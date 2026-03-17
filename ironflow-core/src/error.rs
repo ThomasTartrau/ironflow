@@ -94,6 +94,26 @@ pub enum AgentError {
     #[error("schema validation failed: expected {expected}, got {got}")]
     SchemaValidation { expected: String, got: String },
 
+    /// The prompt exceeds the model's context window.
+    ///
+    /// Returned before spawning the process when the estimated token count
+    /// exceeds the model's known limit.
+    ///
+    /// * `chars` - number of characters in the combined prompt (system + user).
+    /// * `estimated_tokens` - approximate token count (chars / 4).
+    /// * `model_limit` - the model's context window in tokens.
+    #[error(
+        "prompt too large: {chars} chars (~{estimated_tokens} tokens) exceeds model limit of {model_limit} tokens"
+    )]
+    PromptTooLarge {
+        /// Number of characters in the prompt.
+        chars: usize,
+        /// Estimated token count (chars / 4 heuristic).
+        estimated_tokens: usize,
+        /// Model's context window in tokens.
+        model_limit: usize,
+    },
+
     /// The agent did not complete within the configured timeout.
     #[error("agent timed out after {limit:?}")]
     Timeout { limit: Duration },
@@ -344,6 +364,36 @@ mod tests {
             err.to_string(),
             "failed to deserialize into MyStruct: bad input"
         );
+    }
+
+    #[test]
+    fn agent_error_prompt_too_large_display() {
+        let err = AgentError::PromptTooLarge {
+            chars: 966_007,
+            estimated_tokens: 241_501,
+            model_limit: 200_000,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("966007 chars"));
+        assert!(msg.contains("241501 tokens"));
+        assert!(msg.contains("200000 tokens"));
+    }
+
+    #[test]
+    fn from_agent_error_prompt_too_large() {
+        let agent_err = AgentError::PromptTooLarge {
+            chars: 1_000_000,
+            estimated_tokens: 250_000,
+            model_limit: 200_000,
+        };
+        let op_err: OperationError = agent_err.into();
+        assert!(matches!(
+            op_err,
+            OperationError::Agent(AgentError::PromptTooLarge {
+                model_limit: 200_000,
+                ..
+            })
+        ));
     }
 
     #[test]
