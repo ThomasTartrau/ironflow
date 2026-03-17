@@ -252,12 +252,29 @@ impl AgentProvider for ClaudeCodeProvider {
             if !output.status.success() {
                 let stderr = truncate_output(&output.stderr, "claude stderr");
                 let exit_code = output.status.code().unwrap_or(-1);
+
+                // When stderr is empty, include stdout which may contain
+                // the actual error message (e.g. context window exceeded)
+                let error_detail = if stderr.is_empty() {
+                    let stdout = truncate_output(&output.stdout, "claude stdout (error fallback)");
+                    if stdout.is_empty() {
+                        "(no output captured)".to_string()
+                    } else {
+                        stdout
+                    }
+                } else {
+                    stderr
+                };
+
                 error!(
                     exit_code,
-                    stderr_len = stderr.len(),
+                    error_detail_len = error_detail.len(),
                     "claude process failed"
                 );
-                return Err(AgentError::ProcessFailed { exit_code, stderr });
+                return Err(AgentError::ProcessFailed {
+                    exit_code,
+                    stderr: error_detail,
+                });
             }
 
             let stdout = truncate_output(&output.stdout, "claude stdout");

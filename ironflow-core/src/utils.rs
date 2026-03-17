@@ -7,6 +7,30 @@
 
 use tracing::warn;
 
+/// Average number of characters per token used for estimation.
+///
+/// This is a conservative heuristic (1 token ~ 4 chars for English text).
+/// The actual ratio varies by language and content type.
+pub const CHARS_PER_TOKEN: usize = 4;
+
+/// Estimate the number of tokens from a character count.
+///
+/// Uses a simple `chars / 4` heuristic. This is intentionally conservative
+/// (overestimates tokens for ASCII-heavy text, underestimates for CJK).
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::utils::estimate_tokens;
+///
+/// assert_eq!(estimate_tokens(400), 100);
+/// assert_eq!(estimate_tokens(0), 0);
+/// assert_eq!(estimate_tokens(3), 0); // rounds down
+/// ```
+pub fn estimate_tokens(char_count: usize) -> usize {
+    char_count / CHARS_PER_TOKEN
+}
+
 /// Maximum number of bytes kept from a single process output stream (10 MB).
 ///
 /// Any output beyond this limit is silently dropped after a warning is logged.
@@ -49,6 +73,24 @@ pub fn truncate_output(data: &[u8], context: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn estimate_tokens_standard() {
+        assert_eq!(estimate_tokens(400), 100);
+        assert_eq!(estimate_tokens(800_000), 200_000);
+    }
+
+    #[test]
+    fn estimate_tokens_zero() {
+        assert_eq!(estimate_tokens(0), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_rounds_down() {
+        assert_eq!(estimate_tokens(3), 0);
+        assert_eq!(estimate_tokens(5), 1);
+        assert_eq!(estimate_tokens(7), 1);
+    }
 
     #[test]
     fn small_input_returned_as_is() {

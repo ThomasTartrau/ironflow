@@ -33,10 +33,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value, to_string};
 use tracing::{info, warn};
 
-use crate::error::OperationError;
+use crate::error::{AgentError, OperationError};
 #[cfg(feature = "prometheus")]
 use crate::metric_names;
 use crate::provider::{AgentConfig, AgentOutput, AgentProvider};
+use crate::utils::estimate_tokens;
 
 /// Available Claude models.
 ///
@@ -353,6 +354,20 @@ impl Agent {
             !self.config.prompt.trim().is_empty(),
             "prompt must not be empty - call .prompt(\"...\") before .run()"
         );
+
+        // Validate prompt size against the model's context window
+        let total_chars =
+            self.config.prompt.len() + self.config.system_prompt.as_ref().map_or(0, |s| s.len());
+        let estimated_tokens = estimate_tokens(total_chars);
+        let model_limit = self.config.model.context_window();
+        if estimated_tokens > model_limit {
+            return Err(OperationError::Agent(AgentError::PromptTooLarge {
+                chars: total_chars,
+                estimated_tokens,
+                model_limit,
+            }));
+        }
+
         if crate::dry_run::effective_dry_run(self.dry_run) {
             info!(
                 prompt_len = self.config.prompt.len(),
@@ -936,6 +951,86 @@ mod tests {
     #[should_panic(expected = "budget must be a positive finite number")]
     fn max_budget_zero_panics() {
         let _ = Agent::new().max_budget_usd(0.0);
+    }
+
+    #[tokio::test]
+    async fn run_with_prompt_too_large_returns_error() {
+        let provider = TestProvider {
+            output: default_output(),
+        };
+        // 200K context = 800K chars max. Create a prompt exceeding that.
+        let large_prompt = "x".repeat(800_004);
+        let result = Agent::new()
+            .prompt(&large_prompt)
+            .model(Model::Sonnet)
+            .run(&provider)
+            .await;
+
+        let err = result.unwrap_err();
+        match err {
+            OperationError::Agent(crate::error::AgentError::PromptTooLarge {
+                chars,
+                estimated_tokens,
+                model_limit,
+            }) => {
+                assert_eq!(chars, 800_004);
+                assert_eq!(estimated_tokens, 200_001);
+                assert_eq!(model_limit, 200_000);
+            }
+            other => panic!("expected PromptTooLarge, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_with_prompt_at_limit_succeeds() {
+        let provider = TestProvider {
+            output: default_output(),
+        };
+        // Exactly at the limit (200K tokens = 800K chars)
+        let prompt = "x".repeat(800_000);
+        let result = Agent::new()
+            .prompt(&prompt)
+            .model(Model::Sonnet)
+            .run(&provider)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_with_system_prompt_counts_toward_limit() {
+        let provider = TestProvider {
+            output: default_output(),
+        };
+        // System prompt + user prompt together exceed the limit
+        let system = "s".repeat(400_004);
+        let prompt = "p".repeat(400_000);
+        let result = Agent::new()
+            .system_prompt(&system)
+            .prompt(&prompt)
+            .model(Model::Sonnet)
+            .run(&provider)
+            .await;
+
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            OperationError::Agent(crate::error::AgentError::PromptTooLarge { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn run_with_1m_model_allows_larger_prompt() {
+        let provider = TestProvider {
+            output: default_output(),
+        };
+        // 900K chars ~ 225K tokens, exceeds 200K but fits in 1M
+        let prompt = "x".repeat(900_000);
+        let result = Agent::new()
+            .prompt(&prompt)
+            .model(Model::Sonnet46_1M)
+            .run(&provider)
+            .await;
+        assert!(result.is_ok());
     }
 
     #[test]
