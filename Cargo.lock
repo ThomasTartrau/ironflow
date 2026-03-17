@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "futures-util",
  "metrics",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "axum",
  "dotenvy",
