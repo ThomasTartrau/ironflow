@@ -1,0 +1,51 @@
+{
+  "branches": ["main"],
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          { "type": "feat", "release": "minor" },
+          { "type": "fix", "release": "patch" },
+          { "type": "perf", "release": "patch" },
+          { "type": "refactor", "release": "patch" },
+          { "breaking": true, "release": "major" }
+        ]
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md"
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "sed -i 's/^version = \".*\"/version = \"${nextRelease.version}\"/' ironflow-core/Cargo.toml && sed -i 's/^version = \".*\"/version = \"${nextRelease.version}\"/' ironflow-runtime/Cargo.toml && sed -i 's/ironflow-core = { version = \"[^\"]*\"/ironflow-core = { version = \"${nextRelease.version}\"/' ironflow-runtime/Cargo.toml && cargo generate-lockfile",
+        "publishCmd": "cargo publish -p ironflow-core --allow-dirty && cargo publish -p ironflow-runtime --allow-dirty"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "CHANGELOG.md",
+          "Cargo.lock",
+          "ironflow-core/Cargo.toml",
+          "ironflow-runtime/Cargo.toml",
+          "release.toml"
+        ],
+        "message": "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}"
+      }
+    ],
+    "@semantic-release/gitlab"
+  ]
+}

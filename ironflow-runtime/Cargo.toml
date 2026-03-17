@@ -1,0 +1,46 @@
+[package]
+name = "ironflow-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Runtime daemon for ironflow: webhooks (axum) and cron scheduling"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "webhook", "cron", "runtime", "axum"]
+categories = ["asynchronous", "web-programming::http-server", "development-tools"]
+exclude = [".gitlab-ci.yml", ".releaserc.json", "release.toml"]
+
+[dependencies]
+ironflow-core = { version = "0.1.0", path = "../ironflow-core" }
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio-cron-scheduler = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2"
+dotenvy = "0.15"
+thiserror = "2"
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false }
+
+[features]
+default = []
+prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-core/prometheus"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+reqwest = { version = "0.13", features = ["json"] }
+serde_json = "1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+
+[[example]]
+name = "daemon"
+path = "examples/daemon.rs"

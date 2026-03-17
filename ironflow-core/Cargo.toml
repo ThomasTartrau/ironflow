@@ -1,0 +1,33 @@
+[package]
+name = "ironflow-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Rust workflow engine with Claude Code native agent support"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "agent", "claude", "shell", "automation"]
+categories = ["asynchronous", "development-tools"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+tokio = { version = "1", features = ["process", "time", "macros", "rt-multi-thread", "signal"] }
+reqwest = { version = "0.13", features = ["json"] }
+url = "2"
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+futures-util = "0.3"
+metrics = { version = "0.24", optional = true }
+
+[features]
+default = []
+prometheus = ["metrics"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+

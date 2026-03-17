@@ -1,0 +1,16 @@
+# cargo-release workspace configuration
+# https://github.com/crate-ci/cargo-release
+
+# Publish crates in dependency order (ironflow-core first, then ironflow-runtime).
+# cargo-release automatically waits for crates.io indexing between publishes.
+
+# Let semantic-release handle version bumping and changelog - cargo-release
+# only handles the publish step.
+allow-branch = ["main"]
+# Do not create git tags or commits - semantic-release owns that.
+tag = false
+push = false
+# Publish in dependency order with automatic crates.io index wait.
+publish = true
+# Verify that the crate builds before publishing.
+verify = true

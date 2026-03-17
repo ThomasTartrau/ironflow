@@ -1,0 +1,133 @@
+stages:
+  - check
+  - test
+  - build
+  - release
+
+variables:
+  CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
+
+.rust-cache: &rust-cache
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .cargo/registry/
+      - .cargo/git/
+      - target/
+
+cargo-fmt:
+  stage: check
+  image: rust:1.94.0
+  <<: *rust-cache
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - rustup component add rustfmt
+    - cargo fmt --all -- --check
+
+cargo-clippy:
+  stage: check
+  image: rust:1.94.0
+  <<: *rust-cache
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - rustup component add clippy
+    - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo clippy --workspace --all-targets --features prometheus -- -D warnings
+
+cargo-check:
+  stage: check
+  image: rust:1.94.0
+  <<: *rust-cache
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - cargo check --workspace --all-targets
+
+cargo-audit:
+  stage: check
+  image: rust:1.94.0
+  <<: *rust-cache
+  script:
+    - cargo install cargo-audit --locked
+    - cargo audit
+  allow_failure: false
+
+unit-tests:
+  stage: test
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - cargo-check
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - cargo test --workspace
+
+test-prometheus:
+  stage: test
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - cargo-check
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - cargo test --workspace --features prometheus
+
+doc-tests:
+  stage: test
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - cargo-check
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - cargo test --workspace --doc
+
+build-debug:
+  stage: build
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - unit-tests
+    - test-prometheus
+    - doc-tests
+  script:
+    - cargo build --workspace
+
+build-release:
+  stage: build
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - unit-tests
+    - test-prometheus
+    - doc-tests
+  script:
+    - cargo build --workspace --release
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+release:
+  stage: release
+  image: node:22
+  needs:
+    - build-release
+    - cargo-audit
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq build-essential cmake curl
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --no-modify-path
+    - ln -sf "${CARGO_HOME}/bin/cargo" /usr/local/bin/cargo
+    - ln -sf "${CARGO_HOME}/bin/rustc" /usr/local/bin/rustc
+  script:
+    - export PATH="${CARGO_HOME}/bin:$PATH"
+    - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
+    - git checkout -B "$CI_COMMIT_BRANCH"
+    - npm install -g semantic-release @semantic-release/changelog @semantic-release/git @semantic-release/exec @semantic-release/gitlab conventional-changelog-conventionalcommits
+    - npx semantic-release
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

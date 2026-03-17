@@ -1,0 +1,548 @@
+<div align="center">
+
+```
+  ___                  __ _
+ |_ _|_ __ ___  _ __ / _| | _____      __
+  | || '__/ _ \| '_ \| |_| |/ _ \ \ /\ / /
+  | || | | (_) | | | |  _| | (_) \ V  V /
+ |___|_|  \___/|_| |_|_| |_|\___/ \_/\_/
+```
+
+# Ironflow
+
+[![pipeline status](https://img.shields.io/gitlab/pipeline-status/ThomasTartrau%2Fironflow?branch=main&style=for-the-badge&logo=gitlab&logoColor=white)](https://gitlab.com/ThomasTartrau/ironflow/-/pipelines)
+[![ironflow-core](https://img.shields.io/crates/v/ironflow-core.svg?style=for-the-badge&logo=rust&logoColor=white&label=ironflow-core)](https://crates.io/crates/ironflow-core)
+[![ironflow-runtime](https://img.shields.io/crates/v/ironflow-runtime.svg?style=for-the-badge&logo=rust&logoColor=white&label=ironflow-runtime)](https://crates.io/crates/ironflow-runtime)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.94+-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+
+**Workflows as imperative Rust code - no YAML, no DSL.**
+
+**Claude Code native agent support with structured JSON output.**
+
+*Shell commands • HTTP requests • AI agents • Webhooks • Cron scheduling*
+
+[Getting Started](#-quick-start) •
+[Operations](#-operations) •
+[Runtime](#-runtime-webhooks--cron) •
+[Examples](#-use-cases)
+
+</div>
+
+---
+
+## ✨ Features
+
+| | |
+|---|---|
+| **🦀 Imperative API** - A workflow is an `async fn`, not a config file | **🤖 AI Agent** - Claude Code in headless mode, invoked via CLI |
+| **🎯 Type-safe output** - Derive `JsonSchema` on your types, get typed responses | **💰 Budget control** - Per-step `max_budget_usd` prevents runaway costs |
+| **🧪 Record/Replay** - Deterministic agent tests without spending tokens | **❌ No retry logic** - A step fails, the workflow fails. Simple and predictable |
+| **🔀 Parallel execution** - `try_join_all` with optional concurrency limits | **🌐 Webhook auth** - GitHub, GitLab, HMAC-SHA256, static header |
+| **⏰ Cron scheduling** - Job scheduling via `tokio-cron-scheduler` | **📊 Prometheus metrics** - Shell, HTTP, agent, webhook, and cron counters |
+| **🏃 Dry-run mode** - Skip execution while logging intent | **📈 Workflow tracker** - Cost, tokens, and duration across steps |
+
+---
+
+## 🏗️ Architecture
+
+```
+ironflow/
+├── ironflow-core         # Operations: Shell, Http, Agent
+│   ├── operations/       #   Shell, Http, Agent builders + IntoFuture
+│   ├── providers/        #   ClaudeCodeProvider, RecordReplayProvider
+│   ├── tracker.rs        #   WorkflowTracker (cost/tokens/duration)
+│   ├── parallel.rs       #   try_join_all, try_join_all_limited
+│   └── dry_run.rs        #   Global + per-operation dry-run control
+│
+├── ironflow-runtime      # Daemon layer (depends on ironflow-core)
+│   ├── runtime.rs        #   Runtime builder + axum server
+│   ├── webhook.rs        #   WebhookAuth (None, Header, HmacSha256, GitHub, GitLab)
+│   └── cron.rs           #   Cron job scheduling (tokio-cron-scheduler)
+```
+
+`ironflow-core` is standalone. `ironflow-runtime` depends on `ironflow-core` and adds webhook + cron triggering with an HTTP server.
+
+---
+
+## ⚡ Quick Start
+
+Add the crates to your project:
+
+```bash
+cargo add ironflow-core
+# Optional: add the runtime for webhooks and cron
+cargo add ironflow-runtime
+```
+
+Minimal example:
+
+```rust
+use ironflow_core::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ClaudeCodeProvider::new();
+
+    // Run a shell command
+    let files = Shell::new("ls -la src/").await?;
+
+    // Feed the output into an Agent
+    let review = Agent::new()
+        .prompt(&format!("Review these source files:\n{}", files.stdout()))
+        .model(Model::Sonnet)
+        .max_budget_usd(0.10)
+        .run(&provider)
+        .await?;
+
+    println!("{}", review.text());
+    Ok(())
+}
+```
+
+---
+
+## 🛠️ Operations
+
+### Shell
+
+Run system commands with timeout, working directory, and environment control. Implements `IntoFuture` so you can `await` directly.
+
+```rust
+use ironflow_core::prelude::*;
+use std::time::Duration;
+
+# async fn example() -> Result<(), OperationError> {
+let output = Shell::new("cargo test")
+    .dir("/path/to/project")
+    .timeout(Duration::from_secs(120))
+    .env("RUST_LOG", "debug")
+    .await?;
+
+println!("stdout: {}", output.stdout());
+println!("exit code: {}", output.exit_code());
+# Ok(())
+# }
+```
+
+### Http
+
+Perform HTTP requests with headers, JSON body, and timeout. Non-2xx status codes are not treated as errors - use `is_success()` to check.
+
+```rust
+use ironflow_core::prelude::*;
+use std::time::Duration;
+
+# async fn example() -> Result<(), OperationError> {
+let output = Http::post("https://httpbin.org/post")
+    .header("Authorization", "Bearer token123")
+    .json(&serde_json::json!({"key": "value"}))
+    .timeout(Duration::from_secs(30))
+    .await?;
+
+println!("status: {}, body: {}", output.status(), output.body());
+# Ok(())
+# }
+```
+
+### Agent
+
+Invoke Claude Code (or any `AgentProvider`) with builder configuration. Supports structured output via `JsonSchema`.
+
+```rust
+use ironflow_core::prelude::*;
+
+#[derive(Deserialize, JsonSchema)]
+struct Review {
+    score: u8,
+    summary: String,
+}
+
+# async fn example() -> Result<(), OperationError> {
+let provider = ClaudeCodeProvider::new();
+
+let result = Agent::new()
+    .system_prompt("You are a senior Rust reviewer.")
+    .prompt("Review the codebase")
+    .model(Model::Opus)
+    .allowed_tools(&["Read", "Grep"])
+    .max_turns(5)
+    .max_budget_usd(0.50)
+    .output::<Review>()
+    .run(&provider)
+    .await?;
+
+let review: Review = result.json().expect("schema-validated output");
+println!("Score: {}/10 - {}", review.score, review.summary);
+println!("Cost: ${:.4}", result.cost_usd().unwrap_or(0.0));
+# Ok(())
+# }
+```
+
+<details>
+<summary><b>🔄 Session Resume</b></summary>
+
+Continue a multi-turn conversation by passing the session ID from a previous result:
+
+```rust
+use ironflow_core::prelude::*;
+
+# async fn example() -> Result<(), OperationError> {
+let provider = ClaudeCodeProvider::new();
+
+let first = Agent::new()
+    .prompt("Analyze the src/ directory")
+    .max_budget_usd(0.10)
+    .run(&provider)
+    .await?;
+
+let session = first.session_id().expect("provider returned session ID");
+
+let followup = Agent::new()
+    .prompt("Now suggest improvements")
+    .resume(session)
+    .max_budget_usd(0.10)
+    .run(&provider)
+    .await?;
+# Ok(())
+# }
+```
+
+</details>
+
+---
+
+## 🔀 Parallel Execution
+
+### Static parallelism (known number of steps)
+
+Use `tokio::try_join!` when you know at compile time how many steps to run:
+
+```rust
+use ironflow_core::prelude::*;
+
+# async fn example() -> Result<(), OperationError> {
+let (files, status) = tokio::try_join!(
+    Shell::new("ls -la"),
+    Shell::new("git status"),
+)?;
+# Ok(())
+# }
+```
+
+### Dynamic parallelism (runtime-determined)
+
+Use `try_join_all` when the number of steps is determined at runtime:
+
+```rust
+use ironflow_core::prelude::*;
+
+# async fn example() -> Result<(), OperationError> {
+let commands = vec!["ls -la", "git status", "df -h"];
+let results = try_join_all(
+    commands.iter().map(|cmd| Shell::new(cmd).run())
+).await?;
+
+for (cmd, output) in commands.iter().zip(&results) {
+    println!("{cmd}: {}", output.stdout());
+}
+# Ok(())
+# }
+```
+
+<details>
+<summary><b>🔒 Concurrency-limited parallelism</b></summary>
+
+Use `try_join_all_limited` to cap the number of concurrent operations:
+
+```rust
+use ironflow_core::prelude::*;
+
+# async fn example() -> Result<(), OperationError> {
+let provider = ClaudeCodeProvider::new();
+let prompts = vec!["Summarize file A", "Summarize file B", "Summarize file C"];
+
+let results = try_join_all_limited(
+    prompts.iter().map(|p| {
+        Agent::new()
+            .prompt(p)
+            .model(Model::Haiku)
+            .max_budget_usd(0.10)
+            .run(&provider)
+    }),
+    2, // at most 2 agent calls at a time
+).await?;
+# Ok(())
+# }
+```
+
+</details>
+
+---
+
+## 🌐 Runtime (Webhooks + Cron)
+
+The `ironflow-runtime` crate provides an HTTP server with webhook endpoints and cron scheduling.
+
+```rust
+use ironflow_core::prelude::*;
+use ironflow_runtime::prelude::*;
+
+async fn on_push(payload: serde_json::Value, provider: &ClaudeCodeProvider) {
+    let branch = payload["ref"].as_str().unwrap_or("main");
+    let diff = Shell::new(&format!("git diff origin/main...origin/{branch}"))
+        .await
+        .unwrap();
+    let review = Agent::new()
+        .prompt(&format!("Review this diff:\n{}", diff.stdout()))
+        .model(Model::Sonnet)
+        .max_budget_usd(0.50)
+        .run(provider)
+        .await
+        .unwrap();
+    println!("{}", review.text());
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ClaudeCodeProvider::new();
+
+    Runtime::new()
+        .webhook("/hooks/github", WebhookAuth::github("my-secret"), {
+            let p = provider.clone();
+            move |payload| {
+                let p = p.clone();
+                async move { on_push(payload, &p).await }
+            }
+        })
+        .cron("0 30 8 * * *", "daily-report", || async {
+            println!("running daily report");
+        })
+        .serve("0.0.0.0:8080")
+        .await?;
+
+    Ok(())
+}
+```
+
+### Webhook Authentication
+
+| Method | Usage |
+|--------|-------|
+| `WebhookAuth::none()` | No authentication |
+| `WebhookAuth::header(name, value)` | Static header comparison |
+| `WebhookAuth::github(secret)` | GitHub HMAC-SHA256 (`X-Hub-Signature-256`) |
+| `WebhookAuth::gitlab(secret)` | GitLab token (`X-Gitlab-Token`) |
+
+### Built-in Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Returns `200 OK` with body `"ok"` |
+| `GET` | `/metrics` | Prometheus metrics (requires `prometheus` feature) |
+
+---
+
+## 📊 Prometheus Metrics
+
+Enable the `prometheus` feature flag to expose operational metrics:
+
+```toml
+[dependencies]
+ironflow-core = { version = "0.1", features = ["prometheus"] }
+ironflow-runtime = { version = "0.1", features = ["prometheus"] }
+```
+
+When using `ironflow-runtime` with the `prometheus` feature, a `/metrics` endpoint is automatically registered.
+
+<details>
+<summary><b>📋 Exposed Metrics</b></summary>
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `ironflow_shell_total` | Counter | `status` |
+| `ironflow_shell_duration_seconds` | Histogram | |
+| `ironflow_http_total` | Counter | `method`, `status` |
+| `ironflow_http_duration_seconds` | Histogram | |
+| `ironflow_agent_total` | Counter | `model`, `status` |
+| `ironflow_agent_duration_seconds` | Histogram | `model` |
+| `ironflow_agent_cost_usd_total` | Gauge | `model` |
+| `ironflow_agent_tokens_input_total` | Counter | `model` |
+| `ironflow_agent_tokens_output_total` | Counter | `model` |
+| `ironflow_webhook_received_total` | Counter | `path`, `auth` |
+| `ironflow_cron_runs_total` | Counter | `job` |
+
+</details>
+
+---
+
+## 📈 WorkflowTracker
+
+Track cost, tokens, and duration across all steps of a workflow:
+
+```rust
+use ironflow_core::prelude::*;
+
+# async fn example() -> Result<(), OperationError> {
+let provider = ClaudeCodeProvider::new();
+let mut tracker = WorkflowTracker::new("deploy-pipeline");
+
+let files = Shell::new("ls -la").await?;
+tracker.record_shell("list-files", &files);
+
+let review = Agent::new()
+    .prompt("Review the project")
+    .max_budget_usd(0.10)
+    .run(&provider)
+    .await?;
+tracker.record_agent("code-review", &review);
+
+tracker.summary(); // emits structured log via tracing
+println!("Total cost: ${:.4}", tracker.total_cost_usd());
+println!("Steps: {}", tracker.step_count());
+# Ok(())
+# }
+```
+
+---
+
+## 🏃 Dry-Run Mode
+
+Skip execution while logging intent. Useful for testing workflow logic without side effects.
+
+```rust
+use ironflow_core::prelude::*;
+
+# async fn example() -> Result<(), OperationError> {
+// Global dry-run: all operations skip execution
+set_dry_run(true);
+let output = Shell::new("rm -rf /").await?; // not executed
+assert_eq!(output.stdout(), "");
+
+// Per-operation dry-run (overrides global)
+set_dry_run(false);
+let output = Shell::new("echo hello").dry_run(true).await?;
+assert_eq!(output.stdout(), "");
+# Ok(())
+# }
+```
+
+---
+
+## 🧪 Record/Replay Testing
+
+Test agent workflows deterministically without spending tokens. The `RecordReplayProvider` wraps any `AgentProvider` and saves/loads responses from JSON fixtures.
+
+```rust
+use ironflow_core::prelude::*;
+
+# async fn example() -> Result<(), OperationError> {
+let inner = ClaudeCodeProvider::new();
+
+// Record mode: calls the real provider and saves responses
+// Activated by setting IRONFLOW_RECORD=1 env var
+let provider = RecordReplayProvider::new(inner, "tests/fixtures");
+
+// Or force replay mode (ignores IRONFLOW_RECORD env var)
+let inner = ClaudeCodeProvider::new();
+let provider = RecordReplayProvider::replay(inner, "tests/fixtures");
+
+let result = Agent::new()
+    .prompt("Explain ownership in Rust")
+    .max_budget_usd(0.10)
+    .run(&provider)
+    .await?;
+# Ok(())
+# }
+```
+
+Fixture files are named by a hash of the prompt + system prompt + JSON schema, so identical configurations always map to the same file.
+
+---
+
+## 💡 Use Cases
+
+### 🔍 Automated Code Review
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
+│   GitLab    │────▶│  Get Diff &  │────▶│ Claude Code │────▶│    Post      │
+│   Webhook   │     │    Files     │     │   Review    │     │   Comments   │
+└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
+```
+
+<details>
+<summary><b>Workflow Steps</b></summary>
+
+1. **Trigger**: GitLab/GitHub webhook on new MR/PR
+2. **Fetch**: Get changed files and diff via API
+3. **Review**: Agent analyzes code for bugs, security issues, improvements
+4. **Post**: Send review comments back to GitLab/GitHub
+
+</details>
+
+### 📚 Auto Documentation
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
+│    Code     │────▶│  Get Changed │────▶│ Claude Code │────▶│   Commit     │
+│    Push     │     │    Files     │     │  Gen Docs   │     │    Docs      │
+└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
+```
+
+<details>
+<summary><b>Workflow Steps</b></summary>
+
+1. **Trigger**: Webhook on code push to main
+2. **Identify**: Get list of changed files
+3. **Generate**: Agent generates documentation with descriptions, params, examples
+4. **Commit**: Create commit with updated docs
+
+</details>
+
+### 🐛 Auto Bug Fixing
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
+│   Sentry    │────▶│    Parse     │────▶│ Claude Code │────▶│  Create PR   │
+│   Alert     │     │ Stack Trace  │     │   Fix Bug   │     │   + Notify   │
+└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
+```
+
+<details>
+<summary><b>Workflow Steps</b></summary>
+
+1. **Trigger**: Webhook from error monitoring (Sentry, Datadog)
+2. **Analyze**: Parse error stack trace
+3. **Fix**: Agent analyzes and fixes the bug
+4. **Test**: Run tests to validate
+5. **PR**: Create pull request with fix
+
+</details>
+
+---
+
+## ⚙️ Configuration
+
+Ironflow uses `.env` files via [dotenvy](https://crates.io/crates/dotenvy). The runtime loads `.env` automatically when `serve()` is called.
+
+```env
+GITLAB_SECRET=my-webhook-secret
+GITHUB_SECRET=my-github-secret
+```
+
+---
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+<div align="center">
+
+**[GitLab](https://gitlab.com/ThomasTartrau/ironflow)** •
+**[ironflow-core](https://crates.io/crates/ironflow-core)** •
+**[ironflow-runtime](https://crates.io/crates/ironflow-runtime)**
+
+</div>
