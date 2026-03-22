@@ -47,6 +47,7 @@ pub mod metric_names;
 pub mod parallel;
 pub mod provider;
 pub mod providers;
+pub mod retry;
 pub mod tracker;
 pub mod utils;
 
@@ -66,6 +67,7 @@ pub mod prelude {
     pub use crate::provider::AgentProvider;
     pub use crate::providers::claude::ClaudeCodeProvider;
     pub use crate::providers::record_replay::RecordReplayProvider;
+    pub use crate::retry::RetryPolicy;
     pub use crate::tracker::WorkflowTracker;
     pub use schemars::JsonSchema;
     pub use serde::{Deserialize, Serialize};
