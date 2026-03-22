@@ -24,8 +24,10 @@ use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::LazyLock;
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
+
+use crate::retry::RetryPolicy;
 
 /// Default timeout for HTTP requests (30 seconds).
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -117,6 +119,7 @@ pub struct Http {
     timeout: Option<Duration>,
     max_response_size: usize,
     dry_run: Option<bool>,
+    retry_policy: Option<RetryPolicy>,
 }
 
 enum HttpBody {
@@ -145,6 +148,7 @@ impl Http {
             timeout: Some(DEFAULT_HTTP_TIMEOUT),
             max_response_size: MAX_OUTPUT_SIZE,
             dry_run: None,
+            retry_policy: None,
         }
     }
 
@@ -225,6 +229,65 @@ impl Http {
         self
     }
 
+    /// Retry the request up to `max_retries` times on transient failures.
+    ///
+    /// Uses default exponential backoff settings (200ms initial, 2x multiplier,
+    /// 30s cap). For custom backoff parameters, use [`retry_policy`](Http::retry_policy).
+    ///
+    /// Only transient errors are retried: transport errors (DNS, timeout,
+    /// connection refused) and responses with status 5xx or 429. Client errors
+    /// (4xx except 429) and SSRF blocks are never retried.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_retries` is `0`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::operations::http::Http;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+    /// let output = Http::get("https://api.example.com/data")
+    ///     .retry(3)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn retry(mut self, max_retries: u32) -> Self {
+        self.retry_policy = Some(RetryPolicy::new(max_retries));
+        self
+    }
+
+    /// Set a custom [`RetryPolicy`] for this request.
+    ///
+    /// Allows full control over backoff duration, multiplier, and max delay.
+    /// See [`RetryPolicy`] for details.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::operations::http::Http;
+    /// use ironflow_core::retry::RetryPolicy;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+    /// let output = Http::get("https://api.example.com/data")
+    ///     .retry_policy(
+    ///         RetryPolicy::new(5)
+    ///             .backoff(Duration::from_millis(500))
+    ///             .max_backoff(Duration::from_secs(60))
+    ///             .multiplier(3.0)
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = Some(policy);
+        self
+    }
+
     /// Enable or disable dry-run mode for this specific operation.
     ///
     /// When dry-run is active, the request is logged but not sent.
@@ -239,6 +302,11 @@ impl Http {
     }
 
     /// Execute the HTTP request.
+    ///
+    /// If a [`retry_policy`](Http::retry_policy) is configured, transient
+    /// failures (transport errors, 5xx, 429) are retried with exponential
+    /// backoff. Non-retryable errors and successful responses are returned
+    /// immediately.
     ///
     /// # Errors
     ///
@@ -264,13 +332,56 @@ impl Http {
             });
         }
 
+        let result = self.execute_once().await;
+
+        let policy = match &self.retry_policy {
+            Some(p) => p,
+            None => return result,
+        };
+
+        // If the first attempt succeeded with a non-retryable status, return it.
+        // If it failed with a non-retryable error, return it.
+        match &result {
+            Ok(output) if !crate::retry::is_retryable_status(output.status) => return result,
+            Err(err) if !crate::retry::is_retryable(err) => return result,
+            _ => {}
+        }
+
+        let mut last_result = result;
+
+        for attempt in 0..policy.max_retries {
+            let delay = policy.delay_for_attempt(attempt);
+            warn!(
+                attempt = attempt + 1,
+                max_retries = policy.max_retries,
+                delay_ms = delay.as_millis() as u64,
+                "retrying http request"
+            );
+            tokio::time::sleep(delay).await;
+
+            last_result = self.execute_once().await;
+
+            match &last_result {
+                Ok(output) if !crate::retry::is_retryable_status(output.status) => {
+                    return last_result;
+                }
+                Err(err) if !crate::retry::is_retryable(err) => return last_result,
+                _ => {}
+            }
+        }
+
+        last_result
+    }
+
+    /// Execute a single HTTP request attempt (no retry logic).
+    async fn execute_once(&self) -> Result<HttpOutput, OperationError> {
         debug!(method = %self.method, url = %self.url, "executing http request");
         let start = Instant::now();
 
         #[cfg(feature = "prometheus")]
         let method_label = self.method.to_string();
 
-        let mut builder = HTTP_CLIENT.request(self.method, &self.url);
+        let mut builder = HTTP_CLIENT.request(self.method.clone(), &self.url);
 
         if let Some(timeout) = self.timeout {
             builder = builder.timeout(timeout);
@@ -280,12 +391,12 @@ impl Http {
             builder = builder.header(k.as_str(), v.as_str());
         }
 
-        match self.body {
+        match &self.body {
             Some(HttpBody::Json(v)) => {
-                builder = builder.json(&v);
+                builder = builder.json(v);
             }
             Some(HttpBody::Text(t)) => {
-                builder = builder.body(t);
+                builder = builder.body(t.clone());
             }
             None => {}
         }
@@ -319,6 +430,7 @@ impl Http {
                 (k.to_string(), val)
             })
             .collect();
+        let max_response_size = self.max_response_size;
         let response_too_large = |size: usize, limit: usize| OperationError::Http {
             status: Some(status),
             message: format!(
@@ -328,8 +440,8 @@ impl Http {
 
         if let Some(cl) = response.content_length() {
             let content_length = usize::try_from(cl).unwrap_or(usize::MAX);
-            if content_length > self.max_response_size {
-                return Err(response_too_large(content_length, self.max_response_size));
+            if content_length > max_response_size {
+                return Err(response_too_large(content_length, max_response_size));
             }
         }
 
@@ -338,10 +450,10 @@ impl Http {
         loop {
             match response.chunk().await {
                 Ok(Some(chunk)) => {
-                    if body_bytes.len() + chunk.len() > self.max_response_size {
+                    if body_bytes.len() + chunk.len() > max_response_size {
                         return Err(response_too_large(
                             body_bytes.len() + chunk.len(),
-                            self.max_response_size,
+                            max_response_size,
                         ));
                     }
                     body_bytes.extend_from_slice(&chunk);
@@ -682,6 +794,30 @@ mod tests {
     fn dry_run_builder_stores_flag() {
         let http = Http::get("https://x.com").dry_run(true);
         assert_eq!(http.dry_run, Some(true));
+    }
+
+    #[test]
+    fn retry_builder_stores_policy() {
+        let http = Http::get("https://x.com").retry(3);
+        assert!(http.retry_policy.is_some());
+        assert_eq!(http.retry_policy.unwrap().max_retries(), 3);
+    }
+
+    #[test]
+    fn retry_policy_builder_stores_custom_policy() {
+        let policy = RetryPolicy::new(5)
+            .backoff(Duration::from_secs(1))
+            .multiplier(3.0);
+        let http = Http::get("https://x.com").retry_policy(policy);
+        let p = http.retry_policy.unwrap();
+        assert_eq!(p.max_retries(), 5);
+        assert_eq!(p.initial_backoff, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn no_retry_by_default() {
+        let http = Http::get("https://x.com");
+        assert!(http.retry_policy.is_none());
     }
 
     #[test]

@@ -37,6 +37,7 @@ use crate::error::{AgentError, OperationError};
 #[cfg(feature = "prometheus")]
 use crate::metric_names;
 use crate::provider::{AgentConfig, AgentOutput, AgentProvider};
+use crate::retry::RetryPolicy;
 use crate::utils::estimate_tokens;
 
 /// Available Claude models.
@@ -147,6 +148,7 @@ pub enum PermissionMode {
 pub struct Agent {
     config: AgentConfig,
     dry_run: Option<bool>,
+    retry_policy: Option<RetryPolicy>,
 }
 
 impl Agent {
@@ -158,6 +160,7 @@ impl Agent {
         Self {
             config: AgentConfig::new(""),
             dry_run: None,
+            retry_policy: None,
         }
     }
 
@@ -277,6 +280,69 @@ impl Agent {
         self
     }
 
+    /// Retry the agent invocation up to `max_retries` times on transient failures.
+    ///
+    /// Uses default exponential backoff settings (200ms initial, 2x multiplier,
+    /// 30s cap). For custom backoff parameters, use [`retry_policy`](Agent::retry_policy).
+    ///
+    /// Only transient errors are retried: process failures and timeouts.
+    /// Deterministic errors (prompt too large, schema validation) are never retried.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_retries` is `0`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let result = Agent::new()
+    ///     .prompt("Summarize the codebase")
+    ///     .retry(2)
+    ///     .run(&provider)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn retry(mut self, max_retries: u32) -> Self {
+        self.retry_policy = Some(RetryPolicy::new(max_retries));
+        self
+    }
+
+    /// Set a custom [`RetryPolicy`] for this agent invocation.
+    ///
+    /// Allows full control over backoff duration, multiplier, and max delay.
+    /// See [`RetryPolicy`] for details.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::prelude::*;
+    /// use ironflow_core::retry::RetryPolicy;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let result = Agent::new()
+    ///     .prompt("Analyze the code")
+    ///     .retry_policy(
+    ///         RetryPolicy::new(3)
+    ///             .backoff(Duration::from_secs(1))
+    ///             .max_backoff(Duration::from_secs(60))
+    ///     )
+    ///     .run(&provider)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = Some(policy);
+        self
+    }
+
     /// Enable or disable dry-run mode for this specific operation.
     ///
     /// When dry-run is active, the agent call is logged but not executed.
@@ -339,6 +405,11 @@ impl Agent {
 
     /// Execute the agent invocation using the given [`AgentProvider`].
     ///
+    /// If a [`retry_policy`](Agent::retry_policy) is configured, transient
+    /// failures (process crashes, timeouts) are retried with exponential
+    /// backoff. Deterministic errors (prompt too large, schema validation)
+    /// are returned immediately without retry.
+    ///
     /// # Errors
     ///
     /// Returns [`OperationError::Agent`] if the provider reports a failure
@@ -381,12 +452,55 @@ impl Agent {
             return Ok(AgentResult { output });
         }
 
-        let config = self.config;
+        let result = self.invoke_once(provider).await;
 
+        let policy = match &self.retry_policy {
+            Some(p) => p,
+            None => return result,
+        };
+
+        // Non-retryable errors are returned immediately.
+        if let Err(ref err) = result {
+            if !crate::retry::is_retryable(err) {
+                return result;
+            }
+        } else {
+            return result;
+        }
+
+        let mut last_result = result;
+
+        for attempt in 0..policy.max_retries {
+            let delay = policy.delay_for_attempt(attempt);
+            warn!(
+                attempt = attempt + 1,
+                max_retries = policy.max_retries,
+                delay_ms = delay.as_millis() as u64,
+                "retrying agent invocation"
+            );
+            tokio::time::sleep(delay).await;
+
+            last_result = self.invoke_once(provider).await;
+
+            match &last_result {
+                Ok(_) => return last_result,
+                Err(err) if !crate::retry::is_retryable(err) => return last_result,
+                _ => {}
+            }
+        }
+
+        last_result
+    }
+
+    /// Execute a single agent invocation attempt (no retry logic).
+    async fn invoke_once(
+        &self,
+        provider: &dyn AgentProvider,
+    ) -> Result<AgentResult, OperationError> {
         #[cfg(feature = "prometheus")]
-        let model_label = config.model.to_string();
+        let model_label = self.config.model.to_string();
 
-        let output = match provider.invoke(&config).await {
+        let output = match provider.invoke(&self.config).await {
             Ok(output) => output,
             Err(e) => {
                 #[cfg(feature = "prometheus")]
@@ -1051,5 +1165,145 @@ mod tests {
             let back: PermissionMode = serde_json::from_str(&json).unwrap();
             assert_eq!(format!("{:?}", mode), format!("{:?}", back));
         }
+    }
+
+    // --- Retry builder ---
+
+    #[test]
+    fn retry_builder_stores_policy() {
+        let agent = Agent::new().retry(3);
+        assert!(agent.retry_policy.is_some());
+        assert_eq!(agent.retry_policy.unwrap().max_retries(), 3);
+    }
+
+    #[test]
+    fn retry_policy_builder_stores_custom_policy() {
+        use crate::retry::RetryPolicy;
+        let policy = RetryPolicy::new(5).backoff(Duration::from_secs(1));
+        let agent = Agent::new().retry_policy(policy);
+        let p = agent.retry_policy.unwrap();
+        assert_eq!(p.max_retries(), 5);
+    }
+
+    #[test]
+    fn no_retry_by_default() {
+        let agent = Agent::new();
+        assert!(agent.retry_policy.is_none());
+    }
+
+    // --- Retry behavior ---
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
+    struct FailNTimesProvider {
+        fail_count: AtomicU32,
+        failures_before_success: u32,
+        output: AgentOutput,
+    }
+
+    impl AgentProvider for FailNTimesProvider {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async move {
+                let current = self.fail_count.fetch_add(1, Ordering::SeqCst);
+                if current < self.failures_before_success {
+                    Err(AgentError::ProcessFailed {
+                        exit_code: 1,
+                        stderr: format!("transient failure #{}", current + 1),
+                    })
+                } else {
+                    Ok(AgentOutput {
+                        value: self.output.value.clone(),
+                        session_id: self.output.session_id.clone(),
+                        cost_usd: self.output.cost_usd,
+                        input_tokens: self.output.input_tokens,
+                        output_tokens: self.output.output_tokens,
+                        model: self.output.model.clone(),
+                        duration_ms: self.output.duration_ms,
+                    })
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_succeeds_after_transient_failures() {
+        let provider = FailNTimesProvider {
+            fail_count: AtomicU32::new(0),
+            failures_before_success: 2,
+            output: default_output(),
+        };
+        let result = Agent::new()
+            .prompt("test")
+            .retry_policy(crate::retry::RetryPolicy::new(3).backoff(Duration::from_millis(1)))
+            .run(&provider)
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(provider.fail_count.load(Ordering::SeqCst), 3); // 1 initial + 2 retries
+    }
+
+    #[tokio::test]
+    async fn retry_exhausted_returns_last_error() {
+        let provider = FailNTimesProvider {
+            fail_count: AtomicU32::new(0),
+            failures_before_success: 10, // always fails
+            output: default_output(),
+        };
+        let result = Agent::new()
+            .prompt("test")
+            .retry_policy(crate::retry::RetryPolicy::new(2).backoff(Duration::from_millis(1)))
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        // 1 initial + 2 retries = 3 total
+        assert_eq!(provider.fail_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_does_not_retry_non_retryable_errors() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let count = call_count.clone();
+
+        struct CountingNonRetryable {
+            count: Arc<AtomicU32>,
+        }
+        impl AgentProvider for CountingNonRetryable {
+            fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Err(AgentError::SchemaValidation {
+                        expected: "object".to_string(),
+                        got: "string".to_string(),
+                    })
+                })
+            }
+        }
+
+        let provider = CountingNonRetryable { count };
+        let result = Agent::new()
+            .prompt("test")
+            .retry_policy(crate::retry::RetryPolicy::new(3).backoff(Duration::from_millis(1)))
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        // Only 1 attempt, no retries for non-retryable errors
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn no_retry_without_policy() {
+        let provider = FailNTimesProvider {
+            fail_count: AtomicU32::new(0),
+            failures_before_success: 1,
+            output: default_output(),
+        };
+        let result = Agent::new().prompt("test").run(&provider).await;
+
+        assert!(result.is_err());
+        assert_eq!(provider.fail_count.load(Ordering::SeqCst), 1);
     }
 }
