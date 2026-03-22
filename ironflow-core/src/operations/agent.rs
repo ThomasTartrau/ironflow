@@ -1193,8 +1193,8 @@ mod tests {
 
     // --- Retry behavior ---
 
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 
     struct FailNTimesProvider {
@@ -1236,9 +1236,7 @@ mod tests {
         };
         let result = Agent::new()
             .prompt("test")
-            .retry_policy(
-                crate::retry::RetryPolicy::new(3).backoff(Duration::from_millis(1)),
-            )
+            .retry_policy(crate::retry::RetryPolicy::new(3).backoff(Duration::from_millis(1)))
             .run(&provider)
             .await;
 
@@ -1255,9 +1253,7 @@ mod tests {
         };
         let result = Agent::new()
             .prompt("test")
-            .retry_policy(
-                crate::retry::RetryPolicy::new(2).backoff(Duration::from_millis(1)),
-            )
+            .retry_policy(crate::retry::RetryPolicy::new(2).backoff(Duration::from_millis(1)))
             .run(&provider)
             .await;
 
@@ -1289,9 +1285,7 @@ mod tests {
         let provider = CountingNonRetryable { count };
         let result = Agent::new()
             .prompt("test")
-            .retry_policy(
-                crate::retry::RetryPolicy::new(3).backoff(Duration::from_millis(1)),
-            )
+            .retry_policy(crate::retry::RetryPolicy::new(3).backoff(Duration::from_millis(1)))
             .run(&provider)
             .await;
 

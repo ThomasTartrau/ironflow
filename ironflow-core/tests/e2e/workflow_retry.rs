@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use ironflow_core::prelude::*;
@@ -186,8 +186,7 @@ async fn http_no_retry_without_policy() {
         let mut buf = [0u8; 1024];
         let _ = socket.read(&mut buf).await.unwrap();
 
-        let response =
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 11\r\n\r\nunavailable";
+        let response = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 11\r\n\r\nunavailable";
         socket.write_all(response.as_bytes()).await.unwrap();
         socket.shutdown().await.unwrap();
     });
