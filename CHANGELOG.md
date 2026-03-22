@@ -1,3 +1,9 @@
+## [1.1.0](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.0.1...v1.1.0) (2026-03-22)
+
+### Features
+
+* add retry policy with exponential backoff for HTTP and Agent operations ([b3151da](https://gitlab.com/ThomasTartrau/ironflow/commit/b3151dad350c89e3f525a3143353b4aebb5fe122))
+
 ## [1.0.1](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.0.0...v1.0.1) (2026-03-17)
 
 ### Bug Fixes
