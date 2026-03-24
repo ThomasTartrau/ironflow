@@ -6,9 +6,12 @@
 //!
 //! The built-in implementations are:
 //!
-//! * [`ClaudeCodeProvider`](crate::providers::claude::ClaudeCodeProvider) - shells out
-//!   to the `claude` CLI.
-//! * [`RecordReplayProvider`](crate::providers::record_replay::RecordReplayProvider) -
+//! * [`ClaudeCodeProvider`](crate::providers::claude::ClaudeCodeProvider) — local `claude` CLI.
+//! * [`SshProvider`](crate::providers::claude::SshProvider) — remote via SSH (`transport-ssh`).
+//! * [`DockerProvider`](crate::providers::claude::DockerProvider) — Docker container (`transport-docker`).
+//! * [`K8sEphemeralProvider`](crate::providers::claude::K8sEphemeralProvider) — ephemeral K8s pod (`transport-k8s`).
+//! * [`K8sPersistentProvider`](crate::providers::claude::K8sPersistentProvider) — persistent K8s pod (`transport-k8s`).
+//! * [`RecordReplayProvider`](crate::providers::record_replay::RecordReplayProvider) —
 //!   records and replays fixtures for deterministic testing.
 
 use std::future::Future;

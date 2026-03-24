@@ -23,9 +23,23 @@ tracing = "0.1"
 futures-util = "0.3"
 metrics = { version = "0.24", optional = true }
 
+# Transport: SSH
+russh = { version = "0.58", optional = true }
+
+# Transport: Docker
+bollard = { version = "0.20", optional = true }
+
+# Transport: Kubernetes
+kube = { version = "3.1", features = ["client", "runtime", "ws", "rustls-tls", "aws-lc-rs"], default-features = false, optional = true }
+k8s-openapi = { version = "0.27", features = ["latest"], optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
+
 [features]
 default = []
 prometheus = ["metrics"]
+transport-ssh = ["russh"]
+transport-docker = ["bollard"]
+transport-k8s = ["kube", "k8s-openapi", "tokio-util"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
