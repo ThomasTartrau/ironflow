@@ -231,17 +231,20 @@ impl AgentProvider for SshProvider {
         Box::pin(async move {
             let args = common::build_args(config)?;
 
-            // Build the remote command with shell escaping
+            // Build the remote command with shell escaping.
+            // Unset CLAUDECODE (prevents recursive invocation) and
+            // IRONFLOW_ALLOW_BYPASS (prevents leak to child process).
             let claude_cmd = common::build_shell_command(&self.claude_path, &args);
+            let env_prefix = "unset CLAUDECODE IRONFLOW_ALLOW_BYPASS 2>/dev/null; ";
             let remote_cmd = match (&self.working_dir, &config.working_dir) {
                 (_, Some(dir)) | (Some(dir), None) => {
                     format!(
-                        "cd {} && {}",
+                        "{env_prefix}cd {} && {}",
                         common::build_shell_command(dir, &[]),
                         claude_cmd
                     )
                 }
-                (None, None) => claude_cmd,
+                (None, None) => format!("{env_prefix}{claude_cmd}"),
             };
 
             debug!(
