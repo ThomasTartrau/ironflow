@@ -1,3 +1,14 @@
+## [1.3.0](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.2.0...v1.3.0) (2026-03-24)
+
+### Features
+
+* add remote transport providers (SSH, Docker, Kubernetes) ([717f815](https://gitlab.com/ThomasTartrau/ironflow/commit/717f815c20328faf6b84a021ee36472f6c061fe0))
+
+### Bug Fixes
+
+* address review feedback on remote transport providers ([0884ed3](https://gitlab.com/ThomasTartrau/ironflow/commit/0884ed392c75204bfb24fc43ac373482f2ba113e))
+* unset CLAUDECODE and IRONFLOW_ALLOW_BYPASS in SSH remote commands ([d172e46](https://gitlab.com/ThomasTartrau/ironflow/commit/d172e463585864674115219fcfe5b0318a4c89db))
+
 ## [1.2.0](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.1.0...v1.2.0) (2026-03-24)
 
 ### Features
