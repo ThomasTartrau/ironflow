@@ -199,7 +199,11 @@ impl K8sPersistentProvider {
 
         if needs_create {
             // Delete old pod and wait for it to be gone before recreating
-            if pods.delete(&self.pod_name, &DeleteParams::default()).await.is_ok() {
+            if pods
+                .delete(&self.pod_name, &DeleteParams::default())
+                .await
+                .is_ok()
+            {
                 // Poll until the pod is actually gone (max 30s)
                 for _ in 0..60 {
                     match pods.get(&self.pod_name).await {
