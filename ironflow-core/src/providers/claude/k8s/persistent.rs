@@ -198,8 +198,17 @@ impl K8sPersistentProvider {
         };
 
         if needs_create {
-            // Delete old pod if it exists in terminal state (best-effort)
-            let _ = pods.delete(&self.pod_name, &DeleteParams::default()).await;
+            // Delete old pod and wait for it to be gone before recreating
+            if pods.delete(&self.pod_name, &DeleteParams::default()).await.is_ok() {
+                // Poll until the pod is actually gone (max 30s)
+                for _ in 0..60 {
+                    match pods.get(&self.pod_name).await {
+                        Err(kube::Error::Api(e)) if e.code == 404 => break,
+                        Err(_) => break,
+                        Ok(_) => tokio::time::sleep(Duration::from_millis(500)).await,
+                    }
+                }
+            }
 
             debug!(pod = %self.pod_name, "creating persistent worker pod");
 
@@ -217,7 +226,7 @@ impl K8sPersistentProvider {
                 "Always",
                 &self.image_pull_policy,
                 &self.env_vars,
-            );
+            )?;
 
             pods.create(&PostParams::default(), &pod_spec)
                 .await
@@ -295,23 +304,31 @@ impl AgentProvider for K8sPersistentProvider {
                 stderr: format!("failed to exec in worker pod: {e}"),
             })?;
 
-            // Collect stdout
+            // Take readers before the concurrent read to avoid double borrow
+            let stdout_reader = attached.stdout();
+            let stderr_reader = attached.stderr();
+
             let mut stdout_buf = Vec::new();
             let mut stderr_buf = Vec::new();
 
             let collect_result = tokio::time::timeout(self.timeout, async {
-                if let Some(stdout_reader) = attached.stdout() {
-                    let mut stdout_stream = tokio_util::io::ReaderStream::new(stdout_reader);
-                    while let Some(Ok(chunk)) = stdout_stream.next().await {
-                        stdout_buf.extend_from_slice(&chunk);
+                let stdout_fut = async {
+                    if let Some(reader) = stdout_reader {
+                        let mut stream = tokio_util::io::ReaderStream::new(reader);
+                        while let Some(Ok(chunk)) = stream.next().await {
+                            stdout_buf.extend_from_slice(&chunk);
+                        }
                     }
-                }
-                if let Some(stderr_reader) = attached.stderr() {
-                    let mut stderr_stream = tokio_util::io::ReaderStream::new(stderr_reader);
-                    while let Some(Ok(chunk)) = stderr_stream.next().await {
-                        stderr_buf.extend_from_slice(&chunk);
+                };
+                let stderr_fut = async {
+                    if let Some(reader) = stderr_reader {
+                        let mut stream = tokio_util::io::ReaderStream::new(reader);
+                        while let Some(Ok(chunk)) = stream.next().await {
+                            stderr_buf.extend_from_slice(&chunk);
+                        }
                     }
-                }
+                };
+                tokio::join!(stdout_fut, stderr_fut);
             })
             .await;
 

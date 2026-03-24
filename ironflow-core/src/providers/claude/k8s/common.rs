@@ -86,12 +86,13 @@ pub struct K8sResources {
 /// Build a shell prefix that writes OAuth credentials to `~/.claude/.credentials.json`
 /// before executing the main command.
 ///
-/// The credentials JSON is written using a heredoc to avoid escaping issues.
 /// Returns an empty string if no credentials are provided.
 pub fn build_credentials_prefix(oauth_json: Option<&str>) -> String {
     match oauth_json {
         Some(json) => {
-            // Escape single quotes in the JSON for safe shell embedding
+            // Escape single quotes in the JSON for safe shell embedding.
+            // The JSON is passed as a separate argument to printf, not in the
+            // format string, so printf specifiers like %s in the JSON are safe.
             let escaped = json.replace('\'', "'\\''");
             format!(
                 "mkdir -p $HOME/.claude && printf '%s' '{escaped}' > $HOME/.claude/.credentials.json && "
@@ -144,7 +145,7 @@ pub fn build_pod_spec(
     restart_policy: &str,
     image_pull_policy: &ImagePullPolicy,
     env_vars: &[(String, String)],
-) -> Pod {
+) -> Result<Pod, AgentError> {
     let mut resource_limits: BTreeMap<String, Quantity> = BTreeMap::new();
     if let Some(ref cpu) = resources.cpu_limit {
         resource_limits.insert("cpu".to_string(), Quantity(cpu.clone()));
@@ -191,7 +192,10 @@ pub fn build_pod_spec(
         pod_json["spec"]["containers"][0]["resources"] = res;
     }
 
-    serde_json::from_value(pod_json).expect("valid Pod spec")
+    serde_json::from_value(pod_json).map_err(|e| AgentError::ProcessFailed {
+        exit_code: -1,
+        stderr: format!("failed to build K8s Pod spec: {e}"),
+    })
 }
 
 #[cfg(test)]

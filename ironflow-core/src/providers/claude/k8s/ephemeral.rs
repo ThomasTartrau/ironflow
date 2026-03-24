@@ -247,7 +247,7 @@ impl AgentProvider for K8sEphemeralProvider {
                 "Never",
                 &self.image_pull_policy,
                 &self.env_vars,
-            );
+            )?;
 
             pods.create(&PostParams::default(), &pod_spec)
                 .await
@@ -263,51 +263,46 @@ impl AgentProvider for K8sEphemeralProvider {
             )
             .await;
 
-            // Always try to read logs and clean up, even on timeout
+            // Determine exit code from pod phase (must read BEFORE deleting)
+            let timed_out = wait_result.is_err();
+            let pod_phase = if timed_out {
+                "TimedOut".to_string()
+            } else {
+                // await_condition returns the pod when the condition is met
+                let condition_result =
+                    wait_result.expect("timeout already handled").map_err(|e| {
+                        AgentError::ProcessFailed {
+                            exit_code: -1,
+                            stderr: format!("failed waiting for pod completion: {e}"),
+                        }
+                    })?;
+                condition_result
+                    .and_then(|p| p.status)
+                    .and_then(|s| s.phase)
+                    .unwrap_or_else(|| "Unknown".to_string())
+            };
+
+            // Read logs before cleanup
             let logs = pods
                 .logs(&pod_name, &LogParams::default())
                 .await
                 .unwrap_or_default();
 
-            // Delete pod (best-effort)
+            // Delete pod (best-effort, after reading phase and logs)
             let _ = pods.delete(&pod_name, &DeleteParams::default()).await;
 
-            if wait_result.is_err() {
+            if timed_out {
                 warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out");
                 return Err(AgentError::Timeout {
                     limit: self.timeout,
                 });
             }
 
-            // Check if await_condition itself errored
-            wait_result.expect("timeout already handled").map_err(|e| {
-                AgentError::ProcessFailed {
-                    exit_code: -1,
-                    stderr: format!("failed waiting for pod completion: {e}"),
-                }
-            })?;
-
             let duration_ms = start.elapsed().as_millis() as u64;
-
-            // Determine exit code from pod phase
-            let pod_result = pods.get(&pod_name).await;
-            let exit_code = match &pod_result {
-                Ok(pod) => {
-                    let phase = pod
-                        .status
-                        .as_ref()
-                        .and_then(|s| s.phase.as_deref())
-                        .unwrap_or("Unknown");
-                    if phase == "Succeeded" { 0 } else { 1 }
-                }
-                Err(_) => {
-                    // Pod already deleted; infer from logs
-                    if logs.is_empty() { 1 } else { 0 }
-                }
-            };
+            let exit_code = if pod_phase == "Succeeded" { 0 } else { 1 };
 
             if exit_code != 0 {
-                error!(pod = %pod_name, "ephemeral claude pod failed");
+                error!(pod = %pod_name, phase = %pod_phase, "ephemeral claude pod failed");
                 return Err(AgentError::ProcessFailed {
                     exit_code,
                     stderr: if logs.is_empty() {

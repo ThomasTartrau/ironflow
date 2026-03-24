@@ -193,28 +193,43 @@ impl AgentProvider for DockerProvider {
             let collect_result = tokio::time::timeout(self.timeout, async {
                 match start_result {
                     StartExecResults::Attached { mut output, .. } => {
-                        while let Some(Ok(msg)) = output.next().await {
-                            match msg {
-                                bollard::container::LogOutput::StdOut { message } => {
+                        while let Some(result) = output.next().await {
+                            match result {
+                                Ok(bollard::container::LogOutput::StdOut { message }) => {
                                     stdout_buf.extend_from_slice(&message);
                                 }
-                                bollard::container::LogOutput::StdErr { message } => {
+                                Ok(bollard::container::LogOutput::StdErr { message }) => {
                                     stderr_buf.extend_from_slice(&message);
                                 }
-                                _ => {}
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!("docker exec stream error: {e}");
+                                    break;
+                                }
                             }
                         }
                     }
-                    StartExecResults::Detached => {}
+                    StartExecResults::Detached => {
+                        return Err(AgentError::ProcessFailed {
+                            exit_code: -1,
+                            stderr: "docker exec returned Detached mode — cannot capture output"
+                                .to_string(),
+                        });
+                    }
                 }
+                Ok(())
             })
             .await;
 
-            if collect_result.is_err() {
-                warn!(timeout = ?self.timeout, "docker exec timed out");
-                return Err(AgentError::Timeout {
-                    limit: self.timeout,
-                });
+            match collect_result {
+                Err(_) => {
+                    warn!(timeout = ?self.timeout, "docker exec timed out");
+                    return Err(AgentError::Timeout {
+                        limit: self.timeout,
+                    });
+                }
+                Ok(Err(e)) => return Err(e),
+                Ok(Ok(())) => {}
             }
 
             let duration_ms = start.elapsed().as_millis() as u64;

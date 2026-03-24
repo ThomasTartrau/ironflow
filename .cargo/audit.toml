@@ -1,0 +1,13 @@
+# Ignored advisories for transitive dependencies with no fix available.
+# These come from `russh` (transport-ssh feature) and have no upstream fix yet.
+
+[advisories]
+ignore = [
+    # libcrux-sha3 0.0.4 (via russh -> libcrux-ml-kem)
+    # No fixed version available
+    "RUSTSEC-2026-0074",
+
+    # rsa 0.10.0-rc.12 (via russh) — Marvin Attack timing sidechannel
+    # No fixed version available
+    "RUSTSEC-2023-0071",
+]
