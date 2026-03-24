@@ -35,12 +35,15 @@
 
 | | |
 |---|---|
+| | |
+|---|---|
 | **🦀 Imperative API** - A workflow is an `async fn`, not a config file | **🤖 AI Agent** - Claude Code in headless mode, invoked via CLI |
 | **🎯 Type-safe output** - Derive `JsonSchema` on your types, get typed responses | **💰 Budget control** - Per-step `max_budget_usd` prevents runaway costs |
 | **🧪 Record/Replay** - Deterministic agent tests without spending tokens | **❌ No retry logic** - A step fails, the workflow fails. Simple and predictable |
 | **🔀 Parallel execution** - `try_join_all` with optional concurrency limits | **🌐 Webhook auth** - GitHub, GitLab, HMAC-SHA256, static header |
 | **⏰ Cron scheduling** - Job scheduling via `tokio-cron-scheduler` | **📊 Prometheus metrics** - Shell, HTTP, agent, webhook, and cron counters |
 | **🏃 Dry-run mode** - Skip execution while logging intent | **📈 Workflow tracker** - Cost, tokens, and duration across steps |
+| **🚀 Remote transports** - Run Claude Code via SSH, Docker, or Kubernetes | **🔑 OAuth support** - Inject Claude OAuth credentials into remote pods |
 
 ---
 
@@ -50,7 +53,9 @@
 ironflow/
 ├── ironflow-core         # Operations: Shell, Http, Agent
 │   ├── operations/       #   Shell, Http, Agent builders + IntoFuture
-│   ├── providers/        #   ClaudeCodeProvider, RecordReplayProvider
+│   ├── providers/
+│   │   ├── claude/       #   Local, SSH, Docker, K8s transports
+│   │   └── record_replay #   RecordReplayProvider (test fixtures)
 │   ├── tracker.rs        #   WorkflowTracker (cost/tokens/duration)
 │   ├── parallel.rs       #   try_join_all, try_join_all_limited
 │   └── dry_run.rs        #   Global + per-operation dry-run control
@@ -207,6 +212,108 @@ let followup = Agent::new()
 # Ok(())
 # }
 ```
+
+</details>
+
+---
+
+## 🚀 Remote Transports
+
+Run Claude Code on remote machines instead of locally. Each transport is opt-in via feature flags.
+
+```bash
+cargo add ironflow-core --features transport-ssh
+cargo add ironflow-core --features transport-docker
+cargo add ironflow-core --features transport-k8s
+```
+
+### SSH
+
+Execute Claude Code on a remote host via SSH:
+
+```rust
+use ironflow_core::prelude::*;
+use ironflow_core::providers::claude::SshProvider;
+
+# async fn example() -> Result<(), OperationError> {
+let provider = SshProvider::new("build-server.example.com", "deploy")
+    .password("s3cret")
+    .working_dir("/opt/project");
+
+let result = Agent::new()
+    .prompt("Review the codebase")
+    .run(&provider)
+    .await?;
+# Ok(())
+# }
+```
+
+### Docker
+
+Execute Claude Code inside a running Docker container:
+
+```rust
+use ironflow_core::prelude::*;
+use ironflow_core::providers::claude::DockerProvider;
+
+# async fn example() -> Result<(), OperationError> {
+let provider = DockerProvider::new("claude-worker")
+    .user("node")
+    .working_dir("/workspace");
+
+let result = Agent::new()
+    .prompt("Review the codebase")
+    .run(&provider)
+    .await?;
+# Ok(())
+# }
+```
+
+### Kubernetes
+
+Two modes: ephemeral (one pod per invocation) and persistent (reuses a worker pod).
+
+```rust
+use ironflow_core::prelude::*;
+use ironflow_core::providers::claude::{
+    K8sEphemeralProvider, K8sPersistentProvider, K8sClusterConfig, ImagePullPolicy,
+};
+
+# async fn example() -> Result<(), OperationError> {
+// Ephemeral: creates a pod, runs claude, deletes the pod
+let ephemeral = K8sEphemeralProvider::new("my-registry/claude:v1")
+    .namespace("ci")
+    .image_pull_policy(ImagePullPolicy::IfNotPresent)
+    .oauth_credentials(r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-..."}}"#);
+
+// Persistent: reuses a long-running worker pod
+let persistent = K8sPersistentProvider::new("my-registry/claude:v1")
+    .pod_name("claude-worker")
+    .namespace("ci")
+    .oauth_credentials(r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-..."}}"#);
+
+// Custom kubeconfig (file or inline YAML)
+let provider = K8sEphemeralProvider::new("my-registry/claude:v1")
+    .cluster_config(K8sClusterConfig::KubeconfigFile("/path/to/kubeconfig".into()));
+
+let result = Agent::new()
+    .prompt("Review the codebase")
+    .run(&ephemeral)
+    .await?;
+# Ok(())
+# }
+```
+
+<details>
+<summary><b>Transport comparison</b></summary>
+
+| Transport | Feature flag | Use case |
+|-----------|-------------|----------|
+| `ClaudeCodeProvider` | *(always available)* | Claude CLI installed locally |
+| `SshProvider` | `transport-ssh` | Remote build server or GPU instance |
+| `DockerProvider` | `transport-docker` | Isolated container with credentials |
+| `K8sEphemeralProvider` | `transport-k8s` | Full isolation, one pod per invocation |
+| `K8sPersistentProvider` | `transport-k8s` | Low latency, reuses worker pod |
 
 </details>
 

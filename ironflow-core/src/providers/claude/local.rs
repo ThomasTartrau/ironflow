@@ -1,0 +1,196 @@
+//! Local Claude Code CLI provider.
+//!
+//! [`ClaudeCodeProvider`] spawns the `claude` binary as a local child process.
+//! This is the default transport — it requires the `claude` CLI to be installed
+//! on the same machine.
+//!
+//! # Requirements
+//!
+//! The `claude` binary must be available on `$PATH`. Install it via
+//! `npm install -g @anthropic-ai/claude-code`.
+//!
+//! # Examples
+//!
+//! ```no_run
+//! use ironflow_core::prelude::*;
+//!
+//! # async fn example() -> Result<(), OperationError> {
+//! let provider = ClaudeCodeProvider::new();
+//!
+//! let result = Agent::new()
+//!     .prompt("What is 2 + 2?")
+//!     .run(&provider)
+//!     .await?;
+//!
+//! println!("{}", result.text());
+//! # Ok(())
+//! # }
+//! ```
+
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+
+use tokio::process::Command;
+use tracing::{debug, error, warn};
+
+use crate::error::AgentError;
+use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
+use crate::utils::truncate_output;
+
+use super::common::{self, DEFAULT_TIMEOUT};
+
+/// [`AgentProvider`] that shells out to the
+/// `claude` CLI on the local machine.
+///
+/// The provider spawns a `claude` child process for each invocation, passing
+/// the prompt and configuration as command-line arguments. The `CLAUDECODE`
+/// environment variable is removed to avoid recursive invocation when running
+/// inside Claude Code itself.
+#[derive(Clone)]
+pub struct ClaudeCodeProvider {
+    /// Maximum wall-clock time to wait for the `claude` process.
+    pub(crate) timeout: Duration,
+}
+
+impl ClaudeCodeProvider {
+    /// Create a new provider with the default timeout of 5 minutes.
+    pub fn new() -> Self {
+        Self {
+            timeout: DEFAULT_TIMEOUT,
+        }
+    }
+
+    /// Override the default timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    ///
+    /// let provider = ClaudeCodeProvider::new()
+    ///     .timeout(Duration::from_secs(600));
+    /// ```
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+impl Default for ClaudeCodeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AgentProvider for ClaudeCodeProvider {
+    fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
+        Box::pin(async move {
+            let args = common::build_args(config)?;
+
+            debug!(
+                model = %config.model,
+                has_system_prompt = config.system_prompt.is_some(),
+                has_json_schema = config.json_schema.is_some(),
+                permission_mode = ?config.permission_mode,
+                "spawning claude process"
+            );
+
+            let start = Instant::now();
+
+            let mut cmd = Command::new("claude");
+            cmd.args(&args)
+                .env_remove("CLAUDECODE")
+                .env_remove("IRONFLOW_ALLOW_BYPASS")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+
+            if let Some(ref dir) = config.working_dir {
+                cmd.current_dir(dir);
+            }
+
+            let child = cmd.spawn().map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to spawn claude: {e}"),
+            })?;
+
+            let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
+                Ok(result) => result.map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to wait for claude: {e}"),
+                })?,
+                Err(_) => {
+                    warn!(timeout = ?self.timeout, "claude process timed out");
+                    return Err(AgentError::Timeout {
+                        limit: self.timeout,
+                    });
+                }
+            };
+
+            let duration_ms = start.elapsed().as_millis() as u64;
+
+            if !output.status.success() {
+                let stderr = truncate_output(&output.stderr, "claude stderr");
+                let exit_code = output.status.code().unwrap_or(-1);
+
+                let error_detail = if stderr.is_empty() {
+                    let stdout = truncate_output(&output.stdout, "claude stdout (error fallback)");
+                    if stdout.is_empty() {
+                        "(no output captured)".to_string()
+                    } else {
+                        stdout
+                    }
+                } else {
+                    stderr
+                };
+
+                error!(
+                    exit_code,
+                    error_detail_len = error_detail.len(),
+                    "claude process failed"
+                );
+                return Err(AgentError::ProcessFailed {
+                    exit_code,
+                    stderr: error_detail,
+                });
+            }
+
+            let stdout = truncate_output(&output.stdout, "claude stdout");
+            debug!(stdout_len = stdout.len(), "claude process completed");
+
+            common::parse_response(&stdout, config, duration_ms)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_default_timeout() {
+        let provider = ClaudeCodeProvider::new();
+        assert_eq!(provider.timeout, DEFAULT_TIMEOUT);
+    }
+
+    #[test]
+    fn provider_custom_timeout() {
+        let provider = ClaudeCodeProvider::new().timeout(Duration::from_secs(600));
+        assert_eq!(provider.timeout, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn provider_default_matches_new() {
+        let from_new = ClaudeCodeProvider::new();
+        let from_default = ClaudeCodeProvider::default();
+        assert_eq!(from_new.timeout, from_default.timeout);
+    }
+
+    #[test]
+    fn provider_clone() {
+        let provider = ClaudeCodeProvider::new().timeout(Duration::from_secs(42));
+        let cloned = provider.clone();
+        assert_eq!(cloned.timeout, Duration::from_secs(42));
+    }
+}
