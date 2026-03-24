@@ -58,7 +58,9 @@ struct WebhookRoute {
 ///
 /// `Runtime` uses a builder pattern: create one with [`Runtime::new`], register
 /// webhook routes with [`Runtime::webhook`] and cron jobs with
-/// [`Runtime::cron`], then call [`Runtime::serve`] to start listening.
+/// [`Runtime::cron`], then call [`Runtime::serve`] to start both the HTTP
+/// server and the cron scheduler, or [`Runtime::run_crons`] to run only the
+/// cron scheduler without an HTTP listener.
 ///
 /// # Built-in endpoints
 ///
@@ -306,7 +308,7 @@ impl Runtime {
         if !self.crons.is_empty() {
             warn!(
                 cron_count = self.crons.len(),
-                "into_router() drops registered cron jobs - use serve() to start both webhooks and crons"
+                "into_router() drops registered cron jobs - use serve() or run_crons() to start them"
             );
         }
         let tracker = Arc::new(HandlerTracker::new(self.max_concurrent_handlers));
@@ -319,6 +321,104 @@ impl Runtime {
         )
     }
 
+    /// Starts the cron scheduler with all registered cron jobs.
+    ///
+    /// This is an internal helper used by both [`Runtime::serve`] and
+    /// [`Runtime::run_crons`].
+    async fn start_scheduler(crons: Vec<CronJob>) -> Result<JobScheduler, RuntimeError> {
+        let scheduler = JobScheduler::new().await?;
+
+        for cron_job in crons {
+            let handler = Arc::new(cron_job.handler);
+            let name = cron_job.name.clone();
+            let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let job = Job::new_async(cron_job.schedule.as_str(), move |_uuid, _lock| {
+                let handler = handler.clone();
+                let name = name.clone();
+                let running = running.clone();
+                Box::pin(async move {
+                    if running.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                        warn!(cron = %name, "cron job still running, skipping this tick");
+                        return;
+                    }
+                    info!(cron = %name, "cron job triggered");
+                    #[cfg(feature = "prometheus")]
+                    metrics::counter!(metric_names::CRON_RUNS_TOTAL, "job" => name.clone())
+                        .increment(1);
+                    (handler)().await;
+                    running.store(false, std::sync::atomic::Ordering::Release);
+                })
+            })?;
+            info!(cron = %cron_job.name, schedule = %cron_job.schedule, "registered cron job");
+            scheduler.add(job).await?;
+        }
+
+        scheduler.start().await?;
+        Ok(scheduler)
+    }
+
+    /// Starts only the cron scheduler, blocking until a shutdown signal is
+    /// received (`Ctrl+C` / `SIGTERM`).
+    ///
+    /// Unlike [`Runtime::serve`], this does **not** start an HTTP server. Any
+    /// registered webhooks are ignored (a warning is logged if webhooks were
+    /// registered).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// - The cron scheduler fails to initialise or a cron expression is invalid.
+    /// - The scheduler fails to shut down cleanly.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_runtime::prelude::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), ironflow_runtime::error::RuntimeError> {
+    ///     Runtime::new()
+    ///         .cron("0 0 * * * *", "hourly-sync", || async {
+    ///             println!("syncing...");
+    ///         })
+    ///         .run_crons()
+    ///         .await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn run_crons(self) -> Result<(), RuntimeError> {
+        let _ = dotenvy::dotenv();
+
+        if !self.webhooks.is_empty() {
+            warn!(
+                webhook_count = self.webhooks.len(),
+                "run_crons() ignores registered webhooks - use serve() to start both webhooks and crons"
+            );
+        }
+
+        #[cfg(feature = "prometheus")]
+        {
+            match metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder() {
+                Ok(_) => info!("prometheus metrics recorder installed"),
+                Err(_) => {
+                    info!("prometheus metrics recorder already installed, reusing existing")
+                }
+            }
+        }
+
+        let mut scheduler = Self::start_scheduler(self.crons).await?;
+
+        info!("ironflow cron scheduler running (no HTTP server)");
+        shutdown_signal().await;
+
+        info!("shutting down scheduler");
+        scheduler.shutdown().await.map_err(RuntimeError::Shutdown)?;
+        info!("ironflow cron scheduler stopped");
+
+        Ok(())
+    }
+
     /// Starts the HTTP server and cron scheduler, blocking until shutdown.
     ///
     /// This method:
@@ -329,6 +429,9 @@ impl Runtime {
     ///    routes plus a `GET /health` endpoint.
     /// 4. Binds to `addr` and serves until a `Ctrl+C` signal is received.
     /// 5. Gracefully shuts down the scheduler before returning.
+    ///
+    /// If you only need cron jobs without an HTTP server, use
+    /// [`Runtime::run_crons`] instead.
     ///
     /// # Errors
     ///
@@ -368,34 +471,7 @@ impl Runtime {
             }
         };
 
-        let mut scheduler = JobScheduler::new().await?;
-
-        for cron_job in self.crons {
-            let handler = Arc::new(cron_job.handler);
-            let name = cron_job.name.clone();
-            let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let job = Job::new_async(cron_job.schedule.as_str(), move |_uuid, _lock| {
-                let handler = handler.clone();
-                let name = name.clone();
-                let running = running.clone();
-                Box::pin(async move {
-                    if running.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                        warn!(cron = %name, "cron job still running, skipping this tick");
-                        return;
-                    }
-                    info!(cron = %name, "cron job triggered");
-                    #[cfg(feature = "prometheus")]
-                    metrics::counter!(metric_names::CRON_RUNS_TOTAL, "job" => name.clone())
-                        .increment(1);
-                    (handler)().await;
-                    running.store(false, std::sync::atomic::Ordering::Release);
-                })
-            })?;
-            info!(cron = %cron_job.name, schedule = %cron_job.schedule, "registered cron job");
-            scheduler.add(job).await?;
-        }
-
-        scheduler.start().await?;
+        let mut scheduler = Self::start_scheduler(self.crons).await?;
 
         let tracker = Arc::new(HandlerTracker::new(self.max_concurrent_handlers));
         let router = Self::build_router(

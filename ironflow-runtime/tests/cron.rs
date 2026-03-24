@@ -10,7 +10,6 @@ async fn cron_job_fires_within_expected_window() {
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
 
-    // Every second (6-field cron: sec min hour dom month dow).
     let rt = Runtime::new().cron("* * * * * *", "every-second", move || {
         let counter = counter_clone.clone();
         async move {
@@ -18,20 +17,10 @@ async fn cron_job_fires_within_expected_window() {
         }
     });
 
-    // Start the full server (which also starts the scheduler).
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
     let server = tokio::spawn(async move {
-        // We can't call serve() directly because it blocks on ctrl_c.
-        // Instead, build the router + start the cron via serve internals.
-        // Since serve() blocks, we'll just use the raw scheduler approach.
-        // But serve() is the only way to start crons, so we spawn + cancel.
-        let _ = rt.serve(&format!("127.0.0.1:{}", addr.port())).await;
+        let _ = rt.run_crons().await;
     });
 
-    // Wait long enough for at least 2 cron ticks (the scheduler may need
-    // ~1 s to initialise, so give it 3 s total).
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let count = counter.load(Ordering::SeqCst);
@@ -45,16 +34,16 @@ async fn cron_job_fires_within_expected_window() {
 
 #[tokio::test]
 async fn cron_job_receives_correct_name_in_builder() {
-    // Registering a cron with an invalid expression should fail at serve time.
+    // Registering a cron with an invalid expression should fail at run_crons time.
     // This is a negative test.
     let rt = Runtime::new().cron("not-a-cron-expr", "bad-cron", || async {});
 
-    let result = timeout(Duration::from_secs(5), rt.serve("127.0.0.1:0")).await;
+    let result = timeout(Duration::from_secs(5), rt.run_crons()).await;
 
     match result {
         Ok(Err(_)) => {} // Expected: invalid cron expression error.
         Ok(Ok(())) => panic!("expected an error for invalid cron expression"),
-        Err(_) => panic!("serve timed out instead of failing fast"),
+        Err(_) => panic!("run_crons timed out instead of failing fast"),
     }
 }
 
@@ -79,6 +68,74 @@ async fn multiple_cron_jobs_can_be_registered() {
             }
         });
 
+    let server = tokio::spawn(async move {
+        let _ = rt.run_crons().await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let a = counter_a.load(Ordering::SeqCst);
+    let b = counter_b.load(Ordering::SeqCst);
+    assert!(a >= 1, "job-a should have fired at least once, got {a}");
+    assert!(b >= 1, "job-b should have fired at least once, got {b}");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn run_crons_works_without_http_server() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    // No webhooks registered, only a cron job.
+    let rt = Runtime::new().cron("* * * * * *", "cron-only", move || {
+        let counter = counter_clone.clone();
+        async move {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+
+    let handle = tokio::spawn(async move {
+        let _ = rt.run_crons().await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let count = counter.load(Ordering::SeqCst);
+    assert!(
+        count >= 1,
+        "expected at least 1 cron execution without HTTP, got {count}"
+    );
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn run_crons_invalid_expression_fails() {
+    let rt = Runtime::new().cron("bad", "invalid", || async {});
+
+    let result = timeout(Duration::from_secs(5), rt.run_crons()).await;
+
+    match result {
+        Ok(Err(_)) => {} // Expected: invalid cron expression error.
+        Ok(Ok(())) => panic!("expected an error for invalid cron expression"),
+        Err(_) => panic!("run_crons timed out instead of failing fast"),
+    }
+}
+
+#[tokio::test]
+async fn serve_still_starts_crons() {
+    // Verify that serve() still starts the cron scheduler (regression test).
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    let rt = Runtime::new().cron("* * * * * *", "serve-cron", move || {
+        let counter = counter_clone.clone();
+        async move {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -88,10 +145,11 @@ async fn multiple_cron_jobs_can_be_registered() {
 
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let a = counter_a.load(Ordering::SeqCst);
-    let b = counter_b.load(Ordering::SeqCst);
-    assert!(a >= 1, "job-a should have fired at least once, got {a}");
-    assert!(b >= 1, "job-b should have fired at least once, got {b}");
+    let count = counter.load(Ordering::SeqCst);
+    assert!(
+        count >= 1,
+        "serve() should still start crons, got {count} executions"
+    );
 
     server.abort();
 }

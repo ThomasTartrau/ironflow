@@ -4,8 +4,10 @@
 //! cron scheduling on top of [`ironflow_core`] operations.
 //!
 //! This crate exposes a [`runtime::Runtime`] builder that lets you declaratively register
-//! webhook routes (with pluggable authentication) and cron jobs, then start an
-//! [Axum](https://docs.rs/axum) HTTP server with graceful shutdown support.
+//! webhook routes (with pluggable authentication) and cron jobs, then either start a
+//! full [Axum](https://docs.rs/axum) HTTP server via [`runtime::Runtime::serve`] or run
+//! only the cron scheduler via [`runtime::Runtime::run_crons`], both with graceful
+//! shutdown support.
 //!
 //! # Quick start
 //!

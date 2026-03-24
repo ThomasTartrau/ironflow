@@ -2,8 +2,9 @@
 //!
 //! This module is `pub(crate)` and not part of the public API. Cron jobs are
 //! registered through [`Runtime::cron`](crate::runtime::Runtime::cron) and
-//! executed by the [`tokio_cron_scheduler`] scheduler that [`Runtime::serve`](crate::runtime::Runtime::serve)
-//! starts.
+//! executed by the [`tokio_cron_scheduler`] scheduler that
+//! [`Runtime::serve`](crate::runtime::Runtime::serve) or
+//! [`Runtime::run_crons`](crate::runtime::Runtime::run_crons) starts.
 
 use std::future::Future;
 use std::pin::Pin;
