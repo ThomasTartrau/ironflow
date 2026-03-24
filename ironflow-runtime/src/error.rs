@@ -3,7 +3,8 @@
 use thiserror::Error;
 use tokio_cron_scheduler::JobSchedulerError;
 
-/// Error returned by [`Runtime::serve`](crate::runtime::Runtime::serve).
+/// Error returned by [`Runtime::serve`](crate::runtime::Runtime::serve) and
+/// [`Runtime::run_crons`](crate::runtime::Runtime::run_crons).
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     /// Failed to bind the TCP listener to the requested address.
