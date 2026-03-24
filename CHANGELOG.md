@@ -1,3 +1,9 @@
+## [1.2.0](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.1.0...v1.2.0) (2026-03-24)
+
+### Features
+
+* add Runtime::run_crons() to run cron jobs without HTTP server ([9655d56](https://gitlab.com/ThomasTartrau/ironflow/commit/9655d565be18f8e970e9846c872b317fcb2720ea))
+
 ## [1.1.0](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.0.1...v1.1.0) (2026-03-22)
 
 ### Features
