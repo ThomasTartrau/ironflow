@@ -232,10 +232,10 @@ impl AgentProvider for SshProvider {
             let args = common::build_args(config)?;
 
             // Build the remote command with shell escaping.
-            // Unset CLAUDECODE (prevents recursive invocation) and
-            // IRONFLOW_ALLOW_BYPASS (prevents leak to child process).
+            // Unset all CLAUDE* and IRONFLOW_ALLOW_BYPASS env vars to prevent
+            // sub-agent mode interference on the remote host.
             let claude_cmd = common::build_shell_command(&self.claude_path, &args);
-            let env_prefix = "unset CLAUDECODE IRONFLOW_ALLOW_BYPASS 2>/dev/null; ";
+            let env_prefix = common::env_unset_shell_prefix();
             let remote_cmd = match (&self.working_dir, &config.working_dir) {
                 (_, Some(dir)) | (Some(dir), None) => {
                     format!(
