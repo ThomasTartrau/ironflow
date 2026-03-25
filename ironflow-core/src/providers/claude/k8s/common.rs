@@ -178,7 +178,9 @@ pub fn build_pod_spec(
                 "image": image,
                 "imagePullPolicy": image_pull_policy.as_str(),
                 "command": command,
-                "env": std::iter::once(json!({"name": "CLAUDECODE", "value": ""}))
+                "env": super::super::common::env_vars_to_remove()
+                    .iter()
+                    .map(|var| json!({"name": var, "value": ""}))
                     .chain(env_vars.iter().map(|(k, v)| json!({"name": k, "value": v})))
                     .collect::<Vec<_>>()
             }]

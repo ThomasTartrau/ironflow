@@ -100,11 +100,15 @@ impl AgentProvider for ClaudeCodeProvider {
 
             let mut cmd = Command::new("claude");
             cmd.args(&args)
-                .env_remove("CLAUDECODE")
-                .env_remove("IRONFLOW_ALLOW_BYPASS")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
+
+            // Remove ALL inherited Claude Code env vars to prevent
+            // sub-agent mode interference (model override, entrypoint detection, etc.)
+            for var in common::env_vars_to_remove() {
+                cmd.env_remove(&var);
+            }
 
             if let Some(ref dir) = config.working_dir {
                 cmd.current_dir(dir);

@@ -154,6 +154,13 @@ impl AgentProvider for DockerProvider {
 
             let docker = self.connect()?;
 
+            // Clear all CLAUDE* and IRONFLOW_ALLOW_BYPASS env vars to prevent
+            // sub-agent mode interference inside the container.
+            let env_clear: Vec<String> = common::env_vars_to_remove()
+                .iter()
+                .map(|var| format!("{var}="))
+                .collect();
+
             // Create exec instance
             let exec_config = CreateExecOptions {
                 cmd: Some(cmd.iter().map(|s| s.as_str()).collect()),
@@ -163,10 +170,7 @@ impl AgentProvider for DockerProvider {
                 tty: Some(false),
                 working_dir: work_dir,
                 user: self.user.as_deref(),
-                env: Some(vec![
-                    // Prevent recursive invocation inside Claude Code
-                    "CLAUDECODE=",
-                ]),
+                env: Some(env_clear.iter().map(|s| s.as_str()).collect()),
                 ..Default::default()
             };
 

@@ -52,6 +52,47 @@ impl ClaudeUsage {
     }
 }
 
+/// Environment variable names that must be removed before spawning the
+/// `claude` CLI to prevent sub-agent mode interference.
+///
+/// When ironflow runs inside Claude Code (or cmux), the child process inherits
+/// variables like `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SUBAGENT_MODEL`, etc.
+/// that force degraded/sub-agent behaviour, wrong models, or altered context
+/// handling. We strip **all** `CLAUDE*` vars plus `IRONFLOW_ALLOW_BYPASS`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # fn example() {
+/// let vars = ironflow_core::providers::claude::common::env_vars_to_remove();
+/// assert!(vars.contains(&"IRONFLOW_ALLOW_BYPASS".to_string()));
+/// # }
+/// ```
+pub fn env_vars_to_remove() -> Vec<String> {
+    let mut vars: Vec<String> = std::env::vars()
+        .filter_map(|(key, _)| {
+            if key.starts_with("CLAUDE") {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    vars.push("IRONFLOW_ALLOW_BYPASS".to_string());
+    vars
+}
+
+/// Names of `CLAUDE*` env vars to unset in a remote shell command.
+///
+/// Returns a space-separated list suitable for `unset VAR1 VAR2 ...`.
+pub fn env_unset_shell_prefix() -> String {
+    let vars = env_vars_to_remove();
+    if vars.is_empty() {
+        return String::new();
+    }
+    format!("unset {} 2>/dev/null; ", vars.join(" "))
+}
+
 /// Push a CLI flag and its value onto the argument list.
 pub fn push_flag(args: &mut Vec<String>, flag: &str, value: &str) {
     args.push(flag.to_string());
@@ -443,6 +484,61 @@ mod tests {
         assert_eq!(args[1], "hello world");
         assert_eq!(args[2], "--output-format");
         assert_eq!(args[3], "json");
+    }
+
+    #[test]
+    fn env_vars_to_remove_always_includes_ironflow_allow_bypass() {
+        let vars = env_vars_to_remove();
+        assert!(
+            vars.contains(&"IRONFLOW_ALLOW_BYPASS".to_string()),
+            "IRONFLOW_ALLOW_BYPASS must always be removed"
+        );
+    }
+
+    #[test]
+    fn env_vars_to_remove_captures_claude_prefixed_vars() {
+        // SAFETY: single-threaded test, sets a test-specific env var
+        // that no other test reads concurrently.
+        unsafe { std::env::set_var("CLAUDE_CODE_ENTRYPOINT", "cli") };
+        unsafe { std::env::set_var("CLAUDE_CODE_SUBAGENT_MODEL", "haiku") };
+        unsafe { std::env::set_var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "50") };
+        unsafe { std::env::set_var("CLAUDECODE", "1") };
+
+        let vars = env_vars_to_remove();
+
+        assert!(vars.contains(&"CLAUDE_CODE_ENTRYPOINT".to_string()));
+        assert!(vars.contains(&"CLAUDE_CODE_SUBAGENT_MODEL".to_string()));
+        assert!(vars.contains(&"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".to_string()));
+        assert!(vars.contains(&"CLAUDECODE".to_string()));
+        assert!(vars.contains(&"IRONFLOW_ALLOW_BYPASS".to_string()));
+
+        // Cleanup
+        unsafe { std::env::remove_var("CLAUDE_CODE_ENTRYPOINT") };
+        unsafe { std::env::remove_var("CLAUDE_CODE_SUBAGENT_MODEL") };
+        unsafe { std::env::remove_var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") };
+        unsafe { std::env::remove_var("CLAUDECODE") };
+    }
+
+    #[test]
+    fn env_vars_to_remove_excludes_unrelated_vars() {
+        let vars = env_vars_to_remove();
+        // PATH, HOME, etc. should never be included
+        assert!(!vars.contains(&"PATH".to_string()));
+        assert!(!vars.contains(&"HOME".to_string()));
+    }
+
+    #[test]
+    fn env_unset_shell_prefix_includes_all_claude_vars() {
+        // SAFETY: single-threaded test, sets a test-specific env var.
+        unsafe { std::env::set_var("CLAUDE_CODE_ENTRYPOINT", "cli") };
+
+        let prefix = env_unset_shell_prefix();
+        assert!(prefix.starts_with("unset "));
+        assert!(prefix.ends_with("2>/dev/null; "));
+        assert!(prefix.contains("CLAUDE_CODE_ENTRYPOINT"));
+        assert!(prefix.contains("IRONFLOW_ALLOW_BYPASS"));
+
+        unsafe { std::env::remove_var("CLAUDE_CODE_ENTRYPOINT") };
     }
 
     #[test]
