@@ -1,3 +1,9 @@
+## [1.3.1](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.3.0...v1.3.1) (2026-03-25)
+
+### Bug Fixes
+
+* strip all CLAUDE* env vars from child process to prevent sub-agent mode ([e590a03](https://gitlab.com/ThomasTartrau/ironflow/commit/e590a034bea06756a65b347715d03d09b6b61ceb))
+
 ## [1.3.0](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.2.0...v1.3.0) (2026-03-24)
 
 ### Features
