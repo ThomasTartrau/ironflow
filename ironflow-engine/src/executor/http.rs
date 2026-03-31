@@ -85,8 +85,11 @@ impl StepExecutor for HttpExecutor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
+    use axum::routing::{delete, get, patch, post, put};
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
+    use tokio::net::TcpListener;
 
     fn create_test_provider() -> Arc<dyn AgentProvider> {
         let inner = ClaudeCodeProvider::new();
@@ -96,9 +99,27 @@ mod tests {
         ))
     }
 
+    async fn start_test_server() -> String {
+        let app = Router::new()
+            .route("/status/200", get(|| async { "ok" }))
+            .route("/post", post(|| async { "ok" }))
+            .route("/put", put(|| async { "ok" }))
+            .route("/patch", patch(|| async { "ok" }))
+            .route("/delete", delete(|| async { "ok" }))
+            .route("/headers", get(|| async { "ok" }));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://localhost:{port}")
+    }
+
     #[tokio::test]
     async fn http_get_method() {
-        let config = HttpConfig::get("http://httpbin.org/status/200");
+        let base = start_test_server().await;
+        let config = HttpConfig::get(&format!("{base}/status/200"));
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -112,7 +133,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_post_method() {
-        let config = HttpConfig::post("http://httpbin.org/post");
+        let base = start_test_server().await;
+        let config = HttpConfig::post(&format!("{base}/post"));
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -122,7 +144,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_put_method() {
-        let config = HttpConfig::put("http://httpbin.org/put");
+        let base = start_test_server().await;
+        let config = HttpConfig::put(&format!("{base}/put"));
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -132,7 +155,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_patch_method() {
-        let config = HttpConfig::patch("http://httpbin.org/patch");
+        let base = start_test_server().await;
+        let config = HttpConfig::patch(&format!("{base}/patch"));
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -142,7 +166,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_delete_method() {
-        let config = HttpConfig::delete("http://httpbin.org/delete");
+        let base = start_test_server().await;
+        let config = HttpConfig::delete(&format!("{base}/delete"));
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -152,7 +177,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_unsupported_method_returns_error() {
-        let mut config = HttpConfig::get("http://httpbin.org/status/200");
+        let base = start_test_server().await;
+        let mut config = HttpConfig::get(&format!("{base}/status/200"));
         config.method = "INVALID".to_string();
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
@@ -169,7 +195,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_with_custom_headers() {
-        let config = HttpConfig::get("http://httpbin.org/headers")
+        let base = start_test_server().await;
+        let config = HttpConfig::get(&format!("{base}/headers"))
             .header("X-Custom-Header", "test-value")
             .header("Authorization", "Bearer token");
         let executor = HttpExecutor::new(&config);
@@ -181,8 +208,9 @@ mod tests {
 
     #[tokio::test]
     async fn http_with_json_body() {
+        let base = start_test_server().await;
         let config =
-            HttpConfig::post("http://httpbin.org/post").json(json!({"key": "value", "number": 42}));
+            HttpConfig::post(&format!("{base}/post")).json(json!({"key": "value", "number": 42}));
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -192,7 +220,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_step_output_has_structure() {
-        let config = HttpConfig::get("http://httpbin.org/status/200");
+        let base = start_test_server().await;
+        let config = HttpConfig::get(&format!("{base}/status/200"));
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 

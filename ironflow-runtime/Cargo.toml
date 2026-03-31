@@ -9,7 +9,7 @@ description = "Runtime daemon for ironflow: webhooks (axum) and cron scheduling"
 repository = "https://gitlab.com/ThomasTartrau/ironflow"
 keywords = ["workflow", "webhook", "cron", "runtime", "axum"]
 categories = ["asynchronous", "web-programming::http-server", "development-tools"]
-exclude = [".gitlab-ci.yml", ".releaserc.json", "release.toml"]
+exclude = [".gitlab-ci.yml", "release-plz.toml"]
 
 [dependencies]
 ironflow-core = { version = "2.0.0", path = "../ironflow-core" }
