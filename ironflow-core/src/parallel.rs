@@ -185,7 +185,7 @@ mod tests {
 
     #[tokio::test]
     async fn try_join_all_single_future() {
-        let results = try_join_all(vec![Shell::new("echo hello").run()])
+        let results = try_join_all(vec![Shell::new("echo hello").dry_run(false).run()])
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -195,9 +195,9 @@ mod tests {
     #[tokio::test]
     async fn try_join_all_multiple_futures_preserves_order() {
         let results = try_join_all(vec![
-            Shell::new("echo one").run(),
-            Shell::new("echo two").run(),
-            Shell::new("echo three").run(),
+            Shell::new("echo one").dry_run(false).run(),
+            Shell::new("echo two").dry_run(false).run(),
+            Shell::new("echo three").dry_run(false).run(),
         ])
         .await
         .unwrap();
@@ -220,7 +220,10 @@ mod tests {
                 async move {
                     let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
                     max_concurrent.fetch_max(current, Ordering::SeqCst);
-                    let result = Shell::new(&format!("sleep 0.05 && echo {i}")).run().await;
+                    let result = Shell::new(&format!("sleep 0.05 && echo {i}"))
+                        .dry_run(false)
+                        .run()
+                        .await;
                     concurrent.fetch_sub(1, Ordering::SeqCst);
                     result
                 }
@@ -240,9 +243,9 @@ mod tests {
     #[tokio::test]
     async fn try_join_all_returns_first_error() {
         let result = try_join_all(vec![
-            Shell::new("echo ok").run(),
-            Shell::new("exit 1").run(),
-            Shell::new("echo also ok").run(),
+            Shell::new("echo ok").dry_run(false).run(),
+            Shell::new("exit 1").dry_run(false).run(),
+            Shell::new("echo also ok").dry_run(false).run(),
         ])
         .await;
 
@@ -254,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn try_join_all_from_iterator() {
         let commands = ["echo alpha", "echo beta"];
-        let results = try_join_all(commands.iter().map(|c| Shell::new(c).run()))
+        let results = try_join_all(commands.iter().map(|c| Shell::new(c).dry_run(false).run()))
             .await
             .unwrap();
 
@@ -279,9 +282,9 @@ mod tests {
     async fn limited_preserves_order() {
         let results = try_join_all_limited(
             vec![
-                Shell::new("echo one").run(),
-                Shell::new("echo two").run(),
-                Shell::new("echo three").run(),
+                Shell::new("echo one").dry_run(false).run(),
+                Shell::new("echo two").dry_run(false).run(),
+                Shell::new("echo three").dry_run(false).run(),
             ],
             2,
         )
@@ -305,7 +308,10 @@ mod tests {
                 async move {
                     let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
                     max_concurrent.fetch_max(current, Ordering::SeqCst);
-                    let result = Shell::new(&format!("sleep 0.05 && echo {i}")).run().await;
+                    let result = Shell::new(&format!("sleep 0.05 && echo {i}"))
+                        .dry_run(false)
+                        .run()
+                        .await;
                     concurrent.fetch_sub(1, Ordering::SeqCst);
                     result
                 }
@@ -325,9 +331,9 @@ mod tests {
     async fn limited_returns_first_error() {
         let result = try_join_all_limited(
             vec![
-                Shell::new("echo ok").run(),
-                Shell::new("exit 42").run(),
-                Shell::new("echo also ok").run(),
+                Shell::new("echo ok").dry_run(false).run(),
+                Shell::new("exit 42").dry_run(false).run(),
+                Shell::new("echo also ok").dry_run(false).run(),
             ],
             2,
         )
@@ -336,17 +342,15 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
+    #[tokio::test]
     #[should_panic(expected = "concurrency limit must be greater than 0")]
-    fn limited_zero_limit_panics() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let _: Result<Vec<()>, _> = try_join_all_limited(
-                Vec::<std::pin::Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(),
-                0,
-            )
-            .await;
-        });
+    async fn limited_zero_limit_panics() {
+        let _: Result<Vec<()>, _> = try_join_all_limited(
+            Vec::<std::pin::Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(
+            ),
+            0,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -361,7 +365,10 @@ mod tests {
                 async move {
                     let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
                     max_concurrent.fetch_max(current, Ordering::SeqCst);
-                    let result = Shell::new(&format!("sleep 0.05 && echo {i}")).run().await;
+                    let result = Shell::new(&format!("sleep 0.05 && echo {i}"))
+                        .dry_run(false)
+                        .run()
+                        .await;
                     concurrent.fetch_sub(1, Ordering::SeqCst);
                     result
                 }
@@ -382,7 +389,10 @@ mod tests {
     #[tokio::test]
     async fn limited_with_limit_greater_than_count() {
         let results = try_join_all_limited(
-            vec![Shell::new("echo x").run(), Shell::new("echo y").run()],
+            vec![
+                Shell::new("echo x").dry_run(false).run(),
+                Shell::new("echo y").dry_run(false).run(),
+            ],
             100,
         )
         .await

@@ -18,11 +18,13 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum OperationError {
     /// A shell command exited with a non-zero status code.
-    ///
-    /// * `exit_code` - the process exit code (or `-1` if the process could not be spawned).
-    /// * `stderr` - the captured standard-error output, truncated to [`MAX_OUTPUT_SIZE`](crate::utils::MAX_OUTPUT_SIZE).
     #[error("shell exited with code {exit_code}: {stderr}")]
-    Shell { exit_code: i32, stderr: String },
+    Shell {
+        /// Process exit code, or `-1` if the process could not be spawned.
+        exit_code: i32,
+        /// Captured stderr, truncated to [`MAX_OUTPUT_SIZE`](crate::utils::MAX_OUTPUT_SIZE).
+        stderr: String,
+    },
 
     /// An agent invocation failed.
     ///
@@ -31,23 +33,24 @@ pub enum OperationError {
     Agent(#[from] AgentError),
 
     /// An operation exceeded its configured timeout.
-    ///
-    /// * `step` - a human-readable description of the timed-out step (usually the command string).
-    /// * `limit` - the [`Duration`] that was exceeded.
     #[error("step '{step}' timed out after {limit:?}")]
-    Timeout { step: String, limit: Duration },
+    Timeout {
+        /// Human-readable description of the timed-out step (usually the command string).
+        step: String,
+        /// The [`Duration`] that was exceeded.
+        limit: Duration,
+    },
 
     /// An HTTP request failed at the transport layer or the response body
     /// could not be read.
-    ///
-    /// * `status` - the HTTP status code, if a response was received.
-    /// * `message` - human-readable error description.
     #[error("{}", match status {
         Some(code) => format!("http error (status {code}): {message}"),
         None => format!("http error: {message}"),
     })]
     Http {
+        /// HTTP status code, if a response was received.
         status: Option<u16>,
+        /// Human-readable error description.
         message: String,
     },
 
@@ -81,18 +84,22 @@ impl OperationError {
 #[derive(Debug, Error)]
 pub enum AgentError {
     /// The agent process exited with a non-zero status code.
-    ///
-    /// * `exit_code` - the process exit code (or `-1` if spawning failed).
-    /// * `stderr` - the captured standard-error output.
     #[error("claude process exited with code {exit_code}: {stderr}")]
-    ProcessFailed { exit_code: i32, stderr: String },
+    ProcessFailed {
+        /// Process exit code, or `-1` if spawning failed.
+        exit_code: i32,
+        /// Captured stderr.
+        stderr: String,
+    },
 
     /// The agent output did not match the expected schema.
-    ///
-    /// * `expected` - a description of what was expected (e.g. `"structured_output field"`).
-    /// * `got` - a description of what was actually received.
     #[error("schema validation failed: expected {expected}, got {got}")]
-    SchemaValidation { expected: String, got: String },
+    SchemaValidation {
+        /// What was expected (e.g. `"structured_output field"`).
+        expected: String,
+        /// What was actually received.
+        got: String,
+    },
 
     /// The prompt exceeds the model's context window.
     ///
@@ -116,7 +123,10 @@ pub enum AgentError {
 
     /// The agent did not complete within the configured timeout.
     #[error("agent timed out after {limit:?}")]
-    Timeout { limit: Duration },
+    Timeout {
+        /// The [`Duration`] that was exceeded.
+        limit: Duration,
+    },
 }
 
 #[cfg(test)]

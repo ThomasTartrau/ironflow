@@ -7,7 +7,7 @@
 //! # Levels of control
 //!
 //! 1. **Per-operation** - call `.dry_run(true)` on any builder (`Shell`, `Agent`, `Http`).
-//! 2. **Global** - call [`set_dry_run(true)`] to enable dry-run for all operations
+//! 2. **Global** - call [`set_dry_run`]`(true)` to enable dry-run for all operations
 //!    that don't have an explicit per-operation setting.
 //!
 //! # Examples
@@ -105,14 +105,11 @@ pub(crate) fn effective_dry_run(per_operation: Option<bool>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Serialize all dry-run tests since they share a global AtomicBool.
-    static LOCK: Mutex<()> = Mutex::new(());
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn set_and_get() {
-        let _g = LOCK.lock().unwrap();
         set_dry_run(true);
         assert!(is_dry_run());
         set_dry_run(false);
@@ -120,8 +117,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn effective_uses_per_operation_when_set() {
-        let _g = LOCK.lock().unwrap();
         set_dry_run(false);
         assert!(effective_dry_run(Some(true)));
 
@@ -131,8 +128,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn effective_falls_back_to_global() {
-        let _g = LOCK.lock().unwrap();
         set_dry_run(true);
         assert!(effective_dry_run(None));
 
@@ -141,8 +138,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn guard_restores_previous_value() {
-        let _g = LOCK.lock().unwrap();
         set_dry_run(false);
         {
             let _guard = DryRunGuard::new(true);
@@ -152,8 +149,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn guard_nested_restores_correctly() {
-        let _g = LOCK.lock().unwrap();
         set_dry_run(false);
         {
             let _outer = DryRunGuard::new(true);

@@ -18,13 +18,21 @@ pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// Parsed JSON output from the `claude` CLI.
 #[derive(Deserialize)]
 pub struct ClaudeJsonOutput {
+    /// Conversation session identifier for resuming multi-turn calls.
     pub session_id: Option<String>,
+    /// Response subtype (e.g. `"success"`, `"error_max_budget_usd"`).
     pub subtype: Option<String>,
+    /// The model's text response, if any.
     pub result: Option<Value>,
+    /// Typed JSON output when a JSON schema was requested.
     pub structured_output: Option<Value>,
+    /// Token usage breakdown.
     pub usage: Option<ClaudeUsage>,
+    /// Total cost in USD for this invocation.
     pub total_cost_usd: Option<f64>,
+    /// Wall-clock duration in milliseconds.
     pub duration_ms: Option<u64>,
+    /// Per-model token usage keyed by model identifier.
     #[serde(rename = "modelUsage")]
     pub model_usage: Option<Map<String, Value>>,
 }
@@ -32,9 +40,13 @@ pub struct ClaudeJsonOutput {
 /// Token usage statistics from the `claude` CLI.
 #[derive(Deserialize)]
 pub struct ClaudeUsage {
+    /// Direct input tokens consumed.
     pub input_tokens: Option<u64>,
+    /// Output tokens generated.
     pub output_tokens: Option<u64>,
+    /// Tokens used to populate the prompt cache.
     pub cache_creation_input_tokens: Option<u64>,
+    /// Tokens served from the prompt cache.
     pub cache_read_input_tokens: Option<u64>,
 }
 
@@ -58,7 +70,7 @@ impl ClaudeUsage {
 /// When ironflow runs inside Claude Code (or cmux), the child process inherits
 /// variables like `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SUBAGENT_MODEL`, etc.
 /// that force degraded/sub-agent behaviour, wrong models, or altered context
-/// handling. We strip **all** `CLAUDE*` vars plus `IRONFLOW_ALLOW_BYPASS`.
+/// handling. We strip all `CLAUDE*` vars plus `IRONFLOW_ALLOW_BYPASS`.
 ///
 /// # Examples
 ///
@@ -69,15 +81,13 @@ impl ClaudeUsage {
 /// # }
 /// ```
 pub fn env_vars_to_remove() -> Vec<String> {
-    let mut vars: Vec<String> = std::env::vars()
-        .filter_map(|(key, _)| {
-            if key.starts_with("CLAUDE") {
-                Some(key)
-            } else {
-                None
-            }
-        })
-        .collect();
+    collect_vars_to_remove(std::env::vars().map(|(k, _)| k))
+}
+
+/// Filter environment variable names, keeping `CLAUDE*` prefixed ones
+/// and always including `IRONFLOW_ALLOW_BYPASS`.
+fn collect_vars_to_remove(keys: impl Iterator<Item = String>) -> Vec<String> {
+    let mut vars: Vec<String> = keys.filter(|key| key.starts_with("CLAUDE")).collect();
     vars.push("IRONFLOW_ALLOW_BYPASS".to_string());
     vars
 }
@@ -496,49 +506,42 @@ mod tests {
     }
 
     #[test]
-    fn env_vars_to_remove_captures_claude_prefixed_vars() {
-        // SAFETY: single-threaded test, sets a test-specific env var
-        // that no other test reads concurrently.
-        unsafe { std::env::set_var("CLAUDE_CODE_ENTRYPOINT", "cli") };
-        unsafe { std::env::set_var("CLAUDE_CODE_SUBAGENT_MODEL", "haiku") };
-        unsafe { std::env::set_var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "50") };
-        unsafe { std::env::set_var("CLAUDECODE", "1") };
-
-        let vars = env_vars_to_remove();
+    fn collect_vars_to_remove_captures_claude_prefixed_vars() {
+        let keys = vec![
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+            "CLAUDECODE",
+            "PATH",
+            "HOME",
+        ];
+        let vars = collect_vars_to_remove(keys.into_iter().map(String::from));
 
         assert!(vars.contains(&"CLAUDE_CODE_ENTRYPOINT".to_string()));
         assert!(vars.contains(&"CLAUDE_CODE_SUBAGENT_MODEL".to_string()));
         assert!(vars.contains(&"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".to_string()));
         assert!(vars.contains(&"CLAUDECODE".to_string()));
         assert!(vars.contains(&"IRONFLOW_ALLOW_BYPASS".to_string()));
-
-        // Cleanup
-        unsafe { std::env::remove_var("CLAUDE_CODE_ENTRYPOINT") };
-        unsafe { std::env::remove_var("CLAUDE_CODE_SUBAGENT_MODEL") };
-        unsafe { std::env::remove_var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") };
-        unsafe { std::env::remove_var("CLAUDECODE") };
     }
 
     #[test]
-    fn env_vars_to_remove_excludes_unrelated_vars() {
-        let vars = env_vars_to_remove();
-        // PATH, HOME, etc. should never be included
+    fn collect_vars_to_remove_excludes_unrelated_vars() {
+        let keys = vec!["PATH", "HOME", "RUST_LOG"];
+        let vars = collect_vars_to_remove(keys.into_iter().map(String::from));
+
         assert!(!vars.contains(&"PATH".to_string()));
         assert!(!vars.contains(&"HOME".to_string()));
+        // IRONFLOW_ALLOW_BYPASS is always present
+        assert_eq!(vars.len(), 1);
     }
 
     #[test]
-    fn env_unset_shell_prefix_includes_all_claude_vars() {
-        // SAFETY: single-threaded test, sets a test-specific env var.
-        unsafe { std::env::set_var("CLAUDE_CODE_ENTRYPOINT", "cli") };
-
+    fn env_unset_shell_prefix_format() {
+        // env_unset_shell_prefix always includes IRONFLOW_ALLOW_BYPASS at minimum
         let prefix = env_unset_shell_prefix();
         assert!(prefix.starts_with("unset "));
         assert!(prefix.ends_with("2>/dev/null; "));
-        assert!(prefix.contains("CLAUDE_CODE_ENTRYPOINT"));
         assert!(prefix.contains("IRONFLOW_ALLOW_BYPASS"));
-
-        unsafe { std::env::remove_var("CLAUDE_CODE_ENTRYPOINT") };
     }
 
     #[test]

@@ -1,0 +1,797 @@
+//! The core [`Engine`] — orchestrates workflow execution and persistence.
+//!
+//! The engine ties together a [`RunStore`] for persistence, an [`AgentProvider`]
+//! for AI operations, and the executor for running steps. It supports:
+//!
+//! - **Static workflows** ([`WorkflowDef`]): serializable step sequences without chaining.
+//! - **Dynamic workflows** ([`WorkflowHandler`](crate::handler::WorkflowHandler)): Rust-native
+//!   handlers where steps can reference previous outputs.
+//!
+//! Both can be executed inline or enqueued for a worker.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Instant;
+
+use chrono::Utc;
+use serde_json::Value;
+use tracing::{error, info};
+use uuid::Uuid;
+
+use ironflow_core::provider::AgentProvider;
+use ironflow_store::error::StoreError;
+use ironflow_store::models::{NewRun, Run, RunStatus, RunUpdate, TriggerKind};
+use ironflow_store::store::RunStore;
+
+use crate::config::StepConfig;
+use crate::context::WorkflowContext;
+use crate::error::EngineError;
+use crate::handler::{WorkflowHandler, WorkflowInfo};
+use crate::workflow::WorkflowDef;
+
+/// The workflow orchestration engine.
+///
+/// Holds references to the store, agent provider, and a registry of
+/// [`WorkflowHandler`]s for dynamic workflows.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use ironflow_engine::engine::Engine;
+/// use ironflow_engine::config::ShellConfig;
+/// use ironflow_engine::workflow::Workflow;
+/// use ironflow_store::memory::InMemoryStore;
+/// use ironflow_store::models::TriggerKind;
+/// use ironflow_core::providers::claude::ClaudeCodeProvider;
+/// use serde_json::json;
+///
+/// # async fn example() -> Result<(), ironflow_engine::error::EngineError> {
+/// let store = Arc::new(InMemoryStore::new());
+/// let provider = Arc::new(ClaudeCodeProvider::new());
+/// let engine = Engine::new(store, provider);
+///
+/// let workflow = Workflow::new("ci")
+///     .shell("test", ShellConfig::new("cargo test"))
+///     .build()?;
+///
+/// let run = engine.run_inline(&workflow, TriggerKind::Manual, json!({})).await?;
+/// println!("Run {} completed with status {:?}", run.id, run.status);
+/// # Ok(())
+/// # }
+/// ```
+pub struct Engine {
+    store: Arc<dyn RunStore>,
+    provider: Arc<dyn AgentProvider>,
+    handlers: HashMap<String, Arc<dyn WorkflowHandler>>,
+}
+
+impl Engine {
+    /// Create a new engine with the given store and agent provider.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_store::memory::InMemoryStore;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    ///
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// );
+    /// ```
+    pub fn new(store: Arc<dyn RunStore>, provider: Arc<dyn AgentProvider>) -> Self {
+        Self {
+            store,
+            provider,
+            handlers: HashMap::new(),
+        }
+    }
+
+    /// Returns a reference to the backing store.
+    pub fn store(&self) -> &Arc<dyn RunStore> {
+        &self.store
+    }
+
+    /// Returns a reference to the agent provider.
+    pub fn provider(&self) -> &Arc<dyn AgentProvider> {
+        &self.provider
+    }
+
+    /// Build a [`WorkflowContext`] with access to the handler registry.
+    fn build_context(&self, run_id: Uuid) -> WorkflowContext {
+        let handlers = self.handlers.clone();
+        let resolver: crate::context::HandlerResolver =
+            Arc::new(move |name: &str| handlers.get(name).cloned());
+        WorkflowContext::with_handler_resolver(
+            run_id,
+            self.store.clone(),
+            self.provider.clone(),
+            resolver,
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Handler registration
+    // -----------------------------------------------------------------------
+
+    /// Register a [`WorkflowHandler`] for dynamic workflow execution.
+    ///
+    /// The handler is looked up by [`WorkflowHandler::name`] when executing
+    /// or enqueuing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] if a handler with the same
+    /// name is already registered.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::config::ShellConfig;
+    /// use ironflow_store::memory::InMemoryStore;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    ///
+    /// struct MyWorkflow;
+    /// impl WorkflowHandler for MyWorkflow {
+    ///     fn name(&self) -> &str { "my-workflow" }
+    ///     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move {
+    ///             ctx.shell("step1", ShellConfig::new("echo done")).await?;
+    ///             Ok(())
+    ///         })
+    ///     }
+    /// }
+    ///
+    /// let mut engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// );
+    /// engine.register(MyWorkflow)?;
+    /// # Ok::<(), ironflow_engine::error::EngineError>(())
+    /// ```
+    pub fn register(&mut self, handler: impl WorkflowHandler + 'static) -> Result<(), EngineError> {
+        let name = handler.name().to_string();
+        if self.handlers.contains_key(&name) {
+            return Err(EngineError::InvalidWorkflow(format!(
+                "handler '{}' already registered",
+                name
+            )));
+        }
+        self.handlers.insert(name, Arc::new(handler));
+        Ok(())
+    }
+
+    /// Register a pre-boxed workflow handler.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] if a handler with the same
+    /// name is already registered.
+    pub fn register_boxed(&mut self, handler: Box<dyn WorkflowHandler>) -> Result<(), EngineError> {
+        let name = handler.name().to_string();
+        if self.handlers.contains_key(&name) {
+            return Err(EngineError::InvalidWorkflow(format!(
+                "handler '{}' already registered",
+                name
+            )));
+        }
+        self.handlers.insert(name, Arc::from(handler));
+        Ok(())
+    }
+
+    /// Get a registered handler by name.
+    pub fn get_handler(&self, name: &str) -> Option<&Arc<dyn WorkflowHandler>> {
+        self.handlers.get(name)
+    }
+
+    /// List registered handler names.
+    pub fn handler_names(&self) -> Vec<&str> {
+        self.handlers.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get detailed info about a registered workflow handler.
+    pub fn handler_info(&self, name: &str) -> Option<WorkflowInfo> {
+        self.handlers.get(name).map(|h| h.describe())
+    }
+
+    // -----------------------------------------------------------------------
+    // Dynamic workflow execution (WorkflowHandler)
+    // -----------------------------------------------------------------------
+
+    /// Execute a registered handler inline.
+    ///
+    /// Creates a run, builds a [`WorkflowContext`], calls the handler's
+    /// [`execute`](WorkflowHandler::execute), and finalizes the run.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered
+    /// with that name. Returns [`EngineError`] if execution fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_store::memory::InMemoryStore;
+    /// use ironflow_store::models::TriggerKind;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use serde_json::json;
+    ///
+    /// # async fn example(engine: &Engine) -> Result<(), ironflow_engine::error::EngineError> {
+    /// let run = engine.run_handler("deploy", TriggerKind::Manual, json!({})).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[tracing::instrument(name = "engine.run_handler", skip_all, fields(workflow = %handler_name))]
+    pub async fn run_handler(
+        &self,
+        handler_name: &str,
+        trigger: TriggerKind,
+        payload: Value,
+    ) -> Result<Run, EngineError> {
+        let handler = self
+            .handlers
+            .get(handler_name)
+            .ok_or_else(|| {
+                EngineError::InvalidWorkflow(format!("no handler registered: {handler_name}"))
+            })?
+            .clone();
+
+        let run = self
+            .store
+            .create_run(NewRun {
+                workflow_name: handler_name.to_string(),
+                trigger,
+                payload,
+                max_retries: 0,
+            })
+            .await?;
+
+        let run_id = run.id;
+        info!(run_id = %run_id, "run created");
+
+        self.store
+            .update_run_status(run_id, RunStatus::Running)
+            .await?;
+
+        let run_start = Instant::now();
+        let mut ctx = self.build_context(run_id);
+
+        let result = handler.execute(&mut ctx).await;
+        self.finalize_run(run_id, result, &ctx, run_start).await
+    }
+
+    /// Enqueue a handler-based workflow for worker execution.
+    ///
+    /// The workflow name is stored in the run. The worker looks up the
+    /// handler by name when executing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered.
+    #[tracing::instrument(name = "engine.enqueue_handler", skip_all, fields(workflow = %handler_name))]
+    pub async fn enqueue_handler(
+        &self,
+        handler_name: &str,
+        trigger: TriggerKind,
+        payload: Value,
+        max_retries: u32,
+    ) -> Result<Run, EngineError> {
+        if !self.handlers.contains_key(handler_name) {
+            return Err(EngineError::InvalidWorkflow(format!(
+                "no handler registered: {handler_name}"
+            )));
+        }
+
+        let run = self
+            .store
+            .create_run(NewRun {
+                workflow_name: handler_name.to_string(),
+                trigger,
+                payload,
+                max_retries,
+            })
+            .await?;
+
+        info!(run_id = %run.id, workflow = %handler_name, "handler run enqueued");
+        Ok(run)
+    }
+
+    /// Execute a handler-based run (used by the worker after pick_next_pending).
+    ///
+    /// Looks up the handler by the run's `workflow_name` and executes it
+    /// with a fresh [`WorkflowContext`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
+    #[tracing::instrument(name = "engine.execute_handler_run", skip_all, fields(run_id = %run_id))]
+    pub async fn execute_handler_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
+        let run = self
+            .store
+            .get_run(run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+
+        let handler = self
+            .handlers
+            .get(&run.workflow_name)
+            .ok_or_else(|| {
+                EngineError::InvalidWorkflow(format!(
+                    "no handler registered: {}",
+                    run.workflow_name
+                ))
+            })?
+            .clone();
+
+        let run_start = Instant::now();
+        let mut ctx = self.build_context(run_id);
+
+        let result = handler.execute(&mut ctx).await;
+        self.finalize_run(run_id, result, &ctx, run_start).await
+    }
+
+    // -----------------------------------------------------------------------
+    // Static workflow execution (WorkflowDef) — backward compatible
+    // -----------------------------------------------------------------------
+
+    /// Execute a static workflow inline.
+    ///
+    /// For workflows without step chaining. Each step config is fixed at
+    /// definition time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if any step fails.
+    #[tracing::instrument(name = "engine.run_inline", skip_all, fields(workflow = %workflow.name))]
+    pub async fn run_inline(
+        &self,
+        workflow: &WorkflowDef,
+        trigger: TriggerKind,
+        payload: Value,
+    ) -> Result<Run, EngineError> {
+        let run = self
+            .store
+            .create_run(NewRun {
+                workflow_name: workflow.name.clone(),
+                trigger,
+                payload,
+                max_retries: 0,
+            })
+            .await?;
+
+        let run_id = run.id;
+        info!(run_id = %run_id, "run created");
+
+        self.store
+            .update_run_status(run_id, RunStatus::Running)
+            .await?;
+
+        let run_start = Instant::now();
+        let mut ctx = self.build_context(run_id);
+
+        // Execute each step via WorkflowContext for consistent lifecycle management.
+        let result = async {
+            for step_def in &workflow.steps {
+                match &step_def.config {
+                    StepConfig::Shell(cfg) => {
+                        ctx.shell(&step_def.name, cfg.clone()).await?;
+                    }
+                    StepConfig::Http(cfg) => {
+                        ctx.http(&step_def.name, cfg.clone()).await?;
+                    }
+                    StepConfig::Agent(cfg) => {
+                        ctx.agent(&step_def.name, cfg.clone()).await?;
+                    }
+                    StepConfig::Workflow(cfg) => {
+                        let handler = self.handlers.get(&cfg.workflow_name).ok_or_else(|| {
+                            EngineError::InvalidWorkflow(format!(
+                                "no handler registered: {}",
+                                cfg.workflow_name
+                            ))
+                        })?;
+                        ctx.workflow(handler.as_ref(), cfg.payload.clone()).await?;
+                    }
+                }
+            }
+            Ok::<(), EngineError>(())
+        }
+        .await;
+
+        self.finalize_run(run_id, result, &ctx, run_start).await
+    }
+
+    /// Enqueue a static workflow for worker execution.
+    ///
+    /// Serializes the workflow definition into the payload.
+    #[tracing::instrument(name = "engine.enqueue", skip_all, fields(workflow = %workflow.name))]
+    pub async fn enqueue(
+        &self,
+        workflow: &WorkflowDef,
+        trigger: TriggerKind,
+        payload: Value,
+        max_retries: u32,
+    ) -> Result<Run, EngineError> {
+        let enriched_payload = serde_json::json!({
+            "workflow": serde_json::to_value(workflow)?,
+            "original_payload": payload,
+        });
+
+        let run = self
+            .store
+            .create_run(NewRun {
+                workflow_name: workflow.name.clone(),
+                trigger,
+                payload: enriched_payload,
+                max_retries,
+            })
+            .await?;
+
+        info!(run_id = %run.id, workflow = %workflow.name, "run enqueued");
+        Ok(run)
+    }
+
+    /// Execute a static workflow run (used by the worker).
+    ///
+    /// Extracts the workflow definition from the run's payload.
+    #[tracing::instrument(name = "engine.execute_run", skip_all, fields(run_id = %run_id))]
+    pub async fn execute_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
+        // Try handler-based execution first.
+        let run = self
+            .store
+            .get_run(run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+
+        if self.handlers.contains_key(&run.workflow_name) {
+            return self.execute_handler_run(run_id).await;
+        }
+
+        // Fall back to static workflow from payload.
+        let workflow: WorkflowDef = serde_json::from_value(
+            run.payload
+                .get("workflow")
+                .cloned()
+                .ok_or_else(|| EngineError::StepConfig("missing 'workflow' in payload".into()))?,
+        )
+        .map_err(|e| EngineError::StepConfig(format!("invalid workflow in payload: {e}")))?;
+
+        let run_start = Instant::now();
+        let mut ctx = self.build_context(run_id);
+
+        // Execute static steps via context for consistency.
+        let result = async {
+            for step_def in &workflow.steps {
+                match &step_def.config {
+                    StepConfig::Shell(cfg) => {
+                        ctx.shell(&step_def.name, cfg.clone()).await?;
+                    }
+                    StepConfig::Http(cfg) => {
+                        ctx.http(&step_def.name, cfg.clone()).await?;
+                    }
+                    StepConfig::Agent(cfg) => {
+                        ctx.agent(&step_def.name, cfg.clone()).await?;
+                    }
+                    StepConfig::Workflow(cfg) => {
+                        let handler = self.handlers.get(&cfg.workflow_name).ok_or_else(|| {
+                            EngineError::InvalidWorkflow(format!(
+                                "no handler registered: {}",
+                                cfg.workflow_name
+                            ))
+                        })?;
+                        ctx.workflow(handler.as_ref(), cfg.payload.clone()).await?;
+                    }
+                }
+            }
+            Ok::<(), EngineError>(())
+        }
+        .await;
+
+        self.finalize_run(run_id, result, &ctx, run_start).await
+    }
+
+    /// Finalize a run with the given result and context.
+    ///
+    /// On success: updates run to Completed with cost, duration, and completed_at.
+    /// On failure: updates run to Failed with error, cost, duration, and completed_at.
+    /// Always: fetches and returns the final Run.
+    ///
+    /// TODO: `get_run` at the end could be optimized by using an `update_run_returning`
+    /// method if the store supports it.
+    async fn finalize_run(
+        &self,
+        run_id: Uuid,
+        result: Result<(), EngineError>,
+        ctx: &WorkflowContext,
+        run_start: Instant,
+    ) -> Result<Run, EngineError> {
+        let total_duration = run_start.elapsed().as_millis() as u64;
+        let completed_at = Utc::now();
+
+        match result {
+            Ok(()) => {
+                self.store
+                    .update_run(
+                        run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::Completed),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            completed_at: Some(completed_at),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    run_id = %run_id,
+                    cost_usd = %ctx.total_cost_usd(),
+                    duration_ms = total_duration,
+                    "run completed"
+                );
+            }
+            Err(err) => {
+                if let Err(store_err) = self
+                    .store
+                    .update_run(
+                        run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::Failed),
+                            error: Some(err.to_string()),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            completed_at: Some(completed_at),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await
+                {
+                    error!(run_id = %run_id, store_error = %store_err, "failed to persist run failure");
+                }
+
+                error!(run_id = %run_id, error = %err, "run failed");
+                return Err(err);
+            }
+        }
+
+        self.store
+            .get_run(run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))
+    }
+}
+
+impl std::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Engine")
+            .field("handlers", &self.handlers.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ShellConfig;
+    use crate::handler::{HandlerFuture, WorkflowHandler};
+    use crate::workflow::Workflow;
+    use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_core::providers::record_replay::RecordReplayProvider;
+    use ironflow_store::memory::InMemoryStore;
+    use serde_json::json;
+
+    // Test handler that echoes a message via shell
+    struct EchoWorkflow;
+
+    impl WorkflowHandler for EchoWorkflow {
+        fn name(&self) -> &str {
+            "echo-workflow"
+        }
+
+        fn describe(&self) -> WorkflowInfo {
+            WorkflowInfo {
+                description: "A simple workflow that echoes hello".to_string(),
+                source_code: None,
+                sub_workflows: Vec::new(),
+            }
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                ctx.shell("greet", ShellConfig::new("echo hello")).await?;
+                Ok(())
+            })
+        }
+    }
+
+    // Test handler that fails
+    struct FailingWorkflow;
+
+    impl WorkflowHandler for FailingWorkflow {
+        fn name(&self) -> &str {
+            "failing-workflow"
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                ctx.shell("fail", ShellConfig::new("exit 1")).await?;
+                Ok(())
+            })
+        }
+    }
+
+    fn create_test_engine() -> Engine {
+        let store = Arc::new(InMemoryStore::new());
+        let inner = ClaudeCodeProvider::new();
+        let provider: Arc<dyn AgentProvider> = Arc::new(RecordReplayProvider::replay(
+            inner,
+            "/tmp/ironflow-fixtures",
+        ));
+        Engine::new(store, provider)
+    }
+
+    #[test]
+    fn engine_new_creates_instance() {
+        let engine = create_test_engine();
+        assert_eq!(engine.handler_names().len(), 0);
+    }
+
+    #[test]
+    fn engine_register_handler() {
+        let mut engine = create_test_engine();
+        let result = engine.register(EchoWorkflow);
+        assert!(result.is_ok());
+        assert_eq!(engine.handler_names().len(), 1);
+        assert!(engine.handler_names().contains(&"echo-workflow"));
+    }
+
+    #[test]
+    fn engine_register_duplicate_returns_error() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        let result = engine.register(EchoWorkflow);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn engine_get_handler_found() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        let handler = engine.get_handler("echo-workflow");
+        assert!(handler.is_some());
+    }
+
+    #[test]
+    fn engine_get_handler_not_found() {
+        let engine = create_test_engine();
+        let handler = engine.get_handler("nonexistent");
+        assert!(handler.is_none());
+    }
+
+    #[test]
+    fn engine_handler_names_lists_all() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        engine.register(FailingWorkflow).unwrap();
+        let names = engine.handler_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"echo-workflow"));
+        assert!(names.contains(&"failing-workflow"));
+    }
+
+    #[test]
+    fn engine_handler_info_returns_description() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        let info = engine.handler_info("echo-workflow");
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.description, "A simple workflow that echoes hello");
+    }
+
+    #[tokio::test]
+    async fn engine_unknown_workflow_returns_error() {
+        let engine = create_test_engine();
+        let result = engine
+            .run_handler("unknown", TriggerKind::Manual, json!({}))
+            .await;
+        assert!(result.is_err());
+        match result {
+            Err(EngineError::InvalidWorkflow(msg)) => {
+                assert!(msg.contains("no handler registered"));
+            }
+            _ => panic!("expected InvalidWorkflow error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_run_inline_happy_path() {
+        let engine = create_test_engine();
+        let workflow = Workflow::new("simple")
+            .shell("test", ShellConfig::new("echo hello"))
+            .build()
+            .unwrap();
+
+        let result = engine
+            .run_inline(&workflow, TriggerKind::Manual, json!({}))
+            .await;
+        assert!(result.is_ok());
+        let run = result.unwrap();
+        assert_eq!(run.status.state, RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn engine_run_inline_step_failure_marks_failed() {
+        let engine = create_test_engine();
+        let workflow = Workflow::new("failing")
+            .shell("fail", ShellConfig::new("exit 1"))
+            .build()
+            .unwrap();
+
+        let result = engine
+            .run_inline(&workflow, TriggerKind::Manual, json!({}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn engine_enqueue_creates_pending_run() {
+        let engine = create_test_engine();
+        let workflow = Workflow::new("queued")
+            .shell("test", ShellConfig::new("echo queued"))
+            .build()
+            .unwrap();
+
+        let run = engine
+            .enqueue(&workflow, TriggerKind::Manual, json!({}), 3)
+            .await
+            .unwrap();
+        assert_eq!(run.status.state, RunStatus::Pending);
+        assert_eq!(run.max_retries, 3);
+    }
+
+    #[tokio::test]
+    async fn engine_enqueue_handler_creates_pending_run() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        let run = engine
+            .enqueue_handler("echo-workflow", TriggerKind::Manual, json!({}), 0)
+            .await
+            .unwrap();
+        assert_eq!(run.status.state, RunStatus::Pending);
+        assert_eq!(run.workflow_name, "echo-workflow");
+    }
+
+    #[tokio::test]
+    async fn engine_register_boxed() {
+        let mut engine = create_test_engine();
+        let handler: Box<dyn WorkflowHandler> = Box::new(EchoWorkflow);
+        let result = engine.register_boxed(handler);
+        assert!(result.is_ok());
+        assert_eq!(engine.handler_names().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn engine_store_and_provider_accessors() {
+        let store = Arc::new(InMemoryStore::new());
+        let inner = ClaudeCodeProvider::new();
+        let provider: Arc<dyn AgentProvider> = Arc::new(RecordReplayProvider::replay(
+            inner,
+            "/tmp/ironflow-fixtures",
+        ));
+        let engine = Engine::new(store.clone(), provider.clone());
+
+        // Verify accessors return references
+        let _ = engine.store();
+        let _ = engine.provider();
+    }
+}

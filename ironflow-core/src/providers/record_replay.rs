@@ -211,3 +211,334 @@ impl<P: AgentProvider> AgentProvider for RecordReplayProvider<P> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::agent::Model;
+    use crate::providers::claude::ClaudeCodeProvider;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// RAII guard that removes a temp directory on drop (even on panic).
+    struct TempDirGuard(String);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn temp_fixtures_dir() -> (String, TempDirGuard) {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let dir = format!(
+            "/tmp/ironflow-test-rr-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+        );
+        let guard = TempDirGuard(dir.clone());
+        (dir, guard)
+    }
+
+    /// Helper: create a provider wrapping a real ClaudeCodeProvider in replay-only mode.
+    /// Since no fixtures exist by default, it will fall back to the inner provider
+    /// only when explicitly needed. For most tests we write fixtures manually.
+    fn replay_provider(fixtures_dir: &str) -> RecordReplayProvider<ClaudeCodeProvider> {
+        RecordReplayProvider::replay(ClaudeCodeProvider::new(), fixtures_dir)
+    }
+
+    fn record_provider(fixtures_dir: &str) -> RecordReplayProvider<ClaudeCodeProvider> {
+        RecordReplayProvider::record(ClaudeCodeProvider::new(), fixtures_dir)
+    }
+
+    /// Write a fixture file to disk for a given config.
+    fn write_fixture(fixtures_dir: &str, config: &AgentConfig, output: &AgentOutput) {
+        fs::create_dir_all(fixtures_dir).unwrap();
+        let hash = hash_config(config);
+        let fixture = Fixture {
+            config: config.clone(),
+            output: output.clone(),
+        };
+        let json = serde_json::to_string_pretty(&fixture).unwrap();
+        fs::write(format!("{}/{}.json", fixtures_dir, hash), json).unwrap();
+    }
+
+    fn sample_output() -> AgentOutput {
+        AgentOutput {
+            value: json!("Rust is a systems programming language"),
+            session_id: None,
+            cost_usd: Some(0.01),
+            input_tokens: Some(10),
+            output_tokens: Some(50),
+            model: Some("claude-sonnet".to_string()),
+            duration_ms: 100,
+        }
+    }
+
+    // ──── hash_config tests ────────────────────────────────────────
+
+    #[test]
+    fn test_hash_config_deterministic() {
+        let config = AgentConfig::new("What is Rust?");
+        let hash1 = hash_config(&config);
+        let hash2 = hash_config(&config);
+        assert_eq!(hash1, hash2, "same config should produce same hash");
+    }
+
+    #[test]
+    fn test_hash_config_different_prompts() {
+        let config1 = AgentConfig::new("Prompt A");
+        let config2 = AgentConfig::new("Prompt B");
+        assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_system_prompt_affects_hash() {
+        let mut config1 = AgentConfig::new("Analyze this code");
+        let mut config2 = AgentConfig::new("Analyze this code");
+        config1.system_prompt = Some("You are a Rust expert".to_string());
+        config2.system_prompt = Some("You are a Python expert".to_string());
+        assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_no_system_prompt_vs_with_system_prompt() {
+        let config1 = AgentConfig::new("Analyze this code");
+        let mut config2 = AgentConfig::new("Analyze this code");
+        config2.system_prompt = Some("You are a Rust expert".to_string());
+        assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_model_affects_hash() {
+        let mut config1 = AgentConfig::new("What is Rust?");
+        let mut config2 = AgentConfig::new("What is Rust?");
+        config1.model = Model::Sonnet;
+        config2.model = Model::Opus;
+        assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_allowed_tools_affects_hash() {
+        let mut config1 = AgentConfig::new("Write code");
+        let mut config2 = AgentConfig::new("Write code");
+        config1.allowed_tools = vec!["Read".to_string(), "Write".to_string()];
+        config2.allowed_tools = vec!["Read".to_string()];
+        assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_json_schema_affects_hash() {
+        let mut config1 = AgentConfig::new("Extract data");
+        let mut config2 = AgentConfig::new("Extract data");
+        config1.json_schema = Some(r#"{"type": "object"}"#.to_string());
+        config2.json_schema = Some(r#"{"type": "array"}"#.to_string());
+        assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_resume_session_id_affects_hash() {
+        let mut config1 = AgentConfig::new("Continue conversation");
+        let mut config2 = AgentConfig::new("Continue conversation");
+        config1.resume_session_id = Some("session-123".to_string());
+        config2.resume_session_id = Some("session-456".to_string());
+        assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_format() {
+        let config = AgentConfig::new("Test");
+        let hash = hash_config(&config);
+        assert_eq!(hash.len(), 16, "hash should be 16 hex characters");
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_multiple_configs_produce_unique_hashes() {
+        let configs = [
+            AgentConfig::new("Prompt 1"),
+            AgentConfig::new("Prompt 2"),
+            AgentConfig::new("Prompt 3"),
+        ];
+        let hashes: Vec<String> = configs.iter().map(hash_config).collect();
+        for i in 0..hashes.len() {
+            for j in (i + 1)..hashes.len() {
+                assert_ne!(hashes[i], hashes[j], "hashes should be unique");
+            }
+        }
+    }
+
+    // ──── replay: reads fixture from disk ─────────────────────────
+
+    #[tokio::test]
+    async fn test_replay_returns_fixture_when_present() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let config = AgentConfig::new("What is Rust?");
+        let expected = sample_output();
+        write_fixture(&dir, &config, &expected);
+
+        let provider = replay_provider(&dir);
+        let result = provider.invoke(&config).await.unwrap();
+
+        assert_eq!(result.value, expected.value);
+        assert_eq!(result.cost_usd, expected.cost_usd);
+        assert_eq!(result.input_tokens, expected.input_tokens);
+    }
+
+    // ──── fixture_path naming ─────────────────────────────────────
+
+    #[test]
+    fn test_fixture_path_uses_hash_config() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let config = AgentConfig::new("Test prompt");
+        let provider = replay_provider(&dir);
+
+        let path = provider.fixture_path(&config);
+        let expected = format!("{}/{}.json", dir, hash_config(&config));
+        assert_eq!(path.to_string_lossy().to_string(), expected);
+    }
+
+    #[test]
+    fn test_fixture_path_different_configs_different_files() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let provider = replay_provider(&dir);
+
+        let path1 = provider.fixture_path(&AgentConfig::new("Prompt A"));
+        let path2 = provider.fixture_path(&AgentConfig::new("Prompt B"));
+        assert_ne!(path1, path2);
+    }
+
+    // ──── load_fixture ────────────────────────────────────────────
+
+    #[test]
+    fn test_load_fixture_returns_none_when_file_missing() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let provider = replay_provider(&dir);
+        let result = provider.load_fixture(Path::new("/tmp/nonexistent-xyz.json"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_fixture_returns_none_when_file_malformed() {
+        let (dir, _guard) = temp_fixtures_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = format!("{}/malformed.json", dir);
+        fs::write(&path, "{ invalid json }").unwrap();
+
+        let provider = replay_provider(&dir);
+        assert!(provider.load_fixture(Path::new(&path)).is_none());
+    }
+
+    #[test]
+    fn test_load_fixture_extracts_output_from_valid_fixture() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let config = AgentConfig::new("Test");
+        let expected = sample_output();
+        write_fixture(&dir, &config, &expected);
+
+        let provider = replay_provider(&dir);
+        let hash = hash_config(&config);
+        let path = format!("{}/{}.json", dir, hash);
+
+        let loaded = provider.load_fixture(Path::new(&path)).unwrap();
+        assert_eq!(loaded.value, expected.value);
+        assert_eq!(loaded.cost_usd, expected.cost_usd);
+    }
+
+    // ──── save_fixture ────────────────────────────────────────────
+
+    #[test]
+    fn test_save_fixture_creates_valid_json_file() {
+        let (dir, _guard) = temp_fixtures_dir();
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = AgentConfig::new("Save test");
+        let output = AgentOutput::new(json!({"key": "value", "nested": {"count": 42}}));
+
+        let provider = replay_provider(&dir);
+        let path = provider.fixture_path(&config);
+        provider.save_fixture(&path, &config, &output);
+
+        assert!(path.exists());
+
+        let saved_json = fs::read_to_string(&path).unwrap();
+        let fixture: Fixture = serde_json::from_str(&saved_json).unwrap();
+        assert_eq!(fixture.config.prompt, config.prompt);
+        assert_eq!(fixture.output.value, output.value);
+    }
+
+    // ──── save then load roundtrip ────────────────────────────────
+
+    #[test]
+    fn test_save_then_load_roundtrip() {
+        let (dir, _guard) = temp_fixtures_dir();
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = AgentConfig::new("Roundtrip");
+        let output = AgentOutput {
+            value: json!("ownership is key"),
+            session_id: Some("sess-42".to_string()),
+            cost_usd: Some(0.05),
+            input_tokens: Some(20),
+            output_tokens: Some(100),
+            model: Some("claude-sonnet".to_string()),
+            duration_ms: 500,
+        };
+
+        let provider = replay_provider(&dir);
+        let path = provider.fixture_path(&config);
+        provider.save_fixture(&path, &config, &output);
+
+        let loaded = provider.load_fixture(&path).unwrap();
+        assert_eq!(loaded.value, output.value);
+        assert_eq!(loaded.session_id, output.session_id);
+        assert_eq!(loaded.cost_usd, output.cost_usd);
+        assert_eq!(loaded.input_tokens, output.input_tokens);
+        assert_eq!(loaded.output_tokens, output.output_tokens);
+    }
+
+    // ──── Edge cases ──────────────────────────────────────────────
+
+    #[test]
+    fn test_empty_prompt_hash() {
+        let config = AgentConfig::new("");
+        let hash = hash_config(&config);
+        assert_eq!(hash.len(), 16);
+    }
+
+    #[test]
+    fn test_unicode_prompt_roundtrip() {
+        let (dir, _guard) = temp_fixtures_dir();
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = AgentConfig::new("Explain: 你好世界 🌍 Здравствуй мир");
+        let output = AgentOutput::new(json!("Unicode response"));
+
+        let provider = replay_provider(&dir);
+        let path = provider.fixture_path(&config);
+        provider.save_fixture(&path, &config, &output);
+
+        let loaded = provider.load_fixture(&path).unwrap();
+        assert_eq!(loaded.value, output.value);
+    }
+
+    #[test]
+    fn test_new_defaults_to_replay_mode() {
+        let provider = RecordReplayProvider::new(ClaudeCodeProvider::new(), "/tmp/doesnt-matter");
+        assert!(!provider.recording);
+    }
+
+    #[test]
+    fn test_record_mode_flag() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let provider = record_provider(&dir);
+        assert!(provider.recording);
+    }
+
+    #[test]
+    fn test_replay_mode_flag() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let provider = replay_provider(&dir);
+        assert!(!provider.recording);
+    }
+}

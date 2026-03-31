@@ -1,0 +1,78 @@
+//! Step-related DTOs.
+
+use chrono::{DateTime, Utc};
+use ironflow_store::models::{Step, StepKind, StepStatus};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use uuid::Uuid;
+
+/// Step response DTO — public API representation of a step.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::models::Step;
+/// use ironflow_api::entities::StepResponse;
+/// ```
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StepResponse {
+    /// Unique step identifier.
+    pub id: Uuid,
+    /// Parent run ID.
+    pub run_id: Uuid,
+    /// Step name.
+    pub name: String,
+    /// Step operation type.
+    pub kind: StepKind,
+    /// Execution order (0-based).
+    pub position: u32,
+    /// Current status.
+    pub status: StepStatus,
+    /// Input configuration.
+    pub input: Option<Value>,
+    /// Step output.
+    pub output: Option<Value>,
+    /// Optional error message.
+    pub error: Option<String>,
+    /// Execution duration in milliseconds.
+    pub duration_ms: u64,
+    /// Cost in USD.
+    pub cost_usd: Decimal,
+    /// Input token count (agent steps).
+    pub input_tokens: Option<u64>,
+    /// Output token count (agent steps).
+    pub output_tokens: Option<u64>,
+    /// When created.
+    pub created_at: DateTime<Utc>,
+    /// When updated.
+    pub updated_at: DateTime<Utc>,
+    /// When execution started.
+    pub started_at: Option<DateTime<Utc>>,
+    /// When execution completed.
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl From<Step> for StepResponse {
+    fn from(step: Step) -> Self {
+        StepResponse {
+            id: step.id,
+            run_id: step.run_id,
+            name: step.name,
+            kind: step.kind,
+            position: step.position,
+            status: step.status.state,
+            input: step.input,
+            output: step.output,
+            error: step.error,
+            duration_ms: step.duration_ms,
+            cost_usd: step.cost_usd,
+            input_tokens: step.input_tokens,
+            output_tokens: step.output_tokens,
+            created_at: step.created_at,
+            updated_at: step.updated_at,
+            started_at: step.started_at,
+            completed_at: step.completed_at,
+        }
+    }
+}

@@ -1,15 +1,14 @@
 //! Claude Code CLI provider implementations.
 //!
-//! This module contains all transport backends for invoking the `claude` CLI:
+//! Transport backends for invoking the `claude` CLI:
 //!
-//! * [`ClaudeCodeProvider`] — local process execution (always available).
-//! * [`SshProvider`] — remote execution via SSH (requires `transport-ssh` feature).
-//! * [`DockerProvider`] — execution inside a Docker container (requires `transport-docker` feature).
-//! * [`K8sEphemeralProvider`] — one-shot Kubernetes pod per invocation (requires `transport-k8s` feature).
-//! * [`K8sPersistentProvider`] — reuses a persistent Kubernetes worker pod (requires `transport-k8s` feature).
+//! * [`ClaudeCodeProvider`] - local process execution (always available).
+//! * `SshProvider` - remote execution via SSH (requires `transport-ssh` feature).
+//! * `DockerProvider` - Docker container execution (requires `transport-docker` feature).
+//! * `K8sEphemeralProvider` - one-shot Kubernetes pod per invocation (requires `transport-k8s` feature).
+//! * `K8sPersistentProvider` - persistent Kubernetes worker pod (requires `transport-k8s` feature).
 //!
-//! All transports share command building and response parsing logic from the
-//! [`common`] module.
+//! All transports share command building and response parsing from [`common`].
 
 pub mod common;
 pub mod local;

@@ -29,8 +29,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "sed -i 's/^version = \".*\"/version = \"${nextRelease.version}\"/' ironflow-core/Cargo.toml && sed -i 's/^version = \".*\"/version = \"${nextRelease.version}\"/' ironflow-runtime/Cargo.toml && sed -i 's/ironflow-core = { version = \"[^\"]*\"/ironflow-core = { version = \"${nextRelease.version}\"/' ironflow-runtime/Cargo.toml && cargo generate-lockfile",
-        "publishCmd": "cargo publish -p ironflow-core --allow-dirty && cargo publish -p ironflow-runtime --allow-dirty"
+        "prepareCmd": "./scripts/bump-versions.sh ${nextRelease.version}"
       }
     ],
     [
@@ -41,6 +40,11 @@
           "Cargo.lock",
           "ironflow-core/Cargo.toml",
           "ironflow-runtime/Cargo.toml",
+          "ironflow-store/Cargo.toml",
+          "ironflow-engine/Cargo.toml",
+          "ironflow-api/Cargo.toml",
+          "ironflow-auth/Cargo.toml",
+          "ironflow-worker/Cargo.toml",
           "release.toml"
         ],
         "message": "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}"

@@ -3,19 +3,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ironflow_runtime::prelude::*;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 #[tokio::test]
 async fn cron_job_fires_within_expected_window() {
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
+    let (tx, rx) = oneshot::channel::<()>();
 
-    let rt = Runtime::new().cron("* * * * * *", "every-second", move || {
-        let counter = counter_clone.clone();
-        async move {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }
-    });
+    let rt = Runtime::new()
+        .with_shutdown(async {
+            let _ = rx.await;
+        })
+        .cron("* * * * * *", "every-second", move || {
+            let counter = counter_clone.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        });
 
     let server = tokio::spawn(async move {
         let _ = rt.run_crons().await;
@@ -29,7 +35,8 @@ async fn cron_job_fires_within_expected_window() {
         "expected at least 1 cron execution, got {count}"
     );
 
-    server.abort();
+    let _ = tx.send(());
+    let _ = timeout(Duration::from_secs(5), server).await;
 }
 
 #[tokio::test]
@@ -53,8 +60,12 @@ async fn multiple_cron_jobs_can_be_registered() {
     let counter_b = Arc::new(AtomicUsize::new(0));
     let ca = counter_a.clone();
     let cb = counter_b.clone();
+    let (tx, rx) = oneshot::channel::<()>();
 
     let rt = Runtime::new()
+        .with_shutdown(async {
+            let _ = rx.await;
+        })
         .cron("* * * * * *", "job-a", move || {
             let c = ca.clone();
             async move {
@@ -79,21 +90,27 @@ async fn multiple_cron_jobs_can_be_registered() {
     assert!(a >= 1, "job-a should have fired at least once, got {a}");
     assert!(b >= 1, "job-b should have fired at least once, got {b}");
 
-    server.abort();
+    let _ = tx.send(());
+    let _ = timeout(Duration::from_secs(5), server).await;
 }
 
 #[tokio::test]
 async fn run_crons_works_without_http_server() {
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
+    let (tx, rx) = oneshot::channel::<()>();
 
     // No webhooks registered, only a cron job.
-    let rt = Runtime::new().cron("* * * * * *", "cron-only", move || {
-        let counter = counter_clone.clone();
-        async move {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }
-    });
+    let rt = Runtime::new()
+        .with_shutdown(async {
+            let _ = rx.await;
+        })
+        .cron("* * * * * *", "cron-only", move || {
+            let counter = counter_clone.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        });
 
     let handle = tokio::spawn(async move {
         let _ = rt.run_crons().await;
@@ -107,7 +124,8 @@ async fn run_crons_works_without_http_server() {
         "expected at least 1 cron execution without HTTP, got {count}"
     );
 
-    handle.abort();
+    let _ = tx.send(());
+    let _ = timeout(Duration::from_secs(5), handle).await;
 }
 
 #[tokio::test]
@@ -128,16 +146,22 @@ async fn serve_still_starts_crons() {
     // Verify that serve() still starts the cron scheduler (regression test).
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
+    let (tx, rx) = oneshot::channel::<()>();
 
-    let rt = Runtime::new().cron("* * * * * *", "serve-cron", move || {
-        let counter = counter_clone.clone();
-        async move {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }
-    });
+    let rt = Runtime::new()
+        .with_shutdown(async {
+            let _ = rx.await;
+        })
+        .cron("* * * * * *", "serve-cron", move || {
+            let counter = counter_clone.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    drop(listener);
 
     let server = tokio::spawn(async move {
         let _ = rt.serve(&format!("127.0.0.1:{}", addr.port())).await;
@@ -151,5 +175,6 @@ async fn serve_still_starts_crons() {
         "serve() should still start crons, got {count} executions"
     );
 
-    server.abort();
+    let _ = tx.send(());
+    let _ = timeout(Duration::from_secs(5), server).await;
 }

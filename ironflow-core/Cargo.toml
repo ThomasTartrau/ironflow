@@ -44,4 +44,5 @@ transport-k8s = ["kube", "k8s-openapi", "tokio-util"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+serial_test = "3"
 

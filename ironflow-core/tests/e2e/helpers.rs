@@ -71,10 +71,14 @@ impl Drop for FixtureGuard {
 
 /// Create a unique temporary fixtures directory with automatic cleanup.
 pub fn temp_fixtures_dir(name: &str) -> (String, FixtureGuard) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let dir = format!(
-        "/tmp/ironflow-test-fixtures-{}-{}",
+        "/tmp/ironflow-test-fixtures-{}-{}-{}",
         name,
-        std::process::id()
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed),
     );
     let guard = FixtureGuard { dir: dir.clone() };
     (dir, guard)

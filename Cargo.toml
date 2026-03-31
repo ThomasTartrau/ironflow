@@ -1,6 +1,17 @@
 [workspace]
 resolver = "2"
-members = ["ironflow-core", "ironflow-runtime"]
+members = [
+    "ironflow-core",
+    "ironflow-runtime",
+    "ironflow-store",
+    "ironflow-engine",
+    "ironflow-api",
+    "ironflow-auth",
+    "ironflow-worker",
+    "examples/ironflow-workflows",
+    "examples/server",
+    "examples/worker",
+]
 
 [profile.release]
 opt-level = 3

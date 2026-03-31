@@ -120,7 +120,7 @@ pub enum ImagePullPolicy {
     /// Only pull if the image is not already present locally.
     #[default]
     IfNotPresent,
-    /// Never pull — requires the image to be pre-loaded on the node.
+    /// Never pull, requires the image to be pre-loaded on the node.
     Never,
 }
 
