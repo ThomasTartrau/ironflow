@@ -6,6 +6,7 @@ stages:
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
+  PATH: "${CI_PROJECT_DIR}/.cargo/bin:${PATH}"
 
 .rust-cache: &rust-cache
   cache:
