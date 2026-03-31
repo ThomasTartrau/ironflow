@@ -1,0 +1,75 @@
+[workspace]
+changelog_update = true
+git_tag_enable = true
+git_release_enable = true
+git_release_type = "prod"
+publish = true
+semver_check = true
+git_tag_name = "{{ package }}-v{{ version }}"
+git_release_name = "{{ package }} v{{ version }}"
+
+[changelog]
+body = """
+## [{{ version }}]({{ release_link }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message }}
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+protect_breaking_commits = true
+sort_commits = "newest"
+
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^doc", group = "Documentation" },
+    { message = "^test", skip = true },
+    { message = "^chore", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^style", skip = true },
+]
+
+# --- Published crates ---
+
+[[package]]
+name = "ironflow-core"
+
+[[package]]
+name = "ironflow-store"
+
+[[package]]
+name = "ironflow-auth"
+
+[[package]]
+name = "ironflow-engine"
+
+[[package]]
+name = "ironflow-api"
+
+[[package]]
+name = "ironflow-worker"
+
+[[package]]
+name = "ironflow-runtime"
+
+# --- Excluded packages ---
+
+[[package]]
+name = "ironflow-workflows"
+release = false
+publish = false
+
+[[package]]
+name = "ironflow-example-server"
+release = false
+publish = false
+
+[[package]]
+name = "ironflow-example-worker"
+release = false
+publish = false

@@ -3,7 +3,6 @@ stages:
   - test
   - build
   - release
-  - publish
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
@@ -168,88 +167,36 @@ build-release:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
 
-release:
+release-plz-update:
   stage: release
-  image: node:22
+  image: rust:1.94.0
+  <<: *rust-cache
   needs:
     - build-release
     - cargo-audit
   before_script:
-    - apt-get update -qq && apt-get install -y -qq build-essential cmake curl
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --no-modify-path
-    - ln -sf "${CARGO_HOME}/bin/cargo" /usr/local/bin/cargo
-    - ln -sf "${CARGO_HOME}/bin/rustc" /usr/local/bin/rustc
+    - cargo install release-plz --locked
   script:
-    - export PATH="${CARGO_HOME}/bin:$PATH"
     - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
     - git checkout -B "$CI_COMMIT_BRANCH"
-    - npm install -g semantic-release @semantic-release/changelog @semantic-release/git @semantic-release/exec @semantic-release/gitlab conventional-changelog-conventionalcommits
-    - npx semantic-release
+    - release-plz update --forge gitlab --git-token "$GITLAB_TOKEN"
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# --- Publish jobs (triggered by release tag) ---
-
-.publish-crate: &publish-crate
-  stage: publish
+release-plz-release:
+  stage: release
   image: rust:1.94.0
   <<: *rust-cache
-  script:
-    - cargo publish -p ${CRATE_NAME} --allow-dirty
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-  retry:
-    max: 2
-    when: script_failure
-
-publish-core:
-  <<: *publish-crate
-  variables:
-    CRATE_NAME: ironflow-core
-
-publish-store:
-  <<: *publish-crate
   needs:
-    - publish-core
-  variables:
-    CRATE_NAME: ironflow-store
-
-publish-auth:
-  <<: *publish-crate
-  needs:
-    - publish-core
-  variables:
-    CRATE_NAME: ironflow-auth
-
-publish-engine:
-  <<: *publish-crate
-  needs:
-    - publish-store
-  variables:
-    CRATE_NAME: ironflow-engine
-
-publish-api:
-  <<: *publish-crate
-  needs:
-    - publish-engine
-    - publish-auth
+    - build-release
+    - cargo-audit
   before_script:
+    - cargo install release-plz --locked
     - apt-get update -qq && apt-get install -y -qq nodejs npm
     - cd ironflow-dashboard && npm install --legacy-peer-deps && npm run build
-    - cd .. && mkdir -p ironflow-api/dashboard && cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
-  variables:
-    CRATE_NAME: ironflow-api
-
-publish-worker:
-  <<: *publish-crate
-  needs:
-    - publish-engine
-  variables:
-    CRATE_NAME: ironflow-worker
-
-publish-runtime:
-  <<: *publish-crate
-  needs:
-    - publish-core
-  variables:
-    CRATE_NAME: ironflow-runtime
+    - cd .. && mkdir -p ironflow-api/dashboard
+    - cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
+  script:
+    - release-plz release --forge gitlab --git-token "$GITLAB_TOKEN"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
