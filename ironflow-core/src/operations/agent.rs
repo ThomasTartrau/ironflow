@@ -15,7 +15,7 @@
 //!
 //! let result = Agent::new()
 //!     .prompt("Summarize the README.md file")
-//!     .model(Model::Sonnet)
+//!     .model(Model::SONNET)
 //!     .max_turns(3)
 //!     .run(&provider)
 //!     .await?;
@@ -25,76 +25,78 @@
 //! # }
 //! ```
 
-use std::fmt::{self, Display};
-
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value, to_string};
 use tracing::{info, warn};
 
-use crate::error::{AgentError, OperationError};
+use crate::error::OperationError;
 #[cfg(feature = "prometheus")]
 use crate::metric_names;
 use crate::provider::{AgentConfig, AgentOutput, AgentProvider};
 use crate::retry::RetryPolicy;
-use crate::utils::estimate_tokens;
 
-/// Available Claude models.
+/// Provider-agnostic model identifiers.
 ///
-/// Each variant maps to a model name passed to the Claude CLI.
-/// Use the alias variants (`Sonnet`, `Opus`, `Haiku`) for the latest version,
-/// or the explicit variants for a specific model ID and context window.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Model {
-    // ── Aliases (latest version, CLI resolves to current) ───────────
-    /// Claude Sonnet - balanced speed and capability (default, 200K context).
-    Sonnet,
-    /// Claude Opus - highest capability (200K context).
-    Opus,
-    /// Claude Haiku - fastest and cheapest (200K context).
-    Haiku,
-
-    // ── Claude 4.5 ─────────────────────────────────────────────────
-    /// Claude Haiku 4.5 - 200K context.
-    #[serde(rename = "claude-haiku-4-5-20251001")]
-    Haiku45,
-
-    // ── Claude 4.6 - 200K context ──────────────────────────────────
-    /// Claude Sonnet 4.6 - 200K context.
-    #[serde(rename = "claude-sonnet-4-6")]
-    Sonnet46,
-    /// Claude Opus 4.6 - 200K context.
-    #[serde(rename = "claude-opus-4-6")]
-    Opus46,
-
-    // ── Claude 4.6 - 1M context ────────────────────────────────────
-    /// Claude Sonnet 4.6 with 1M token context window.
-    #[serde(rename = "claude-sonnet-4-6[1m]")]
-    Sonnet46_1M,
-    /// Claude Opus 4.6 with 1M token context window.
-    #[serde(rename = "claude-opus-4-6[1m]")]
-    Opus46_1M,
-}
+/// Constants are provided for well-known Claude models, but any string
+/// is accepted - custom [`AgentProvider`] implementations interpret the
+/// model identifier however they wish.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_core::prelude::*;
+///
+/// # async fn example() -> Result<(), OperationError> {
+/// let provider = ClaudeCodeProvider::new();
+///
+/// // Using a built-in constant
+/// let r = Agent::new()
+///     .prompt("hi")
+///     .model(Model::SONNET)
+///     .run(&provider)
+///     .await?;
+///
+/// // Using a custom model string
+/// let r = Agent::new()
+///     .prompt("hi")
+///     .model("mistral-large-latest")
+///     .run(&provider)
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct Model;
 
 impl Model {
-    /// Maximum context window size in tokens.
-    pub fn context_window(self) -> usize {
-        match self {
-            Self::Sonnet46_1M | Self::Opus46_1M => 1_000_000,
-            _ => 200_000,
-        }
-    }
-}
+    // ── Aliases (latest version, CLI resolves to current) ───────────
 
-impl Display for Model {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(s)) => f.write_str(&s),
-            _ => f.write_str("unknown"),
-        }
-    }
+    /// Claude Sonnet - balanced speed and capability (default).
+    pub const SONNET: &str = "sonnet";
+    /// Claude Opus - highest capability.
+    pub const OPUS: &str = "opus";
+    /// Claude Haiku - fastest and cheapest.
+    pub const HAIKU: &str = "haiku";
+
+    // ── Claude 4.5 ─────────────────────────────────────────────────
+
+    /// Claude Haiku 4.5.
+    pub const HAIKU_45: &str = "claude-haiku-4-5-20251001";
+
+    // ── Claude 4.6 - 200K context ──────────────────────────────────
+
+    /// Claude Sonnet 4.6.
+    pub const SONNET_46: &str = "claude-sonnet-4-6";
+    /// Claude Opus 4.6.
+    pub const OPUS_46: &str = "claude-opus-4-6";
+
+    // ── Claude 4.6 - 1M context ────────────────────────────────────
+
+    /// Claude Sonnet 4.6 with 1M token context window.
+    pub const SONNET_46_1M: &str = "claude-sonnet-4-6[1m]";
+    /// Claude Opus 4.6 with 1M token context window.
+    pub const OPUS_46_1M: &str = "claude-opus-4-6[1m]";
 }
 
 /// Controls how the agent handles tool-use permission prompts.
@@ -131,7 +133,7 @@ pub enum PermissionMode {
 /// let result = Agent::new()
 ///     .system_prompt("You are a Rust expert.")
 ///     .prompt("Review this code for safety issues.")
-///     .model(Model::Opus)
+///     .model(Model::OPUS)
 ///     .allowed_tools(&["Read", "Grep"])
 ///     .max_turns(5)
 ///     .max_budget_usd(0.50)
@@ -154,7 +156,7 @@ pub struct Agent {
 impl Agent {
     /// Create a new agent builder with default settings.
     ///
-    /// Defaults: [`Model::Sonnet`], no system prompt, no tool restrictions,
+    /// Defaults: [`Model::SONNET`], no system prompt, no tool restrictions,
     /// no budget/turn limits, [`PermissionMode::Default`].
     pub fn new() -> Self {
         Self {
@@ -176,11 +178,14 @@ impl Agent {
         self
     }
 
-    /// Set the model tier to use for this invocation.
+    /// Set the model to use for this invocation.
     ///
-    /// Defaults to [`Model::Sonnet`] if not called.
-    pub fn model(mut self, model: Model) -> Self {
-        self.config.model = model;
+    /// Accepts any string-like value. Use [`Model`] constants for well-known
+    /// Claude models, or pass an arbitrary string for custom providers.
+    ///
+    /// Defaults to [`Model::SONNET`] if not called.
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.config.model = model.into();
         self
     }
 
@@ -426,19 +431,6 @@ impl Agent {
             "prompt must not be empty - call .prompt(\"...\") before .run()"
         );
 
-        // Validate prompt size against the model's context window
-        let total_chars =
-            self.config.prompt.len() + self.config.system_prompt.as_ref().map_or(0, |s| s.len());
-        let estimated_tokens = estimate_tokens(total_chars);
-        let model_limit = self.config.model.context_window();
-        if estimated_tokens > model_limit {
-            return Err(OperationError::Agent(AgentError::PromptTooLarge {
-                chars: total_chars,
-                estimated_tokens,
-                model_limit,
-            }));
-        }
-
         if crate::dry_run::effective_dry_run(self.dry_run) {
             info!(
                 prompt_len = self.config.prompt.len(),
@@ -645,6 +637,7 @@ impl AgentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AgentError;
     use crate::provider::InvokeFuture;
     use serde_json::json;
 
@@ -701,21 +694,18 @@ mod tests {
         }
     }
 
-    // --- Model Display ---
+    // --- Model constants ---
 
     #[test]
-    fn model_display_sonnet() {
-        assert_eq!(Model::Sonnet.to_string(), "sonnet");
-    }
-
-    #[test]
-    fn model_display_opus() {
-        assert_eq!(Model::Opus.to_string(), "opus");
-    }
-
-    #[test]
-    fn model_display_haiku() {
-        assert_eq!(Model::Haiku.to_string(), "haiku");
+    fn model_constants_have_expected_values() {
+        assert_eq!(Model::SONNET, "sonnet");
+        assert_eq!(Model::OPUS, "opus");
+        assert_eq!(Model::HAIKU, "haiku");
+        assert_eq!(Model::HAIKU_45, "claude-haiku-4-5-20251001");
+        assert_eq!(Model::SONNET_46, "claude-sonnet-4-6");
+        assert_eq!(Model::OPUS_46, "claude-opus-4-6");
+        assert_eq!(Model::SONNET_46_1M, "claude-sonnet-4-6[1m]");
+        assert_eq!(Model::OPUS_46_1M, "claude-opus-4-6[1m]");
     }
 
     // --- Agent::new() defaults via ConfigCapture ---
@@ -761,7 +751,7 @@ mod tests {
         let result = Agent::new()
             .system_prompt("you are a bot")
             .prompt("do something")
-            .model(Model::Opus)
+            .model(Model::OPUS)
             .allowed_tools(&["Read", "Write"])
             .max_turns(5)
             .max_budget_usd(1.5)
@@ -977,42 +967,35 @@ mod tests {
         let _ = Agent::new().prompt("   ").run(&provider).await;
     }
 
-    // --- Serde roundtrips ---
+    // --- Model accepts arbitrary strings ---
 
-    #[test]
-    fn model_serialize_deserialize_roundtrip() {
-        for model in [
-            Model::Sonnet,
-            Model::Opus,
-            Model::Haiku,
-            Model::Haiku45,
-            Model::Sonnet46,
-            Model::Opus46,
-            Model::Sonnet46_1M,
-            Model::Opus46_1M,
-        ] {
-            let json = serde_json::to_string(&model).unwrap();
-            let back: Model = serde_json::from_str(&json).unwrap();
-            assert_eq!(model.to_string(), back.to_string());
-        }
+    #[tokio::test]
+    async fn model_accepts_custom_string() {
+        let provider = ConfigCapture {
+            output: default_output(),
+        };
+        let result = Agent::new()
+            .prompt("hi")
+            .model("mistral-large-latest")
+            .run(&provider)
+            .await
+            .unwrap();
+        assert_eq!(result.value()["model"], json!("mistral-large-latest"));
     }
 
-    #[test]
-    fn model_display_explicit_ids() {
-        assert_eq!(Model::Haiku45.to_string(), "claude-haiku-4-5-20251001");
-        assert_eq!(Model::Sonnet46.to_string(), "claude-sonnet-4-6");
-        assert_eq!(Model::Opus46.to_string(), "claude-opus-4-6");
-        assert_eq!(Model::Sonnet46_1M.to_string(), "claude-sonnet-4-6[1m]");
-        assert_eq!(Model::Opus46_1M.to_string(), "claude-opus-4-6[1m]");
-    }
-
-    #[test]
-    fn model_context_window() {
-        assert_eq!(Model::Sonnet.context_window(), 200_000);
-        assert_eq!(Model::Opus.context_window(), 200_000);
-        assert_eq!(Model::Haiku.context_window(), 200_000);
-        assert_eq!(Model::Sonnet46_1M.context_window(), 1_000_000);
-        assert_eq!(Model::Opus46_1M.context_window(), 1_000_000);
+    #[tokio::test]
+    async fn model_accepts_owned_string() {
+        let provider = ConfigCapture {
+            output: default_output(),
+        };
+        let model_name = String::from("gpt-4o");
+        let result = Agent::new()
+            .prompt("hi")
+            .model(model_name)
+            .run(&provider)
+            .await
+            .unwrap();
+        assert_eq!(result.value()["model"], json!("gpt-4o"));
     }
 
     #[tokio::test]
@@ -1067,90 +1050,10 @@ mod tests {
         let _ = Agent::new().max_budget_usd(0.0);
     }
 
-    #[tokio::test]
-    async fn run_with_prompt_too_large_returns_error() {
-        let provider = TestProvider {
-            output: default_output(),
-        };
-        // 200K context = 800K chars max. Create a prompt exceeding that.
-        let large_prompt = "x".repeat(800_004);
-        let result = Agent::new()
-            .prompt(&large_prompt)
-            .model(Model::Sonnet)
-            .run(&provider)
-            .await;
-
-        let err = result.unwrap_err();
-        match err {
-            OperationError::Agent(crate::error::AgentError::PromptTooLarge {
-                chars,
-                estimated_tokens,
-                model_limit,
-            }) => {
-                assert_eq!(chars, 800_004);
-                assert_eq!(estimated_tokens, 200_001);
-                assert_eq!(model_limit, 200_000);
-            }
-            other => panic!("expected PromptTooLarge, got: {other}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn run_with_prompt_at_limit_succeeds() {
-        let provider = TestProvider {
-            output: default_output(),
-        };
-        // Exactly at the limit (200K tokens = 800K chars)
-        let prompt = "x".repeat(800_000);
-        let result = Agent::new()
-            .prompt(&prompt)
-            .model(Model::Sonnet)
-            .run(&provider)
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn run_with_system_prompt_counts_toward_limit() {
-        let provider = TestProvider {
-            output: default_output(),
-        };
-        // System prompt + user prompt together exceed the limit
-        let system = "s".repeat(400_004);
-        let prompt = "p".repeat(400_000);
-        let result = Agent::new()
-            .system_prompt(&system)
-            .prompt(&prompt)
-            .model(Model::Sonnet)
-            .run(&provider)
-            .await;
-
-        let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            OperationError::Agent(crate::error::AgentError::PromptTooLarge { .. })
-        ));
-    }
-
-    #[tokio::test]
-    async fn run_with_1m_model_allows_larger_prompt() {
-        let provider = TestProvider {
-            output: default_output(),
-        };
-        // 900K chars ~ 225K tokens, exceeds 200K but fits in 1M
-        let prompt = "x".repeat(900_000);
-        let result = Agent::new()
-            .prompt(&prompt)
-            .model(Model::Sonnet46_1M)
-            .run(&provider)
-            .await;
-        assert!(result.is_ok());
-    }
-
     #[test]
-    fn model_equality() {
-        assert_eq!(Model::Sonnet, Model::Sonnet);
-        assert_ne!(Model::Sonnet, Model::Opus);
+    fn model_constant_equality() {
+        assert_eq!(Model::SONNET, "sonnet");
+        assert_ne!(Model::SONNET, Model::OPUS);
     }
 
     #[test]

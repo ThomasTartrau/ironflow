@@ -11,9 +11,42 @@ use tracing::warn;
 use crate::error::AgentError;
 use crate::operations::agent::PermissionMode;
 use crate::provider::{AgentConfig, AgentOutput};
+use crate::utils::estimate_tokens;
 
 /// Default timeout for a single Claude CLI invocation (5 minutes).
 pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Return the context window size for a known Claude model identifier.
+///
+/// Returns `200_000` for all standard models, `1_000_000` for `[1m]` variants,
+/// and `200_000` as a safe default for unrecognised identifiers.
+pub fn context_window_for_model(model: &str) -> usize {
+    if model.ends_with("[1m]") {
+        1_000_000
+    } else {
+        200_000
+    }
+}
+
+/// Validate that the prompt fits within the Claude model's context window.
+///
+/// # Errors
+///
+/// Returns [`AgentError::PromptTooLarge`] if the estimated token count exceeds
+/// the model's context window.
+pub fn validate_prompt_size(config: &AgentConfig) -> Result<(), AgentError> {
+    let total_chars = config.prompt.len() + config.system_prompt.as_ref().map_or(0, |s| s.len());
+    let estimated_tokens = estimate_tokens(total_chars);
+    let model_limit = context_window_for_model(&config.model);
+    if estimated_tokens > model_limit {
+        return Err(AgentError::PromptTooLarge {
+            chars: total_chars,
+            estimated_tokens,
+            model_limit,
+        });
+    }
+    Ok(())
+}
 
 /// Parsed JSON output from the `claude` CLI.
 #[derive(Deserialize)]
@@ -133,7 +166,7 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     ];
 
     push_opt(&mut args, "--system-prompt", &config.system_prompt);
-    push_flag(&mut args, "--model", &config.model.to_string());
+    push_flag(&mut args, "--model", &config.model);
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
     }

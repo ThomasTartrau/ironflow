@@ -2200,6 +2200,7 @@ dependencies = [
 name = "ironflow-engine"
 version = "2.0.0"
 dependencies = [
+ "axum 0.8.8",
  "chrono",
  "ironflow-core",
  "ironflow-store",

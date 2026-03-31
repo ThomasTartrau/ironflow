@@ -23,7 +23,7 @@ async fn replay_is_deterministic() {
     for _ in 0..3 {
         let result = Agent::new()
             .prompt(prompt)
-            .model(Model::Haiku)
+            .model(Model::HAIKU)
             .max_turns(1)
             .max_budget_usd(0.10)
             .run(&provider)
@@ -104,7 +104,7 @@ async fn record_mode_writes_fixture_file() {
 
     let result = Agent::new()
         .prompt(prompt)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&recorder)
@@ -124,7 +124,7 @@ async fn record_mode_writes_fixture_file() {
     );
     let replayed = Agent::new()
         .prompt(prompt)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&replayer)
@@ -147,9 +147,9 @@ fn hash_config_allowed_tools_affect_hash() {
 #[test]
 fn hash_config_model_affects_hash() {
     let mut c1 = ironflow_core::provider::AgentConfig::new("prompt");
-    c1.model = Model::Sonnet;
+    c1.model = Model::SONNET.to_string();
     let mut c2 = ironflow_core::provider::AgentConfig::new("prompt");
-    c2.model = Model::Opus;
+    c2.model = Model::OPUS.to_string();
     assert_ne!(hash_config(&c1), hash_config(&c2));
 }
 

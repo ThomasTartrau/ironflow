@@ -261,6 +261,7 @@ impl K8sPersistentProvider {
 impl AgentProvider for K8sPersistentProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
+            claude_common::validate_prompt_size(config)?;
             let args = claude_common::build_args(config)?;
 
             let claude_cmd = claude_common::build_shell_command(&self.claude_path, &args);

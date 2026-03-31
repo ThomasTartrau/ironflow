@@ -33,7 +33,7 @@ async fn shell_then_agent_with_tracker() {
     let result = Agent::new()
         .system_prompt("You are a concise assistant.")
         .prompt(&prompt)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&provider)
@@ -84,7 +84,7 @@ async fn multi_shell_then_agent() {
 
     let result = Agent::new()
         .prompt(&prompt)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&provider)
@@ -134,7 +134,7 @@ async fn parallel_shells_then_agent() {
 
     let result = Agent::new()
         .prompt(&prompt)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&provider)

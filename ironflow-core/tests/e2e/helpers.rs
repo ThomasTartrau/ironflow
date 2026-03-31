@@ -26,7 +26,7 @@ pub fn make_config(
 ) -> AgentConfig {
     let mut config = AgentConfig::new(prompt);
     config.system_prompt = system_prompt.map(|s| s.to_string());
-    config.model = Model::Haiku;
+    config.model = Model::HAIKU.to_string();
     config.max_turns = Some(1);
     config.max_budget_usd = Some(0.10);
     config.json_schema = json_schema.map(|s| s.to_string());

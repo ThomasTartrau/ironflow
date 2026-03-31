@@ -86,6 +86,7 @@ impl Default for ClaudeCodeProvider {
 impl AgentProvider for ClaudeCodeProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
+            common::validate_prompt_size(config)?;
             let args = common::build_args(config)?;
 
             debug!(

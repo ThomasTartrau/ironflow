@@ -133,6 +133,7 @@ impl DockerProvider {
 impl AgentProvider for DockerProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
+            common::validate_prompt_size(config)?;
             let args = common::build_args(config)?;
 
             let mut cmd: Vec<String> = vec![self.claude_path.clone()];

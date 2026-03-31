@@ -57,7 +57,7 @@ async fn agent_error_propagates() {
 
     let result = Agent::new()
         .prompt("This will fail")
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&provider)
