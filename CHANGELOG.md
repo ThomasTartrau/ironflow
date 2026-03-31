@@ -1,3 +1,23 @@
+## [2.0.0](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.3.1...v2.0.0) (2026-03-31)
+
+### ⚠ BREAKING CHANGES
+
+* Complete architecture overhaul from v1 to v2.
+
+- Add workflow engine with FSM-based run execution
+- Add worker with step executors (shell, agent, webhook, sub-workflow)
+- Add REST API with axum (runs, workflows, steps, dashboard stats)
+- Add React/TypeScript dashboard with filtering, retry, and theming
+- Add store layer (SQLx/PostgreSQL) with migrations
+- Add auth layer with JWT, Argon2id password hashing, and cookie management
+- Refactor runtime into webhook + cron modules
+- Add comprehensive test suite (unit + integration)
+- Add example server, worker, and workflow definitions
+
+### Features
+
+* add workflow engine, worker, API, and dashboard ([9db68e8](https://gitlab.com/ThomasTartrau/ironflow/commit/9db68e8340482f3f709efffbe00943fe1edaf176))
+
 ## [1.3.1](https://gitlab.com/ThomasTartrau/ironflow/compare/v1.3.0...v1.3.1) (2026-03-25)
 
 ### Bug Fixes
