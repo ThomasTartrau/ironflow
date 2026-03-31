@@ -1,0 +1,40 @@
+[package]
+name = "ironflow-store"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Storage abstraction and implementations for ironflow run tracking"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "store", "runs", "persistence"]
+categories = ["asynchronous", "database"]
+
+[dependencies]
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust_decimal = { version = "1", features = ["serde-float"] }
+tokio = { version = "1", features = ["sync"] }
+thiserror = "2"
+tracing = "0.1"
+
+# PostgreSQL (Phase 2)
+sqlx = { version = "0.8", features = [
+    "postgres",
+    "runtime-tokio-rustls",
+    "uuid",
+    "chrono",
+    "json",
+    "migrate",
+], optional = true }
+
+[features]
+default = ["store-memory"]
+store-memory = []
+store-postgres = ["sqlx"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"

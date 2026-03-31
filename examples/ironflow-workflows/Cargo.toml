@@ -1,0 +1,11 @@
+[package]
+name = "ironflow-workflows"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Example workflow handlers for ironflow"
+
+[dependencies]
+ironflow-engine = { path = "../../ironflow-engine" }
+ironflow-store = { path = "../../ironflow-store" }
+serde_json = "1"

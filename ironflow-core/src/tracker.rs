@@ -27,16 +27,16 @@ use crate::operations::agent::AgentResult;
 use crate::operations::http::HttpOutput;
 use crate::operations::shell::ShellOutput;
 
+/// Default maximum number of steps kept in the tracker.
+/// Older steps are evicted when this limit is reached.
+const DEFAULT_MAX_STEPS: usize = 10_000;
+
 /// Aggregates cost, token, and duration metrics for a named workflow.
 ///
 /// Create one tracker per workflow run with [`WorkflowTracker::new`], record
 /// each step with [`record_shell`](WorkflowTracker::record_shell) or
 /// [`record_agent`](WorkflowTracker::record_agent), then call
 /// [`summary`](WorkflowTracker::summary) to emit a structured log line.
-/// Default maximum number of steps kept in the tracker.
-/// Older steps are evicted when this limit is reached.
-const DEFAULT_MAX_STEPS: usize = 10_000;
-
 pub struct WorkflowTracker {
     name: String,
     start: Instant,

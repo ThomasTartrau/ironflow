@@ -4,14 +4,14 @@
 //! to plug in any AI backend (local model, HTTP API, mock, etc.) without changing
 //! your workflow code.
 //!
-//! The built-in implementations are:
+//! Built-in implementations:
 //!
-//! * [`ClaudeCodeProvider`](crate::providers::claude::ClaudeCodeProvider) — local `claude` CLI.
-//! * [`SshProvider`](crate::providers::claude::SshProvider) — remote via SSH (`transport-ssh`).
-//! * [`DockerProvider`](crate::providers::claude::DockerProvider) — Docker container (`transport-docker`).
-//! * [`K8sEphemeralProvider`](crate::providers::claude::K8sEphemeralProvider) — ephemeral K8s pod (`transport-k8s`).
-//! * [`K8sPersistentProvider`](crate::providers::claude::K8sPersistentProvider) — persistent K8s pod (`transport-k8s`).
-//! * [`RecordReplayProvider`](crate::providers::record_replay::RecordReplayProvider) —
+//! * [`ClaudeCodeProvider`](crate::providers::claude::ClaudeCodeProvider) - local `claude` CLI.
+//! * `SshProvider` - remote via SSH (requires `transport-ssh` feature).
+//! * `DockerProvider` - Docker container (requires `transport-docker` feature).
+//! * `K8sEphemeralProvider` - ephemeral K8s pod (requires `transport-k8s` feature).
+//! * `K8sPersistentProvider` - persistent K8s pod (requires `transport-k8s` feature).
+//! * [`RecordReplayProvider`](crate::providers::record_replay::RecordReplayProvider) -
 //!   records and replays fixtures for deterministic testing.
 
 use std::future::Future;

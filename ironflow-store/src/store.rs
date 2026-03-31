@@ -1,0 +1,106 @@
+//! The [`RunStore`] trait — async storage abstraction for runs and steps.
+//!
+//! Implement this trait to plug in any backing store. Built-in implementations:
+//!
+//! - [`InMemoryStore`](crate::memory::InMemoryStore) — development and testing.
+//! - `PostgresStore` — production (behind the `store-postgres` feature).
+
+use std::future::Future;
+use std::pin::Pin;
+
+use uuid::Uuid;
+
+use crate::entities::{
+    NewRun, NewStep, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepUpdate,
+};
+use crate::error::StoreError;
+
+/// Boxed future for [`RunStore`] methods — ensures object safety for `dyn RunStore`.
+pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
+
+/// Async storage abstraction for workflow runs and steps.
+///
+/// All methods return a [`StoreFuture`] (boxed future) to maintain object safety,
+/// allowing the store to be used as `Arc<dyn RunStore>`.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_store::prelude::*;
+/// use serde_json::json;
+/// use uuid::Uuid;
+///
+/// # async fn example() -> Result<(), ironflow_store::error::StoreError> {
+/// let store = InMemoryStore::new();
+///
+/// let run = store.create_run(NewRun {
+///     workflow_name: "deploy".to_string(),
+///     trigger: TriggerKind::Manual,
+///     payload: json!({}),
+///     max_retries: 3,
+/// }).await?;
+///
+/// let fetched = store.get_run(run.id).await?;
+/// assert!(fetched.is_some());
+/// # Ok(())
+/// # }
+/// ```
+pub trait RunStore: Send + Sync {
+    /// Create a new run in `Pending` status.
+    fn create_run(&self, req: NewRun) -> StoreFuture<'_, Run>;
+
+    /// Get a run by ID. Returns `None` if not found.
+    fn get_run(&self, id: Uuid) -> StoreFuture<'_, Option<Run>>;
+
+    /// List runs matching the given filter, with pagination.
+    ///
+    /// Results are ordered by `created_at` descending (newest first).
+    fn list_runs(&self, filter: RunFilter, page: u32, per_page: u32) -> StoreFuture<'_, Page<Run>>;
+
+    /// Update a run's status with FSM validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::InvalidTransition`] if the transition is not allowed.
+    /// Returns [`StoreError::RunNotFound`] if the run does not exist.
+    fn update_run_status(&self, id: Uuid, new_status: RunStatus) -> StoreFuture<'_, ()>;
+
+    /// Apply a partial update to a run.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::RunNotFound`] if the run does not exist.
+    fn update_run(&self, id: Uuid, update: RunUpdate) -> StoreFuture<'_, ()>;
+
+    /// Atomically pick the oldest pending run and transition it to `Running`.
+    ///
+    /// In PostgreSQL, this uses `SELECT FOR UPDATE SKIP LOCKED` for safe
+    /// multi-worker concurrency. The in-memory implementation uses a write lock.
+    ///
+    /// Returns `None` if no pending runs are available.
+    fn pick_next_pending(&self) -> StoreFuture<'_, Option<Run>>;
+
+    /// Create a new step for a run.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::RunNotFound`] if the parent run does not exist.
+    fn create_step(&self, step: NewStep) -> StoreFuture<'_, Step>;
+
+    /// Apply a partial update to a step after execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::StepNotFound`] if the step does not exist.
+    fn update_step(&self, id: Uuid, update: StepUpdate) -> StoreFuture<'_, ()>;
+
+    /// List all steps for a run, ordered by position ascending.
+    fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>>;
+
+    /// Get aggregated statistics across all runs.
+    ///
+    /// Returns counts of runs by terminal state, counts of active runs,
+    /// and totals for cost and duration. Computed efficiently by the store
+    /// implementation (single SQL query in PostgreSQL).
+    fn get_stats(&self) -> StoreFuture<'_, RunStats>;
+}

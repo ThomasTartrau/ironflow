@@ -2,9 +2,9 @@
 //!
 //! Two providers are available:
 //!
-//! * [`K8sEphemeralProvider`] — creates a new pod for each invocation, reads logs,
+//! * [`K8sEphemeralProvider`] - creates a new pod for each invocation, reads logs,
 //!   then deletes the pod. Simple and isolated but has startup overhead.
-//! * [`K8sPersistentProvider`] — reuses a long-running worker pod and executes
+//! * [`K8sPersistentProvider`] - reuses a long-running worker pod and executes
 //!   commands via the Kubernetes exec API. Lower latency but shared state between
 //!   invocations.
 //!

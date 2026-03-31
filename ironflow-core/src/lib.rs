@@ -51,12 +51,14 @@ pub mod retry;
 pub mod tracker;
 pub mod utils;
 
+/// Workflow operations (shell commands, agent calls, HTTP requests).
 pub mod operations {
     pub mod agent;
     pub mod http;
     pub mod shell;
 }
 
+/// Re-exports of the most commonly used types.
 pub mod prelude {
     pub use crate::dry_run::{DryRunGuard, is_dry_run, set_dry_run};
     pub use crate::error::{AgentError, OperationError};

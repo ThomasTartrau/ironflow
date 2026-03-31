@@ -57,7 +57,7 @@ enum SshAuth {
 ///
 /// In production you should verify the server's public key against a known
 /// hosts database. This implementation unconditionally trusts the server for
-/// simplicity — callers should layer their own verification if needed.
+/// simplicity, so callers should layer their own verification if needed.
 struct SshHandler;
 
 impl russh::client::Handler for SshHandler {
@@ -180,7 +180,7 @@ impl SshProvider {
             .ok_or_else(|| AgentError::ProcessFailed {
                 exit_code: -1,
                 stderr:
-                    "no SSH authentication method configured — call .password() or .private_key()"
+                    "no SSH authentication method configured - call .password() or .private_key()"
                         .to_string(),
             })?;
 
@@ -298,7 +298,7 @@ impl AgentProvider for SshProvider {
                     stderr: format!("failed to exec remote command: {e}"),
                 })?;
 
-            // Close stdin immediately — non-interactive
+            // Close stdin immediately (non-interactive)
             channel.eof().await.map_err(|e| AgentError::ProcessFailed {
                 exit_code: -1,
                 stderr: format!("failed to send EOF on SSH channel: {e}"),

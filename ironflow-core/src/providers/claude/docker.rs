@@ -44,7 +44,7 @@ use super::common::{self, DEFAULT_TIMEOUT};
 ///
 /// Uses the Docker Engine API (via [`bollard`]) to create an exec instance,
 /// start it, and capture stdout/stderr. No PTY is allocated and stdin is
-/// not attached — the execution is fully non-interactive.
+/// not attached, so the execution is fully non-interactive.
 ///
 /// # Examples
 ///
@@ -216,7 +216,7 @@ impl AgentProvider for DockerProvider {
                     StartExecResults::Detached => {
                         return Err(AgentError::ProcessFailed {
                             exit_code: -1,
-                            stderr: "docker exec returned Detached mode — cannot capture output"
+                            stderr: "docker exec returned Detached mode, cannot capture output"
                                 .to_string(),
                         });
                     }

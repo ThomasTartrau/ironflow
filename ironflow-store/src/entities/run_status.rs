@@ -1,0 +1,185 @@
+//! [`RunStatus`] FSM — lifecycle states for a workflow run.
+
+use serde::{Deserialize, Serialize};
+
+/// Status of a workflow run, forming a finite state machine.
+///
+/// Valid transitions:
+/// - `Pending` → `Running`, `Cancelled`
+/// - `Running` → `Completed`, `Failed`, `Retrying`, `Cancelled`
+/// - `Retrying` → `Running`, `Failed`, `Cancelled`
+///
+/// Terminal states: `Completed`, `Failed`, `Cancelled`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::RunStatus;
+///
+/// assert!(RunStatus::Pending.can_transition_to(&RunStatus::Running));
+/// assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));
+/// assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    /// Waiting to be picked up by a worker or inline executor.
+    Pending,
+    /// Currently executing steps.
+    Running,
+    /// All steps completed successfully.
+    Completed,
+    /// A step failed and no retries remain.
+    Failed,
+    /// A step failed but retries are available; waiting to be re-queued.
+    Retrying,
+    /// Cancelled by user or API before completion.
+    Cancelled,
+}
+
+impl RunStatus {
+    /// Returns `true` if the current status can legally transition to `target`.
+    pub fn can_transition_to(&self, target: &RunStatus) -> bool {
+        matches!(
+            (self, target),
+            (RunStatus::Pending, RunStatus::Running)
+                | (RunStatus::Pending, RunStatus::Cancelled)
+                | (RunStatus::Running, RunStatus::Completed)
+                | (RunStatus::Running, RunStatus::Failed)
+                | (RunStatus::Running, RunStatus::Retrying)
+                | (RunStatus::Running, RunStatus::Cancelled)
+                | (RunStatus::Retrying, RunStatus::Running)
+                | (RunStatus::Retrying, RunStatus::Failed)
+                | (RunStatus::Retrying, RunStatus::Cancelled)
+        )
+    }
+
+    /// Returns `true` if this is a terminal state (no further transitions).
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
+        )
+    }
+}
+
+impl std::fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunStatus::Pending => f.write_str("Pending"),
+            RunStatus::Running => f.write_str("Running"),
+            RunStatus::Completed => f.write_str("Completed"),
+            RunStatus::Failed => f.write_str("Failed"),
+            RunStatus::Retrying => f.write_str("Retrying"),
+            RunStatus::Cancelled => f.write_str("Cancelled"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_can_transition_to_running() {
+        assert!(RunStatus::Pending.can_transition_to(&RunStatus::Running));
+    }
+
+    #[test]
+    fn pending_can_transition_to_cancelled() {
+        assert!(RunStatus::Pending.can_transition_to(&RunStatus::Cancelled));
+    }
+
+    #[test]
+    fn pending_cannot_transition_to_completed() {
+        assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));
+    }
+
+    #[test]
+    fn pending_cannot_transition_to_failed() {
+        assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Failed));
+    }
+
+    #[test]
+    fn running_can_transition_to_completed() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Completed));
+    }
+
+    #[test]
+    fn running_can_transition_to_failed() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Failed));
+    }
+
+    #[test]
+    fn running_can_transition_to_retrying() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Retrying));
+    }
+
+    #[test]
+    fn running_can_transition_to_cancelled() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Cancelled));
+    }
+
+    #[test]
+    fn retrying_can_transition_to_running() {
+        assert!(RunStatus::Retrying.can_transition_to(&RunStatus::Running));
+    }
+
+    #[test]
+    fn retrying_can_transition_to_failed() {
+        assert!(RunStatus::Retrying.can_transition_to(&RunStatus::Failed));
+    }
+
+    #[test]
+    fn retrying_can_transition_to_cancelled() {
+        assert!(RunStatus::Retrying.can_transition_to(&RunStatus::Cancelled));
+    }
+
+    #[test]
+    fn completed_is_terminal() {
+        assert!(RunStatus::Completed.is_terminal());
+        assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
+    }
+
+    #[test]
+    fn failed_is_terminal() {
+        assert!(RunStatus::Failed.is_terminal());
+    }
+
+    #[test]
+    fn cancelled_is_terminal() {
+        assert!(RunStatus::Cancelled.is_terminal());
+    }
+
+    #[test]
+    fn pending_and_running_not_terminal() {
+        assert!(!RunStatus::Pending.is_terminal());
+        assert!(!RunStatus::Running.is_terminal());
+    }
+
+    #[test]
+    fn display() {
+        assert_eq!(RunStatus::Pending.to_string(), "Pending");
+        assert_eq!(RunStatus::Running.to_string(), "Running");
+        assert_eq!(RunStatus::Completed.to_string(), "Completed");
+        assert_eq!(RunStatus::Failed.to_string(), "Failed");
+        assert_eq!(RunStatus::Retrying.to_string(), "Retrying");
+        assert_eq!(RunStatus::Cancelled.to_string(), "Cancelled");
+    }
+
+    #[test]
+    fn serde_roundtrip() {
+        for status in [
+            RunStatus::Pending,
+            RunStatus::Running,
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Retrying,
+            RunStatus::Cancelled,
+        ] {
+            let json = serde_json::to_string(&status).expect("serialize");
+            let back: RunStatus = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(status, back);
+        }
+    }
+}

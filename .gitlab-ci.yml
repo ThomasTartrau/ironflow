@@ -3,6 +3,7 @@ stages:
   - test
   - build
   - release
+  - publish
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
@@ -33,8 +34,8 @@ cargo-clippy:
     RUSTFLAGS: "-D warnings"
   script:
     - rustup component add clippy
-    - cargo clippy --workspace --all-targets -- -D warnings
-    - cargo clippy --workspace --all-targets --features prometheus -- -D warnings
+    - cargo clippy --workspace --all-targets --exclude ironflow-example-server -- -D warnings
+    - cargo clippy --workspace --all-targets --exclude ironflow-example-server --features prometheus -- -D warnings
 
 cargo-check:
   stage: check
@@ -43,7 +44,62 @@ cargo-check:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo check --workspace --all-targets
+    - cargo check --workspace --all-targets --exclude ironflow-example-server
+
+dashboard-lint:
+  stage: check
+  image: node:22
+  cache:
+    key: dashboard-${CI_COMMIT_REF_SLUG}
+    paths:
+      - ironflow-dashboard/node_modules/
+  script:
+    - cd ironflow-dashboard && npm install --legacy-peer-deps
+    - npm run lint
+
+dashboard-typecheck:
+  stage: check
+  image: node:22
+  cache:
+    key: dashboard-${CI_COMMIT_REF_SLUG}
+    paths:
+      - ironflow-dashboard/node_modules/
+  script:
+    - cd ironflow-dashboard && npm install --legacy-peer-deps
+    - npx tsc -b --noEmit
+
+dashboard-build:
+  stage: build
+  image: node:22
+  needs:
+    - dashboard-lint
+    - dashboard-typecheck
+  cache:
+    key: dashboard-${CI_COMMIT_REF_SLUG}
+    paths:
+      - ironflow-dashboard/node_modules/
+  script:
+    - cd ironflow-dashboard && npm install --legacy-peer-deps && npm run build
+  artifacts:
+    paths:
+      - ironflow-dashboard/dist/
+    expire_in: 1 hour
+
+cargo-check-dashboard:
+  stage: build
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - dashboard-build
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - ls ironflow-dashboard/dist/
+    - mkdir -p ironflow-api/dashboard
+    - cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
+    - ls ironflow-api/dashboard/
+    - cargo check -p ironflow-api --features dashboard
+    - cargo check -p ironflow-example-server
 
 cargo-audit:
   stage: check
@@ -63,7 +119,7 @@ unit-tests:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo test --workspace
+    - cargo test --workspace --exclude ironflow-example-server
 
 test-prometheus:
   stage: test
@@ -74,7 +130,7 @@ test-prometheus:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo test --workspace --features prometheus
+    - cargo test --workspace --exclude ironflow-example-server --features prometheus
 
 doc-tests:
   stage: test
@@ -85,7 +141,7 @@ doc-tests:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo test --workspace --doc
+    - cargo test --workspace --exclude ironflow-example-server --doc
 
 build-debug:
   stage: build
@@ -96,7 +152,7 @@ build-debug:
     - test-prometheus
     - doc-tests
   script:
-    - cargo build --workspace
+    - cargo build --workspace --exclude ironflow-example-server
 
 build-release:
   stage: build
@@ -107,7 +163,7 @@ build-release:
     - test-prometheus
     - doc-tests
   script:
-    - cargo build --workspace --release
+    - cargo build --workspace --exclude ironflow-example-server --release
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
@@ -131,3 +187,69 @@ release:
     - npx semantic-release
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# --- Publish jobs (triggered by release tag) ---
+
+.publish-crate: &publish-crate
+  stage: publish
+  image: rust:1.94.0
+  <<: *rust-cache
+  script:
+    - cargo publish -p ${CRATE_NAME} --allow-dirty
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  retry:
+    max: 2
+    when: script_failure
+
+publish-core:
+  <<: *publish-crate
+  variables:
+    CRATE_NAME: ironflow-core
+
+publish-store:
+  <<: *publish-crate
+  needs:
+    - publish-core
+  variables:
+    CRATE_NAME: ironflow-store
+
+publish-auth:
+  <<: *publish-crate
+  needs:
+    - publish-core
+  variables:
+    CRATE_NAME: ironflow-auth
+
+publish-engine:
+  <<: *publish-crate
+  needs:
+    - publish-store
+  variables:
+    CRATE_NAME: ironflow-engine
+
+publish-api:
+  <<: *publish-crate
+  needs:
+    - publish-engine
+    - publish-auth
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq nodejs npm
+    - cd ironflow-dashboard && npm install --legacy-peer-deps && npm run build
+    - cd .. && mkdir -p ironflow-api/dashboard && cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
+  variables:
+    CRATE_NAME: ironflow-api
+
+publish-worker:
+  <<: *publish-crate
+  needs:
+    - publish-engine
+  variables:
+    CRATE_NAME: ironflow-worker
+
+publish-runtime:
+  <<: *publish-crate
+  needs:
+    - publish-core
+  variables:
+    CRATE_NAME: ironflow-runtime

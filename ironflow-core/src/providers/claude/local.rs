@@ -1,7 +1,7 @@
 //! Local Claude Code CLI provider.
 //!
 //! [`ClaudeCodeProvider`] spawns the `claude` binary as a local child process.
-//! This is the default transport — it requires the `claude` CLI to be installed
+//! This is the default transport and requires the `claude` CLI to be installed
 //! on the same machine.
 //!
 //! # Requirements

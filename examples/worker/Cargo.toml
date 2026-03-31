@@ -1,0 +1,18 @@
+[package]
+name = "ironflow-example-worker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "ironflow-worker"
+path = "src/main.rs"
+
+[dependencies]
+ironflow-core = { path = "../../ironflow-core" }
+ironflow-worker = { path = "../../ironflow-worker" }
+ironflow-workflows = { path = "../ironflow-workflows" }
+
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -36,6 +36,7 @@ const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_HANDLERS: usize = 64;
 
 type WebhookHandler = Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+type ShutdownSignal = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Metric name constants for the runtime (webhook + cron).
 #[cfg(feature = "prometheus")]
@@ -94,6 +95,7 @@ pub struct Runtime {
     crons: Vec<CronJob>,
     max_body_size: usize,
     max_concurrent_handlers: usize,
+    custom_shutdown: Option<ShutdownSignal>,
 }
 
 impl Runtime {
@@ -112,6 +114,7 @@ impl Runtime {
             crons: Vec::new(),
             max_body_size: DEFAULT_MAX_BODY_SIZE,
             max_concurrent_handlers: DEFAULT_MAX_CONCURRENT_HANDLERS,
+            custom_shutdown: None,
         }
     }
 
@@ -152,6 +155,41 @@ impl Runtime {
     pub fn max_concurrent_handlers(mut self, limit: usize) -> Self {
         assert!(limit > 0, "max_concurrent_handlers must be greater than 0");
         self.max_concurrent_handlers = limit;
+        self
+    }
+
+    /// Override the default shutdown signal (`Ctrl+C` / `SIGTERM`).
+    ///
+    /// By default, [`Runtime::serve`] and [`Runtime::run_crons`] block until
+    /// the process receives `Ctrl+C` or `SIGTERM`. Use this method to provide
+    /// a custom future that resolves when the runtime should shut down.
+    ///
+    /// This is useful in tests where you want to trigger a clean shutdown
+    /// (including `scheduler.shutdown()`) without relying on OS signals.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_runtime::runtime::Runtime;
+    /// use tokio::sync::oneshot;
+    ///
+    /// # async fn example() -> Result<(), ironflow_runtime::error::RuntimeError> {
+    /// let (tx, rx) = oneshot::channel::<()>();
+    ///
+    /// let rt = Runtime::new()
+    ///     .with_shutdown(async { let _ = rx.await; })
+    ///     .cron("0 */5 * * * *", "check", || async {});
+    ///
+    /// // In another task: tx.send(()) to trigger shutdown.
+    /// rt.run_crons().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_shutdown<F>(mut self, signal: F) -> Self
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.custom_shutdown = Some(Box::pin(signal));
         self
     }
 
@@ -410,7 +448,10 @@ impl Runtime {
         let mut scheduler = Self::start_scheduler(self.crons).await?;
 
         info!("ironflow cron scheduler running (no HTTP server)");
-        shutdown_signal().await;
+        match self.custom_shutdown {
+            Some(signal) => signal.await,
+            None => shutdown_signal().await,
+        }
 
         info!("shutting down scheduler");
         scheduler.shutdown().await.map_err(RuntimeError::Shutdown)?;
@@ -487,8 +528,12 @@ impl Runtime {
             .map_err(RuntimeError::Bind)?;
         info!(addr = %addr, "ironflow runtime listening");
 
+        let graceful_shutdown = match self.custom_shutdown {
+            Some(signal) => signal,
+            None => Box::pin(shutdown_signal()),
+        };
         axum::serve(listener, router)
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(graceful_shutdown)
             .await
             .map_err(RuntimeError::Serve)?;
 
@@ -668,5 +713,298 @@ async fn shutdown_signal() {
     {
         ctrl_c.await;
         info!("received ctrl+c, shutting down");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that Runtime::new() creates a runtime with default values.
+    #[test]
+    fn runtime_new_creates_with_defaults() {
+        let rt = Runtime::new();
+        assert_eq!(rt.webhooks.len(), 0);
+        assert_eq!(rt.crons.len(), 0);
+        assert_eq!(rt.max_body_size, DEFAULT_MAX_BODY_SIZE);
+        assert_eq!(rt.max_concurrent_handlers, DEFAULT_MAX_CONCURRENT_HANDLERS);
+        assert!(rt.custom_shutdown.is_none());
+    }
+
+    /// Test that Runtime::default() is equivalent to Runtime::new().
+    #[test]
+    fn runtime_default_equals_new() {
+        let rt_new = Runtime::new();
+        let rt_default = Runtime::default();
+        assert_eq!(rt_new.webhooks.len(), rt_default.webhooks.len());
+        assert_eq!(rt_new.crons.len(), rt_default.crons.len());
+        assert_eq!(rt_new.max_body_size, rt_default.max_body_size);
+        assert_eq!(
+            rt_new.max_concurrent_handlers,
+            rt_default.max_concurrent_handlers
+        );
+    }
+
+    /// Test that max_body_size() builder method sets the value and returns self.
+    #[test]
+    fn max_body_size_sets_value_and_returns_self() {
+        let rt = Runtime::new().max_body_size(512 * 1024);
+        assert_eq!(rt.max_body_size, 512 * 1024);
+    }
+
+    /// Test that max_body_size() can be chained with other builder methods.
+    #[test]
+    fn max_body_size_chainable() {
+        let rt =
+            Runtime::new()
+                .max_body_size(1024)
+                .webhook("/test", WebhookAuth::none(), |_| async {});
+        assert_eq!(rt.max_body_size, 1024);
+        assert_eq!(rt.webhooks.len(), 1);
+    }
+
+    /// Test that max_body_size() can be set to zero.
+    #[test]
+    fn max_body_size_can_be_zero() {
+        let rt = Runtime::new().max_body_size(0);
+        assert_eq!(rt.max_body_size, 0);
+    }
+
+    /// Test that max_body_size() can be set to large values.
+    #[test]
+    fn max_body_size_can_be_large() {
+        let large_size = 1024 * 1024 * 1024; // 1 GiB
+        let rt = Runtime::new().max_body_size(large_size);
+        assert_eq!(rt.max_body_size, large_size);
+    }
+
+    /// Test that max_concurrent_handlers() panics when given 0.
+    #[test]
+    #[should_panic(expected = "max_concurrent_handlers must be greater than 0")]
+    fn max_concurrent_handlers_zero_panics() {
+        let _ = Runtime::new().max_concurrent_handlers(0);
+    }
+
+    /// Test that max_concurrent_handlers() sets the value for valid inputs.
+    #[test]
+    fn max_concurrent_handlers_sets_valid_values() {
+        let rt = Runtime::new().max_concurrent_handlers(16);
+        assert_eq!(rt.max_concurrent_handlers, 16);
+    }
+
+    /// Test that max_concurrent_handlers() with 1 is allowed.
+    #[test]
+    fn max_concurrent_handlers_one_is_valid() {
+        let rt = Runtime::new().max_concurrent_handlers(1);
+        assert_eq!(rt.max_concurrent_handlers, 1);
+    }
+
+    /// Test that max_concurrent_handlers() with large values is allowed.
+    #[test]
+    fn max_concurrent_handlers_large_value_is_valid() {
+        let large_limit = 10000;
+        let rt = Runtime::new().max_concurrent_handlers(large_limit);
+        assert_eq!(rt.max_concurrent_handlers, large_limit);
+    }
+
+    /// Test that max_concurrent_handlers() returns self for chaining.
+    #[test]
+    fn max_concurrent_handlers_chainable() {
+        let rt = Runtime::new().max_concurrent_handlers(32).webhook(
+            "/test",
+            WebhookAuth::none(),
+            |_| async {},
+        );
+        assert_eq!(rt.max_concurrent_handlers, 32);
+        assert_eq!(rt.webhooks.len(), 1);
+    }
+
+    /// Test that with_shutdown() sets a custom shutdown signal and returns self.
+    #[tokio::test]
+    async fn with_shutdown_sets_signal_and_returns_self() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let rt = Runtime::new().with_shutdown(async move {
+            let _ = rx.await;
+        });
+        assert!(rt.custom_shutdown.is_some());
+
+        // Signal to verify it was set properly.
+        let _ = tx.send(());
+    }
+
+    /// Test that with_shutdown() is chainable.
+    #[tokio::test]
+    async fn with_shutdown_chainable() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let rt = Runtime::new()
+            .with_shutdown(async move {
+                let _ = rx.await;
+            })
+            .webhook("/test", WebhookAuth::none(), |_| async {});
+        assert!(rt.custom_shutdown.is_some());
+        assert_eq!(rt.webhooks.len(), 1);
+
+        let _ = tx.send(());
+    }
+
+    /// Test that webhook() registers a route and returns self.
+    #[test]
+    fn webhook_registers_route_and_returns_self() {
+        let rt = Runtime::new().webhook("/hooks/test", WebhookAuth::none(), |_| async {});
+        assert_eq!(rt.webhooks.len(), 1);
+        assert_eq!(rt.webhooks[0].path, "/hooks/test");
+    }
+
+    /// Test that webhook() panics if path does not start with '/'.
+    #[test]
+    #[should_panic(expected = "webhook path must start with '/'")]
+    fn webhook_path_without_slash_panics() {
+        let _ = Runtime::new().webhook("no-slash", WebhookAuth::none(), |_| async {});
+    }
+
+    /// Test that webhook() accepts paths with various formats.
+    #[test]
+    fn webhook_accepts_valid_paths() {
+        let rt = Runtime::new()
+            .webhook("/", WebhookAuth::none(), |_| async {})
+            .webhook("/simple", WebhookAuth::none(), |_| async {})
+            .webhook("/nested/path", WebhookAuth::none(), |_| async {})
+            .webhook("/with-dashes", WebhookAuth::none(), |_| async {})
+            .webhook("/with_underscores", WebhookAuth::none(), |_| async {})
+            .webhook("/with/numbers/123", WebhookAuth::none(), |_| async {});
+        assert_eq!(rt.webhooks.len(), 6);
+    }
+
+    /// Test that webhook() can be chained multiple times.
+    #[test]
+    fn webhook_chainable() {
+        let rt = Runtime::new()
+            .webhook("/hook-a", WebhookAuth::none(), |_| async {})
+            .webhook("/hook-b", WebhookAuth::none(), |_| async {})
+            .webhook("/hook-c", WebhookAuth::none(), |_| async {});
+        assert_eq!(rt.webhooks.len(), 3);
+        assert_eq!(rt.webhooks[0].path, "/hook-a");
+        assert_eq!(rt.webhooks[1].path, "/hook-b");
+        assert_eq!(rt.webhooks[2].path, "/hook-c");
+    }
+
+    /// Test that webhook() works with different auth types.
+    #[test]
+    fn webhook_with_various_auth_types() {
+        let rt = Runtime::new()
+            .webhook("/none", WebhookAuth::none(), |_| async {})
+            .webhook(
+                "/header",
+                WebhookAuth::header("x-api-key", "secret"),
+                |_| async {},
+            )
+            .webhook("/github", WebhookAuth::github("secret"), |_| async {})
+            .webhook("/gitlab", WebhookAuth::gitlab("token"), |_| async {});
+        assert_eq!(rt.webhooks.len(), 4);
+    }
+
+    /// Test that cron() registers a job and returns self.
+    #[test]
+    fn cron_registers_job_and_returns_self() {
+        let rt = Runtime::new().cron("0 0 * * * *", "daily-task", || async {});
+        assert_eq!(rt.crons.len(), 1);
+        assert_eq!(rt.crons[0].name, "daily-task");
+        assert_eq!(rt.crons[0].schedule, "0 0 * * * *");
+    }
+
+    /// Test that cron() is chainable.
+    #[test]
+    fn cron_chainable() {
+        let rt = Runtime::new()
+            .cron("0 0 * * * *", "midnight", || async {})
+            .cron("0 */5 * * * *", "every-5-minutes", || async {});
+        assert_eq!(rt.crons.len(), 2);
+    }
+
+    /// Test that cron() preserves all parameters correctly.
+    #[test]
+    fn cron_preserves_schedule_and_name() {
+        let rt = Runtime::new()
+            .cron("0 12 * * * MON", "noon-mondays", || async {})
+            .cron("0 0 1 * * *", "first-of-month", || async {});
+        assert_eq!(rt.crons[0].name, "noon-mondays");
+        assert_eq!(rt.crons[0].schedule, "0 12 * * * MON");
+        assert_eq!(rt.crons[1].name, "first-of-month");
+        assert_eq!(rt.crons[1].schedule, "0 0 1 * * *");
+    }
+
+    /// Test that into_router() returns a Router (compiles and doesn't panic).
+    #[test]
+    fn into_router_returns_router() {
+        let rt = Runtime::new();
+        let _router = rt.into_router();
+        // If this compiles and doesn't panic, the router was successfully created.
+    }
+
+    /// Test that into_router() with webhooks returns a Router.
+    #[test]
+    fn into_router_with_webhooks_returns_router() {
+        let rt = Runtime::new()
+            .webhook("/hook-a", WebhookAuth::none(), |_| async {})
+            .webhook("/hook-b", WebhookAuth::github("secret"), |_| async {});
+        let _router = rt.into_router();
+        // If this compiles and doesn't panic, the router was successfully created with all webhooks.
+    }
+
+    /// Test that into_router() with cron jobs (warns but doesn't panic).
+    #[test]
+    fn into_router_with_crons_returns_router() {
+        let rt = Runtime::new()
+            .cron("0 0 * * * *", "daily", || async {})
+            .cron("0 */5 * * * *", "every-5-min", || async {});
+        let _router = rt.into_router();
+        // Crons are dropped but not an error; router should still be created.
+    }
+
+    /// Test that into_router() with max_body_size returns a Router.
+    #[test]
+    fn into_router_respects_max_body_size_config() {
+        let rt =
+            Runtime::new()
+                .max_body_size(100)
+                .webhook("/hook", WebhookAuth::none(), |_| async {});
+        let _router = rt.into_router();
+        // Router created; actual body size limit enforcement is tested in integration tests.
+    }
+
+    /// Test that into_router() with max_concurrent_handlers returns a Router.
+    #[test]
+    fn into_router_respects_max_concurrent_handlers_config() {
+        let rt = Runtime::new().max_concurrent_handlers(16).webhook(
+            "/hook",
+            WebhookAuth::none(),
+            |_| async {},
+        );
+        let _router = rt.into_router();
+        // Router created; concurrency limit enforcement is tested in integration tests.
+    }
+
+    /// Test full builder chain with multiple methods.
+    #[test]
+    fn builder_chain_multiple_methods() {
+        let rt = Runtime::new()
+            .max_body_size(512 * 1024)
+            .max_concurrent_handlers(32)
+            .webhook("/hook-a", WebhookAuth::none(), |_| async {})
+            .webhook("/hook-b", WebhookAuth::github("secret"), |_| async {})
+            .cron("0 0 * * * *", "daily", || async {});
+
+        assert_eq!(rt.max_body_size, 512 * 1024);
+        assert_eq!(rt.max_concurrent_handlers, 32);
+        assert_eq!(rt.webhooks.len(), 2);
+        assert_eq!(rt.crons.len(), 1);
+    }
+
+    /// Test that into_router() drops cron jobs with a warning logged.
+    #[test]
+    fn into_router_with_crons_doesnt_start_them() {
+        let rt = Runtime::new().cron("0 0 * * * *", "test-cron", || async {});
+        // This should not panic; crons are simply dropped.
+        let _router = rt.into_router();
     }
 }
