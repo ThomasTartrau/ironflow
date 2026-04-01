@@ -6,7 +6,6 @@ stages:
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
-  PATH: "${CI_PROJECT_DIR}/.cargo/bin:${PATH}"
 
 .rust-cache: &rust-cache
   cache:
@@ -105,6 +104,8 @@ cargo-audit:
   stage: check
   image: rust:1.94.0
   <<: *rust-cache
+  before_script:
+    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
   script:
     - cargo install cargo-audit --locked
     - cargo audit
@@ -176,6 +177,7 @@ release-plz-update:
     - build-release
     - cargo-audit
   before_script:
+    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
     - cargo install release-plz --locked
   script:
     - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
@@ -192,6 +194,7 @@ release-plz-release:
     - build-release
     - cargo-audit
   before_script:
+    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
     - cargo install release-plz --locked
     - apt-get update -qq && apt-get install -y -qq nodejs npm
     - cd ironflow-dashboard && npm install --legacy-peer-deps && npm run build
