@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -17,8 +17,8 @@ dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 
 [dependencies]
 ironflow-store = { version = "2.0.0", path = "../ironflow-store" }
-ironflow-engine = { version = "2.0.0", path = "../ironflow-engine" }
-ironflow-core = { version = "2.0.0", path = "../ironflow-core" }
+ironflow-engine = { version = "2.0.1", path = "../ironflow-engine" }
+ironflow-core = { version = "2.0.1", path = "../ironflow-core" }
 ironflow-auth = { version = "2.0.0", path = "../ironflow-auth" }
 
 axum = { version = "0.8", features = ["json"] }
