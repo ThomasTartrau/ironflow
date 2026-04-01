@@ -1,7 +1,8 @@
 target
 plan.md
 .DS_Store
-.cargo/
+.cargo/*
+!.cargo/audit.toml
 
 # Dashboard build artifacts (built in CI before cargo build)
 ironflow-api/dashboard/
