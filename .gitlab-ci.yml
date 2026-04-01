@@ -181,7 +181,8 @@ release-plz-update:
     - cargo install release-plz --locked
   script:
     - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
-    - git checkout -B "$CI_COMMIT_BRANCH"
+    - git fetch origin "$CI_COMMIT_BRANCH"
+    - git checkout -B "$CI_COMMIT_BRANCH" "origin/$CI_COMMIT_BRANCH"
     - release-plz update --forge gitlab --git-token "$GITLAB_TOKEN"
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -201,6 +202,9 @@ release-plz-release:
     - cd .. && mkdir -p ironflow-api/dashboard
     - cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
   script:
+    - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
+    - git fetch origin "$CI_COMMIT_BRANCH"
+    - git checkout -B "$CI_COMMIT_BRANCH" "origin/$CI_COMMIT_BRANCH"
     - release-plz release --forge gitlab --git-token "$GITLAB_TOKEN"
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
