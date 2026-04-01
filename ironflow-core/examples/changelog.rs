@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Generate a changelog from these commits ({range}):\n\n```\n{}\n```",
             git_log.stdout()
         ))
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.50)
         .run(&provider)

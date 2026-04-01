@@ -25,7 +25,7 @@ async fn on_webhook(payload: Value, provider: &ClaudeCodeProvider) {
         .prompt(&format!(
             "Summarise this webhook description:\n\n{description}"
         ))
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(provider)
@@ -56,7 +56,7 @@ async fn on_cron(provider: &ClaudeCodeProvider) {
         .prompt(&format!(
             "Here is the server uptime. Give a one-line summary:\n\n{output}"
         ))
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(provider)

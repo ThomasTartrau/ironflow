@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             build_status = build_status.stdout(),
             deps = deps.stdout(),
         ))
-        .model(Model::Sonnet)
+        .model(Model::SONNET)
         .max_turns(1)
         .max_budget_usd(0.50)
         .run(&provider)

@@ -7,7 +7,7 @@ use rust_decimal::Decimal;
 use serde_json::json;
 use tracing::info;
 
-use ironflow_core::operations::agent::{Agent, Model, PermissionMode};
+use ironflow_core::operations::agent::{Agent, PermissionMode};
 use ironflow_core::provider::AgentProvider;
 
 use crate::config::AgentStepConfig;
@@ -40,8 +40,7 @@ impl StepExecutor for AgentExecutor<'_> {
             agent = agent.system_prompt(sp);
         }
         if let Some(ref model_str) = self.config.model {
-            let model = parse_model(model_str)?;
-            agent = agent.model(model);
+            agent = agent.model(model_str.clone());
         }
         if let Some(budget) = self.config.max_budget_usd {
             agent = agent.max_budget_usd(budget);
@@ -95,25 +94,6 @@ impl StepExecutor for AgentExecutor<'_> {
     }
 }
 
-/// Parse a model string into a [`Model`] enum.
-///
-/// Supports multiple formats for backward compatibility:
-/// - "sonnet", "opus", "haiku"
-/// - "haiku45", "haiku-4.5"
-/// - "sonnet46", "sonnet-4.6"
-/// - "opus46", "opus-4.6"
-fn parse_model(s: &str) -> Result<Model, EngineError> {
-    match s.to_lowercase().as_str() {
-        "sonnet" => Ok(Model::Sonnet),
-        "opus" => Ok(Model::Opus),
-        "haiku" => Ok(Model::Haiku),
-        "haiku45" | "haiku-4.5" => Ok(Model::Haiku45),
-        "sonnet46" | "sonnet-4.6" => Ok(Model::Sonnet46),
-        "opus46" | "opus-4.6" => Ok(Model::Opus46),
-        other => Err(EngineError::StepConfig(format!("unknown model: {other}"))),
-    }
-}
-
 /// Parse a permission mode string into a [`PermissionMode`] enum.
 ///
 /// Unknown values default to [`PermissionMode::Default`].
@@ -129,87 +109,6 @@ fn parse_permission_mode(s: &str) -> PermissionMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn parse_model_sonnet() {
-        let result = parse_model("sonnet");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Sonnet);
-    }
-
-    #[test]
-    fn parse_model_opus() {
-        let result = parse_model("opus");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Opus);
-    }
-
-    #[test]
-    fn parse_model_haiku() {
-        let result = parse_model("haiku");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Haiku);
-    }
-
-    #[test]
-    fn parse_model_haiku45() {
-        let result = parse_model("haiku45");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Haiku45);
-    }
-
-    #[test]
-    fn parse_model_haiku_with_dash() {
-        let result = parse_model("haiku-4.5");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Haiku45);
-    }
-
-    #[test]
-    fn parse_model_sonnet46() {
-        let result = parse_model("sonnet46");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Sonnet46);
-    }
-
-    #[test]
-    fn parse_model_sonnet_with_dash() {
-        let result = parse_model("sonnet-4.6");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Sonnet46);
-    }
-
-    #[test]
-    fn parse_model_opus46() {
-        let result = parse_model("opus46");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Opus46);
-    }
-
-    #[test]
-    fn parse_model_opus_with_dash() {
-        let result = parse_model("opus-4.6");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Model::Opus46);
-    }
-
-    #[test]
-    fn parse_model_unknown_returns_error() {
-        let result = parse_model("invalid-model");
-        assert!(result.is_err());
-        match result {
-            Err(EngineError::StepConfig(msg)) => {
-                assert!(msg.contains("unknown model"));
-            }
-            _ => panic!("expected StepConfig error"),
-        }
-    }
-
-    #[test]
-    fn parse_model_case_insensitive() {
-        assert!(parse_model("SONNET").is_ok());
-        assert!(parse_model("OpUs").is_ok());
-        assert!(parse_model("HAIKU").is_ok());
-    }
 
     #[test]
     fn parse_permission_mode_auto() {

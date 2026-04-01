@@ -229,6 +229,7 @@ impl SshProvider {
 impl AgentProvider for SshProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
+            common::validate_prompt_size(config)?;
             let args = common::build_args(config)?;
 
             // Build the remote command with shell escaping.

@@ -313,8 +313,8 @@ mod tests {
     fn test_hash_config_model_affects_hash() {
         let mut config1 = AgentConfig::new("What is Rust?");
         let mut config2 = AgentConfig::new("What is Rust?");
-        config1.model = Model::Sonnet;
-        config2.model = Model::Opus;
+        config1.model = Model::SONNET.to_string();
+        config2.model = Model::OPUS.to_string();
         assert_ne!(hash_config(&config1), hash_config(&config2));
     }
 

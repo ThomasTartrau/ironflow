@@ -31,7 +31,7 @@
 //! let provider = ClaudeCodeProvider::new();
 //! let review = Agent::new()
 //!     .prompt(&format!("Summarise:\n{}", files.stdout()))
-//!     .model(Model::Haiku)
+//!     .model(Model::HAIKU)
 //!     .max_budget_usd(0.10)
 //!     .run(&provider)
 //!     .await?;

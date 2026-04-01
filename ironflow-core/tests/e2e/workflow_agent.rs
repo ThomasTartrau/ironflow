@@ -33,7 +33,7 @@ async fn chained_agents() {
 
     let keywords = Agent::new()
         .prompt(prompt1)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&provider)
@@ -45,7 +45,7 @@ async fn chained_agents() {
     let haiku_prompt = format!("Write a haiku using these keywords: {}", keywords.text());
     let haiku = Agent::new()
         .prompt(&haiku_prompt)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&provider)
@@ -104,7 +104,7 @@ async fn structured_output() {
 
     let result = Agent::new()
         .prompt(&prompt)
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .output::<CodeReview>()

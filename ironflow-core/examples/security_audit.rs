@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Analyze this cargo audit report and produce a structured assessment:\n\n{}",
             audit.stdout()
         ))
-        .model(Model::Sonnet)
+        .model(Model::SONNET)
         .max_turns(1)
         .max_budget_usd(0.50)
         .output::<AuditReport>()

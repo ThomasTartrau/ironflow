@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Review the following commit diff and provide actionable feedback:\n\n```diff\n{}\n```",
             diff.stdout()
         ))
-        .model(Model::Haiku)
+        .model(Model::HAIKU)
         .max_turns(1)
         .max_budget_usd(0.10)
         .run(&provider)

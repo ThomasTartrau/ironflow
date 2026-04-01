@@ -59,7 +59,7 @@
 //!     prompts.iter().map(|p| {
 //!         Agent::new()
 //!             .prompt(p)
-//!             .model(Model::Haiku)
+//!             .model(Model::HAIKU)
 //!             .max_budget_usd(0.10)
 //!             .run(&provider)
 //!     }),

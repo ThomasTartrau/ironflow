@@ -42,7 +42,10 @@ pub struct AgentConfig {
     pub prompt: String,
 
     /// Which model to use for this invocation.
-    pub model: Model,
+    ///
+    /// Accepts any string. Use [`Model`] constants for well-known Claude models
+    /// (e.g. `Model::SONNET`), or pass a custom identifier for other providers.
+    pub model: String,
 
     /// Allowlist of tool names the agent may invoke (empty = provider default).
     pub allowed_tools: Vec<String>,
@@ -108,7 +111,7 @@ impl AgentConfig {
         Self {
             system_prompt: None,
             prompt: prompt.to_string(),
-            model: Model::Sonnet,
+            model: Model::SONNET.to_string(),
             allowed_tools: Vec::new(),
             max_turns: None,
             max_budget_usd: None,
@@ -177,7 +180,7 @@ mod tests {
         AgentConfig {
             system_prompt: Some("you are helpful".to_string()),
             prompt: "do stuff".to_string(),
-            model: Model::Opus,
+            model: Model::OPUS.to_string(),
             allowed_tools: vec!["Read".to_string(), "Write".to_string()],
             max_turns: Some(10),
             max_budget_usd: Some(2.5),
@@ -210,7 +213,7 @@ mod tests {
         let config = AgentConfig {
             system_prompt: None,
             prompt: "hello".to_string(),
-            model: Model::Haiku,
+            model: Model::HAIKU.to_string(),
             allowed_tools: vec![],
             max_turns: None,
             max_budget_usd: None,
@@ -261,7 +264,7 @@ mod tests {
         let config = AgentConfig::new("test prompt");
         assert_eq!(config.prompt, "test prompt");
         assert_eq!(config.system_prompt, None);
-        assert!(matches!(config.model, Model::Sonnet));
+        assert_eq!(config.model, Model::SONNET);
         assert!(config.allowed_tools.is_empty());
         assert_eq!(config.max_turns, None);
         assert_eq!(config.max_budget_usd, None);
