@@ -180,6 +180,8 @@ release-plz-update:
     - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
     - cargo install release-plz --locked
   script:
+    - git config user.name "release-plz[bot]"
+    - git config user.email "release-plz@users.noreply.gitlab.com"
     - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
     - git fetch origin "$CI_COMMIT_BRANCH"
     - git checkout -B "$CI_COMMIT_BRANCH" "origin/$CI_COMMIT_BRANCH"
