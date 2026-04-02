@@ -851,7 +851,7 @@ impl RunStore for PostgresStore {
                     COUNT(*) FILTER (WHERE ast.name = 'cancelled') as cancelled,
                     COUNT(*) FILTER (WHERE ast.name IN ('pending', 'running', 'retrying')) as active,
                     COALESCE(SUM(r.cost_usd::numeric), 0)::text as total_cost,
-                    COALESCE(SUM(r.duration_ms), 0) as total_duration
+                    COALESCE(SUM(r.duration_ms), 0)::BIGINT as total_duration
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
