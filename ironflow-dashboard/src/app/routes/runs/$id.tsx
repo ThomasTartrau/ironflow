@@ -17,6 +17,7 @@ import { TimeAgo } from "@/app/components/TimeAgo";
 import { RunActions } from "./_components/RunActions";
 import { StepList } from "./_components/StepList";
 import { StepFlow } from "./_components/StepFlow";
+import { DagFlow } from "./_components/DagFlow";
 import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
 import { Clock, DollarSign, RotateCcw, Calendar } from "lucide-react";
@@ -120,11 +121,15 @@ export function Component() {
 					<h2 className="text-base font-semibold tracking-tight">
 						Steps ({steps.length})
 					</h2>
-					<StepFlow
-						steps={steps}
-						workflowName={run.workflow_name}
-						runId={run.id}
-					/>
+					{steps.some((s) => s.dependencies.length > 0) ? (
+						<DagFlow steps={steps} />
+					) : (
+						<StepFlow
+							steps={steps}
+							workflowName={run.workflow_name}
+							runId={run.id}
+						/>
+					)}
 					<StepList steps={steps} />
 				</div>
 			</div>
