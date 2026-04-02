@@ -695,6 +695,47 @@ async fn get_stats_aggregates_cost_and_duration() {
     assert_eq!(stats.total_duration_ms, 5000);
 }
 
+/// Regression test: PostgreSQL returns `NUMERIC` for `SUM(BIGINT)`.
+/// Without an explicit `::BIGINT` cast, `row.get::<i64, _>()` panics at runtime.
+/// This test ensures `total_duration_ms` handles values exceeding `i32::MAX`,
+/// which is the scenario that originally exposed the type mismatch.
+#[tokio::test]
+async fn get_stats_total_duration_exceeds_i32_max() {
+    let store = InMemoryStore::new();
+
+    let r1 = store.create_run(new_run("wf")).await.unwrap();
+    let r2 = store.create_run(new_run("wf")).await.unwrap();
+
+    // Each duration alone fits in i32, but their sum exceeds i32::MAX (2_147_483_647).
+    let half: u64 = 1_200_000_000; // 1.2 billion ms (~333 hours)
+
+    store
+        .update_run(
+            r1.id,
+            RunUpdate {
+                duration_ms: Some(half),
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    store
+        .update_run(
+            r2.id,
+            RunUpdate {
+                duration_ms: Some(half),
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let stats = store.get_stats().await.unwrap();
+    assert_eq!(stats.total_duration_ms, half * 2);
+    assert!(stats.total_duration_ms > i32::MAX as u64);
+}
+
 #[tokio::test]
 async fn get_stats_active_runs_counts_pending_running_retrying() {
     let store = InMemoryStore::new();

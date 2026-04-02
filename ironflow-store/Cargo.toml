@@ -28,6 +28,7 @@ sqlx = { version = "0.8", features = [
     "chrono",
     "json",
     "migrate",
+    "rust_decimal",
 ], optional = true }
 
 [features]
