@@ -13,6 +13,7 @@ include = ["src/**", "Cargo.toml", "build.rs"]
 
 [features]
 default = []
+sign-up = []
 dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 
 [dependencies]
