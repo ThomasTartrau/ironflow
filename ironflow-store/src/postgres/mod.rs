@@ -513,7 +513,7 @@ impl RunStore for PostgresStore {
                 query = query.bind(error);
             }
             if let Some(cost) = update.cost_usd {
-                query = query.bind(cost.to_string());
+                query = query.bind(cost);
             }
             if let Some(dur) = update.duration_ms {
                 query = query.bind(dur as i64);
@@ -785,7 +785,7 @@ impl RunStore for PostgresStore {
                 query = query.bind(dur as i64);
             }
             if let Some(cost) = update.cost_usd {
-                query = query.bind(cost.to_string());
+                query = query.bind(cost);
             }
             if let Some(tokens) = update.input_tokens {
                 query = query.bind(tokens as i64);
@@ -850,7 +850,7 @@ impl RunStore for PostgresStore {
                     COUNT(*) FILTER (WHERE ast.name = 'failed') as failed,
                     COUNT(*) FILTER (WHERE ast.name = 'cancelled') as cancelled,
                     COUNT(*) FILTER (WHERE ast.name IN ('pending', 'running', 'retrying')) as active,
-                    COALESCE(SUM(r.cost_usd::numeric), 0)::text as total_cost,
+                    COALESCE(SUM(r.cost_usd), 0) as total_cost,
                     COALESCE(SUM(r.duration_ms), 0)::BIGINT as total_duration
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
@@ -867,10 +867,7 @@ impl RunStore for PostgresStore {
                 failed_runs: row.get::<i64, _>("failed") as u64,
                 cancelled_runs: row.get::<i64, _>("cancelled") as u64,
                 active_runs: row.get::<i64, _>("active") as u64,
-                total_cost_usd: row
-                    .get::<String, _>("total_cost")
-                    .parse()
-                    .unwrap_or(rust_decimal::Decimal::ZERO),
+                total_cost_usd: row.get::<rust_decimal::Decimal, _>("total_cost"),
                 total_duration_ms: row.get::<i64, _>("total_duration") as u64,
             })
         })
