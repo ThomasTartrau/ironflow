@@ -92,8 +92,12 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         .route("/runs/{id}/retry", post(retry_run::retry_run))
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
-        .route("/stats", get(get_stats::get_stats))
-        .route("/auth/sign-up", post(auth::sign_up::sign_up))
+        .route("/stats", get(get_stats::get_stats));
+
+    #[cfg(feature = "sign-up")]
+    let api_v1 = api_v1.route("/auth/sign-up", post(auth::sign_up::sign_up));
+
+    let api_v1 = api_v1
         .route("/auth/sign-in", post(auth::sign_in::sign_in))
         .route("/auth/refresh", post(auth::refresh::refresh))
         .route("/auth/sign-out", post(auth::sign_out::sign_out))
