@@ -11,7 +11,8 @@ use reqwest::Client;
 use uuid::Uuid;
 
 use ironflow_store::entities::{
-    NewRun, NewStep, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepUpdate,
+    NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
+    StepDependency, StepUpdate,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::store::RunStore;
@@ -250,6 +251,25 @@ impl RunStore for ApiRunStore {
         Box::pin(async move {
             Err(StoreError::Database(
                 "get_stats not supported via worker API".to_string(),
+            ))
+        })
+    }
+
+    fn create_step_dependencies(
+        &self,
+        _deps: Vec<NewStepDependency>,
+    ) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "create_step_dependencies not supported via worker API".to_string(),
+            ))
+        })
+    }
+
+    fn list_step_dependencies(&self, _run_id: Uuid) -> StoreFuture<'_, Vec<StepDependency>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "list_step_dependencies not supported via worker API".to_string(),
             ))
         })
     }
