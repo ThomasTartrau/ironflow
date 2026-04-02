@@ -657,7 +657,7 @@ impl RunStore for PostgresStore {
             .bind(id)
             .bind(req.run_id)
             .bind(&req.name)
-            .bind(helpers::step_kind_to_str(req.kind))
+            .bind(helpers::step_kind_to_str(&req.kind).as_ref())
             .bind(req.position as i32)
             .bind(state_machine_id)
             .bind(&req.input)

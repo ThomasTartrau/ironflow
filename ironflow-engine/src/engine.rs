@@ -794,4 +794,172 @@ mod tests {
         let _ = engine.store();
         let _ = engine.provider();
     }
+
+    // -----------------------------------------------------------------------
+    // Operation trait tests
+    // -----------------------------------------------------------------------
+
+    use crate::operation::Operation;
+    use ironflow_store::models::StepKind;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct FakeGitlabOp {
+        project_id: u64,
+        title: String,
+    }
+
+    impl Operation for FakeGitlabOp {
+        fn kind(&self) -> &str {
+            "gitlab"
+        }
+
+        fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+            Box::pin(async move {
+                Ok(json!({
+                    "issue_id": 42,
+                    "project_id": self.project_id,
+                    "title": self.title,
+                }))
+            })
+        }
+
+        fn input(&self) -> Option<Value> {
+            Some(json!({
+                "project_id": self.project_id,
+                "title": self.title,
+            }))
+        }
+    }
+
+    struct FailingOp;
+
+    impl Operation for FailingOp {
+        fn kind(&self) -> &str {
+            "broken-service"
+        }
+
+        fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+            Box::pin(async move { Err(EngineError::StepConfig("service unavailable".to_string())) })
+        }
+    }
+
+    struct OperationWorkflow;
+
+    impl WorkflowHandler for OperationWorkflow {
+        fn name(&self) -> &str {
+            "operation-workflow"
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                let op = FakeGitlabOp {
+                    project_id: 123,
+                    title: "Bug report".to_string(),
+                };
+                ctx.operation("create-issue", &op).await?;
+                Ok(())
+            })
+        }
+    }
+
+    struct FailingOperationWorkflow;
+
+    impl WorkflowHandler for FailingOperationWorkflow {
+        fn name(&self) -> &str {
+            "failing-operation-workflow"
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                ctx.operation("broken-call", &FailingOp).await?;
+                Ok(())
+            })
+        }
+    }
+
+    struct MixedWorkflow;
+
+    impl WorkflowHandler for MixedWorkflow {
+        fn name(&self) -> &str {
+            "mixed-workflow"
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                ctx.shell("build", ShellConfig::new("echo built")).await?;
+                let op = FakeGitlabOp {
+                    project_id: 456,
+                    title: "Deploy done".to_string(),
+                };
+                let result = ctx.operation("notify-gitlab", &op).await?;
+                assert_eq!(result.output["issue_id"], 42);
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn operation_step_happy_path() {
+        let mut engine = create_test_engine();
+        engine.register(OperationWorkflow).unwrap();
+
+        let run = engine
+            .run_handler("operation-workflow", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(run.status.state, RunStatus::Completed);
+
+        let steps = engine.store().list_steps(run.id).await.unwrap();
+
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].name, "create-issue");
+        assert_eq!(steps[0].kind, StepKind::Custom("gitlab".to_string()));
+        assert_eq!(
+            steps[0].status.state,
+            ironflow_store::models::StepStatus::Completed
+        );
+
+        let output = steps[0].output.as_ref().unwrap();
+        assert_eq!(output["issue_id"], 42);
+        assert_eq!(output["project_id"], 123);
+
+        let input = steps[0].input.as_ref().unwrap();
+        assert_eq!(input["project_id"], 123);
+        assert_eq!(input["title"], "Bug report");
+    }
+
+    #[tokio::test]
+    async fn operation_step_failure_marks_run_failed() {
+        let mut engine = create_test_engine();
+        engine.register(FailingOperationWorkflow).unwrap();
+
+        let result = engine
+            .run_handler("failing-operation-workflow", TriggerKind::Manual, json!({}))
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn operation_mixed_with_shell_steps() {
+        let mut engine = create_test_engine();
+        engine.register(MixedWorkflow).unwrap();
+
+        let run = engine
+            .run_handler("mixed-workflow", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(run.status.state, RunStatus::Completed);
+
+        let steps = engine.store().list_steps(run.id).await.unwrap();
+
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].kind, StepKind::Shell);
+        assert_eq!(steps[1].kind, StepKind::Custom("gitlab".to_string()));
+        assert_eq!(steps[0].position, 0);
+        assert_eq!(steps[1].position, 1);
+    }
 }
