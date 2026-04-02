@@ -51,7 +51,8 @@ async fn main() {
         .register(ironflow_workflows::GitInsight)
         .register(ironflow_workflows::Collect)
         .register(ironflow_workflows::Enrich)
-        .register(ironflow_workflows::Report);
+        .register(ironflow_workflows::Report)
+        .register(ironflow_workflows::CiPipeline);
 
     let worker = builder.build().expect("failed to build worker");
 

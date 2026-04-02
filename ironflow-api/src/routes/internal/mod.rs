@@ -8,6 +8,7 @@
 
 pub mod create_run;
 pub mod create_step;
+pub mod create_step_dependencies;
 pub mod get_run;
 pub mod pick_next_run;
 pub mod update_run;

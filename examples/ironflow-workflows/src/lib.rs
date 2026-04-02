@@ -3,11 +3,13 @@
 //! This crate provides reusable workflow handlers that can be registered
 //! in both the API server (for metadata/describe) and the worker (for execution).
 
+mod ci_pipeline;
 mod git_insight;
 mod pipeline;
 mod system_audit;
 mod weather_report;
 
+pub use ci_pipeline::CiPipeline;
 pub use git_insight::GitInsight;
 pub use pipeline::{Collect, Enrich, Report};
 pub use system_audit::SystemAudit;
@@ -29,5 +31,6 @@ pub fn register_all(engine: &mut Engine) -> Result<(), EngineError> {
     engine.register(Collect)?;
     engine.register(Enrich)?;
     engine.register(Report)?;
+    engine.register(CiPipeline)?;
     Ok(())
 }

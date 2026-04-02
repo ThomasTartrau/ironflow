@@ -26,7 +26,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use tracing::{error, info};
@@ -184,7 +184,6 @@ impl WorkflowContext {
         let wave_position = self.position;
         self.position += 1;
 
-        // Create all step records and transition to Running.
         let now = Utc::now();
         let mut step_records: Vec<(Uuid, String, StepConfig)> = Vec::with_capacity(steps.len());
 
@@ -201,24 +200,11 @@ impl WorkflowContext {
                 })
                 .await?;
 
-            // Record dependencies on previous step(s).
-            self.record_dependencies_for(step.id).await?;
-
-            self.store
-                .update_step(
-                    step.id,
-                    StepUpdate {
-                        status: Some(StepStatus::Running),
-                        started_at: Some(now),
-                        ..StepUpdate::default()
-                    },
-                )
-                .await?;
+            self.start_step(step.id, now).await?;
 
             step_records.push((step.id, name.to_string(), config.clone()));
         }
 
-        // Execute all steps in parallel.
         let mut join_set = tokio::task::JoinSet::new();
         for (idx, (_id, _name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
@@ -226,7 +212,7 @@ impl WorkflowContext {
             join_set.spawn(async move { (idx, execute_step_config(&config, &provider).await) });
         }
 
-        // Collect results in original order.
+        // JoinSet returns in completion order; indexed_results restores input order.
         let mut indexed_results: Vec<Option<Result<StepOutput, String>>> =
             vec![None; step_records.len()];
         let mut first_error: Option<EngineError> = None;
@@ -318,7 +304,6 @@ impl WorkflowContext {
             return Err(err);
         }
 
-        // Update last_step_ids to all steps in this batch.
         self.last_step_ids = step_records.iter().map(|(id, _, _)| *id).collect();
 
         // Build results in original order.
@@ -485,20 +470,7 @@ impl WorkflowContext {
             })
             .await?;
 
-        // Record dependencies on previous step(s).
-        self.record_dependencies_for(step.id).await?;
-
-        let now = Utc::now();
-        self.store
-            .update_step(
-                step.id,
-                StepUpdate {
-                    status: Some(StepStatus::Running),
-                    started_at: Some(now),
-                    ..StepUpdate::default()
-                },
-            )
-            .await?;
+        self.start_step(step.id, Utc::now()).await?;
 
         let start = std::time::Instant::now();
 
@@ -609,20 +581,7 @@ impl WorkflowContext {
             })
             .await?;
 
-        // Record dependencies on previous step(s).
-        self.record_dependencies_for(step.id).await?;
-
-        let now = Utc::now();
-        self.store
-            .update_step(
-                step.id,
-                StepUpdate {
-                    status: Some(StepStatus::Running),
-                    started_at: Some(now),
-                    ..StepUpdate::default()
-                },
-            )
-            .await?;
+        self.start_step(step.id, Utc::now()).await?;
 
         match self.execute_child_workflow(&config).await {
             Ok(output) => {
@@ -810,23 +769,8 @@ impl WorkflowContext {
             })
             .await?;
 
-        // Record dependencies on previous step(s).
-        self.record_dependencies_for(step.id).await?;
+        self.start_step(step.id, Utc::now()).await?;
 
-        // Transition to Running.
-        let now = Utc::now();
-        self.store
-            .update_step(
-                step.id,
-                StepUpdate {
-                    status: Some(StepStatus::Running),
-                    started_at: Some(now),
-                    ..StepUpdate::default()
-                },
-            )
-            .await?;
-
-        // Execute the operation.
         match execute_step_config(&config, &self.provider).await {
             Ok(output) => {
                 self.total_cost_usd += output.cost_usd;
@@ -856,7 +800,6 @@ impl WorkflowContext {
                     "step completed"
                 );
 
-                // Update last_step_ids for downstream dependency tracking.
                 self.last_step_ids = vec![step.id];
 
                 Ok(output)
@@ -884,22 +827,34 @@ impl WorkflowContext {
         }
     }
 
-    /// Record dependency edges from `step_id` to all `last_step_ids`.
-    async fn record_dependencies_for(&self, step_id: Uuid) -> Result<(), EngineError> {
-        if self.last_step_ids.is_empty() {
-            return Ok(());
+    /// Record dependency edges and transition a step to Running.
+    ///
+    /// Records edges from `step_id` to all `last_step_ids`, then
+    /// transitions the step to `Running` with the given timestamp.
+    async fn start_step(&self, step_id: Uuid, now: DateTime<Utc>) -> Result<(), EngineError> {
+        if !self.last_step_ids.is_empty() {
+            let deps: Vec<NewStepDependency> = self
+                .last_step_ids
+                .iter()
+                .map(|&depends_on| NewStepDependency {
+                    step_id,
+                    depends_on,
+                })
+                .collect();
+            self.store.create_step_dependencies(deps).await?;
         }
 
-        let deps: Vec<NewStepDependency> = self
-            .last_step_ids
-            .iter()
-            .map(|&depends_on| NewStepDependency {
+        self.store
+            .update_step(
                 step_id,
-                depends_on,
-            })
-            .collect();
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    started_at: Some(now),
+                    ..StepUpdate::default()
+                },
+            )
+            .await?;
 
-        self.store.create_step_dependencies(deps).await?;
         Ok(())
     }
 

@@ -76,6 +76,10 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         )
         .route("/steps", post(internal::create_step::create_step))
         .route("/steps/{id}", put(internal::update_step::update_step))
+        .route(
+            "/step-dependencies",
+            post(internal::create_step_dependencies::create_step_dependencies),
+        )
         .layer(axum_mw::from_fn(worker_token_auth))
         .layer(Extension(WorkerToken(state.worker_token.clone())))
         .with_state(state.clone());

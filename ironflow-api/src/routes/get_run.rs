@@ -22,8 +22,12 @@ pub async fn get_run(
 ) -> Result<impl IntoResponse, ApiError> {
     let run = state.get_run_or_404(id).await?;
 
-    let steps = state.store.list_steps(id).await?;
-    let deps = state.store.list_step_dependencies(id).await?;
+    let (steps, deps) = tokio::join!(
+        state.store.list_steps(id),
+        state.store.list_step_dependencies(id)
+    );
+    let steps = steps?;
+    let deps = deps?;
 
     let mut deps_map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for dep in &deps {
