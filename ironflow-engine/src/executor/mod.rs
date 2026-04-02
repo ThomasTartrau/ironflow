@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use rust_decimal::Decimal;
 use serde_json::Value;
+use uuid::Uuid;
 
 use ironflow_core::provider::AgentProvider;
 
@@ -24,7 +25,7 @@ pub use http::HttpExecutor;
 pub use shell::ShellExecutor;
 
 /// Result of executing a single step.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StepOutput {
     /// Serialized output (stdout for shell, body for http, value for agent).
     pub output: Value,
@@ -36,6 +37,17 @@ pub struct StepOutput {
     pub input_tokens: Option<u64>,
     /// Output token count (agent steps only).
     pub output_tokens: Option<u64>,
+}
+
+/// Result of a single step within a [`parallel`](crate::context::WorkflowContext::parallel) batch.
+#[derive(Debug, Clone)]
+pub struct ParallelStepResult {
+    /// The step name (same as provided to `parallel()`).
+    pub name: String,
+    /// The step execution output.
+    pub output: StepOutput,
+    /// The step ID in the store (for dependency tracking).
+    pub step_id: Uuid,
 }
 
 /// Trait for step executors.
