@@ -30,7 +30,12 @@ pub struct Step {
     pub name: String,
     /// The type of operation.
     pub kind: StepKind,
-    /// Execution order within the run (0-based).
+    /// Execution wave within the run (0-based).
+    ///
+    /// In linear flows, this strictly increases (0, 1, 2, ...).
+    /// In DAGs with parallel execution, steps at the same wave share
+    /// the same position and execute concurrently. Use
+    /// `step_dependencies` to determine the actual execution order.
     pub position: u32,
     /// Current FSM status — embeds state + state_machine_id for SQL-side transitions.
     pub status: FsmState<StepStatus>,

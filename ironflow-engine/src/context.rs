@@ -85,7 +85,7 @@ impl WorkflowContext {
     /// Create a new context for a run.
     ///
     /// Not typically called directly — the [`Engine`](crate::engine::Engine)
-    /// creates this when executing a [`WorkflowHandler`](crate::handler::WorkflowHandler).
+    /// creates this when executing a [`WorkflowHandler`].
     pub fn new(run_id: Uuid, store: Arc<dyn RunStore>, provider: Arc<dyn AgentProvider>) -> Self {
         Self {
             run_id,
@@ -435,7 +435,7 @@ impl WorkflowContext {
     /// persists the output and duration, and marks the step Completed or Failed.
     ///
     /// The operation's [`kind()`](Operation::kind) is stored as
-    /// [`StepKind::Custom`](ironflow_store::models::StepKind::Custom).
+    /// [`StepKind::Custom`].
     ///
     /// # Errors
     ///
@@ -570,7 +570,7 @@ impl WorkflowContext {
     /// the child run ID and aggregated metrics.
     ///
     /// Requires the context to be created with
-    /// [`with_handler_resolver`](Self::with_handler_resolver).
+    /// `with_handler_resolver`.
     ///
     /// # Errors
     ///
