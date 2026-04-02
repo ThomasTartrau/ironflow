@@ -10,17 +10,17 @@ use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_engine::config::{ShellConfig, StepConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::error::EngineError;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, StepStatus, TriggerKind};
-use ironflow_store::store::RunStore;
 
 fn create_test_engine() -> Engine {
     let store = Arc::new(InMemoryStore::new());
     let inner = ClaudeCodeProvider::new();
-    let provider: Arc<dyn AgentProvider> =
-        Arc::new(RecordReplayProvider::replay(inner, "/tmp/ironflow-fixtures"));
+    let provider: Arc<dyn AgentProvider> = Arc::new(RecordReplayProvider::replay(
+        inner,
+        "/tmp/ironflow-fixtures",
+    ));
     Engine::new(store, provider)
 }
 
@@ -63,7 +63,10 @@ impl WorkflowHandler for SequentialThenParallelWorkflow {
             ctx.shell("build", ShellConfig::new("echo build")).await?;
             ctx.parallel(
                 vec![
-                    ("test-unit", StepConfig::Shell(ShellConfig::new("echo unit"))),
+                    (
+                        "test-unit",
+                        StepConfig::Shell(ShellConfig::new("echo unit")),
+                    ),
                     (
                         "test-integ",
                         StepConfig::Shell(ShellConfig::new("echo integ")),
@@ -72,8 +75,7 @@ impl WorkflowHandler for SequentialThenParallelWorkflow {
                 true,
             )
             .await?;
-            ctx.shell("deploy", ShellConfig::new("echo deploy"))
-                .await?;
+            ctx.shell("deploy", ShellConfig::new("echo deploy")).await?;
             Ok(())
         })
     }
@@ -115,10 +117,7 @@ impl WorkflowHandler for ParallelFailFastWorkflow {
             ctx.parallel(
                 vec![
                     ("ok-step", StepConfig::Shell(ShellConfig::new("echo ok"))),
-                    (
-                        "fail-step",
-                        StepConfig::Shell(ShellConfig::new("exit 1")),
-                    ),
+                    ("fail-step", StepConfig::Shell(ShellConfig::new("exit 1"))),
                 ],
                 true,
             )
@@ -140,10 +139,7 @@ impl WorkflowHandler for ParallelNoFailFastWorkflow {
             ctx.parallel(
                 vec![
                     ("ok-step", StepConfig::Shell(ShellConfig::new("echo ok"))),
-                    (
-                        "fail-step",
-                        StepConfig::Shell(ShellConfig::new("exit 1")),
-                    ),
+                    ("fail-step", StepConfig::Shell(ShellConfig::new("exit 1"))),
                 ],
                 false,
             )
@@ -192,9 +188,11 @@ async fn parallel_three_shells_all_succeed() {
     assert!(steps.iter().all(|s| s.position == 0));
 
     // All completed.
-    assert!(steps
-        .iter()
-        .all(|s| s.status.state == StepStatus::Completed));
+    assert!(
+        steps
+            .iter()
+            .all(|s| s.status.state == StepStatus::Completed)
+    );
 
     // Names preserved.
     let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();
@@ -307,11 +305,7 @@ async fn dependencies_recorded_correctly() {
         .unwrap();
 
     let steps = engine.store().list_steps(run.id).await.unwrap();
-    let deps = engine
-        .store()
-        .list_step_dependencies(run.id)
-        .await
-        .unwrap();
+    let deps = engine.store().list_step_dependencies(run.id).await.unwrap();
 
     let build = steps.iter().find(|s| s.name == "build").unwrap();
     let test_unit = steps.iter().find(|s| s.name == "test-unit").unwrap();
