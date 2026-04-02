@@ -60,6 +60,7 @@ export interface StepResponse {
 	updated_at: string;
 	started_at: string | null;
 	completed_at: string | null;
+	dependencies: string[];
 }
 
 export interface StatsResponse {

@@ -8,7 +8,7 @@
 //!
 //! - [`RunFsm`] — Manages the lifecycle of a [`Run`](ironflow_store::entities::Run).
 //! - [`StepFsm`] — Manages the lifecycle of a [`Step`](ironflow_store::entities::Step).
-//! - [`FsmEvent`] — Typed events that trigger transitions.
+//! - [`RunEvent`] / [`StepEvent`] -- Typed events that trigger transitions.
 //! - [`Transition`] — A recorded state change with event and timestamp.
 
 mod run_fsm;

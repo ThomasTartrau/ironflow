@@ -34,8 +34,8 @@ use uuid::Uuid;
 use rust_decimal::Decimal;
 
 use crate::entities::{
-    FsmState, NewRun, NewStep, NewUser, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
-    StepStatus, StepUpdate, User,
+    FsmState, NewRun, NewStep, NewStepDependency, NewUser, Page, Run, RunFilter, RunStats,
+    RunStatus, RunUpdate, Step, StepDependency, StepStatus, StepUpdate, User,
 };
 use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
@@ -45,6 +45,7 @@ use crate::user_store::UserStore;
 struct State {
     runs: HashMap<Uuid, Run>,
     steps: HashMap<Uuid, Step>,
+    step_dependencies: Vec<StepDependency>,
     users: HashMap<Uuid, User>,
 }
 
@@ -417,6 +418,59 @@ impl RunStore for InMemoryStore {
                 total_cost_usd,
                 total_duration_ms,
             })
+        })
+    }
+
+    fn create_step_dependencies(&self, deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+
+            for dep in deps {
+                if !state.steps.contains_key(&dep.step_id) {
+                    return Err(StoreError::StepNotFound(dep.step_id));
+                }
+                if !state.steps.contains_key(&dep.depends_on) {
+                    return Err(StoreError::StepNotFound(dep.depends_on));
+                }
+
+                let already_exists = state
+                    .step_dependencies
+                    .iter()
+                    .any(|d| d.step_id == dep.step_id && d.depends_on == dep.depends_on);
+
+                if !already_exists {
+                    state.step_dependencies.push(StepDependency {
+                        step_id: dep.step_id,
+                        depends_on: dep.depends_on,
+                        created_at: Utc::now(),
+                    });
+                }
+            }
+
+            Ok(())
+        })
+    }
+
+    fn list_step_dependencies(&self, run_id: Uuid) -> StoreFuture<'_, Vec<StepDependency>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+
+            let run_step_ids: std::collections::HashSet<Uuid> = state
+                .steps
+                .values()
+                .filter(|s| s.run_id == run_id)
+                .map(|s| s.id)
+                .collect();
+
+            let mut deps: Vec<StepDependency> = state
+                .step_dependencies
+                .iter()
+                .filter(|d| run_step_ids.contains(&d.step_id))
+                .cloned()
+                .collect();
+
+            deps.sort_by_key(|d| d.created_at);
+            Ok(deps)
         })
     }
 }

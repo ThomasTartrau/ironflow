@@ -1,11 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { StepResponse, RunDetailResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
-import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { formatDuration } from "@/app/lib/format";
 import { Link } from "react-router";
-import { Terminal, Globe, Bot, GitBranch, type LucideIcon } from "lucide-react";
+import {
+	Terminal,
+	Globe,
+	Bot,
+	GitBranch,
+	ZoomIn,
+	ZoomOut,
+	type LucideIcon,
+} from "lucide-react";
 
 type FlowItem =
 	| { kind: "step"; step: StepResponse; ownerRunId: string }
@@ -14,6 +21,10 @@ type FlowItem =
 			name: string;
 			runId: string;
 			color: string;
+			items: FlowItem[];
+	  }
+	| {
+			kind: "parallel";
 			items: FlowItem[];
 	  };
 
@@ -197,6 +208,23 @@ function FlowItemView({
 		);
 	}
 
+	if (item.kind === "parallel") {
+		return (
+			<div className="flex flex-col gap-1.5 shrink-0 rounded-lg border border-dashed border-foreground/15 bg-foreground/[0.02] px-1.5 py-1.5">
+				<span className="text-[8px] uppercase tracking-[0.2em] text-foreground/30 font-semibold px-0.5">
+					parallel
+				</span>
+				{item.items.map((child) => (
+					<FlowItemView
+						key={getItemKey(child)}
+						item={child}
+						currentRunId={currentRunId}
+					/>
+				))}
+			</div>
+		);
+	}
+
 	const depth = getGroupDepth(item);
 	const gc = groupColors[depth % groupColors.length];
 
@@ -227,7 +255,7 @@ function getGroupDepth(item: FlowItem): number {
 	if (item.kind === "step") return 0;
 	let max = 0;
 	for (const child of item.items) {
-		if (child.kind === "group") {
+		if (child.kind === "group" || child.kind === "parallel") {
 			max = Math.max(max, 1 + getGroupDepth(child));
 		}
 	}
@@ -235,40 +263,63 @@ function getGroupDepth(item: FlowItem): number {
 }
 
 function getItemKey(item: FlowItem): string {
-	return item.kind === "step" ? item.step.id : `group-${item.name}`;
+	if (item.kind === "step") return item.step.id;
+	if (item.kind === "parallel")
+		return `parallel-${item.items.map(getItemKey).join(",")}`;
+	return `group-${item.name}`;
+}
+
+async function resolveStep(
+	step: StepResponse,
+	ownerRunId: string,
+): Promise<FlowItem> {
+	if (
+		step.kind === "workflow" &&
+		step.output &&
+		typeof step.output.run_id === "string"
+	) {
+		const childRunId = step.output.run_id;
+		const res = await api
+			.get<RunDetailResponse>(`/runs/${childRunId}`)
+			.catch(() => null);
+
+		if (res && res.data.steps.length > 0) {
+			const childItems = await resolveItems(res.data.steps, childRunId);
+			return {
+				kind: "group",
+				name: step.name,
+				runId: childRunId,
+				color: "blue",
+				items: childItems,
+			};
+		}
+	}
+	return { kind: "step", step, ownerRunId };
 }
 
 async function resolveItems(
 	steps: StepResponse[],
 	ownerRunId: string,
 ): Promise<FlowItem[]> {
-	const items: FlowItem[] = [];
-
+	// Group steps by position to detect parallel waves.
+	const waves = new Map<number, StepResponse[]>();
 	for (const step of steps) {
-		if (
-			step.kind === "workflow" &&
-			step.output &&
-			typeof step.output.run_id === "string"
-		) {
-			const childRunId = step.output.run_id;
-			const res = await api
-				.get<RunDetailResponse>(`/runs/${childRunId}`)
-				.catch(() => null);
+		const list = waves.get(step.position) ?? [];
+		list.push(step);
+		waves.set(step.position, list);
+	}
 
-			if (res && res.data.steps.length > 0) {
-				const childItems = await resolveItems(res.data.steps, childRunId);
-				items.push({
-					kind: "group",
-					name: step.name,
-					runId: childRunId,
-					color: "blue",
-					items: childItems,
-				});
-			} else {
-				items.push({ kind: "step", step, ownerRunId });
-			}
+	const sortedWaves = Array.from(waves.entries()).sort((a, b) => a[0] - b[0]);
+
+	const items: FlowItem[] = [];
+	for (const [, waveSteps] of sortedWaves) {
+		if (waveSteps.length === 1) {
+			items.push(await resolveStep(waveSteps[0], ownerRunId));
 		} else {
-			items.push({ kind: "step", step, ownerRunId });
+			const parallelItems = await Promise.all(
+				waveSteps.map((s) => resolveStep(s, ownerRunId)),
+			);
+			items.push({ kind: "parallel", items: parallelItems });
 		}
 	}
 
@@ -281,8 +332,17 @@ interface StepFlowProps {
 	runId: string;
 }
 
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 2;
+const ZOOM_STEP = 0.15;
+
 export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 	const [items, setItems] = useState<FlowItem[] | null>(null);
+	const [zoom, setZoom] = useState(1);
+	const [pan, setPan] = useState({ x: 0, y: 0 });
+	const [isDragging, setIsDragging] = useState(false);
+	const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+	const containerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (steps.length === 0) return;
@@ -291,9 +351,60 @@ export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 			.catch(() => setItems(null));
 	}, [steps, runId]);
 
+	const zoomIn = useCallback(
+		() => setZoom((z) => Math.min(MAX_ZOOM, z + ZOOM_STEP)),
+		[],
+	);
+	const zoomOut = useCallback(
+		() => setZoom((z) => Math.max(MIN_ZOOM, z - ZOOM_STEP)),
+		[],
+	);
+	const zoomReset = useCallback(() => {
+		setZoom(1);
+		setPan({ x: 0, y: 0 });
+	}, []);
+
+	const handleWheel = useCallback((e: React.WheelEvent) => {
+		if (e.ctrlKey || e.metaKey) {
+			e.preventDefault();
+			setZoom((z) => {
+				const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+				return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z + delta));
+			});
+		}
+	}, []);
+
+	const handleMouseDown = useCallback(
+		(e: React.MouseEvent) => {
+			if (e.button !== 0) return;
+			setIsDragging(true);
+			dragStart.current = {
+				x: e.clientX,
+				y: e.clientY,
+				panX: pan.x,
+				panY: pan.y,
+			};
+		},
+		[pan],
+	);
+
+	const handleMouseMove = useCallback(
+		(e: React.MouseEvent) => {
+			if (!isDragging) return;
+			setPan({
+				x: dragStart.current.panX + (e.clientX - dragStart.current.x),
+				y: dragStart.current.panY + (e.clientY - dragStart.current.y),
+			});
+		},
+		[isDragging],
+	);
+
+	const handleMouseUp = useCallback(() => {
+		setIsDragging(false);
+	}, []);
+
 	if (!items || items.length === 0) return null;
 
-	const totalSteps = countSteps(items);
 	const rootGroup: FlowItem = {
 		kind: "group",
 		name: workflowName,
@@ -304,29 +415,52 @@ export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 
 	return (
 		<div className="rounded-2xl border border-border/40 bg-background/60 backdrop-blur p-4">
-			<div className="mb-3 flex items-center gap-3">
-				<Badge
-					variant="outline"
-					className="rounded-full border-emerald-400/40 bg-emerald-400/10 px-2.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.25em] text-emerald-400"
+			<div className="mb-3 flex items-center justify-end gap-1">
+				<button
+					type="button"
+					onClick={zoomOut}
+					className="rounded p-1 text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5 transition-colors"
+					title="Zoom out"
 				>
-					Pipeline
-				</Badge>
-				<span className="text-[10px] uppercase tracking-[0.25em] text-foreground/40">
-					{totalSteps} steps
-				</span>
+					<ZoomOut className="h-3.5 w-3.5" />
+				</button>
+				<button
+					type="button"
+					onClick={zoomReset}
+					className="rounded px-1.5 py-0.5 text-[9px] text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5 transition-colors tabular-nums"
+					title="Reset zoom"
+				>
+					{Math.round(zoom * 100)}%
+				</button>
+				<button
+					type="button"
+					onClick={zoomIn}
+					className="rounded p-1 text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5 transition-colors"
+					title="Zoom in"
+				>
+					<ZoomIn className="h-3.5 w-3.5" />
+				</button>
 			</div>
-			<div className="overflow-x-auto pb-1">
-				<FlowItemView item={rootGroup} currentRunId={runId} />
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: canvas drag/pan requires mouse events on container */}
+			<div
+				ref={containerRef}
+				className="overflow-hidden pb-1"
+				style={{ cursor: isDragging ? "grabbing" : "grab" }}
+				onWheel={handleWheel}
+				onMouseDown={handleMouseDown}
+				onMouseMove={handleMouseMove}
+				onMouseUp={handleMouseUp}
+				onMouseLeave={handleMouseUp}
+			>
+				<div
+					style={{
+						transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+						transformOrigin: "top left",
+					}}
+				>
+					<FlowItemView item={rootGroup} currentRunId={runId} />
+				</div>
 			</div>
 		</div>
 	);
-}
-
-function countSteps(items: FlowItem[]): number {
-	let count = 0;
-	for (const item of items) {
-		if (item.kind === "step") count++;
-		else count += countSteps(item.items);
-	}
-	return count;
 }

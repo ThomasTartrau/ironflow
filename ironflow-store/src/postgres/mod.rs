@@ -26,8 +26,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::entities::{
-    NewRun, NewStep, NewUser, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
-    StepUpdate, User,
+    NewRun, NewStep, NewStepDependency, NewUser, Page, Run, RunFilter, RunStats, RunStatus,
+    RunUpdate, Step, StepDependency, StepUpdate, User,
 };
 use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
@@ -870,6 +870,70 @@ impl RunStore for PostgresStore {
                 total_cost_usd: row.get::<rust_decimal::Decimal, _>("total_cost"),
                 total_duration_ms: row.get::<i64, _>("total_duration") as u64,
             })
+        })
+    }
+
+    fn create_step_dependencies(&self, deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            if deps.is_empty() {
+                return Ok(());
+            }
+
+            let mut query = String::from(
+                "INSERT INTO ironflow.step_dependencies (step_id, depends_on) VALUES ",
+            );
+            let mut binds: Vec<Uuid> = Vec::with_capacity(deps.len() * 2);
+
+            for (i, dep) in deps.iter().enumerate() {
+                if i > 0 {
+                    query.push_str(", ");
+                }
+                let p1 = i * 2 + 1;
+                let p2 = i * 2 + 2;
+                query.push_str(&format!("(${p1}, ${p2})"));
+                binds.push(dep.step_id);
+                binds.push(dep.depends_on);
+            }
+
+            query.push_str(" ON CONFLICT DO NOTHING");
+
+            let mut q = sqlx::query(&query);
+            for id in &binds {
+                q = q.bind(id);
+            }
+
+            q.execute(&self.pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(())
+        })
+    }
+
+    fn list_step_dependencies(&self, run_id: Uuid) -> StoreFuture<'_, Vec<StepDependency>> {
+        Box::pin(async move {
+            let rows = sqlx::query(
+                r#"
+                SELECT sd.step_id, sd.depends_on, sd.created_at
+                FROM ironflow.step_dependencies sd
+                JOIN ironflow.steps s ON s.id = sd.step_id
+                WHERE s.run_id = $1
+                ORDER BY sd.created_at ASC
+                "#,
+            )
+            .bind(run_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(rows
+                .iter()
+                .map(|row| StepDependency {
+                    step_id: row.get("step_id"),
+                    depends_on: row.get("depends_on"),
+                    created_at: row.get("created_at"),
+                })
+                .collect())
         })
     }
 }

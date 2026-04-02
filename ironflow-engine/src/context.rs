@@ -26,7 +26,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use tracing::{error, info};
@@ -34,13 +34,14 @@ use uuid::Uuid;
 
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::models::{
-    NewRun, NewStep, RunStatus, RunUpdate, StepKind, StepStatus, StepUpdate, TriggerKind,
+    NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, StepKind, StepStatus, StepUpdate,
+    TriggerKind,
 };
 use ironflow_store::store::RunStore;
 
 use crate::config::{AgentStepConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig};
 use crate::error::EngineError;
-use crate::executor::{StepOutput, execute_step_config};
+use crate::executor::{ParallelStepResult, StepOutput, execute_step_config};
 use crate::handler::WorkflowHandler;
 use crate::operation::Operation;
 
@@ -72,6 +73,8 @@ pub struct WorkflowContext {
     provider: Arc<dyn AgentProvider>,
     handler_resolver: Option<HandlerResolver>,
     position: u32,
+    /// IDs of the last executed step(s) -- used to record DAG dependencies.
+    last_step_ids: Vec<Uuid>,
     /// Accumulated cost across all steps in this run.
     total_cost_usd: Decimal,
     /// Accumulated duration across all steps.
@@ -82,7 +85,7 @@ impl WorkflowContext {
     /// Create a new context for a run.
     ///
     /// Not typically called directly — the [`Engine`](crate::engine::Engine)
-    /// creates this when executing a [`WorkflowHandler`](crate::handler::WorkflowHandler).
+    /// creates this when executing a [`WorkflowHandler`].
     pub fn new(run_id: Uuid, store: Arc<dyn RunStore>, provider: Arc<dyn AgentProvider>) -> Self {
         Self {
             run_id,
@@ -90,6 +93,7 @@ impl WorkflowContext {
             provider,
             handler_resolver: None,
             position: 0,
+            last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
         }
@@ -111,6 +115,7 @@ impl WorkflowContext {
             provider,
             handler_resolver: Some(resolver),
             position: 0,
+            last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
         }
@@ -129,6 +134,196 @@ impl WorkflowContext {
     /// Accumulated duration across all executed steps so far.
     pub fn total_duration_ms(&self) -> u64 {
         self.total_duration_ms
+    }
+
+    /// Execute multiple steps concurrently (wait-all model).
+    ///
+    /// All steps in the batch execute in parallel via `tokio::JoinSet`.
+    /// Each step is recorded with the same `position` (execution wave).
+    /// Dependencies on previous steps are recorded automatically.
+    ///
+    /// When `fail_fast` is true, remaining steps are aborted on the first
+    /// failure. When false, all steps run to completion and the first
+    /// error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if any step fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::config::{StepConfig, ShellConfig};
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let results = ctx.parallel(
+    ///     vec![
+    ///         ("test-unit", StepConfig::Shell(ShellConfig::new("cargo test --lib"))),
+    ///         ("lint", StepConfig::Shell(ShellConfig::new("cargo clippy"))),
+    ///     ],
+    ///     true,
+    /// ).await?;
+    ///
+    /// for r in &results {
+    ///     println!("{}: {:?}", r.name, r.output.output);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn parallel(
+        &mut self,
+        steps: Vec<(&str, StepConfig)>,
+        fail_fast: bool,
+    ) -> Result<Vec<ParallelStepResult>, EngineError> {
+        if steps.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let wave_position = self.position;
+        self.position += 1;
+
+        let now = Utc::now();
+        let mut step_records: Vec<(Uuid, String, StepConfig)> = Vec::with_capacity(steps.len());
+
+        for (name, config) in &steps {
+            let kind = config.kind();
+            let step = self
+                .store
+                .create_step(NewStep {
+                    run_id: self.run_id,
+                    name: name.to_string(),
+                    kind,
+                    position: wave_position,
+                    input: Some(serde_json::to_value(config)?),
+                })
+                .await?;
+
+            self.start_step(step.id, now).await?;
+
+            step_records.push((step.id, name.to_string(), config.clone()));
+        }
+
+        let mut join_set = tokio::task::JoinSet::new();
+        for (idx, (_id, _name, config)) in step_records.iter().enumerate() {
+            let provider = self.provider.clone();
+            let config = config.clone();
+            join_set.spawn(async move { (idx, execute_step_config(&config, &provider).await) });
+        }
+
+        // JoinSet returns in completion order; indexed_results restores input order.
+        let mut indexed_results: Vec<Option<Result<StepOutput, String>>> =
+            vec![None; step_records.len()];
+        let mut first_error: Option<EngineError> = None;
+
+        while let Some(join_result) = join_set.join_next().await {
+            let (idx, step_result) = match join_result {
+                Ok(r) => r,
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(EngineError::StepConfig(format!("join error: {e}")));
+                    }
+                    if fail_fast {
+                        join_set.abort_all();
+                    }
+                    continue;
+                }
+            };
+
+            let (step_id, step_name, _) = &step_records[idx];
+            let completed_at = Utc::now();
+
+            match step_result {
+                Ok(output) => {
+                    self.total_cost_usd += output.cost_usd;
+                    self.total_duration_ms += output.duration_ms;
+
+                    self.store
+                        .update_step(
+                            *step_id,
+                            StepUpdate {
+                                status: Some(StepStatus::Completed),
+                                output: Some(output.output.clone()),
+                                duration_ms: Some(output.duration_ms),
+                                cost_usd: Some(output.cost_usd),
+                                input_tokens: output.input_tokens,
+                                output_tokens: output.output_tokens,
+                                completed_at: Some(completed_at),
+                                ..StepUpdate::default()
+                            },
+                        )
+                        .await?;
+
+                    info!(
+                        run_id = %self.run_id,
+                        step = %step_name,
+                        duration_ms = output.duration_ms,
+                        "parallel step completed"
+                    );
+
+                    indexed_results[idx] = Some(Ok(output));
+                }
+                Err(err) => {
+                    let err_msg = err.to_string();
+
+                    if let Err(store_err) = self
+                        .store
+                        .update_step(
+                            *step_id,
+                            StepUpdate {
+                                status: Some(StepStatus::Failed),
+                                error: Some(err_msg.clone()),
+                                completed_at: Some(completed_at),
+                                ..StepUpdate::default()
+                            },
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            step_id = %step_id,
+                            error = %store_err,
+                            "failed to persist parallel step failure"
+                        );
+                    }
+
+                    indexed_results[idx] = Some(Err(err_msg.clone()));
+
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+
+                    if fail_fast {
+                        join_set.abort_all();
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+
+        self.last_step_ids = step_records.iter().map(|(id, _, _)| *id).collect();
+
+        // Build results in original order.
+        let results: Vec<ParallelStepResult> = step_records
+            .iter()
+            .enumerate()
+            .map(|(idx, (step_id, name, _))| {
+                let output = match indexed_results[idx].take() {
+                    Some(Ok(o)) => o,
+                    _ => unreachable!("all steps succeeded if no error returned"),
+                };
+                ParallelStepResult {
+                    name: name.clone(),
+                    output,
+                    step_id: *step_id,
+                }
+            })
+            .collect();
+
+        Ok(results)
     }
 
     /// Execute a shell step.
@@ -225,7 +420,7 @@ impl WorkflowContext {
     /// persists the output and duration, and marks the step Completed or Failed.
     ///
     /// The operation's [`kind()`](Operation::kind) is stored as
-    /// [`StepKind::Custom`](ironflow_store::models::StepKind::Custom).
+    /// [`StepKind::Custom`].
     ///
     /// # Errors
     ///
@@ -275,17 +470,7 @@ impl WorkflowContext {
             })
             .await?;
 
-        let now = Utc::now();
-        self.store
-            .update_step(
-                step.id,
-                StepUpdate {
-                    status: Some(StepStatus::Running),
-                    started_at: Some(now),
-                    ..StepUpdate::default()
-                },
-            )
-            .await?;
+        self.start_step(step.id, Utc::now()).await?;
 
         let start = std::time::Instant::now();
 
@@ -316,6 +501,8 @@ impl WorkflowContext {
                     duration_ms,
                     "operation step completed"
                 );
+
+                self.last_step_ids = vec![step.id];
 
                 Ok(StepOutput {
                     output: output_value,
@@ -355,7 +542,7 @@ impl WorkflowContext {
     /// the child run ID and aggregated metrics.
     ///
     /// Requires the context to be created with
-    /// [`with_handler_resolver`](Self::with_handler_resolver).
+    /// `with_handler_resolver`.
     ///
     /// # Errors
     ///
@@ -394,17 +581,7 @@ impl WorkflowContext {
             })
             .await?;
 
-        let now = Utc::now();
-        self.store
-            .update_step(
-                step.id,
-                StepUpdate {
-                    status: Some(StepStatus::Running),
-                    started_at: Some(now),
-                    ..StepUpdate::default()
-                },
-            )
-            .await?;
+        self.start_step(step.id, Utc::now()).await?;
 
         match self.execute_child_workflow(&config).await {
             Ok(output) => {
@@ -432,6 +609,8 @@ impl WorkflowContext {
                     duration_ms = output.duration_ms,
                     "workflow step completed"
                 );
+
+                self.last_step_ids = vec![step.id];
 
                 Ok(output)
             }
@@ -502,6 +681,7 @@ impl WorkflowContext {
             provider: self.provider.clone(),
             handler_resolver: self.handler_resolver.clone(),
             position: 0,
+            last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
         };
@@ -589,20 +769,8 @@ impl WorkflowContext {
             })
             .await?;
 
-        // Transition to Running.
-        let now = Utc::now();
-        self.store
-            .update_step(
-                step.id,
-                StepUpdate {
-                    status: Some(StepStatus::Running),
-                    started_at: Some(now),
-                    ..StepUpdate::default()
-                },
-            )
-            .await?;
+        self.start_step(step.id, Utc::now()).await?;
 
-        // Execute the operation.
         match execute_step_config(&config, &self.provider).await {
             Ok(output) => {
                 self.total_cost_usd += output.cost_usd;
@@ -632,6 +800,8 @@ impl WorkflowContext {
                     "step completed"
                 );
 
+                self.last_step_ids = vec![step.id];
+
                 Ok(output)
             }
             Err(err) => {
@@ -655,6 +825,37 @@ impl WorkflowContext {
                 Err(err)
             }
         }
+    }
+
+    /// Record dependency edges and transition a step to Running.
+    ///
+    /// Records edges from `step_id` to all `last_step_ids`, then
+    /// transitions the step to `Running` with the given timestamp.
+    async fn start_step(&self, step_id: Uuid, now: DateTime<Utc>) -> Result<(), EngineError> {
+        if !self.last_step_ids.is_empty() {
+            let deps: Vec<NewStepDependency> = self
+                .last_step_ids
+                .iter()
+                .map(|&depends_on| NewStepDependency {
+                    step_id,
+                    depends_on,
+                })
+                .collect();
+            self.store.create_step_dependencies(deps).await?;
+        }
+
+        self.store
+            .update_step(
+                step_id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    started_at: Some(now),
+                    ..StepUpdate::default()
+                },
+            )
+            .await?;
+
+        Ok(())
     }
 
     /// Access the store directly (advanced usage).

@@ -11,7 +11,8 @@ use std::pin::Pin;
 use uuid::Uuid;
 
 use crate::entities::{
-    NewRun, NewStep, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepUpdate,
+    NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
+    StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 
@@ -103,4 +104,20 @@ pub trait RunStore: Send + Sync {
     /// and totals for cost and duration. Computed efficiently by the store
     /// implementation (single SQL query in PostgreSQL).
     fn get_stats(&self) -> StoreFuture<'_, RunStats>;
+
+    /// Create step dependency edges in batch.
+    ///
+    /// Each entry records that `step_id` depends on `depends_on`.
+    /// Duplicate edges are silently ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if a referenced step does not exist.
+    fn create_step_dependencies(&self, deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()>;
+
+    /// List all step dependencies for a given run.
+    ///
+    /// Returns every edge where either `step_id` or `depends_on` belongs
+    /// to the run. Ordered by `created_at` ascending.
+    fn list_step_dependencies(&self, run_id: Uuid) -> StoreFuture<'_, Vec<StepDependency>>;
 }

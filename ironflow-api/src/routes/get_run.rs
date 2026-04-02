@@ -1,5 +1,7 @@
 //! `GET /api/v1/runs/:id` — Get run details with steps.
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::AuthenticatedUser;
@@ -10,7 +12,7 @@ use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
 
-/// Get a run by ID, including all its steps.
+/// Get a run by ID, including all its steps and dependency edges.
 ///
 /// Returns 404 if the run does not exist.
 pub async fn get_run(
@@ -20,8 +22,28 @@ pub async fn get_run(
 ) -> Result<impl IntoResponse, ApiError> {
     let run = state.get_run_or_404(id).await?;
 
-    let steps = state.store.list_steps(id).await?;
-    let step_responses: Vec<StepResponse> = steps.into_iter().map(StepResponse::from).collect();
+    let (steps, deps) = tokio::join!(
+        state.store.list_steps(id),
+        state.store.list_step_dependencies(id)
+    );
+    let steps = steps?;
+    let deps = deps?;
+
+    let mut deps_map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for dep in &deps {
+        deps_map
+            .entry(dep.step_id)
+            .or_default()
+            .push(dep.depends_on);
+    }
+
+    let step_responses: Vec<StepResponse> = steps
+        .into_iter()
+        .map(|step| {
+            let step_deps = deps_map.remove(&step.id).unwrap_or_default();
+            StepResponse::with_dependencies(step, step_deps)
+        })
+        .collect();
 
     let response = RunDetailResponse {
         run: RunResponse::from(run),
