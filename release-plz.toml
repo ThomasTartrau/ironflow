@@ -50,6 +50,7 @@ name = "ironflow-engine"
 
 [[package]]
 name = "ironflow-api"
+publish_allow_dirty = true
 
 [[package]]
 name = "ironflow-worker"
