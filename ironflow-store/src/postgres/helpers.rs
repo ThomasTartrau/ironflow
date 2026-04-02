@@ -89,8 +89,7 @@ pub(crate) fn step_kind_to_str(kind: &StepKind) -> std::borrow::Cow<'static, str
 pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError> {
     let state_name: &str = row.get("state_name");
     let trigger_json: serde_json::Value = row.get("trigger");
-    let cost_str: String = row.get("cost_usd");
-    let cost_usd: Decimal = cost_str.parse().unwrap_or(Decimal::ZERO);
+    let cost_usd: Decimal = row.get("cost_usd");
     let state_machine_id = row.get("state_machine__id");
 
     Ok(Run {
@@ -117,8 +116,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
 pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreError> {
     let state_name: &str = row.get("state_name");
     let kind_str: &str = row.get("kind");
-    let cost_str: String = row.get("cost_usd");
-    let cost_usd: Decimal = cost_str.parse().unwrap_or(Decimal::ZERO);
+    let cost_usd: Decimal = row.get("cost_usd");
     let state_machine_id = row.get("state_machine__id");
 
     Ok(Step {
