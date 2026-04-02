@@ -873,10 +873,7 @@ impl RunStore for PostgresStore {
         })
     }
 
-    fn create_step_dependencies(
-        &self,
-        deps: Vec<NewStepDependency>,
-    ) -> StoreFuture<'_, ()> {
+    fn create_step_dependencies(&self, deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             if deps.is_empty() {
                 return Ok(());

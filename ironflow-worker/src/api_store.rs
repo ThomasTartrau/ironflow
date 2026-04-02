@@ -255,10 +255,7 @@ impl RunStore for ApiRunStore {
         })
     }
 
-    fn create_step_dependencies(
-        &self,
-        _deps: Vec<NewStepDependency>,
-    ) -> StoreFuture<'_, ()> {
+    fn create_step_dependencies(&self, _deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "create_step_dependencies not supported via worker API".to_string(),

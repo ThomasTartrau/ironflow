@@ -421,10 +421,7 @@ impl RunStore for InMemoryStore {
         })
     }
 
-    fn create_step_dependencies(
-        &self,
-        deps: Vec<NewStepDependency>,
-    ) -> StoreFuture<'_, ()> {
+    fn create_step_dependencies(&self, deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             let mut state = self.state.write().await;
 
