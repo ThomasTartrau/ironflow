@@ -40,13 +40,16 @@ pub(crate) fn parse_step_status(s: &str) -> Result<StepStatus, StoreError> {
 }
 
 /// Parse a `&str` from the DB into a `StepKind`.
+///
+/// Built-in kinds (`shell`, `http`, `agent`, `workflow`) are matched directly.
+/// Any other value is treated as a [`StepKind::Custom`] kind.
 pub(crate) fn parse_step_kind(s: &str) -> Result<StepKind, StoreError> {
     match s {
         "shell" => Ok(StepKind::Shell),
         "http" => Ok(StepKind::Http),
         "agent" => Ok(StepKind::Agent),
         "workflow" => Ok(StepKind::Workflow),
-        other => Err(StoreError::Database(format!("unknown step kind: {other}"))),
+        other => Ok(StepKind::Custom(other.to_string())),
     }
 }
 
@@ -63,12 +66,16 @@ pub(crate) fn run_status_to_db_str(status: &RunStatus) -> &'static str {
 }
 
 /// Convert a `StepKind` to its DB string representation.
-pub(crate) fn step_kind_to_str(kind: StepKind) -> &'static str {
+///
+/// Built-in kinds return a static `&str`. Custom kinds return the
+/// user-provided name as a [`Cow::Owned`].
+pub(crate) fn step_kind_to_str(kind: &StepKind) -> std::borrow::Cow<'static, str> {
     match kind {
-        StepKind::Shell => "shell",
-        StepKind::Http => "http",
-        StepKind::Agent => "agent",
-        StepKind::Workflow => "workflow",
+        StepKind::Shell => std::borrow::Cow::Borrowed("shell"),
+        StepKind::Http => std::borrow::Cow::Borrowed("http"),
+        StepKind::Agent => std::borrow::Cow::Borrowed("agent"),
+        StepKind::Workflow => std::borrow::Cow::Borrowed("workflow"),
+        StepKind::Custom(name) => std::borrow::Cow::Owned(name.clone()),
     }
 }
 

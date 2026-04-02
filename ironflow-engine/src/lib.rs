@@ -8,6 +8,13 @@
 //!
 //! Both can run inline or be enqueued for a background worker.
 //!
+//! ## Custom operations
+//!
+//! Implement [`Operation`](operation::Operation) to define custom step types
+//! (e.g. GitLab, Gmail, Slack) that integrate into the workflow lifecycle.
+//! Call [`WorkflowContext::operation()`](context::WorkflowContext::operation)
+//! inside a handler to execute them with full step tracking.
+//!
 //! # Dynamic workflow example
 //!
 //! ```no_run
@@ -38,6 +45,7 @@ pub mod error;
 pub mod executor;
 pub mod fsm;
 pub mod handler;
+pub mod operation;
 pub mod workflow;
 
 /// Convenience re-exports.
@@ -48,5 +56,6 @@ pub mod prelude {
     pub use crate::error::EngineError;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};
+    pub use crate::operation::Operation;
     pub use crate::workflow::{StepDef, Workflow, WorkflowDef};
 }

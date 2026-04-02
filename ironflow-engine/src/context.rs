@@ -42,6 +42,7 @@ use crate::config::{AgentStepConfig, HttpConfig, ShellConfig, StepConfig, Workfl
 use crate::error::EngineError;
 use crate::executor::{StepOutput, execute_step_config};
 use crate::handler::WorkflowHandler;
+use crate::operation::Operation;
 
 /// Callback type for resolving workflow handlers by name.
 pub(crate) type HandlerResolver =
@@ -215,6 +216,136 @@ impl WorkflowContext {
     ) -> Result<StepOutput, EngineError> {
         self.execute_step(name, StepKind::Agent, StepConfig::Agent(config))
             .await
+    }
+
+    /// Execute a custom operation step.
+    ///
+    /// Runs a user-defined [`Operation`] with full step lifecycle management:
+    /// creates the step record, transitions to Running, executes the operation,
+    /// persists the output and duration, and marks the step Completed or Failed.
+    ///
+    /// The operation's [`kind()`](Operation::kind) is stored as
+    /// [`StepKind::Custom`](ironflow_store::models::StepKind::Custom).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the operation fails or the store errors.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::operation::Operation;
+    /// use ironflow_engine::error::EngineError;
+    /// use serde_json::{Value, json};
+    /// use std::pin::Pin;
+    /// use std::future::Future;
+    ///
+    /// struct MyOp;
+    /// impl Operation for MyOp {
+    ///     fn kind(&self) -> &str { "my-service" }
+    ///     fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    ///         Box::pin(async { Ok(json!({"ok": true})) })
+    ///     }
+    /// }
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let result = ctx.operation("call-service", &MyOp).await?;
+    /// println!("output: {}", result.output);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn operation(
+        &mut self,
+        name: &str,
+        op: &dyn Operation,
+    ) -> Result<StepOutput, EngineError> {
+        let kind = StepKind::Custom(op.kind().to_string());
+        let position = self.position;
+        self.position += 1;
+
+        let step = self
+            .store
+            .create_step(NewStep {
+                run_id: self.run_id,
+                name: name.to_string(),
+                kind,
+                position,
+                input: op.input(),
+            })
+            .await?;
+
+        let now = Utc::now();
+        self.store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    started_at: Some(now),
+                    ..StepUpdate::default()
+                },
+            )
+            .await?;
+
+        let start = std::time::Instant::now();
+
+        match op.execute().await {
+            Ok(output_value) => {
+                let duration_ms = start.elapsed().as_millis() as u64;
+                self.total_duration_ms += duration_ms;
+
+                let completed_at = Utc::now();
+                self.store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Completed),
+                            output: Some(output_value.clone()),
+                            duration_ms: Some(duration_ms),
+                            cost_usd: Some(Decimal::ZERO),
+                            completed_at: Some(completed_at),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    run_id = %self.run_id,
+                    step = %name,
+                    kind = op.kind(),
+                    duration_ms,
+                    "operation step completed"
+                );
+
+                Ok(StepOutput {
+                    output: output_value,
+                    duration_ms,
+                    cost_usd: Decimal::ZERO,
+                    input_tokens: None,
+                    output_tokens: None,
+                })
+            }
+            Err(err) => {
+                let completed_at = Utc::now();
+                if let Err(store_err) = self
+                    .store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Failed),
+                            error: Some(err.to_string()),
+                            completed_at: Some(completed_at),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await
+                {
+                    error!(step_id = %step.id, error = %store_err, "failed to persist step failure");
+                }
+
+                Err(err)
+            }
+        }
     }
 
     /// Execute a sub-workflow step.
