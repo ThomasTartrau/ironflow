@@ -51,10 +51,13 @@ pub struct StepResponse {
     pub started_at: Option<DateTime<Utc>>,
     /// When execution completed.
     pub completed_at: Option<DateTime<Utc>>,
+    /// IDs of steps this step depends on (direct dependencies).
+    pub dependencies: Vec<Uuid>,
 }
 
-impl From<Step> for StepResponse {
-    fn from(step: Step) -> Self {
+impl StepResponse {
+    /// Build a response from a step entity with pre-resolved dependencies.
+    pub fn with_dependencies(step: Step, dependencies: Vec<Uuid>) -> Self {
         StepResponse {
             id: step.id,
             run_id: step.run_id,
@@ -73,6 +76,13 @@ impl From<Step> for StepResponse {
             updated_at: step.updated_at,
             started_at: step.started_at,
             completed_at: step.completed_at,
+            dependencies,
         }
+    }
+}
+
+impl From<Step> for StepResponse {
+    fn from(step: Step) -> Self {
+        Self::with_dependencies(step, Vec::new())
     }
 }
