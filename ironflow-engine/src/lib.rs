@@ -1,12 +1,14 @@
 //! # ironflow-engine
 //!
-//! Workflow orchestration engine for **ironflow**. Supports two workflow styles:
+//! Workflow orchestration engine for **ironflow**.
 //!
-//! - **Static** ([`WorkflowDef`](workflow::WorkflowDef)): serializable step sequences, no chaining.
-//! - **Dynamic** ([`WorkflowHandler`](handler::WorkflowHandler)): Rust-native handlers where
-//!   steps receive a [`WorkflowContext`](context::WorkflowContext) and can chain outputs.
+//! Workflows are defined as Rust-native handlers implementing
+//! [`WorkflowHandler`](handler::WorkflowHandler). Handlers receive a
+//! [`WorkflowContext`](context::WorkflowContext) and can chain step outputs,
+//! use native `if`/`else`/`match` for conditional branching, and execute
+//! steps in parallel.
 //!
-//! Both can run inline or be enqueued for a background worker.
+//! Handlers can be executed inline or enqueued for a background worker.
 //!
 //! ## Custom operations
 //!
@@ -15,7 +17,7 @@
 //! Call [`WorkflowContext::operation()`](context::WorkflowContext::operation)
 //! inside a handler to execute them with full step tracking.
 //!
-//! # Dynamic workflow example
+//! # Example
 //!
 //! ```no_run
 //! use ironflow_engine::prelude::*;
@@ -46,7 +48,6 @@ pub mod executor;
 pub mod fsm;
 pub mod handler;
 pub mod operation;
-pub mod workflow;
 
 /// Convenience re-exports.
 pub mod prelude {
@@ -57,5 +58,4 @@ pub mod prelude {
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};
     pub use crate::operation::Operation;
-    pub use crate::workflow::{StepDef, Workflow, WorkflowDef};
 }
