@@ -309,9 +309,7 @@ async function resolveItems(
 		waves.set(step.position, list);
 	}
 
-	const sortedWaves = Array.from(waves.entries()).sort(
-		(a, b) => a[0] - b[0],
-	);
+	const sortedWaves = Array.from(waves.entries()).sort((a, b) => a[0] - b[0]);
 
 	const items: FlowItem[] = [];
 	for (const [, waveSteps] of sortedWaves) {
@@ -443,6 +441,7 @@ export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 					<ZoomIn className="h-3.5 w-3.5" />
 				</button>
 			</div>
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: canvas drag/pan requires mouse events on container */}
 			<div
 				ref={containerRef}
 				className="overflow-hidden pb-1"
@@ -465,4 +464,3 @@ export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 		</div>
 	);
 }
-
