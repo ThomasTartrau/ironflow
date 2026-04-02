@@ -9,7 +9,7 @@ description = "REST API for ironflow run management and observability"
 repository = "https://gitlab.com/ThomasTartrau/ironflow"
 keywords = ["workflow", "api", "rest", "runs"]
 categories = ["web-programming::http-server"]
-include = ["src/**", "Cargo.toml", "build.rs"]
+include = ["src/**", "Cargo.toml", "build.rs", "dashboard/**"]
 
 [features]
 default = []
