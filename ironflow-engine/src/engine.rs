@@ -840,9 +840,7 @@ mod tests {
         }
 
         fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
-            Box::pin(async move {
-                Err(EngineError::StepConfig("service unavailable".to_string()))
-            })
+            Box::pin(async move { Err(EngineError::StepConfig("service unavailable".to_string())) })
         }
     }
 
@@ -913,11 +911,7 @@ mod tests {
 
         assert_eq!(run.status.state, RunStatus::Completed);
 
-        let steps = engine
-            .store()
-            .list_steps(run.id)
-            .await
-            .unwrap();
+        let steps = engine.store().list_steps(run.id).await.unwrap();
 
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].name, "create-issue");
@@ -960,11 +954,7 @@ mod tests {
 
         assert_eq!(run.status.state, RunStatus::Completed);
 
-        let steps = engine
-            .store()
-            .list_steps(run.id)
-            .await
-            .unwrap();
+        let steps = engine.store().list_steps(run.id).await.unwrap();
 
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[0].kind, StepKind::Shell);
