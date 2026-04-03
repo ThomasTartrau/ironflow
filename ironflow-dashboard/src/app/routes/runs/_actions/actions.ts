@@ -10,7 +10,9 @@ export function retryRun(runId: string): Promise<RunResponse> {
 }
 
 export function approveRun(runId: string): Promise<RunResponse> {
-	return api.post<RunResponse>(`/runs/${runId}/approve`).then((res) => res.data);
+	return api
+		.post<RunResponse>(`/runs/${runId}/approve`)
+		.then((res) => res.data);
 }
 
 export function rejectRun(runId: string): Promise<RunResponse> {

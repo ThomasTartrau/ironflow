@@ -76,9 +76,7 @@ describe("StatusBadge", () => {
 	});
 
 	it("applies purple styles with pulse for awaiting_approval", () => {
-		const { container } = render(
-			<StatusBadge status="awaiting_approval" />,
-		);
+		const { container } = render(<StatusBadge status="awaiting_approval" />);
 		const badge = container.firstElementChild;
 		expect(badge?.className).toContain("bg-purple-100");
 		expect(badge?.className).toContain("animate-pulse");

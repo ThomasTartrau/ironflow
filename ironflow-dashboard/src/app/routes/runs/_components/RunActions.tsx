@@ -2,21 +2,34 @@ import { useState } from "react";
 import { useNavigate, useRevalidator } from "react-router";
 import type { RunResponse } from "@/app/lib/types";
 import { withToast, type ToastMessages } from "@/app/lib/api-toast";
-import { approveRun, cancelRun, rejectRun, retryRun } from "../_actions/actions";
+import {
+	approveRun,
+	cancelRun,
+	rejectRun,
+	retryRun,
+} from "../_actions/actions";
 import { Button } from "@/components/ui/button";
 
 interface RunActionsProps {
 	run: RunResponse;
 }
 
-type PendingAction = "idle" | "cancelling" | "retrying" | "approving" | "rejecting";
+type PendingAction =
+	| "idle"
+	| "cancelling"
+	| "retrying"
+	| "approving"
+	| "rejecting";
 
 export function RunActions({ run }: RunActionsProps) {
 	const revalidator = useRevalidator();
 	const navigate = useNavigate();
 	const [pendingAction, setPendingAction] = useState<PendingAction>("idle");
 
-	const canCancel = run.status === "pending" || run.status === "running" || run.status === "awaiting_approval";
+	const canCancel =
+		run.status === "pending" ||
+		run.status === "running" ||
+		run.status === "awaiting_approval";
 	const canRetry = run.status === "failed" || run.status === "cancelled";
 	const canApprove = run.status === "awaiting_approval";
 	const isLoading = pendingAction !== "idle";

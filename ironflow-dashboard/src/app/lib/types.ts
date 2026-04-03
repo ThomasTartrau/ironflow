@@ -6,7 +6,13 @@ export type RunStatus =
 	| "retrying"
 	| "cancelled"
 	| "awaiting_approval";
-export type StepKind = "shell" | "http" | "agent" | "workflow" | "approval" | (string & {});
+export type StepKind =
+	| "shell"
+	| "http"
+	| "agent"
+	| "workflow"
+	| "approval"
+	| (string & {});
 export type StepStatus =
 	| "pending"
 	| "running"
