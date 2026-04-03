@@ -43,7 +43,7 @@ mod tests {
     use ironflow_store::entities::{NewStep, StepKind};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
-    use serde_json::json;
+    use serde_json::{from_slice, json, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let json: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json["data"]["run"]["id"], run.id.to_string());
         assert_eq!(json["data"]["steps"].as_array().unwrap().len(), 1);
         assert_eq!(json["data"]["steps"][0]["id"], step.id.to_string());
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let json: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json["error"]["code"], "RUN_NOT_FOUND");
     }
 }

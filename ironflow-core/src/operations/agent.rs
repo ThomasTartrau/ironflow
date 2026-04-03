@@ -25,10 +25,13 @@
 //! # }
 //! ```
 
+use std::any;
+
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value, to_string};
+use tokio::time;
 use tracing::{info, warn};
 
 use crate::error::OperationError;
@@ -278,7 +281,7 @@ impl Agent {
         self.config.json_schema = match to_string(&schema) {
             Ok(s) => Some(s),
             Err(e) => {
-                warn!(error = %e, type_name = std::any::type_name::<T>(), "failed to serialize JSON schema, structured output disabled");
+                warn!(error = %e, type_name = any::type_name::<T>(), "failed to serialize JSON schema, structured output disabled");
                 None
             }
         };
@@ -498,7 +501,7 @@ impl Agent {
                 delay_ms = delay.as_millis() as u64,
                 "retrying agent invocation"
             );
-            tokio::time::sleep(delay).await;
+            time::sleep(delay).await;
 
             last_result = self.invoke_once(provider).await;
 
@@ -1092,7 +1095,7 @@ mod tests {
             PermissionMode::DontAsk,
             PermissionMode::BypassPermissions,
         ] {
-            let json = serde_json::to_string(&mode).unwrap();
+            let json = to_string(&mode).unwrap();
             let back: PermissionMode = serde_json::from_str(&json).unwrap();
             assert_eq!(format!("{:?}", mode), format!("{:?}", back));
         }

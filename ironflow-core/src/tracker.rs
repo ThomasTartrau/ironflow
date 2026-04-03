@@ -19,6 +19,7 @@
 //! ```
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::time::Instant;
 
 use tracing::info;
@@ -59,8 +60,8 @@ enum StepKind {
     Agent,
 }
 
-impl std::fmt::Display for StepKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for StepKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Shell => f.write_str("shell"),
             Self::Http => f.write_str("http"),

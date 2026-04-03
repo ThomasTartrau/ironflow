@@ -6,6 +6,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::AuthenticatedUser;
 use ironflow_store::models::RunStatus;
+use tokio::spawn;
 use uuid::Uuid;
 
 use crate::entities::RunResponse;
@@ -61,7 +62,7 @@ async fn resolve_approval(
     // stopped.
     if target_status == RunStatus::Running {
         let engine = state.engine.clone();
-        tokio::spawn(async move {
+        spawn(async move {
             if let Err(err) = engine.resume_run(id).await {
                 tracing::error!(run_id = %id, error = %err, "failed to resume run after approval");
             }
@@ -86,7 +87,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
-    use serde_json::json;
+    use serde_json::{json, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -168,8 +169,8 @@ mod tests {
         assert_eq!(resp.status(), HttpStatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["status"], "running");
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"], "running");
     }
 
     #[tokio::test]
@@ -249,8 +250,8 @@ mod tests {
         assert_eq!(resp.status(), HttpStatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["status"], "failed");
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"], "failed");
     }
 
     #[tokio::test]

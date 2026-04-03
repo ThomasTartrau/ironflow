@@ -29,7 +29,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_store::memory::InMemoryStore;
-    use serde_json::json;
+    use serde_json::{from_slice, json, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -82,8 +82,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["workflow_name"], "test-workflow");
-        assert_eq!(json["data"]["status"]["state"], "pending");
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["workflow_name"], "test-workflow");
+        assert_eq!(json_val["data"]["status"]["state"], "pending");
     }
 }

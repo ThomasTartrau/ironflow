@@ -27,7 +27,7 @@ mod tests {
 
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
-    use serde_json::json;
+    use serde_json::{from_slice, json, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -81,8 +81,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["id"], run.id.to_string());
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["id"], run.id.to_string());
     }
 
     #[tokio::test]
@@ -100,8 +100,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["data"].is_null());
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert!(json_val["data"].is_null());
     }
 
     #[tokio::test]
@@ -130,7 +130,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["status"]["state"], "running");
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"]["state"], "running");
     }
 }

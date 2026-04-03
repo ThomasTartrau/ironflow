@@ -15,8 +15,9 @@ pub async fn create_step_dependencies(
     State(state): State<AppState>,
     Json(deps): Json<Vec<NewStepDependency>>,
 ) -> Result<impl IntoResponse, ApiError> {
+    use serde_json::json;
     state.store.create_step_dependencies(deps).await?;
-    Ok(ok(serde_json::json!({})))
+    Ok(ok(json!({})))
 }
 
 #[cfg(test)]
@@ -28,7 +29,7 @@ mod tests {
     use ironflow_store::entities::{NewStep, StepKind};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
-    use serde_json::json;
+    use serde_json::{json, to_string};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -106,7 +107,7 @@ mod tests {
             .uri("/api/v1/internal/step-dependencies")
             .header("content-type", "application/json")
             .header("authorization", "Bearer test-worker-token")
-            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .body(Body::from(to_string(&body).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();

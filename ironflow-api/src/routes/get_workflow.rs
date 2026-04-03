@@ -1,5 +1,7 @@
 //! `GET /api/v1/workflows/:name` — Get workflow details.
 
+use std::collections::HashSet;
+
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::AuthenticatedUser;
@@ -49,7 +51,7 @@ pub async fn get_workflow(
         .ok_or_else(|| ApiError::WorkflowNotFound(name.clone()))?;
 
     let mut sub_workflows = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = HashSet::new();
     visited.insert(name.clone());
     collect_sub_workflows(
         &state,
@@ -71,7 +73,7 @@ fn collect_sub_workflows(
     state: &AppState,
     names: &[String],
     result: &mut Vec<SubWorkflowDetail>,
-    visited: &mut std::collections::HashSet<String>,
+    visited: &mut HashSet<String>,
     depth: usize,
 ) {
     if depth == 0 {
@@ -105,6 +107,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_store::memory::InMemoryStore;
+    use serde_json::Value as JsonValue;
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -168,8 +171,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["name"], "my-workflow");
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["name"], "my-workflow");
     }
 
     #[tokio::test]

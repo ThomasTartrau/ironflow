@@ -4,6 +4,9 @@
 //! and structured-output extraction logic shared across local, SSH, Docker,
 //! and Kubernetes transports.
 
+use std::env;
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use tracing::warn;
@@ -14,7 +17,7 @@ use crate::provider::{AgentConfig, AgentOutput};
 use crate::utils::estimate_tokens;
 
 /// Default timeout for a single Claude CLI invocation (5 minutes).
-pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Return the context window size for a known Claude model identifier.
 ///
@@ -114,7 +117,7 @@ impl ClaudeUsage {
 /// # }
 /// ```
 pub fn env_vars_to_remove() -> Vec<String> {
-    collect_vars_to_remove(std::env::vars().map(|(k, _)| k))
+    collect_vars_to_remove(env::vars().map(|(k, _)| k))
 }
 
 /// Filter environment variable names, keeping `CLAUDE*` prefixed ones
@@ -179,7 +182,7 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
         PermissionMode::Auto => push_flag(&mut args, "--permission-mode", "auto"),
         PermissionMode::DontAsk => push_flag(&mut args, "--permission-mode", "dontAsk"),
         PermissionMode::BypassPermissions => {
-            if std::env::var("IRONFLOW_ALLOW_BYPASS").as_deref() != Ok("1") {
+            if env::var("IRONFLOW_ALLOW_BYPASS").as_deref() != Ok("1") {
                 return Err(AgentError::ProcessFailed {
                     exit_code: -1,
                     stderr:

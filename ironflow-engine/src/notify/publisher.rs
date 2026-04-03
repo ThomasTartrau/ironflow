@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use tokio::spawn;
+
 use super::{Event, EventSubscriber};
 
 /// A subscriber paired with its event type filter.
@@ -109,7 +111,7 @@ impl EventPublisher {
             }
             let subscriber = subscription.subscriber.clone();
             let event = event.clone();
-            tokio::spawn(async move {
+            spawn(async move {
                 subscriber.handle(&event).await;
             });
         }
@@ -129,6 +131,7 @@ mod tests {
     use rust_decimal::Decimal;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+    use tokio::time::sleep;
 
     use chrono::Utc;
     use ironflow_store::models::RunStatus;
@@ -231,7 +234,7 @@ mod tests {
         publisher.publish(sample_run_status_changed()); // matches
         publisher.publish(sample_user_signed_in()); // filtered out
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
 
         assert_eq!(subscriber.count(), 1);
     }
@@ -256,7 +259,7 @@ mod tests {
         publisher.publish(sample_run_status_changed());
         publisher.publish(sample_user_signed_in());
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
 
         assert_eq!(subscriber.count(), 2);
     }
@@ -281,7 +284,7 @@ mod tests {
         publisher.publish(sample_run_status_changed());
         publisher.publish(sample_user_signed_in());
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
 
         assert_eq!(subscriber.count(), 0);
     }

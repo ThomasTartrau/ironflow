@@ -142,7 +142,6 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use std::sync::Arc;
     use tower::ServiceExt;
-
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
         let user_store = Arc::new(InMemoryStore::new());

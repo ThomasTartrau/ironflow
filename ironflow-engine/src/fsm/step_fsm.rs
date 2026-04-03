@@ -1,5 +1,7 @@
 //! [`StepFsm`] — Finite state machine for the step lifecycle.
 
+use std::fmt;
+
 use chrono::Utc;
 use ironflow_store::entities::StepStatus;
 use serde::{Deserialize, Serialize};
@@ -29,8 +31,8 @@ pub enum StepEvent {
     Skipped,
 }
 
-impl std::fmt::Display for StepEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for StepEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StepEvent::Started => f.write_str("started"),
             StepEvent::Succeeded => f.write_str("succeeded"),

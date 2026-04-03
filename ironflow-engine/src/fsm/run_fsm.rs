@@ -3,6 +3,8 @@
 //! Events drive transitions; the FSM rejects invalid ones and keeps
 //! a full history of state changes.
 
+use std::fmt;
+
 use chrono::Utc;
 use ironflow_store::entities::RunStatus;
 use serde::{Deserialize, Serialize};
@@ -46,8 +48,8 @@ pub enum RunEvent {
     Rejected,
 }
 
-impl std::fmt::Display for RunEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for RunEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RunEvent::PickedUp => f.write_str("picked_up"),
             RunEvent::AllStepsCompleted => f.write_str("all_steps_completed"),

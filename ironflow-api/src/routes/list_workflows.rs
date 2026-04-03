@@ -54,6 +54,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_store::memory::InMemoryStore;
+    use serde_json::{from_slice, from_value, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -151,8 +152,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"].as_array().unwrap().len(), 0);
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -173,8 +174,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let workflows: Vec<String> = serde_json::from_value(json["data"].clone()).unwrap();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
         assert_eq!(workflows.len(), 2);
         assert!(workflows.contains(&"test-workflow".to_string()));
         assert!(workflows.contains(&"another-workflow".to_string()));
@@ -198,8 +199,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let workflows: Vec<String> = serde_json::from_value(json["data"].clone()).unwrap();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
         assert_eq!(workflows.len(), 1);
         assert_eq!(workflows[0], "test-workflow");
     }
@@ -220,8 +221,8 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let workflows: Vec<String> = serde_json::from_value(json["data"].clone()).unwrap();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
         assert_eq!(workflows.len(), 1);
         assert_eq!(workflows[0], "test-workflow");
     }
@@ -242,8 +243,8 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let workflows: Vec<String> = serde_json::from_value(json["data"].clone()).unwrap();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
         assert!(workflows.is_empty());
     }
 }

@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use super::{Event, EventSubscriber, SubscriberFuture};
@@ -96,7 +97,7 @@ impl WebhookSubscriber {
 
             if attempt + 1 < MAX_RETRIES {
                 let delay = BASE_BACKOFF * 2u32.pow(attempt);
-                tokio::time::sleep(delay).await;
+                sleep(delay).await;
             }
         }
     }

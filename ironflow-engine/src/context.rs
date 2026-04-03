@@ -23,12 +23,14 @@
 //! # }
 //! ```
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
+use tokio::task::JoinSet;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -231,7 +233,7 @@ impl WorkflowContext {
             step_records.push((step.id, name.to_string(), config.clone()));
         }
 
-        let mut join_set = tokio::task::JoinSet::new();
+        let mut join_set = JoinSet::new();
         for (idx, (_id, _name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
             let config = config.clone();
@@ -587,7 +589,7 @@ impl WorkflowContext {
 
         self.start_step(step.id, Utc::now()).await?;
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         match op.execute().await {
             Ok(output_value) => {
@@ -1031,8 +1033,8 @@ impl WorkflowContext {
     }
 }
 
-impl std::fmt::Debug for WorkflowContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for WorkflowContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WorkflowContext")
             .field("run_id", &self.run_id)
             .field("position", &self.position)

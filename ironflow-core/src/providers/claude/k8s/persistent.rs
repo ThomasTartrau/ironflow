@@ -36,6 +36,7 @@ use futures_util::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, AttachParams, DeleteParams, PostParams};
 use kube::runtime::wait::{await_condition, conditions};
+use tokio::time;
 
 use tracing::{debug, error, warn};
 
@@ -209,7 +210,7 @@ impl K8sPersistentProvider {
                     match pods.get(&self.pod_name).await {
                         Err(kube::Error::Api(e)) if e.code == 404 => break,
                         Err(_) => break,
-                        Ok(_) => tokio::time::sleep(Duration::from_millis(500)).await,
+                        Ok(_) => time::sleep(Duration::from_millis(500)).await,
                     }
                 }
             }
@@ -241,7 +242,7 @@ impl K8sPersistentProvider {
         }
 
         // Wait for Running state
-        tokio::time::timeout(
+        time::timeout(
             Duration::from_secs(120),
             await_condition(pods.clone(), &self.pod_name, conditions::is_pod_running()),
         )
@@ -296,7 +297,7 @@ impl AgentProvider for K8sPersistentProvider {
             // Execute command via K8s exec API
             let attach_params = AttachParams::default().stderr(true);
 
-            let mut attached = tokio::time::timeout(
+            let mut attached = time::timeout(
                 Duration::from_secs(30),
                 pods.exec(&self.pod_name, vec!["sh", "-c", &full_cmd], &attach_params),
             )
@@ -316,7 +317,7 @@ impl AgentProvider for K8sPersistentProvider {
             let mut stdout_buf = Vec::new();
             let mut stderr_buf = Vec::new();
 
-            let collect_result = tokio::time::timeout(self.timeout, async {
+            let collect_result = time::timeout(self.timeout, async {
                 let stdout_fut = async {
                     if let Some(reader) = stdout_reader {
                         let mut stream = tokio_util::io::ReaderStream::new(reader);

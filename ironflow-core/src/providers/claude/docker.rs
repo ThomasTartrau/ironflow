@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::StreamExt;
+use tokio::time;
 use tracing::{debug, error, warn};
 
 use crate::error::AgentError;
@@ -195,7 +196,7 @@ impl AgentProvider for DockerProvider {
             let mut stdout_buf = Vec::new();
             let mut stderr_buf = Vec::new();
 
-            let collect_result = tokio::time::timeout(self.timeout, async {
+            let collect_result = time::timeout(self.timeout, async {
                 match start_result {
                     StartExecResults::Attached { mut output, .. } => {
                         while let Some(result) = output.next().await {

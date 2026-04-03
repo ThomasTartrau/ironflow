@@ -50,6 +50,7 @@ mod tests {
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
+    use serde_json::Value as JsonValue;
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -135,9 +136,9 @@ mod tests {
             .await
             .expect("failed to collect body")
             .to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).expect("failed to parse json");
-        assert_eq!(json["data"]["email"], "test@example.com");
-        assert_eq!(json["data"]["username"], "testuser");
+        let json_val: JsonValue = serde_json::from_slice(&body).expect("failed to parse json");
+        assert_eq!(json_val["data"]["email"], "test@example.com");
+        assert_eq!(json_val["data"]["username"], "testuser");
     }
 
     #[tokio::test]

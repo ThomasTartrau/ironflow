@@ -31,7 +31,9 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+
 use tokio::process::Command;
+use tokio::time;
 use tracing::{debug, error, warn};
 
 use crate::error::OperationError;
@@ -279,7 +281,7 @@ impl Shell {
             stderr: format!("failed to spawn shell: {e}"),
         })?;
 
-        let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
+        let output = match time::timeout(self.timeout, child.wait_with_output()).await {
             Ok(result) => result.map_err(|e| OperationError::Shell {
                 exit_code: -1,
                 stderr: format!("failed to wait for shell: {e}"),

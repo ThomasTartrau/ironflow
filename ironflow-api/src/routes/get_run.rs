@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::AuthenticatedUser;
+use tokio::join;
 use uuid::Uuid;
 
 use crate::entities::{RunDetailResponse, RunResponse, StepResponse};
@@ -22,7 +23,7 @@ pub async fn get_run(
 ) -> Result<impl IntoResponse, ApiError> {
     let run = state.get_run_or_404(id).await?;
 
-    let (steps, deps) = tokio::join!(
+    let (steps, deps) = join!(
         state.store.list_steps(id),
         state.store.list_step_dependencies(id)
     );
@@ -66,7 +67,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
     use ironflow_store::store::RunStore;
-    use serde_json::json;
+    use serde_json::{json, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -145,8 +146,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["run"]["id"], run.id.to_string());
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["run"]["id"], run.id.to_string());
     }
 
     #[tokio::test]

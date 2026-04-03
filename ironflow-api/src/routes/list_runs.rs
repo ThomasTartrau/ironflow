@@ -55,7 +55,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
-    use serde_json::json;
+    use serde_json::{from_slice, json, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -106,8 +106,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"].as_array().unwrap().len(), 0);
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -145,9 +145,9 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"].as_array().unwrap().len(), 1);
-        assert_eq!(json["data"][0]["workflow_name"], "deploy");
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 1);
+        assert_eq!(json_val["data"][0]["workflow_name"], "deploy");
     }
 
     #[tokio::test]
@@ -194,9 +194,9 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"].as_array().unwrap().len(), 1);
-        assert_eq!(json["data"][0]["status"], "running");
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 1);
+        assert_eq!(json_val["data"][0]["status"], "running");
     }
 
     #[tokio::test]
@@ -227,11 +227,11 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"].as_array().unwrap().len(), 2);
-        assert_eq!(json["meta"]["page"], 1);
-        assert_eq!(json["meta"]["per_page"], 2);
-        assert_eq!(json["meta"]["total"], 5);
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 2);
+        assert_eq!(json_val["meta"]["page"], 1);
+        assert_eq!(json_val["meta"]["per_page"], 2);
+        assert_eq!(json_val["meta"]["total"], 5);
     }
 
     #[tokio::test]
@@ -248,8 +248,8 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let json_val: JsonValue = from_slice(&body).unwrap();
         // per_page should be capped to 100
-        assert_eq!(json["meta"]["per_page"], 100);
+        assert_eq!(json_val["meta"]["per_page"], 100);
     }
 }

@@ -4,6 +4,7 @@
 //! `ironflow-api/dashboard/` are compiled into the binary and served
 //! with automatic fallback to `index.html` for client-side routing.
 
+use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -73,7 +74,7 @@ pub struct EmbeddedDashboard;
 
 impl Service<Request<Body>> for EmbeddedDashboard {
     type Response = Response;
-    type Error = std::convert::Infallible;
+    type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

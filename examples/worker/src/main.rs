@@ -10,10 +10,12 @@
 //! - `CONCURRENCY` (default: 2)
 //! - `POLL_INTERVAL_SECS` (default: 2)
 
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_worker::WorkerBuilder;
@@ -22,19 +24,19 @@ use ironflow_worker::WorkerBuilder;
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
+            EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info,ironflow=debug".parse().expect("valid filter")),
         )
         .init();
 
-    let api_url = std::env::var("API_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let api_url = env::var("API_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let worker_token =
-        std::env::var("WORKER_TOKEN").unwrap_or_else(|_| "ironflow-dev-worker-token".to_string());
-    let concurrency: usize = std::env::var("CONCURRENCY")
+        env::var("WORKER_TOKEN").unwrap_or_else(|_| "ironflow-dev-worker-token".to_string());
+    let concurrency: usize = env::var("CONCURRENCY")
         .ok()
         .and_then(|c| c.parse().ok())
         .unwrap_or(2);
-    let poll_interval: u64 = std::env::var("POLL_INTERVAL_SECS")
+    let poll_interval: u64 = env::var("POLL_INTERVAL_SECS")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(2);

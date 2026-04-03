@@ -52,7 +52,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
-    use serde_json::json;
+    use serde_json::{from_slice, json, Value as JsonValue};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -117,8 +117,8 @@ mod tests {
         assert_eq!(resp.status(), HttpStatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["status"], "cancelled");
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"], "cancelled");
 
         let cancelled = store.get_run(run.id).await.unwrap().unwrap();
         assert_eq!(cancelled.status.state, RunStatus::Cancelled);
@@ -200,8 +200,8 @@ mod tests {
         assert_eq!(resp.status(), HttpStatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["status"], "cancelled");
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"], "cancelled");
     }
 
     #[tokio::test]

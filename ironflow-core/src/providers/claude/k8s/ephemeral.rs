@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, DeleteParams, LogParams, PostParams};
 use kube::runtime::wait::await_condition;
+use tokio::time;
 
 use tracing::{debug, error, warn};
 
@@ -258,7 +259,7 @@ impl AgentProvider for K8sEphemeralProvider {
                 })?;
 
             // Wait for pod to complete
-            let wait_result = tokio::time::timeout(
+            let wait_result = time::timeout(
                 self.timeout,
                 await_condition(pods.clone(), &pod_name, is_pod_completed()),
             )
