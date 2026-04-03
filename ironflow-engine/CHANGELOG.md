@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.2.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.1.2...ironflow-engine-v2.2.0) - 2026-04-03
+
+### Added
+
+- #2 add internal step-dependencies route, ci-pipeline demo, and review fixes
+
+- #2 add ctx.parallel() and DAG dependency tracking
+
+
+### Changed
+
+- #2 remove static workflow execution
+
+
+### Documentation
+
+- #2 fix rustdoc warnings and update position field docs
+
+
+### Fixed
+
+- #2 remove unused imports in dag_execution tests
+
 ## [2.1.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.1.0...ironflow-engine-v2.1.1) - 2026-04-02
 
 ### Fixed
