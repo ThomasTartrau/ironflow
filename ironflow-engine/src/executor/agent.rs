@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use rust_decimal::Decimal;
 use serde_json::json;
-use tracing::info;
+use tracing::{info, warn};
 
 use ironflow_core::operations::agent::{Agent, PermissionMode};
 use ironflow_core::provider::AgentProvider;
@@ -63,6 +63,15 @@ impl StepExecutor for AgentExecutor<'_> {
         if let Some(ref mode) = self.config.permission_mode {
             let pm = parse_permission_mode(mode);
             agent = agent.permission_mode(pm);
+        }
+        if let Some(ref schema) = self.config.output_schema {
+            if self.config.max_turns == Some(1) {
+                warn!(
+                    "structured output (output_schema) requires max_turns >= 2; \
+                     max_turns is set to 1, the agent will likely fail with error_max_turns"
+                );
+            }
+            agent = agent.output_schema_raw(schema);
         }
 
         let result = agent.run(provider.as_ref()).await?;

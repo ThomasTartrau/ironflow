@@ -22,6 +22,7 @@ rust_decimal = { version = "1", features = ["serde-float"] }
 tokio = { version = "1", features = ["time"] }
 thiserror = "2"
 tracing = "0.1"
+schemars = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
