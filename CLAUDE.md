@@ -117,7 +117,23 @@ Use RFC 4231 test vectors for HMAC-SHA256 verification tests.
 
 ### Imports
 
-Always use `use` imports. Never use inline paths like `serde_json::Value` in function bodies - import as `use serde_json::Value`.
+Always use `use` imports. Never use inline qualified paths in function bodies, closures, or match arms. Import everything at the top of the file (or in `#[cfg(test)] mod tests` for test-only imports).
+
+```rust
+// Bad - magic inline paths
+let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+let dur = std::time::Duration::from_secs(5);
+tokio::spawn(async { /* ... */ });
+futures_util::future::try_join_all(futs).await?;
+
+// Good - proper use imports
+use std::time::Duration;
+use serde_json::{Value, from_slice};
+use tokio::spawn;
+use futures_util::future::try_join_all;
+```
+
+Exception: `crate::` and `self::` paths are acceptable as internal module references.
 
 ### Error Handling
 
