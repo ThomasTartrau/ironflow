@@ -11,6 +11,8 @@ mod health_check;
 mod internal;
 mod list_runs;
 mod list_workflows;
+#[cfg(feature = "prometheus")]
+pub mod metrics;
 mod retry_run;
 
 use std::path::PathBuf;
@@ -58,7 +60,7 @@ const MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 ///     cookie_domain: None,
 ///     cookie_secure: false,
 /// });
-/// let state = AppState { store, user_store, engine, jwt_config, worker_token: "token".to_string() };
+/// let state = AppState::new(store, user_store, engine, jwt_config, "token".to_string());
 /// let router = create_router(state, None);
 /// # }
 /// ```
@@ -86,7 +88,8 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         .with_state(state.clone());
 
     // Public + user-authenticated routes
-    let api_v1 = Router::new()
+    #[allow(unused_mut)]
+    let mut api_v1 = Router::new()
         .route("/health-check", get(health_check::health_check))
         .route(
             "/runs",
@@ -101,6 +104,11 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         .route("/workflows/{name}", get(get_workflow::get_workflow))
         .route("/stats", get(get_stats::get_stats));
 
+    #[cfg(feature = "prometheus")]
+    {
+        api_v1 = api_v1.route("/metrics", get(metrics::metrics));
+    }
+
     #[cfg(feature = "sign-up")]
     let api_v1 = api_v1.route("/auth/sign-up", post(auth::sign_up::sign_up));
 
@@ -111,12 +119,18 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         .route("/auth/me", get(auth::me::me))
         .with_state(state.clone());
 
-    let app = Router::new()
+    #[allow(unused_mut)]
+    let mut app = Router::new()
         .nest("/api/v1/internal", internal_routes)
         .nest("/api/v1", api_v1)
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .layer(axum_mw::from_fn(security_headers));
+
+    #[cfg(feature = "prometheus")]
+    {
+        app = app.layer(axum_mw::from_fn(crate::middleware::request_metrics));
+    }
 
     match dashboard_dir {
         Some(dir) => {
@@ -140,11 +154,12 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::user_store::UserStore;
     use std::sync::Arc;
     use tower::ServiceExt;
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store = Arc::new(InMemoryStore::new());
+        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -154,13 +169,13 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
-        AppState {
+        AppState::new(
             store,
             user_store,
             engine,
             jwt_config,
-            worker_token: "test-worker-token".to_string(),
-        }
+            "test-worker-token".to_string(),
+        )
     }
 
     #[tokio::test]

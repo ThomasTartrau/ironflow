@@ -52,7 +52,7 @@
 //!     cookie_domain: None,
 //!     cookie_secure: false,
 //! });
-//! let state = AppState { store, user_store, engine, jwt_config, worker_token: "token".to_string() };
+//! let state = AppState::new(store, user_store, engine, jwt_config, "token".to_string());
 //! let app = create_router(state, None);
 //!
 //! let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")

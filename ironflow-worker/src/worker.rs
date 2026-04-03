@@ -9,6 +9,10 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use ironflow_core::provider::AgentProvider;
+#[cfg(feature = "prometheus")]
+use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_POLLS_TOTAL};
+#[cfg(feature = "prometheus")]
+use metrics::{counter, gauge};
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_store::store::RunStore;
@@ -143,6 +147,9 @@ impl Worker {
 
             match run {
                 Ok(Some(run)) => {
+                    #[cfg(feature = "prometheus")]
+                    counter!(WORKER_POLLS_TOTAL, "result" => "hit").increment(1);
+
                     let permit = semaphore
                         .clone()
                         .acquire_owned()
@@ -156,6 +163,9 @@ impl Worker {
 
                     info!(run_id = %run_id, workflow = %workflow, "executing run");
 
+                    #[cfg(feature = "prometheus")]
+                    gauge!(WORKER_ACTIVE).increment(1.0);
+
                     let handle = spawn(async move {
                         let _permit = permit;
                         match engine.execute_handler_run(run_id).await {
@@ -166,6 +176,8 @@ impl Worker {
                                 error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
                             }
                         }
+                        #[cfg(feature = "prometheus")]
+                        gauge!(WORKER_ACTIVE).decrement(1.0);
                     });
 
                     // Spawn a watcher to catch panics and mark the run as failed
@@ -186,6 +198,9 @@ impl Worker {
                     });
                 }
                 Ok(None) => {
+                    #[cfg(feature = "prometheus")]
+                    counter!(WORKER_POLLS_TOTAL, "result" => "miss").increment(1);
+
                     idle_streak += 1;
                     let backoff = if idle_streak > 10 {
                         self.poll_interval * 3

@@ -112,13 +112,13 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
-        AppState {
+        AppState::new(
             store,
             user_store,
             engine,
             jwt_config,
-            worker_token: "test-worker-token".to_string(),
-        }
+            "test-worker-token".to_string(),
+        )
     }
 
     async fn create_awaiting_approval_run(

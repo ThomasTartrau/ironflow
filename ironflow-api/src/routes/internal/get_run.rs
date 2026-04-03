@@ -49,10 +49,11 @@ mod tests {
 
     use crate::routes::create_router;
     use crate::state::AppState;
+    use ironflow_store::user_store::UserStore;
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store = Arc::new(InMemoryStore::new());
+        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -62,13 +63,13 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
-        AppState {
+        AppState::new(
             store,
             user_store,
             engine,
             jwt_config,
-            worker_token: "test-worker-token".to_string(),
-        }
+            "test-worker-token".to_string(),
+        )
     }
 
     #[tokio::test]

@@ -77,13 +77,13 @@ mod tests {
         engine
             .register(TestWorkflow)
             .expect("failed to register test workflow");
-        AppState {
+        AppState::new(
             store,
             user_store,
-            engine: Arc::new(engine),
-            jwt_config: test_jwt_config(),
-            worker_token: "test-worker-token".to_string(),
-        }
+            Arc::new(engine),
+            test_jwt_config(),
+            "test-worker-token".to_string(),
+        )
     }
 
     fn make_auth_header(state: &AppState) -> String {
