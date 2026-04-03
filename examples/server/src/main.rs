@@ -83,9 +83,7 @@ async fn main() {
 
     let cors = build_cors();
 
-    let dashboard_dir = env::var("DASHBOARD_DIR")
-        .ok()
-        .map(PathBuf::from);
+    let dashboard_dir = env::var("DASHBOARD_DIR").ok().map(PathBuf::from);
 
     let state = AppState {
         store,
@@ -99,9 +97,7 @@ async fn main() {
         .into_make_service();
 
     let addr = format!("0.0.0.0:{port}");
-    let listener = TcpListener::bind(&addr)
-        .await
-        .expect("bind address");
+    let listener = TcpListener::bind(&addr).await.expect("bind address");
 
     info!("==============================================");
     info!("  ironflow server on http://{addr}");
@@ -109,9 +105,7 @@ async fn main() {
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("ctrl+c handler");
+            tokio::signal::ctrl_c().await.expect("ctrl+c handler");
             info!("shutting down...");
         })
         .await

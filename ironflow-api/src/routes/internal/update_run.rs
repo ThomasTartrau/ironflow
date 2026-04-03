@@ -34,7 +34,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
     use rust_decimal::Decimal;
-    use serde_json::{from_slice, json, to_string, Value as JsonValue};
+    use serde_json::{Value as JsonValue, from_slice, json, to_string};
     use std::sync::Arc;
     use tower::ServiceExt;
 

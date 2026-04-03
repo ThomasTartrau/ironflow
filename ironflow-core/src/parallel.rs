@@ -272,8 +272,7 @@ mod tests {
     #[tokio::test]
     async fn limited_empty_returns_empty_vec() {
         let result: Result<Vec<()>, OperationError> = try_join_all_limited(
-            Vec::<Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(
-            ),
+            Vec::<Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(),
             3,
         )
         .await;
@@ -348,8 +347,7 @@ mod tests {
     #[should_panic(expected = "concurrency limit must be greater than 0")]
     async fn limited_zero_limit_panics() {
         let _: Result<Vec<()>, _> = try_join_all_limited(
-            Vec::<Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(
-            ),
+            Vec::<Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(),
             0,
         )
         .await;

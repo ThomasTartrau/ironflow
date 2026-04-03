@@ -33,7 +33,7 @@ mod tests {
     use ironflow_store::entities::StepKind;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
-    use serde_json::{json, to_string, Value as JsonValue};
+    use serde_json::{Value as JsonValue, json, to_string};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
