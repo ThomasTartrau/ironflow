@@ -27,6 +27,17 @@ pub enum EngineError {
     /// JSON serialization error.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    /// The run requires human approval before continuing.
+    #[error("approval required for run {run_id}, step {step_id}: {message}")]
+    ApprovalRequired {
+        /// The run that is awaiting approval.
+        run_id: uuid::Uuid,
+        /// The approval step that triggered the pause.
+        step_id: uuid::Uuid,
+        /// The approval message.
+        message: String,
+    },
 }
 
 #[cfg(test)]

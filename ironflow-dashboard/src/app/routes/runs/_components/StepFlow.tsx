@@ -9,6 +9,7 @@ import {
 	Globe,
 	Bot,
 	GitBranch,
+	ShieldCheck,
 	ZoomIn,
 	ZoomOut,
 	type LucideIcon,
@@ -42,6 +43,8 @@ function getKindMeta(kind: string): {
 			return { icon: Bot, color: "purple", label: "agent" };
 		case "workflow":
 			return { icon: GitBranch, color: "indigo", label: "workflow" };
+		case "approval":
+			return { icon: ShieldCheck, color: "rose", label: "approval" };
 		default:
 			return { icon: Terminal, color: "emerald", label: kind };
 	}
@@ -53,6 +56,7 @@ const nodeColors: Record<string, string> = {
 	purple: "border-purple-400/40 bg-purple-400/10 text-purple-500",
 	indigo: "border-indigo-400/40 bg-indigo-400/10 text-indigo-500",
 	emerald: "border-emerald-400/40 bg-emerald-400/10 text-emerald-500",
+	rose: "border-rose-400/40 bg-rose-400/10 text-rose-500",
 };
 
 const groupColors = [

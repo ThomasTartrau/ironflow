@@ -38,6 +38,12 @@ pub enum RunEvent {
     MaxRetriesExceeded,
     /// User or API requested cancellation.
     CancelRequested,
+    /// A step requires human approval before continuing.
+    ApprovalRequested,
+    /// Human approved the run to continue.
+    Approved,
+    /// Human rejected the run.
+    Rejected,
 }
 
 impl std::fmt::Display for RunEvent {
@@ -50,6 +56,9 @@ impl std::fmt::Display for RunEvent {
             RunEvent::RetryStarted => f.write_str("retry_started"),
             RunEvent::MaxRetriesExceeded => f.write_str("max_retries_exceeded"),
             RunEvent::CancelRequested => f.write_str("cancel_requested"),
+            RunEvent::ApprovalRequested => f.write_str("approval_requested"),
+            RunEvent::Approved => f.write_str("approved"),
+            RunEvent::Rejected => f.write_str("rejected"),
         }
     }
 }
@@ -72,6 +81,10 @@ impl std::fmt::Display for RunEvent {
 /// | Retrying | RetryStarted | Running |
 /// | Retrying | MaxRetriesExceeded | Failed |
 /// | Retrying | CancelRequested | Cancelled |
+/// | Running | ApprovalRequested | AwaitingApproval |
+/// | AwaitingApproval | Approved | Running |
+/// | AwaitingApproval | Rejected | Failed |
+/// | AwaitingApproval | CancelRequested | Cancelled |
 ///
 /// # Examples
 ///
@@ -228,6 +241,12 @@ fn next_state(from: RunStatus, event: RunEvent) -> Option<RunStatus> {
         (RunStatus::Retrying, RunEvent::RetryStarted) => Some(RunStatus::Running),
         (RunStatus::Retrying, RunEvent::MaxRetriesExceeded) => Some(RunStatus::Failed),
         (RunStatus::Retrying, RunEvent::CancelRequested) => Some(RunStatus::Cancelled),
+
+        // Approval
+        (RunStatus::Running, RunEvent::ApprovalRequested) => Some(RunStatus::AwaitingApproval),
+        (RunStatus::AwaitingApproval, RunEvent::Approved) => Some(RunStatus::Running),
+        (RunStatus::AwaitingApproval, RunEvent::Rejected) => Some(RunStatus::Failed),
+        (RunStatus::AwaitingApproval, RunEvent::CancelRequested) => Some(RunStatus::Cancelled),
 
         // Terminal states and all other combos → invalid
         _ => None,
@@ -392,6 +411,63 @@ mod tests {
         assert_eq!(history[2].from, RunStatus::Retrying);
         assert_eq!(history[2].to, RunStatus::Running);
         assert_eq!(history[2].event, RunEvent::RetryStarted);
+    }
+
+    // ---- Approval transitions ----
+
+    #[test]
+    fn running_to_awaiting_approval() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PickedUp).unwrap();
+        fsm.apply(RunEvent::ApprovalRequested).unwrap();
+        assert_eq!(fsm.state(), RunStatus::AwaitingApproval);
+        assert!(!fsm.is_terminal());
+    }
+
+    #[test]
+    fn awaiting_approval_approved_resumes_running() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PickedUp).unwrap();
+        fsm.apply(RunEvent::ApprovalRequested).unwrap();
+        fsm.apply(RunEvent::Approved).unwrap();
+        assert_eq!(fsm.state(), RunStatus::Running);
+    }
+
+    #[test]
+    fn awaiting_approval_rejected_fails() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PickedUp).unwrap();
+        fsm.apply(RunEvent::ApprovalRequested).unwrap();
+        fsm.apply(RunEvent::Rejected).unwrap();
+        assert_eq!(fsm.state(), RunStatus::Failed);
+        assert!(fsm.is_terminal());
+    }
+
+    #[test]
+    fn awaiting_approval_cancel() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PickedUp).unwrap();
+        fsm.apply(RunEvent::ApprovalRequested).unwrap();
+        fsm.apply(RunEvent::CancelRequested).unwrap();
+        assert_eq!(fsm.state(), RunStatus::Cancelled);
+        assert!(fsm.is_terminal());
+    }
+
+    #[test]
+    fn cannot_approve_from_pending() {
+        let mut fsm = RunFsm::new();
+        assert!(fsm.apply(RunEvent::Approved).is_err());
+    }
+
+    #[test]
+    fn approval_then_complete() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PickedUp).unwrap();
+        fsm.apply(RunEvent::ApprovalRequested).unwrap();
+        fsm.apply(RunEvent::Approved).unwrap();
+        fsm.apply(RunEvent::AllStepsCompleted).unwrap();
+        assert_eq!(fsm.state(), RunStatus::Completed);
+        assert_eq!(fsm.history().len(), 4);
     }
 
     // ---- TransitionError Display ----

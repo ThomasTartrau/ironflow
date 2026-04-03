@@ -25,6 +25,7 @@ use ironflow_api::state::AppState;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
+use ironflow_engine::notify::{Event, WebhookSubscriber};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
@@ -63,6 +64,17 @@ async fn main() {
 
     let mut engine = Engine::new(store.clone(), provider);
     ironflow_workflows::register_all(&mut engine).expect("failed to register workflows");
+
+    // Outbound webhook notifications (optional).
+    // Set WEBHOOK_URL to receive JSON POSTs on run completion/failure.
+    if let Ok(webhook_url) = std::env::var("WEBHOOK_URL") {
+        info!(url = %webhook_url, "registering webhook subscriber");
+        engine.subscribe(
+            WebhookSubscriber::new(&webhook_url),
+            &[Event::RUN_STATUS_CHANGED, Event::STEP_FAILED],
+        );
+    }
+
     let engine = Arc::new(engine);
 
     let cors = build_cors();

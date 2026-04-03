@@ -18,6 +18,7 @@ const STATUS_OPTIONS: RunStatus[] = [
 	"failed",
 	"retrying",
 	"cancelled",
+	"awaiting_approval",
 ];
 
 export function RunFilters() {

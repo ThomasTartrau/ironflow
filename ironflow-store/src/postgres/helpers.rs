@@ -21,6 +21,7 @@ pub(crate) fn parse_run_status(s: &str) -> Result<RunStatus, StoreError> {
         "failed" => Ok(RunStatus::Failed),
         "retrying" => Ok(RunStatus::Retrying),
         "cancelled" => Ok(RunStatus::Cancelled),
+        "awaiting_approval" => Ok(RunStatus::AwaitingApproval),
         other => Err(StoreError::Database(format!("unknown run status: {other}"))),
     }
 }
@@ -49,6 +50,7 @@ pub(crate) fn parse_step_kind(s: &str) -> Result<StepKind, StoreError> {
         "http" => Ok(StepKind::Http),
         "agent" => Ok(StepKind::Agent),
         "workflow" => Ok(StepKind::Workflow),
+        "approval" => Ok(StepKind::Approval),
         other => Ok(StepKind::Custom(other.to_string())),
     }
 }
@@ -62,6 +64,7 @@ pub(crate) fn run_status_to_db_str(status: &RunStatus) -> &'static str {
         RunStatus::Failed => "failed",
         RunStatus::Retrying => "retrying",
         RunStatus::Cancelled => "cancelled",
+        RunStatus::AwaitingApproval => "awaiting_approval",
     }
 }
 
@@ -75,6 +78,7 @@ pub(crate) fn step_kind_to_str(kind: &StepKind) -> std::borrow::Cow<'static, str
         StepKind::Http => std::borrow::Cow::Borrowed("http"),
         StepKind::Agent => std::borrow::Cow::Borrowed("agent"),
         StepKind::Workflow => std::borrow::Cow::Borrowed("workflow"),
+        StepKind::Approval => std::borrow::Cow::Borrowed("approval"),
         StepKind::Custom(name) => std::borrow::Cow::Owned(name.clone()),
     }
 }

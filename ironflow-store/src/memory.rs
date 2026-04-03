@@ -401,7 +401,10 @@ impl RunStore for InMemoryStore {
                     RunStatus::Completed => completed_runs += 1,
                     RunStatus::Failed => failed_runs += 1,
                     RunStatus::Cancelled => cancelled_runs += 1,
-                    RunStatus::Pending | RunStatus::Running | RunStatus::Retrying => {
+                    RunStatus::Pending
+                    | RunStatus::Running
+                    | RunStatus::Retrying
+                    | RunStatus::AwaitingApproval => {
                         active_runs += 1;
                     }
                 }

@@ -146,6 +146,10 @@ impl PostgresStore {
             (RunStatus::Retrying, RunStatus::Running) => Ok("retry_started"),
             (RunStatus::Retrying, RunStatus::Failed) => Ok("max_retries_exceeded"),
             (RunStatus::Retrying, RunStatus::Cancelled) => Ok("cancel_requested"),
+            (RunStatus::Running, RunStatus::AwaitingApproval) => Ok("approval_requested"),
+            (RunStatus::AwaitingApproval, RunStatus::Running) => Ok("approved"),
+            (RunStatus::AwaitingApproval, RunStatus::Failed) => Ok("rejected"),
+            (RunStatus::AwaitingApproval, RunStatus::Cancelled) => Ok("cancel_requested"),
             _ => Err(StoreError::InvalidTransition { from, to }),
         }
     }

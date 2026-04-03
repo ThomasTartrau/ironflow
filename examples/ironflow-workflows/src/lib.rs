@@ -4,13 +4,17 @@
 //! in both the API server (for metadata/describe) and the worker (for execution).
 
 mod ci_pipeline;
+mod deploy_approval;
 mod git_insight;
+mod notified_pipeline;
 mod pipeline;
 mod system_audit;
 mod weather_report;
 
 pub use ci_pipeline::CiPipeline;
+pub use deploy_approval::DeployApproval;
 pub use git_insight::GitInsight;
+pub use notified_pipeline::NotifiedPipeline;
 pub use pipeline::{Collect, Enrich, Report};
 pub use system_audit::SystemAudit;
 pub use weather_report::WeatherReport;
@@ -32,5 +36,7 @@ pub fn register_all(engine: &mut Engine) -> Result<(), EngineError> {
     engine.register(Enrich)?;
     engine.register(Report)?;
     engine.register(CiPipeline)?;
+    engine.register(DeployApproval)?;
+    engine.register(NotifiedPipeline)?;
     Ok(())
 }

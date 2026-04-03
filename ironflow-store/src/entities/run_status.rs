@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Valid transitions:
 /// - `Pending` → `Running`, `Cancelled`
-/// - `Running` → `Completed`, `Failed`, `Retrying`, `Cancelled`
+/// - `Running` → `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
 /// - `Retrying` → `Running`, `Failed`, `Cancelled`
+/// - `AwaitingApproval` → `Running`, `Failed`, `Cancelled`
 ///
 /// Terminal states: `Completed`, `Failed`, `Cancelled`.
 ///
@@ -19,6 +20,8 @@ use serde::{Deserialize, Serialize};
 /// assert!(RunStatus::Pending.can_transition_to(&RunStatus::Running));
 /// assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));
 /// assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
+/// assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
+/// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +38,8 @@ pub enum RunStatus {
     Retrying,
     /// Cancelled by user or API before completion.
     Cancelled,
+    /// Waiting for human approval before continuing.
+    AwaitingApproval,
 }
 
 impl RunStatus {
@@ -48,9 +53,13 @@ impl RunStatus {
                 | (RunStatus::Running, RunStatus::Failed)
                 | (RunStatus::Running, RunStatus::Retrying)
                 | (RunStatus::Running, RunStatus::Cancelled)
+                | (RunStatus::Running, RunStatus::AwaitingApproval)
                 | (RunStatus::Retrying, RunStatus::Running)
                 | (RunStatus::Retrying, RunStatus::Failed)
                 | (RunStatus::Retrying, RunStatus::Cancelled)
+                | (RunStatus::AwaitingApproval, RunStatus::Running)
+                | (RunStatus::AwaitingApproval, RunStatus::Failed)
+                | (RunStatus::AwaitingApproval, RunStatus::Cancelled)
         )
     }
 
@@ -72,6 +81,7 @@ impl std::fmt::Display for RunStatus {
             RunStatus::Failed => f.write_str("Failed"),
             RunStatus::Retrying => f.write_str("Retrying"),
             RunStatus::Cancelled => f.write_str("Cancelled"),
+            RunStatus::AwaitingApproval => f.write_str("AwaitingApproval"),
         }
     }
 }
@@ -158,6 +168,36 @@ mod tests {
     }
 
     #[test]
+    fn awaiting_approval_not_terminal() {
+        assert!(!RunStatus::AwaitingApproval.is_terminal());
+    }
+
+    #[test]
+    fn running_can_transition_to_awaiting_approval() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
+    }
+
+    #[test]
+    fn awaiting_approval_can_transition_to_running() {
+        assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+    }
+
+    #[test]
+    fn awaiting_approval_can_transition_to_failed() {
+        assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Failed));
+    }
+
+    #[test]
+    fn awaiting_approval_can_transition_to_cancelled() {
+        assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Cancelled));
+    }
+
+    #[test]
+    fn awaiting_approval_cannot_transition_to_completed() {
+        assert!(!RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Completed));
+    }
+
+    #[test]
     fn display() {
         assert_eq!(RunStatus::Pending.to_string(), "Pending");
         assert_eq!(RunStatus::Running.to_string(), "Running");
@@ -165,6 +205,7 @@ mod tests {
         assert_eq!(RunStatus::Failed.to_string(), "Failed");
         assert_eq!(RunStatus::Retrying.to_string(), "Retrying");
         assert_eq!(RunStatus::Cancelled.to_string(), "Cancelled");
+        assert_eq!(RunStatus::AwaitingApproval.to_string(), "AwaitingApproval");
     }
 
     #[test]
@@ -176,6 +217,7 @@ mod tests {
             RunStatus::Failed,
             RunStatus::Retrying,
             RunStatus::Cancelled,
+            RunStatus::AwaitingApproval,
         ] {
             let json = serde_json::to_string(&status).expect("serialize");
             let back: RunStatus = serde_json::from_str(&json).expect("deserialize");

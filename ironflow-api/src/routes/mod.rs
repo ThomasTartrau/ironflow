@@ -1,5 +1,6 @@
 //! Router assembly — one module per route.
 
+mod approve_run;
 mod auth;
 mod cancel_run;
 mod create_run;
@@ -93,6 +94,8 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         )
         .route("/runs/{id}", get(get_run::get_run))
         .route("/runs/{id}/cancel", post(cancel_run::cancel_run))
+        .route("/runs/{id}/approve", post(approve_run::approve_run))
+        .route("/runs/{id}/reject", post(approve_run::reject_run))
         .route("/runs/{id}/retry", post(retry_run::retry_run))
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))

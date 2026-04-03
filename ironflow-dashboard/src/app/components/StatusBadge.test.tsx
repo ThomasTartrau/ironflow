@@ -11,6 +11,7 @@ describe("StatusBadge", () => {
 		"failed",
 		"retrying",
 		"cancelled",
+		"awaiting_approval",
 	];
 
 	const stepStatuses: StepStatus[] = [
@@ -72,5 +73,14 @@ describe("StatusBadge", () => {
 		const { container } = render(<StatusBadge status="skipped" />);
 		const badge = container.firstElementChild;
 		expect(badge?.className).toContain("bg-gray-100");
+	});
+
+	it("applies purple styles with pulse for awaiting_approval", () => {
+		const { container } = render(
+			<StatusBadge status="awaiting_approval" />,
+		);
+		const badge = container.firstElementChild;
+		expect(badge?.className).toContain("bg-purple-100");
+		expect(badge?.className).toContain("animate-pulse");
 	});
 });
