@@ -1,5 +1,6 @@
 //! [`AgentStepConfig`] — serializable configuration for an agent step.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Serializable configuration for an agent step.
@@ -31,6 +32,11 @@ pub struct AgentStepConfig {
     pub working_dir: Option<String>,
     /// Permission mode (e.g. "auto", "dont_ask").
     pub permission_mode: Option<String>,
+    /// Optional JSON Schema string for structured output.
+    ///
+    /// When set, the agent provider will request typed output conforming to this schema.
+    /// The result value is guaranteed to be valid JSON matching the schema.
+    pub output_schema: Option<String>,
 }
 
 impl AgentStepConfig {
@@ -54,6 +60,7 @@ impl AgentStepConfig {
             allowed_tools: Vec::new(),
             working_dir: None,
             permission_mode: None,
+            output_schema: None,
         }
     }
 
@@ -98,6 +105,75 @@ impl AgentStepConfig {
         self.permission_mode = Some(mode.to_string());
         self
     }
+
+    /// Set structured output from a Rust type implementing [`JsonSchema`].
+    ///
+    /// The schema is serialized once at build time. When set, the agent provider
+    /// will request typed output conforming to this schema.
+    ///
+    /// **Important:** structured output requires `max_turns >= 2`. The Claude CLI
+    /// uses the first turn for reasoning and a second turn to produce the
+    /// schema-conforming JSON. If `max_turns` is set to `1`, the agent will
+    /// fail at runtime with an `error_max_turns` error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::AgentStepConfig;
+    /// use schemars::JsonSchema;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize, JsonSchema)]
+    /// struct Labels {
+    ///     labels: Vec<String>,
+    /// }
+    ///
+    /// let config = AgentStepConfig::new("Classify this email")
+    ///     .output::<Labels>()
+    ///     .max_turns(2);
+    ///
+    /// assert!(config.output_schema.is_some());
+    /// ```
+    pub fn output<T: JsonSchema>(mut self) -> Self {
+        let schema = schemars::schema_for!(T);
+        self.output_schema = match serde_json::to_string(&schema) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    type_name = std::any::type_name::<T>(),
+                    "failed to serialize JSON schema, structured output disabled"
+                );
+                None
+            }
+        };
+        self
+    }
+
+    /// Set structured output from a pre-serialized JSON Schema string.
+    ///
+    /// Use this when the schema comes from configuration (e.g. YAML/JSON files)
+    /// rather than a Rust type. For type-safe schema generation, prefer
+    /// [`output`](AgentStepConfig::output).
+    ///
+    /// **Important:** structured output requires `max_turns >= 2`. See
+    /// [`output`](AgentStepConfig::output) for details.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::AgentStepConfig;
+    ///
+    /// let schema = r#"{"type":"object","properties":{"score":{"type":"integer"}}}"#;
+    /// let config = AgentStepConfig::new("Rate this PR")
+    ///     .output_schema_raw(schema.to_string());
+    ///
+    /// assert_eq!(config.output_schema.as_deref(), Some(schema));
+    /// ```
+    pub fn output_schema_raw(mut self, schema: String) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -119,5 +195,73 @@ mod tests {
         assert_eq!(config.system_prompt.unwrap(), "You are a code reviewer");
         assert_eq!(config.model.unwrap(), "haiku");
         assert_eq!(config.allowed_tools, vec!["read"]);
+        assert!(config.output_schema.is_none());
+    }
+
+    #[test]
+    fn output_sets_schema_from_type() {
+        #[derive(serde::Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct Labels {
+            labels: Vec<String>,
+        }
+
+        let config = AgentStepConfig::new("Classify").output::<Labels>();
+
+        let schema = config.output_schema.expect("schema should be set");
+        assert!(schema.contains("labels"));
+    }
+
+    #[test]
+    fn output_schema_raw_sets_string() {
+        let raw = r#"{"type":"object"}"#;
+        let config = AgentStepConfig::new("Rate").output_schema_raw(raw.to_string());
+
+        assert_eq!(config.output_schema.as_deref(), Some(raw));
+    }
+
+    #[test]
+    fn output_overrides_previous_schema() {
+        #[derive(serde::Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct First {
+            a: String,
+        }
+
+        #[derive(serde::Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct Second {
+            b: i32,
+        }
+
+        let config = AgentStepConfig::new("Test")
+            .output::<First>()
+            .output::<Second>();
+
+        let schema = config.output_schema.expect("schema should be set");
+        assert!(!schema.contains("\"a\""));
+        assert!(schema.contains("\"b\""));
+    }
+
+    #[test]
+    fn output_schema_raw_overrides_typed_schema() {
+        #[derive(serde::Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct Typed {
+            field: String,
+        }
+
+        let raw = r#"{"type":"string"}"#;
+        let config = AgentStepConfig::new("Test")
+            .output::<Typed>()
+            .output_schema_raw(raw.to_string());
+
+        assert_eq!(config.output_schema.as_deref(), Some(raw));
+    }
+
+    #[test]
+    fn default_output_schema_is_none() {
+        let config = AgentStepConfig::new("Hello");
+        assert!(config.output_schema.is_none());
     }
 }

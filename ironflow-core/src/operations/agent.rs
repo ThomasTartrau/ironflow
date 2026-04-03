@@ -285,6 +285,34 @@ impl Agent {
         self
     }
 
+    /// Set structured output from a pre-serialized JSON Schema string.
+    ///
+    /// Use this when the schema comes from configuration or another source
+    /// rather than a Rust type. For type-safe schema generation, prefer
+    /// [`output`](Agent::output).
+    ///
+    /// **Important:** structured output requires `max_turns >= 2`. The Claude CLI
+    /// uses the first turn for reasoning and a second turn to produce the
+    /// schema-conforming JSON.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let schema = r#"{"type":"object","properties":{"labels":{"type":"array","items":{"type":"string"}}}}"#;
+    /// let agent = Agent::new()
+    ///     .prompt("Classify this email")
+    ///     .output_schema_raw(schema);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn output_schema_raw(mut self, schema: &str) -> Self {
+        self.config.json_schema = Some(schema.to_string());
+        self
+    }
+
     /// Retry the agent invocation up to `max_retries` times on transient failures.
     ///
     /// Uses default exponential backoff settings (200ms initial, 2x multiplier,

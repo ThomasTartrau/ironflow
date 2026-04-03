@@ -2205,6 +2205,7 @@ dependencies = [
  "ironflow-core",
  "ironflow-store",
  "rust_decimal",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
