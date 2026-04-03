@@ -9,6 +9,7 @@ use axum::http::header::{
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use serde_json::json;
 use subtle::ConstantTimeEq;
 
 /// Axum middleware that validates a static worker token.
@@ -33,7 +34,7 @@ pub async fn worker_token_auth(req: Request, next: Next) -> Response {
         }
         _ => (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({
+            Json(json!({
                 "error": {
                     "code": "INVALID_WORKER_TOKEN",
                     "message": "Invalid or missing worker token",
@@ -86,6 +87,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_store::memory::InMemoryStore;
+    use serde_json::Value as JsonValue;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -142,8 +144,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"]["code"], "INVALID_WORKER_TOKEN");
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "INVALID_WORKER_TOKEN");
     }
 
     #[tokio::test]
@@ -161,8 +163,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"]["code"], "INVALID_WORKER_TOKEN");
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "INVALID_WORKER_TOKEN");
     }
 
     #[tokio::test]

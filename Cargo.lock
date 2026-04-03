@@ -2204,6 +2204,7 @@ dependencies = [
  "chrono",
  "ironflow-core",
  "ironflow-store",
+ "reqwest 0.12.28",
  "rust_decimal",
  "schemars",
  "serde",

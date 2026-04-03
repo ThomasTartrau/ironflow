@@ -5,11 +5,13 @@
 //! and reconstructed by the executor at runtime.
 
 mod agent;
+mod approval;
 mod http;
 mod shell;
 mod workflow;
 
 pub use agent::AgentStepConfig;
+pub use approval::ApprovalConfig;
 pub use http::HttpConfig;
 pub use shell::ShellConfig;
 pub use workflow::WorkflowStepConfig;
@@ -42,6 +44,8 @@ pub enum StepConfig {
     Agent(AgentStepConfig),
     /// A sub-workflow invocation step.
     Workflow(WorkflowStepConfig),
+    /// A human approval gate step.
+    Approval(ApprovalConfig),
 }
 
 impl StepConfig {
@@ -62,6 +66,7 @@ impl StepConfig {
             StepConfig::Http(_) => StepKind::Http,
             StepConfig::Agent(_) => StepKind::Agent,
             StepConfig::Workflow(_) => StepKind::Workflow,
+            StepConfig::Approval(_) => StepKind::Approval,
         }
     }
 }
@@ -77,6 +82,7 @@ mod tests {
             StepConfig::Http(HttpConfig::get("http://example.com")),
             StepConfig::Agent(AgentStepConfig::new("summarize")),
             StepConfig::Workflow(WorkflowStepConfig::new("build", serde_json::json!({}))),
+            StepConfig::Approval(ApprovalConfig::new("Deploy to production?")),
         ];
 
         for config in configs {

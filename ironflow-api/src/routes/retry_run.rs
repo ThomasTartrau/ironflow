@@ -59,7 +59,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
-    use serde_json::json;
+    use serde_json::{Value as JsonValue, from_slice, from_value, json};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -133,8 +133,8 @@ mod tests {
         assert_eq!(resp.status(), HttpStatusCode::CREATED);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let new_id: Uuid = serde_json::from_value(json["data"]["id"].clone()).unwrap();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
 
         let new_run = store.get_run(new_id).await.unwrap().unwrap();
         assert_eq!(new_run.status.state, RunStatus::Pending);

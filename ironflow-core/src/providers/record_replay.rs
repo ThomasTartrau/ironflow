@@ -214,11 +214,14 @@ impl<P: AgentProvider> AgentProvider for RecordReplayProvider<P> {
 
 #[cfg(test)]
 mod tests {
+    use std::process;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use serde_json::json;
+
     use super::*;
     use crate::operations::agent::Model;
     use crate::providers::claude::ClaudeCodeProvider;
-    use serde_json::json;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// RAII guard that removes a temp directory on drop (even on panic).
     struct TempDirGuard(String);
@@ -233,7 +236,7 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let dir = format!(
             "/tmp/ironflow-test-rr-{}-{}",
-            std::process::id(),
+            process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed),
         );
         let guard = TempDirGuard(dir.clone());

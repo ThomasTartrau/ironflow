@@ -79,7 +79,7 @@ mod tests {
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
-    use serde_json::json;
+    use serde_json::{json, to_string};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -134,7 +134,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "username": "testuser",
                     "password": "password123"
@@ -160,7 +160,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "invalid-email",
                     "username": "testuser",
                     "password": "password123"
@@ -183,7 +183,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "username": "ab",
                     "password": "password123"
@@ -206,7 +206,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "username": "testuser",
                     "password": "short"
@@ -229,7 +229,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "username": "testuser1",
                     "password": "password123"
@@ -250,7 +250,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "username": "testuser2",
                     "password": "password123"
@@ -276,7 +276,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test1@example.com",
                     "username": "testuser",
                     "password": "password123"
@@ -297,7 +297,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test2@example.com",
                     "username": "testuser",
                     "password": "password123"

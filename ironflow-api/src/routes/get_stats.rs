@@ -47,7 +47,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
-    use serde_json::json;
+    use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -97,8 +97,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["total_runs"], 0);
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["total_runs"], 0);
     }
 
     #[tokio::test]
@@ -166,13 +166,13 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["total_runs"], 3);
-        assert_eq!(json["data"]["completed_runs"], 1);
-        assert_eq!(json["data"]["failed_runs"], 1);
-        assert_eq!(json["data"]["active_runs"], 1);
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["total_runs"], 3);
+        assert_eq!(json_val["data"]["completed_runs"], 1);
+        assert_eq!(json_val["data"]["failed_runs"], 1);
+        assert_eq!(json_val["data"]["active_runs"], 1);
 
-        let rate = json["data"]["success_rate_percent"].as_f64().unwrap();
+        let rate = json_val["data"]["success_rate_percent"].as_f64().unwrap();
         assert!((rate - 50.0).abs() < 0.01);
     }
 }

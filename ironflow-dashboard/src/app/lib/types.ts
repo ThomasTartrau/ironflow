@@ -4,8 +4,15 @@ export type RunStatus =
 	| "completed"
 	| "failed"
 	| "retrying"
-	| "cancelled";
-export type StepKind = "shell" | "http" | "agent" | "workflow" | (string & {});
+	| "cancelled"
+	| "awaiting_approval";
+export type StepKind =
+	| "shell"
+	| "http"
+	| "agent"
+	| "workflow"
+	| "approval"
+	| (string & {});
 export type StepStatus =
 	| "pending"
 	| "running"

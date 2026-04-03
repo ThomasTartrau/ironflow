@@ -47,15 +47,17 @@ pub mod error;
 pub mod executor;
 pub mod fsm;
 pub mod handler;
+pub mod notify;
 pub mod operation;
 
 /// Convenience re-exports.
 pub mod prelude {
-    pub use crate::config::{AgentStepConfig, HttpConfig, ShellConfig, StepConfig};
+    pub use crate::config::{AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig};
     pub use crate::context::WorkflowContext;
     pub use crate::engine::Engine;
     pub use crate::error::EngineError;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};
+    pub use crate::notify::{Event, EventPublisher, EventSubscriber, WebhookSubscriber};
     pub use crate::operation::Operation;
 }

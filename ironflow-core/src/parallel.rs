@@ -72,6 +72,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use futures_util::future;
 use tokio::sync::Semaphore;
 
 use crate::error::OperationError;
@@ -108,7 +109,7 @@ where
     I: IntoIterator<Item = F>,
     F: Future<Output = Result<T, OperationError>>,
 {
-    futures_util::future::try_join_all(futures).await
+    future::try_join_all(futures).await
 }
 
 /// Run a collection of futures with a concurrency limit.
@@ -164,20 +165,21 @@ where
         }
     });
 
-    futures_util::future::try_join_all(guarded).await
+    future::try_join_all(guarded).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use super::*;
     use crate::operations::shell::Shell;
 
     #[tokio::test]
     async fn try_join_all_empty_returns_empty_vec() {
         let result: Result<Vec<()>, OperationError> = try_join_all(Vec::<
-            std::pin::Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>,
+            Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>,
         >::new())
         .await;
         assert!(result.unwrap().is_empty());
@@ -270,8 +272,7 @@ mod tests {
     #[tokio::test]
     async fn limited_empty_returns_empty_vec() {
         let result: Result<Vec<()>, OperationError> = try_join_all_limited(
-            Vec::<std::pin::Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(
-            ),
+            Vec::<Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(),
             3,
         )
         .await;
@@ -346,8 +347,7 @@ mod tests {
     #[should_panic(expected = "concurrency limit must be greater than 0")]
     async fn limited_zero_limit_panics() {
         let _: Result<Vec<()>, _> = try_join_all_limited(
-            Vec::<std::pin::Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(
-            ),
+            Vec::<Pin<Box<dyn Future<Output = Result<(), OperationError>> + Send>>>::new(),
             0,
         )
         .await;

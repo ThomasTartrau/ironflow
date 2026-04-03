@@ -33,7 +33,7 @@ mod tests {
     use ironflow_store::entities::StepKind;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
-    use serde_json::json;
+    use serde_json::{Value as JsonValue, json, to_string};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -91,15 +91,15 @@ mod tests {
             .uri("/api/v1/internal/steps")
             .header("authorization", "Bearer test-worker-token")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&new_step).unwrap()))
+            .body(Body::from(to_string(&new_step).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["run_id"], run.id.to_string());
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["run_id"], run.id.to_string());
     }
 
     #[tokio::test]
@@ -121,7 +121,7 @@ mod tests {
             .uri("/api/v1/internal/steps")
             .header("authorization", "Bearer test-worker-token")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&new_step).unwrap()))
+            .body(Body::from(to_string(&new_step).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();

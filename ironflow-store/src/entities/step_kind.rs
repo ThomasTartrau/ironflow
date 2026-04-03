@@ -35,6 +35,8 @@ pub enum StepKind {
     Agent,
     /// A sub-workflow invocation.
     Workflow,
+    /// A human approval gate.
+    Approval,
     /// A user-defined operation (e.g. `"gitlab"`, `"gmail"`, `"slack"`).
     Custom(String),
 }
@@ -46,6 +48,7 @@ impl Serialize for StepKind {
             StepKind::Http => "http",
             StepKind::Agent => "agent",
             StepKind::Workflow => "workflow",
+            StepKind::Approval => "approval",
             StepKind::Custom(name) => name.as_str(),
         };
         serializer.serialize_str(s)
@@ -60,6 +63,7 @@ impl<'de> Deserialize<'de> for StepKind {
             "http" => StepKind::Http,
             "agent" => StepKind::Agent,
             "workflow" => StepKind::Workflow,
+            "approval" => StepKind::Approval,
             _ => StepKind::Custom(s),
         })
     }
@@ -72,6 +76,7 @@ impl std::fmt::Display for StepKind {
             StepKind::Http => f.write_str("Http"),
             StepKind::Agent => f.write_str("Agent"),
             StepKind::Workflow => f.write_str("Workflow"),
+            StepKind::Approval => f.write_str("Approval"),
             StepKind::Custom(name) => write!(f, "Custom({name})"),
         }
     }

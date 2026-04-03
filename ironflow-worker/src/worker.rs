@@ -3,7 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::spawn;
 use tokio::sync::Semaphore;
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use ironflow_core::provider::AgentProvider;
@@ -154,7 +156,7 @@ impl Worker {
 
                     info!(run_id = %run_id, workflow = %workflow, "executing run");
 
-                    let handle = tokio::spawn(async move {
+                    let handle = spawn(async move {
                         let _permit = permit;
                         match engine.execute_handler_run(run_id).await {
                             Ok(_) => {
@@ -168,7 +170,7 @@ impl Worker {
 
                     // Spawn a watcher to catch panics and mark the run as failed
                     let store = self.engine.store().clone();
-                    tokio::spawn(async move {
+                    spawn(async move {
                         if let Err(e) = handle.await {
                             error!(run_id = %run_id, "spawned task panicked: {e}");
                             if let Err(store_err) = store
@@ -192,11 +194,11 @@ impl Worker {
                     } else {
                         self.poll_interval
                     };
-                    tokio::time::sleep(backoff).await;
+                    sleep(backoff).await;
                 }
                 Err(e) => {
                     warn!(error = %e, "poll error");
-                    tokio::time::sleep(self.poll_interval).await;
+                    sleep(self.poll_interval).await;
                 }
             }
         }

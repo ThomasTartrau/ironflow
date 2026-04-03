@@ -17,6 +17,8 @@ mod step_fsm;
 pub use run_fsm::{RunEvent, RunFsm};
 pub use step_fsm::{StepEvent, StepFsm};
 
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -63,15 +65,15 @@ pub struct Transition<S, E> {
 /// assert!(err.to_string().contains("Completed"));
 /// ```
 #[derive(Debug, Clone)]
-pub struct TransitionError<S: std::fmt::Display, E: std::fmt::Display> {
+pub struct TransitionError<S: fmt::Display, E: fmt::Display> {
     /// Current state when the invalid transition was attempted.
     pub from: S,
     /// Event that was rejected.
     pub event: E,
 }
 
-impl<S: std::fmt::Display, E: std::fmt::Display> std::fmt::Display for TransitionError<S, E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<S: fmt::Display, E: fmt::Display> fmt::Display for TransitionError<S, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "invalid transition: event '{}' not allowed in state '{}'",
@@ -80,7 +82,7 @@ impl<S: std::fmt::Display, E: std::fmt::Display> std::fmt::Display for Transitio
     }
 }
 
-impl<S: std::fmt::Debug + std::fmt::Display, E: std::fmt::Debug + std::fmt::Display>
-    std::error::Error for TransitionError<S, E>
+impl<S: fmt::Debug + fmt::Display, E: fmt::Debug + fmt::Display> std::error::Error
+    for TransitionError<S, E>
 {
 }

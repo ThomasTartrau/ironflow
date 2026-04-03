@@ -8,6 +8,8 @@
 //! [`AgentError`] converts into [`OperationError`] via the [`From`] trait, so agent
 //! errors propagate naturally through the `?` operator.
 
+use std::any;
+use std::fmt;
 use std::time::Duration;
 
 use thiserror::Error;
@@ -69,9 +71,9 @@ pub enum OperationError {
 
 impl OperationError {
     /// Build a [`Deserialize`](OperationError::Deserialize) error for type `T`.
-    pub fn deserialize<T>(error: impl std::fmt::Display) -> Self {
+    pub fn deserialize<T>(error: impl fmt::Display) -> Self {
         Self::Deserialize {
-            target_type: std::any::type_name::<T>().to_string(),
+            target_type: any::type_name::<T>().to_string(),
             reason: error.to_string(),
         }
     }
@@ -248,19 +250,21 @@ mod tests {
 
     #[test]
     fn operation_error_implements_std_error() {
+        use std::error::Error;
         let err = OperationError::Shell {
             exit_code: 1,
             stderr: "x".to_string(),
         };
-        let _: &dyn std::error::Error = &err;
+        let _: &dyn Error = &err;
     }
 
     #[test]
     fn agent_error_implements_std_error() {
+        use std::error::Error;
         let err = AgentError::Timeout {
             limit: Duration::from_secs(60),
         };
-        let _: &dyn std::error::Error = &err;
+        let _: &dyn Error = &err;
     }
 
     #[test]

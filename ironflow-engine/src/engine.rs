@@ -7,6 +7,7 @@
 //! `if`/`else`/`match` for conditional branching, and execute in parallel.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,6 +24,7 @@ use ironflow_store::store::RunStore;
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
 use crate::handler::{WorkflowHandler, WorkflowInfo};
+use crate::notify::{Event, EventPublisher, EventSubscriber};
 
 /// The workflow orchestration engine.
 ///
@@ -68,6 +70,7 @@ pub struct Engine {
     store: Arc<dyn RunStore>,
     provider: Arc<dyn AgentProvider>,
     handlers: HashMap<String, Arc<dyn WorkflowHandler>>,
+    event_publisher: EventPublisher,
 }
 
 impl Engine {
@@ -91,6 +94,7 @@ impl Engine {
             store,
             provider,
             handlers: HashMap::new(),
+            event_publisher: EventPublisher::new(),
         }
     }
 
@@ -205,6 +209,46 @@ impl Engine {
         self.handlers.get(name).map(|h| h.describe())
     }
 
+    /// Register an event subscriber for domain events.
+    ///
+    /// The subscriber is called only for events whose type is in
+    /// `event_types`. Pass [`Event::ALL`] to receive every event.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::notify::{Event, WebhookSubscriber};
+    /// use ironflow_store::memory::InMemoryStore;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use std::sync::Arc;
+    ///
+    /// let mut engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// );
+    ///
+    /// engine.subscribe(
+    ///     WebhookSubscriber::new("https://hooks.example.com/events"),
+    ///     &[Event::RUN_STATUS_CHANGED, Event::STEP_FAILED],
+    /// );
+    /// ```
+    pub fn subscribe(
+        &mut self,
+        subscriber: impl EventSubscriber + 'static,
+        event_types: &[&'static str],
+    ) {
+        self.event_publisher.subscribe(subscriber, event_types);
+    }
+
+    /// Returns a reference to the event publisher.
+    ///
+    /// Useful for publishing events from outside the engine (e.g. auth
+    /// routes in the API layer).
+    pub fn event_publisher(&self) -> &EventPublisher {
+        &self.event_publisher
+    }
+
     // -----------------------------------------------------------------------
     // Dynamic workflow execution (WorkflowHandler)
     // -----------------------------------------------------------------------
@@ -270,7 +314,8 @@ impl Engine {
         let mut ctx = self.build_context(run_id);
 
         let result = handler.execute(&mut ctx).await;
-        self.finalize_run(run_id, result, &ctx, run_start).await
+        self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
+            .await
     }
 
     /// Enqueue a handler-based workflow for worker execution.
@@ -340,7 +385,8 @@ impl Engine {
         let mut ctx = self.build_context(run_id);
 
         let result = handler.execute(&mut ctx).await;
-        self.finalize_run(run_id, result, &ctx, run_start).await
+        self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
+            .await
     }
 
     /// Execute a run by its ID (used by the worker after pick_next_pending).
@@ -355,6 +401,49 @@ impl Engine {
         self.execute_handler_run(run_id).await
     }
 
+    /// Resume a run after human approval.
+    ///
+    /// Re-executes the handler with step replay: completed steps return
+    /// cached output, approved approval steps are skipped, and execution
+    /// continues from the first unexecuted step.
+    ///
+    /// Supports multiple approval gates -- each resume replays all prior
+    /// steps and stops at the next approval (or completes the run).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
+    /// Returns [`EngineError`] if execution fails or hits another approval.
+    #[tracing::instrument(name = "engine.resume_run", skip_all, fields(run_id = %run_id))]
+    pub async fn resume_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
+        let run = self
+            .store
+            .get_run(run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+
+        let handler = self
+            .handlers
+            .get(&run.workflow_name)
+            .ok_or_else(|| {
+                EngineError::InvalidWorkflow(format!(
+                    "no handler registered: {}",
+                    run.workflow_name
+                ))
+            })?
+            .clone();
+
+        info!(run_id = %run_id, workflow = %run.workflow_name, "resuming run after approval");
+
+        let run_start = Instant::now();
+        let mut ctx = self.build_context(run_id);
+        ctx.load_replay_steps().await?;
+
+        let result = handler.execute(&mut ctx).await;
+        self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
+            .await
+    }
+
     /// Finalize a run with the given result and context.
     ///
     /// On success: updates run to Completed with cost, duration, and completed_at.
@@ -366,6 +455,7 @@ impl Engine {
     async fn finalize_run(
         &self,
         run_id: Uuid,
+        workflow_name: &str,
         result: Result<(), EngineError>,
         ctx: &WorkflowContext,
         run_start: Instant,
@@ -373,8 +463,11 @@ impl Engine {
         let total_duration = run_start.elapsed().as_millis() as u64;
         let completed_at = Utc::now();
 
+        let final_status;
+
         match result {
             Ok(()) => {
+                final_status = RunStatus::Completed;
                 self.store
                     .update_run(
                         run_id,
@@ -395,7 +488,33 @@ impl Engine {
                     "run completed"
                 );
             }
+            Err(EngineError::ApprovalRequired {
+                run_id: approval_run_id,
+                step_id,
+                ref message,
+            }) => {
+                final_status = RunStatus::AwaitingApproval;
+                self.store
+                    .update_run(
+                        run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::AwaitingApproval),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    run_id = %approval_run_id,
+                    step_id = %step_id,
+                    message = %message,
+                    "run awaiting approval"
+                );
+            }
             Err(err) => {
+                final_status = RunStatus::Failed;
                 if let Err(store_err) = self
                     .store
                     .update_run(
@@ -415,19 +534,62 @@ impl Engine {
                 }
 
                 error!(run_id = %run_id, error = %err, "run failed");
+
+                self.publish_run_status_changed(
+                    workflow_name,
+                    run_id,
+                    final_status,
+                    Some(err.to_string()),
+                    ctx,
+                    total_duration,
+                );
                 return Err(err);
             }
         }
+
+        self.publish_run_status_changed(
+            workflow_name,
+            run_id,
+            final_status,
+            None,
+            ctx,
+            total_duration,
+        );
 
         self.store
             .get_run(run_id)
             .await?
             .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))
     }
+
+    /// Publish a run status changed event to all registered subscribers.
+    ///
+    /// `from` is always `Running` because `finalize_run` is only called
+    /// from a running state.
+    fn publish_run_status_changed(
+        &self,
+        workflow_name: &str,
+        run_id: Uuid,
+        to: RunStatus,
+        error: Option<String>,
+        ctx: &WorkflowContext,
+        duration_ms: u64,
+    ) {
+        self.event_publisher.publish(Event::RunStatusChanged {
+            run_id,
+            workflow_name: workflow_name.to_string(),
+            from: RunStatus::Running,
+            to,
+            error,
+            cost_usd: ctx.total_cost_usd(),
+            duration_ms,
+            at: Utc::now(),
+        });
+    }
 }
 
-impl std::fmt::Debug for Engine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Engine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Engine")
             .field("handlers", &self.handlers.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
@@ -442,6 +604,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
     use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::models::StepStatus;
     use serde_json::json;
 
     // Test handler that echoes a message via shell
@@ -771,5 +934,157 @@ mod tests {
         assert_eq!(steps[1].kind, StepKind::Custom("gitlab".to_string()));
         assert_eq!(steps[0].position, 0);
         assert_eq!(steps[1].position, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Approval + resume tests
+    // -----------------------------------------------------------------------
+
+    use crate::config::ApprovalConfig;
+
+    struct SingleApprovalWorkflow;
+
+    impl WorkflowHandler for SingleApprovalWorkflow {
+        fn name(&self) -> &str {
+            "single-approval"
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                ctx.shell("build", ShellConfig::new("echo built")).await?;
+                ctx.approval("gate", ApprovalConfig::new("OK?")).await?;
+                ctx.shell("deploy", ShellConfig::new("echo deployed"))
+                    .await?;
+                Ok(())
+            })
+        }
+    }
+
+    struct DoubleApprovalWorkflow;
+
+    impl WorkflowHandler for DoubleApprovalWorkflow {
+        fn name(&self) -> &str {
+            "double-approval"
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                ctx.shell("build", ShellConfig::new("echo built")).await?;
+                ctx.approval("staging-gate", ApprovalConfig::new("Deploy staging?"))
+                    .await?;
+                ctx.shell("deploy-staging", ShellConfig::new("echo staging"))
+                    .await?;
+                ctx.approval("prod-gate", ApprovalConfig::new("Deploy prod?"))
+                    .await?;
+                ctx.shell("deploy-prod", ShellConfig::new("echo prod"))
+                    .await?;
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_pauses_run() {
+        let mut engine = create_test_engine();
+        engine.register(SingleApprovalWorkflow).unwrap();
+
+        let run = engine
+            .run_handler("single-approval", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(run.status.state, RunStatus::AwaitingApproval);
+
+        let steps = engine.store().list_steps(run.id).await.unwrap();
+        assert_eq!(steps.len(), 2); // build + approval gate
+        assert_eq!(steps[0].kind, StepKind::Shell);
+        assert_eq!(steps[0].status.state, StepStatus::Completed);
+        assert_eq!(steps[1].kind, StepKind::Approval);
+        assert_eq!(steps[1].status.state, StepStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn approval_resume_completes_run() {
+        let mut engine = create_test_engine();
+        engine.register(SingleApprovalWorkflow).unwrap();
+
+        // First execution: pauses at approval
+        let run = engine
+            .run_handler("single-approval", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap();
+        assert_eq!(run.status.state, RunStatus::AwaitingApproval);
+
+        // Simulate approval: transition to Running
+        engine
+            .store()
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        // Resume: replays build, skips approval, executes deploy
+        let resumed = engine.resume_run(run.id).await.unwrap();
+        assert_eq!(resumed.status.state, RunStatus::Completed);
+
+        let steps = engine.store().list_steps(run.id).await.unwrap();
+        assert_eq!(steps.len(), 3); // build + approval + deploy
+        assert_eq!(steps[0].name, "build");
+        assert_eq!(steps[0].status.state, StepStatus::Completed);
+        assert_eq!(steps[1].name, "gate");
+        assert_eq!(steps[1].kind, StepKind::Approval);
+        assert_eq!(steps[1].status.state, StepStatus::Completed);
+        assert_eq!(steps[2].name, "deploy");
+        assert_eq!(steps[2].status.state, StepStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn double_approval_two_resumes() {
+        let mut engine = create_test_engine();
+        engine.register(DoubleApprovalWorkflow).unwrap();
+
+        // First execution: pauses at staging-gate
+        let run = engine
+            .run_handler("double-approval", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap();
+        assert_eq!(run.status.state, RunStatus::AwaitingApproval);
+
+        let steps = engine.store().list_steps(run.id).await.unwrap();
+        assert_eq!(steps.len(), 2); // build + staging-gate
+
+        // First approval
+        engine
+            .store()
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        let resumed = engine.resume_run(run.id).await.unwrap();
+        assert_eq!(resumed.status.state, RunStatus::AwaitingApproval);
+
+        let steps = engine.store().list_steps(run.id).await.unwrap();
+        assert_eq!(steps.len(), 4); // build + staging-gate + deploy-staging + prod-gate
+
+        // Second approval
+        engine
+            .store()
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        let final_run = engine.resume_run(run.id).await.unwrap();
+        assert_eq!(final_run.status.state, RunStatus::Completed);
+
+        let steps = engine.store().list_steps(run.id).await.unwrap();
+        assert_eq!(steps.len(), 5);
+        assert_eq!(steps[0].name, "build");
+        assert_eq!(steps[1].name, "staging-gate");
+        assert_eq!(steps[2].name, "deploy-staging");
+        assert_eq!(steps[3].name, "prod-gate");
+        assert_eq!(steps[4].name, "deploy-prod");
+
+        for step in &steps {
+            assert_eq!(step.status.state, StepStatus::Completed);
+        }
     }
 }

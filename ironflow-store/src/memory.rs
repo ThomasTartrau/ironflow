@@ -401,7 +401,10 @@ impl RunStore for InMemoryStore {
                     RunStatus::Completed => completed_runs += 1,
                     RunStatus::Failed => failed_runs += 1,
                     RunStatus::Cancelled => cancelled_runs += 1,
-                    RunStatus::Pending | RunStatus::Running | RunStatus::Retrying => {
+                    RunStatus::Pending
+                    | RunStatus::Running
+                    | RunStatus::Retrying
+                    | RunStatus::AwaitingApproval => {
                         active_runs += 1;
                     }
                 }
@@ -525,6 +528,7 @@ impl UserStore for InMemoryStore {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tokio::spawn;
 
     use super::*;
     use crate::entities::TriggerKind;
@@ -964,7 +968,7 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..10 {
             let s = store.clone();
-            handles.push(tokio::spawn(async move { s.pick_next_pending().await }));
+            handles.push(spawn(async move { s.pick_next_pending().await }));
         }
 
         let mut picked_ids = Vec::new();

@@ -34,7 +34,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
     use rust_decimal::Decimal;
-    use serde_json::json;
+    use serde_json::{Value as JsonValue, from_slice, json, to_string};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -93,15 +93,15 @@ mod tests {
             .uri(format!("/api/v1/internal/runs/{}", run.id))
             .header("authorization", "Bearer test-worker-token")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&update).unwrap()))
+            .body(Body::from(to_string(&update).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["updated"], true);
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["updated"], true);
 
         let updated = state.get_run_or_404(run.id).await.unwrap();
         assert_eq!(updated.cost_usd, Decimal::from_str_exact("1.50").unwrap());
@@ -129,7 +129,7 @@ mod tests {
             .uri(format!("/api/v1/internal/runs/{}", fake_id))
             .header("authorization", "Bearer test-worker-token")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&update).unwrap()))
+            .body(Body::from(to_string(&update).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();

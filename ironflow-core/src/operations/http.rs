@@ -24,6 +24,7 @@ use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::LazyLock;
+use tokio::time;
 use tracing::{debug, warn};
 use url::Url;
 
@@ -357,7 +358,7 @@ impl Http {
                 delay_ms = delay.as_millis() as u64,
                 "retrying http request"
             );
-            tokio::time::sleep(delay).await;
+            time::sleep(delay).await;
 
             last_result = self.execute_once().await;
 

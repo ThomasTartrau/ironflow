@@ -69,6 +69,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use serde_json::to_string;
 
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
@@ -130,7 +131,7 @@ mod tests {
             .uri(format!("/api/v1/internal/runs/{}/status", run.id))
             .header("authorization", "Bearer test-worker-token")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&req_body).unwrap()))
+            .body(Body::from(to_string(&req_body).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
@@ -185,7 +186,7 @@ mod tests {
             .uri(format!("/api/v1/internal/runs/{}/status", run.id))
             .header("authorization", "Bearer test-worker-token")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&req_body).unwrap()))
+            .body(Body::from(to_string(&req_body).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
@@ -215,7 +216,7 @@ mod tests {
             .uri(format!("/api/v1/internal/runs/{}/status", fake_id))
             .header("authorization", "Bearer test-worker-token")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(&req_body).unwrap()))
+            .body(Body::from(to_string(&req_body).unwrap()))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();

@@ -13,18 +13,23 @@
 //! - `DASHBOARD_DIR` (optional: overrides the embedded dashboard with a filesystem path)
 //! - `ALLOWED_ORIGINS` (comma-separated list; omit to allow same-origin only)
 
+use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderValue, Method};
+use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
 use ironflow_api::routes::create_router;
 use ironflow_api::state::AppState;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
+use ironflow_engine::notify::{Event, WebhookSubscriber};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
@@ -33,7 +38,7 @@ use ironflow_store::user_store::UserStore;
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
+            EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info,ironflow=debug".parse().expect("valid filter")),
         )
         .init();
@@ -43,7 +48,7 @@ async fn main() {
     let provider = Arc::new(ClaudeCodeProvider::new());
 
     let jwt_config = Arc::new(JwtConfig {
-        secret: std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+        secret: env::var("JWT_SECRET").unwrap_or_else(|_| {
             warn!("JWT_SECRET not set, using insecure dev default — do NOT use in production");
             "ironflow-dev-secret".to_string()
         }),
@@ -52,24 +57,33 @@ async fn main() {
         cookie_domain: None,
         cookie_secure: false,
     });
-    let worker_token = std::env::var("WORKER_TOKEN").unwrap_or_else(|_| {
+    let worker_token = env::var("WORKER_TOKEN").unwrap_or_else(|_| {
         warn!("WORKER_TOKEN not set, using insecure dev default — do NOT use in production");
         "ironflow-dev-worker-token".to_string()
     });
-    let port: u16 = std::env::var("PORT")
+    let port: u16 = env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
 
     let mut engine = Engine::new(store.clone(), provider);
     ironflow_workflows::register_all(&mut engine).expect("failed to register workflows");
+
+    // Outbound webhook notifications (optional).
+    // Set WEBHOOK_URL to receive JSON POSTs on run completion/failure.
+    if let Ok(webhook_url) = env::var("WEBHOOK_URL") {
+        info!(url = %webhook_url, "registering webhook subscriber");
+        engine.subscribe(
+            WebhookSubscriber::new(&webhook_url),
+            &[Event::RUN_STATUS_CHANGED, Event::STEP_FAILED],
+        );
+    }
+
     let engine = Arc::new(engine);
 
     let cors = build_cors();
 
-    let dashboard_dir = std::env::var("DASHBOARD_DIR")
-        .ok()
-        .map(std::path::PathBuf::from);
+    let dashboard_dir = env::var("DASHBOARD_DIR").ok().map(PathBuf::from);
 
     let state = AppState {
         store,
@@ -83,9 +97,7 @@ async fn main() {
         .into_make_service();
 
     let addr = format!("0.0.0.0:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("bind address");
+    let listener = TcpListener::bind(&addr).await.expect("bind address");
 
     info!("==============================================");
     info!("  ironflow server on http://{addr}");
@@ -110,7 +122,7 @@ fn build_cors() -> CorsLayer {
     let methods = vec![Method::GET, Method::POST, Method::PUT, Method::DELETE];
     let headers = vec![AUTHORIZATION, CONTENT_TYPE];
 
-    match std::env::var("ALLOWED_ORIGINS") {
+    match env::var("ALLOWED_ORIGINS") {
         Ok(raw) => {
             let origins: Vec<HeaderValue> = raw
                 .split(',')

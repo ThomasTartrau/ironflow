@@ -5,6 +5,8 @@
 //! [`MAX_OUTPUT_SIZE`] bytes, preventing out-of-memory conditions in
 //! long-running workflows.
 
+use std::str;
+
 use tracing::warn;
 
 /// Average number of characters per token used for estimation.
@@ -61,7 +63,7 @@ pub fn truncate_output(data: &[u8], context: &str) -> String {
         );
     }
     let truncated = &data[..data.len().min(MAX_OUTPUT_SIZE)];
-    match std::str::from_utf8(truncated) {
+    match str::from_utf8(truncated) {
         Ok(s) => s.trim_end().to_string(),
         Err(_) => {
             let cow = String::from_utf8_lossy(truncated);

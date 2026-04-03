@@ -120,6 +120,7 @@ pub fn ok_paged<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn api_meta_empty() {
@@ -143,9 +144,9 @@ mod tests {
             data: vec![1, 2, 3],
             meta: None,
         };
-        let json = serde_json::to_value(&response).expect("serialize");
-        assert_eq!(json["data"], serde_json::json!([1, 2, 3]));
-        assert_eq!(json["meta"], serde_json::Value::Null);
+        let json_val = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(json_val["data"], json!([1, 2, 3]));
+        assert_eq!(json_val["meta"], serde_json::json!(null));
     }
 
     #[test]
@@ -154,10 +155,10 @@ mod tests {
             data: vec!["a"],
             meta: Some(ApiMeta::paginated(1, 10, 50)),
         };
-        let json = serde_json::to_value(&response).expect("serialize");
-        assert_eq!(json["data"], serde_json::json!(["a"]));
-        assert_eq!(json["meta"]["page"], 1);
-        assert_eq!(json["meta"]["per_page"], 10);
-        assert_eq!(json["meta"]["total"], 50);
+        let json_val = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(json_val["data"], json!(["a"]));
+        assert_eq!(json_val["meta"]["page"], 1);
+        assert_eq!(json_val["meta"]["per_page"], 10);
+        assert_eq!(json_val["meta"]["total"], 50);
     }
 }

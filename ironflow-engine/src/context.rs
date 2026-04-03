@@ -23,23 +23,27 @@
 //! # }
 //! ```
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
+use tokio::task::JoinSet;
 use tracing::{error, info};
 use uuid::Uuid;
 
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::models::{
-    NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, StepKind, StepStatus, StepUpdate,
-    TriggerKind,
+    NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind, StepStatus,
+    StepUpdate, TriggerKind,
 };
 use ironflow_store::store::RunStore;
 
-use crate::config::{AgentStepConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig};
+use crate::config::{
+    AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig,
+};
 use crate::error::EngineError;
 use crate::executor::{ParallelStepResult, StepOutput, execute_step_config};
 use crate::handler::WorkflowHandler;
@@ -79,6 +83,9 @@ pub struct WorkflowContext {
     total_cost_usd: Decimal,
     /// Accumulated duration across all steps.
     total_duration_ms: u64,
+    /// Steps from a previous execution, keyed by position.
+    /// Used when resuming after approval to replay completed steps.
+    replay_steps: std::collections::HashMap<u32, Step>,
 }
 
 impl WorkflowContext {
@@ -96,6 +103,7 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            replay_steps: std::collections::HashMap::new(),
         }
     }
 
@@ -118,7 +126,27 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            replay_steps: std::collections::HashMap::new(),
         }
+    }
+
+    /// Load existing steps from the store for replay after approval.
+    ///
+    /// Called by the engine when resuming a run. All completed steps
+    /// and the approved approval step are indexed by position so that
+    /// `execute_step` and `approval` can skip them.
+    pub(crate) async fn load_replay_steps(&mut self) -> Result<(), EngineError> {
+        let steps = self.store.list_steps(self.run_id).await?;
+        for step in steps {
+            let dominated = matches!(
+                step.status.state,
+                StepStatus::Completed | StepStatus::Running
+            );
+            if dominated {
+                self.replay_steps.insert(step.position, step);
+            }
+        }
+        Ok(())
     }
 
     /// The run ID this context is executing for.
@@ -205,7 +233,7 @@ impl WorkflowContext {
             step_records.push((step.id, name.to_string(), config.clone()));
         }
 
-        let mut join_set = tokio::task::JoinSet::new();
+        let mut join_set = JoinSet::new();
         for (idx, (_id, _name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
             let config = config.clone();
@@ -413,6 +441,95 @@ impl WorkflowContext {
             .await
     }
 
+    /// Create a human approval gate.
+    ///
+    /// On first execution, records an approval step and returns
+    /// [`EngineError::ApprovalRequired`] to suspend the run. The engine
+    /// transitions the run to `AwaitingApproval`.
+    ///
+    /// On resume (after a human approved via the API), the approval step
+    /// is replayed: it is marked as `Completed` and execution continues
+    /// past it. Multiple approval gates in the same handler work -- each
+    /// one pauses and resumes independently.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::ApprovalRequired`] to pause the run on
+    /// first execution. Returns other [`EngineError`] variants on store
+    /// failures.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::config::ApprovalConfig;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// ctx.approval("deploy-gate", ApprovalConfig::new("Approve deployment?")).await?;
+    /// // Execution continues here after approval
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn approval(
+        &mut self,
+        name: &str,
+        config: ApprovalConfig,
+    ) -> Result<(), EngineError> {
+        let position = self.position;
+        self.position += 1;
+
+        // Replay: if this approval step exists from a prior execution,
+        // the run was approved -- mark it completed (if not already) and continue.
+        if let Some(existing) = self.replay_steps.get(&position)
+            && existing.kind == StepKind::Approval
+        {
+            if existing.status.state == StepStatus::Running {
+                self.store
+                    .update_step(
+                        existing.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Completed),
+                            completed_at: Some(Utc::now()),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await?;
+            }
+
+            self.last_step_ids = vec![existing.id];
+            info!(
+                run_id = %self.run_id,
+                step = %name,
+                position,
+                "approval step replayed (approved)"
+            );
+            return Ok(());
+        }
+
+        // First execution: create the approval step and suspend.
+        let step = self
+            .store
+            .create_step(NewStep {
+                run_id: self.run_id,
+                name: name.to_string(),
+                kind: StepKind::Approval,
+                position,
+                input: Some(serde_json::to_value(&config)?),
+            })
+            .await?;
+
+        self.start_step(step.id, Utc::now()).await?;
+
+        self.last_step_ids = vec![step.id];
+
+        Err(EngineError::ApprovalRequired {
+            run_id: self.run_id,
+            step_id: step.id,
+            message: config.message().to_string(),
+        })
+    }
+
     /// Execute a custom operation step.
     ///
     /// Runs a user-defined [`Operation`] with full step lifecycle management:
@@ -472,7 +589,7 @@ impl WorkflowContext {
 
         self.start_step(step.id, Utc::now()).await?;
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         match op.execute().await {
             Ok(output_value) => {
@@ -684,6 +801,7 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            replay_steps: std::collections::HashMap::new(),
         };
 
         let result = handler.execute(&mut child_ctx).await;
@@ -747,6 +865,34 @@ impl WorkflowContext {
         }
     }
 
+    /// Try to replay a completed step from a previous execution.
+    ///
+    /// Returns `Some(StepOutput)` if a completed step exists at the given
+    /// position, `None` otherwise.
+    fn try_replay_step(&mut self, position: u32) -> Option<StepOutput> {
+        let step = self.replay_steps.get(&position)?;
+        if step.status.state != StepStatus::Completed {
+            return None;
+        }
+        let output = StepOutput {
+            output: step.output.clone().unwrap_or(Value::Null),
+            duration_ms: step.duration_ms,
+            cost_usd: step.cost_usd,
+            input_tokens: step.input_tokens,
+            output_tokens: step.output_tokens,
+        };
+        self.total_cost_usd += output.cost_usd;
+        self.total_duration_ms += output.duration_ms;
+        self.last_step_ids = vec![step.id];
+        info!(
+            run_id = %self.run_id,
+            step = %step.name,
+            position,
+            "step replayed from previous execution"
+        );
+        Some(output)
+    }
+
     /// Internal: execute a step with full persistence lifecycle.
     async fn execute_step(
         &mut self,
@@ -756,6 +902,11 @@ impl WorkflowContext {
     ) -> Result<StepOutput, EngineError> {
         let position = self.position;
         self.position += 1;
+
+        // Replay: if this step already completed in a prior execution, return cached output.
+        if let Some(output) = self.try_replay_step(position) {
+            return Ok(output);
+        }
 
         // Create step record in Pending.
         let step = self
@@ -882,8 +1033,8 @@ impl WorkflowContext {
     }
 }
 
-impl std::fmt::Debug for WorkflowContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for WorkflowContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WorkflowContext")
             .field("run_id", &self.run_id)
             .field("position", &self.position)

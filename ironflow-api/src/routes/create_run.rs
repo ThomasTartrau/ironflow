@@ -58,7 +58,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_store::memory::InMemoryStore;
-    use serde_json::json;
+    use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -130,8 +130,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["data"]["workflow_name"], "test-workflow");
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["workflow_name"], "test-workflow");
     }
 
     #[tokio::test]

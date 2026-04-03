@@ -52,6 +52,8 @@ function getKindColor(kind: string): string {
 			return "bg-violet-100 text-violet-700 border-violet-200";
 		case "workflow":
 			return "bg-indigo-100 text-indigo-700 border-indigo-200";
+		case "approval":
+			return "bg-rose-100 text-rose-700 border-rose-200";
 		default:
 			return "bg-gray-100 text-gray-700 border-gray-200";
 	}

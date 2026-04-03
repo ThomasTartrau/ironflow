@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use russh::ChannelMsg;
 use russh::keys::PrivateKeyWithHashAlg;
+use tokio::time;
 use tracing::{debug, error, warn};
 
 use crate::error::AgentError;
@@ -260,7 +261,7 @@ impl AgentProvider for SshProvider {
 
             // Connect
             let ssh_config = Arc::new(russh::client::Config::default());
-            let mut session = tokio::time::timeout(
+            let mut session = time::timeout(
                 Duration::from_secs(30),
                 russh::client::connect(ssh_config, (&*self.host, self.port), SshHandler),
             )
@@ -310,7 +311,7 @@ impl AgentProvider for SshProvider {
             let mut stderr_buf = Vec::new();
             let mut exit_code: Option<u32> = None;
 
-            let collect_result = tokio::time::timeout(self.timeout, async {
+            let collect_result = time::timeout(self.timeout, async {
                 loop {
                     let msg = channel.wait().await;
                     let Some(msg) = msg else { break };

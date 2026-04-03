@@ -99,5 +99,8 @@ pub async fn execute_step_config(
         StepConfig::Workflow(_) => Err(EngineError::StepConfig(
             "workflow steps are executed by WorkflowContext, not the executor".to_string(),
         )),
+        StepConfig::Approval(_) => Err(EngineError::StepConfig(
+            "approval steps are executed by WorkflowContext, not the executor".to_string(),
+        )),
     }
 }

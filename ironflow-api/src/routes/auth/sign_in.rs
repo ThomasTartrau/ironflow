@@ -68,7 +68,7 @@ mod tests {
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
-    use serde_json::json;
+    use serde_json::{json, to_string};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -134,7 +134,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "password": "password123"
                 }))
@@ -159,7 +159,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "unknown@example.com",
                     "password": "password123"
                 }))
@@ -192,7 +192,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "password": "wrongpassword"
                 }))
@@ -225,7 +225,7 @@ mod tests {
             .method("POST")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_string(&json!({
+                to_string(&json!({
                     "email": "test@example.com",
                     "password": "password123"
                 }))
