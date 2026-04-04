@@ -70,8 +70,7 @@ pub async fn request_metrics(req: Request, next: Next) -> Response {
     let duration = start.elapsed().as_secs_f64();
 
     counter!(API_REQUESTS_TOTAL, "method" => method.clone(), "path" => path.clone(), "status" => status).increment(1);
-    histogram!(API_REQUEST_DURATION_SECONDS, "method" => method, "path" => path)
-        .record(duration);
+    histogram!(API_REQUEST_DURATION_SECONDS, "method" => method, "path" => path).record(duration);
 
     resp
 }

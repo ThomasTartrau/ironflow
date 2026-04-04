@@ -38,21 +38,6 @@ impl WorkflowHandler for MetricsTestWorkflow {
     }
 }
 
-struct FailingMetricsWorkflow;
-
-impl WorkflowHandler for FailingMetricsWorkflow {
-    fn name(&self) -> &str {
-        "failing-metrics"
-    }
-
-    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
-        Box::pin(async move {
-            ctx.shell("fail-step", ShellConfig::new("exit 1")).await?;
-            Ok(())
-        })
-    }
-}
-
 fn create_test_engine() -> Engine {
     let store = Arc::new(InMemoryStore::new());
     let inner = ClaudeCodeProvider::new();

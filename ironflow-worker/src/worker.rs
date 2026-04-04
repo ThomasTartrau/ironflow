@@ -8,14 +8,14 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use ironflow_core::provider::AgentProvider;
 #[cfg(feature = "prometheus")]
 use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_POLLS_TOTAL};
-#[cfg(feature = "prometheus")]
-use metrics::{counter, gauge};
+use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_store::store::RunStore;
+#[cfg(feature = "prometheus")]
+use metrics::{counter, gauge};
 
 use crate::api_store::ApiRunStore;
 use crate::error::WorkerError;

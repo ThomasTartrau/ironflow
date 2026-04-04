@@ -16,14 +16,14 @@ use serde_json::Value;
 use tracing::{error, info};
 use uuid::Uuid;
 
+#[cfg(feature = "prometheus")]
+use ironflow_core::metric_names::{RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL};
 use ironflow_core::provider::AgentProvider;
-#[cfg(feature = "prometheus")]
-use ironflow_core::metric_names::{RUNS_ACTIVE, RUNS_TOTAL, RUN_COST_USD, RUN_DURATION_SECONDS};
-#[cfg(feature = "prometheus")]
-use metrics::{counter, gauge, histogram};
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{NewRun, Run, RunStatus, RunUpdate, TriggerKind};
 use ironflow_store::store::RunStore;
+#[cfg(feature = "prometheus")]
+use metrics::{counter, gauge, histogram};
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
@@ -591,8 +591,7 @@ impl Engine {
         let status_str = status.to_string();
         let wf = workflow_name.to_string();
 
-        counter!(RUNS_TOTAL, "workflow" => wf.clone(), "status" => status_str.clone())
-            .increment(1);
+        counter!(RUNS_TOTAL, "workflow" => wf.clone(), "status" => status_str.clone()).increment(1);
         histogram!(RUN_DURATION_SECONDS, "workflow" => wf.clone(), "status" => status_str)
             .record(duration_ms as f64 / 1000.0);
         histogram!(RUN_COST_USD, "workflow" => wf.clone()).record(
