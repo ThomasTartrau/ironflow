@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.5.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.4.0...ironflow-api-v2.5.0) - 2026-04-04
+
+### Added
+
+- add AwaitingApproval and Rejected step statuses
+
+- #9 add Prometheus metrics across API, engine, and worker
+
 ## [2.4.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.3.1...ironflow-api-v2.4.0) - 2026-04-03
 
 ### Added
