@@ -2129,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-api"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "axum 0.8.8",
  "chrono",
@@ -2200,7 +2200,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "axum 0.8.8",
  "chrono",
@@ -2273,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-store"
-version = "2.3.0"
+version = "2.4.0"
 dependencies = [
  "chrono",
  "rust_decimal",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.2.0"
+version = "2.2.1"
 dependencies = [
  "axum 0.7.9",
  "chrono",
