@@ -62,6 +62,7 @@
 //! # }
 //! ```
 
+pub mod config;
 #[cfg(feature = "dashboard")]
 pub mod dashboard;
 pub mod entities;

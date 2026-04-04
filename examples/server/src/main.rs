@@ -7,14 +7,16 @@
 //! The dashboard is served automatically via the `dashboard` feature in `ironflow-api`.
 //!
 //! Environment:
-//! - `JWT_SECRET` (default: dev secret)
-//! - `WORKER_TOKEN` (default: dev token)
+//! - `IRONFLOW_ENV` (`production` or `development`, default: development)
+//! - `DATABASE_URL` (required in production)
+//! - `JWT_SECRET` (required in production, default: dev secret)
+//! - `WORKER_TOKEN` (required in production, default: dev token)
 //! - `PORT` (default: 3000)
 //! - `DASHBOARD_DIR` (optional: overrides the embedded dashboard with a filesystem path)
 //! - `ALLOWED_ORIGINS` (comma-separated list; omit to allow same-origin only)
+//! - `WEBHOOK_URL` (optional: outbound webhook for run events)
 
-use std::env;
-use std::path::PathBuf;
+use std::process;
 use std::sync::Arc;
 
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -24,6 +26,7 @@ use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+use ironflow_api::config::ServerConfig;
 use ironflow_api::routes::create_router;
 use ironflow_api::state::AppState;
 use ironflow_auth::jwt::JwtConfig;
@@ -43,64 +46,62 @@ async fn main() {
         )
         .init();
 
+    let config = ServerConfig::from_env().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        process::exit(1);
+    });
+
     let store: Arc<dyn RunStore> = Arc::new(InMemoryStore::new());
     let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
     let provider = Arc::new(ClaudeCodeProvider::new());
 
     let jwt_config = Arc::new(JwtConfig {
-        secret: env::var("JWT_SECRET").unwrap_or_else(|_| {
-            warn!("JWT_SECRET not set, using insecure dev default — do NOT use in production");
-            "ironflow-dev-secret".to_string()
-        }),
+        secret: config.jwt_secret.clone(),
         access_token_ttl_secs: 900,
         refresh_token_ttl_secs: 604800,
         cookie_domain: None,
-        cookie_secure: false,
+        cookie_secure: config.is_production,
     });
-    let worker_token = env::var("WORKER_TOKEN").unwrap_or_else(|_| {
-        warn!("WORKER_TOKEN not set, using insecure dev default — do NOT use in production");
-        "ironflow-dev-worker-token".to_string()
-    });
-    let port: u16 = env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3000);
 
     let mut engine = Engine::new(store.clone(), provider);
     ironflow_workflows::register_all(&mut engine).expect("failed to register workflows");
 
-    // Outbound webhook notifications (optional).
-    // Set WEBHOOK_URL to receive JSON POSTs on run completion/failure.
-    if let Ok(webhook_url) = env::var("WEBHOOK_URL") {
+    if let Some(ref webhook_url) = config.webhook_url {
         info!(url = %webhook_url, "registering webhook subscriber");
         engine.subscribe(
-            WebhookSubscriber::new(&webhook_url),
+            WebhookSubscriber::new(webhook_url),
             &[Event::RUN_STATUS_CHANGED, Event::STEP_FAILED],
         );
     }
 
     let engine = Arc::new(engine);
 
-    let cors = build_cors();
+    let cors = build_cors(&config);
 
-    let dashboard_dir = env::var("DASHBOARD_DIR").ok().map(PathBuf::from);
-
-    let state = AppState {
+    let state = AppState::new(
         store,
         user_store,
         engine,
         jwt_config,
-        worker_token,
-    };
-    let app = create_router(state, dashboard_dir)
+        config.worker_token.clone(),
+    );
+    let app = create_router(state, config.dashboard_dir.clone())
         .layer(cors)
         .into_make_service();
 
-    let addr = format!("0.0.0.0:{port}");
+    let addr = format!("0.0.0.0:{}", config.port);
     let listener = TcpListener::bind(&addr).await.expect("bind address");
 
     info!("==============================================");
     info!("  ironflow server on http://{addr}");
+    info!(
+        "  environment: {}",
+        if config.is_production {
+            "production"
+        } else {
+            "development"
+        }
+    );
     info!("==============================================");
 
     axum::serve(listener, app)
@@ -112,18 +113,18 @@ async fn main() {
         .expect("serve");
 }
 
-/// Build CORS layer from `ALLOWED_ORIGINS` env var.
+/// Build CORS layer from config.
 ///
-/// - If `ALLOWED_ORIGINS` is set: only those origins are permitted (comma-separated).
+/// - If `allowed_origins` is set: only those origins are permitted (comma-separated).
 /// - If unset: no extra origins are allowed (same-origin only).
 ///
 /// Credentials (cookies) are always allowed so JWT cookies work cross-origin.
-fn build_cors() -> CorsLayer {
+fn build_cors(config: &ServerConfig) -> CorsLayer {
     let methods = vec![Method::GET, Method::POST, Method::PUT, Method::DELETE];
     let headers = vec![AUTHORIZATION, CONTENT_TYPE];
 
-    match env::var("ALLOWED_ORIGINS") {
-        Ok(raw) => {
+    match config.allowed_origins {
+        Some(ref raw) => {
             let origins: Vec<HeaderValue> = raw
                 .split(',')
                 .map(str::trim)
@@ -145,7 +146,7 @@ fn build_cors() -> CorsLayer {
                 .allow_headers(headers)
                 .allow_credentials(true)
         }
-        Err(_) => {
+        None => {
             info!("CORS: no ALLOWED_ORIGINS set, same-origin only");
 
             CorsLayer::new()
