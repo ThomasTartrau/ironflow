@@ -18,7 +18,9 @@ export type StepStatus =
 	| "running"
 	| "completed"
 	| "failed"
-	| "skipped";
+	| "skipped"
+	| "awaiting_approval"
+	| "rejected";
 
 export type TriggerKind =
 	| { kind: "manual" }

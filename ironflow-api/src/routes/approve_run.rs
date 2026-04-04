@@ -5,7 +5,7 @@
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::AuthenticatedUser;
-use ironflow_store::models::RunStatus;
+use ironflow_store::models::{RunStatus, StepStatus, StepUpdate};
 use tokio::spawn;
 use uuid::Uuid;
 
@@ -54,6 +54,27 @@ async fn resolve_approval(
         )));
     }
 
+    // On rejection, mark the approval step as Rejected so the dashboard reflects it.
+    // On approval, the step is transitioned by the replay in resume_run.
+    if target_status == RunStatus::Failed {
+        let steps = state.store.list_steps(id).await?;
+        for step in &steps {
+            if step.status.state == StepStatus::AwaitingApproval {
+                state
+                    .store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Rejected),
+                            completed_at: Some(chrono::Utc::now()),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await?;
+            }
+        }
+    }
+
     state.store.update_run_status(id, target_status).await?;
 
     // On approval, resume the run in the background.
@@ -85,7 +106,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
+    use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, StepStatus, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
@@ -252,6 +273,64 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert_eq!(json_val["data"]["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn reject_transitions_approval_step_to_failed() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+
+        // Create an approval step in AwaitingApproval state
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "gate".to_string(),
+                kind: StepKind::Approval,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                ironflow_store::models::StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..ironflow_store::models::StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                ironflow_store::models::StepUpdate {
+                    status: Some(StepStatus::AwaitingApproval),
+                    ..ironflow_store::models::StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/reject", post(reject_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/reject", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::OK);
+
+        let steps = store.list_steps(run.id).await.unwrap();
+        assert_eq!(steps[0].status.state, StepStatus::Rejected);
     }
 
     #[tokio::test]

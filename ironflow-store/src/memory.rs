@@ -330,6 +330,11 @@ impl RunStore for InMemoryStore {
                         | (StepStatus::Pending, StepStatus::Skipped)
                         | (StepStatus::Running, StepStatus::Completed)
                         | (StepStatus::Running, StepStatus::Failed)
+                        | (StepStatus::Running, StepStatus::AwaitingApproval)
+                        | (StepStatus::AwaitingApproval, StepStatus::Running)
+                        | (StepStatus::AwaitingApproval, StepStatus::Completed)
+                        | (StepStatus::AwaitingApproval, StepStatus::Failed)
+                        | (StepStatus::AwaitingApproval, StepStatus::Rejected)
                 ) {
                     return Err(StoreError::Database(format!(
                         "invalid step status transition: {:?} -> {:?}",

@@ -165,6 +165,10 @@ impl PostgresStore {
             (StepStatus::Pending, StepStatus::Skipped) => Ok("skipped"),
             (StepStatus::Running, StepStatus::Completed) => Ok("succeeded"),
             (StepStatus::Running, StepStatus::Failed) => Ok("failed"),
+            (StepStatus::Running, StepStatus::AwaitingApproval) => Ok("suspended"),
+            (StepStatus::AwaitingApproval, StepStatus::Running) => Ok("resumed"),
+            (StepStatus::AwaitingApproval, StepStatus::Rejected) => Ok("rejected"),
+            (StepStatus::AwaitingApproval, StepStatus::Failed) => Ok("failed"),
             _ => Err(StoreError::Database(format!(
                 "invalid step status transition: {from:?} -> {to:?}"
             ))),

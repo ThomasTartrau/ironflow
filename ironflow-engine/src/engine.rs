@@ -1041,7 +1041,7 @@ mod tests {
         assert_eq!(steps[0].kind, StepKind::Shell);
         assert_eq!(steps[0].status.state, StepStatus::Completed);
         assert_eq!(steps[1].kind, StepKind::Approval);
-        assert_eq!(steps[1].status.state, StepStatus::Running);
+        assert_eq!(steps[1].status.state, StepStatus::AwaitingApproval);
     }
 
     #[tokio::test]

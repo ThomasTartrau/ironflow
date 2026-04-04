@@ -29,6 +29,12 @@ pub enum StepEvent {
     Failed,
     /// Step was skipped (prior step failed).
     Skipped,
+    /// Step is suspended, waiting for human approval.
+    Suspended,
+    /// Approval received, step resumes.
+    Resumed,
+    /// Human rejected the approval.
+    Rejected,
 }
 
 impl fmt::Display for StepEvent {
@@ -38,6 +44,9 @@ impl fmt::Display for StepEvent {
             StepEvent::Succeeded => f.write_str("succeeded"),
             StepEvent::Failed => f.write_str("failed"),
             StepEvent::Skipped => f.write_str("skipped"),
+            StepEvent::Suspended => f.write_str("suspended"),
+            StepEvent::Resumed => f.write_str("resumed"),
+            StepEvent::Rejected => f.write_str("rejected"),
         }
     }
 }
@@ -52,6 +61,10 @@ impl fmt::Display for StepEvent {
 /// | Pending | Skipped | Skipped |
 /// | Running | Succeeded | Completed |
 /// | Running | Failed | Failed |
+/// | Running | Suspended | AwaitingApproval |
+/// | AwaitingApproval | Resumed | Running |
+/// | AwaitingApproval | Rejected | Rejected |
+/// | AwaitingApproval | Failed | Failed |
 ///
 /// # Examples
 ///
@@ -166,6 +179,10 @@ fn next_state(from: StepStatus, event: StepEvent) -> Option<StepStatus> {
         (StepStatus::Pending, StepEvent::Skipped) => Some(StepStatus::Skipped),
         (StepStatus::Running, StepEvent::Succeeded) => Some(StepStatus::Completed),
         (StepStatus::Running, StepEvent::Failed) => Some(StepStatus::Failed),
+        (StepStatus::Running, StepEvent::Suspended) => Some(StepStatus::AwaitingApproval),
+        (StepStatus::AwaitingApproval, StepEvent::Resumed) => Some(StepStatus::Running),
+        (StepStatus::AwaitingApproval, StepEvent::Rejected) => Some(StepStatus::Rejected),
+        (StepStatus::AwaitingApproval, StepEvent::Failed) => Some(StepStatus::Failed),
         _ => None,
     }
 }
@@ -253,5 +270,46 @@ mod tests {
         assert_eq!(h[1].from, StepStatus::Running);
         assert_eq!(h[1].to, StepStatus::Completed);
         assert_eq!(h[1].event, StepEvent::Succeeded);
+    }
+
+    #[test]
+    fn approval_suspend_and_resume_path() {
+        let mut fsm = StepFsm::new();
+        fsm.apply(StepEvent::Started).unwrap();
+        fsm.apply(StepEvent::Suspended).unwrap();
+        assert_eq!(fsm.state(), StepStatus::AwaitingApproval);
+        assert!(!fsm.is_terminal());
+
+        fsm.apply(StepEvent::Resumed).unwrap();
+        assert_eq!(fsm.state(), StepStatus::Running);
+
+        fsm.apply(StepEvent::Succeeded).unwrap();
+        assert_eq!(fsm.state(), StepStatus::Completed);
+        assert!(fsm.is_terminal());
+    }
+
+    #[test]
+    fn approval_reject_path() {
+        let mut fsm = StepFsm::new();
+        fsm.apply(StepEvent::Started).unwrap();
+        fsm.apply(StepEvent::Suspended).unwrap();
+        assert_eq!(fsm.state(), StepStatus::AwaitingApproval);
+
+        fsm.apply(StepEvent::Rejected).unwrap();
+        assert_eq!(fsm.state(), StepStatus::Rejected);
+        assert!(fsm.is_terminal());
+    }
+
+    #[test]
+    fn cannot_suspend_from_pending() {
+        let mut fsm = StepFsm::new();
+        assert!(fsm.apply(StepEvent::Suspended).is_err());
+    }
+
+    #[test]
+    fn cannot_resume_from_running() {
+        let mut fsm = StepFsm::new();
+        fsm.apply(StepEvent::Started).unwrap();
+        assert!(fsm.apply(StepEvent::Resumed).is_err());
     }
 }

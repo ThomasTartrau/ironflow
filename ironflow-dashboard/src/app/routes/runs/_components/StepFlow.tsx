@@ -84,6 +84,8 @@ const statusDot: Record<string, string> = {
 	running: "bg-blue-500 animate-pulse",
 	pending: "bg-amber-500",
 	cancelled: "bg-gray-400",
+	awaiting_approval: "bg-purple-500 animate-pulse",
+	rejected: "bg-rose-500",
 };
 
 function formatNodeCost(usd: number): string {

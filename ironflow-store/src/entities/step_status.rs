@@ -25,6 +25,10 @@ pub enum StepStatus {
     Failed,
     /// Skipped (e.g. when a prior step failed).
     Skipped,
+    /// Waiting for human approval before continuing.
+    AwaitingApproval,
+    /// Human rejected the approval request.
+    Rejected,
 }
 
 impl StepStatus {
@@ -32,7 +36,7 @@ impl StepStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            StepStatus::Completed | StepStatus::Failed | StepStatus::Skipped
+            StepStatus::Completed | StepStatus::Failed | StepStatus::Skipped | StepStatus::Rejected
         )
     }
 }
@@ -45,6 +49,8 @@ impl std::fmt::Display for StepStatus {
             StepStatus::Completed => f.write_str("Completed"),
             StepStatus::Failed => f.write_str("Failed"),
             StepStatus::Skipped => f.write_str("Skipped"),
+            StepStatus::AwaitingApproval => f.write_str("AwaitingApproval"),
+            StepStatus::Rejected => f.write_str("Rejected"),
         }
     }
 }
@@ -60,6 +66,8 @@ mod tests {
         assert!(StepStatus::Skipped.is_terminal());
         assert!(!StepStatus::Pending.is_terminal());
         assert!(!StepStatus::Running.is_terminal());
+        assert!(!StepStatus::AwaitingApproval.is_terminal());
+        assert!(StepStatus::Rejected.is_terminal());
     }
 
     #[test]
@@ -69,5 +77,7 @@ mod tests {
         assert_eq!(StepStatus::Completed.to_string(), "Completed");
         assert_eq!(StepStatus::Failed.to_string(), "Failed");
         assert_eq!(StepStatus::Skipped.to_string(), "Skipped");
+        assert_eq!(StepStatus::AwaitingApproval.to_string(), "AwaitingApproval");
+        assert_eq!(StepStatus::Rejected.to_string(), "Rejected");
     }
 }
