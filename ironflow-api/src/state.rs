@@ -2,14 +2,20 @@
 //!
 //! [`AppState`] holds the shared [`RunStore`] and [`Engine`] used by all handlers.
 
+use std::sync::Arc;
+#[cfg(feature = "prometheus")]
+use std::sync::OnceLock;
+
 use axum::extract::FromRef;
+#[cfg(feature = "prometheus")]
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use uuid::Uuid;
+
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_engine::engine::Engine;
 use ironflow_store::entities::Run;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
-use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::error::ApiError;
 
@@ -40,7 +46,7 @@ use crate::error::ApiError;
 ///     cookie_domain: None,
 ///     cookie_secure: false,
 /// });
-/// let state = AppState { store, user_store, engine, jwt_config, worker_token: "token".to_string() };
+/// let state = AppState::new(store, user_store, engine, jwt_config, "token".to_string());
 /// # }
 /// ```
 #[derive(Clone)]
@@ -55,6 +61,9 @@ pub struct AppState {
     pub jwt_config: Arc<JwtConfig>,
     /// Static token for worker-to-API authentication.
     pub worker_token: String,
+    /// Prometheus metrics handle (only when `prometheus` feature is enabled).
+    #[cfg(feature = "prometheus")]
+    pub prometheus_handle: PrometheusHandle,
 }
 
 impl FromRef<AppState> for Arc<dyn RunStore> {
@@ -75,7 +84,60 @@ impl FromRef<AppState> for Arc<JwtConfig> {
     }
 }
 
+#[cfg(feature = "prometheus")]
+impl FromRef<AppState> for PrometheusHandle {
+    fn from_ref(state: &AppState) -> Self {
+        state.prometheus_handle.clone()
+    }
+}
+
 impl AppState {
+    /// Fetch a run by ID or return 404.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ApiError::RunNotFound` if the run does not exist.
+    /// Returns `ApiError::Store` if there is a store error.
+    /// Create a new `AppState`.
+    ///
+    /// When the `prometheus` feature is enabled, a global Prometheus recorder
+    /// is installed (once) and its handle is stored in the state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a Prometheus recorder cannot be installed (should only
+    /// happen if another incompatible recorder was set elsewhere).
+    pub fn new(
+        store: Arc<dyn RunStore>,
+        user_store: Arc<dyn UserStore>,
+        engine: Arc<Engine>,
+        jwt_config: Arc<JwtConfig>,
+        worker_token: String,
+    ) -> Self {
+        Self {
+            store,
+            user_store,
+            engine,
+            jwt_config,
+            worker_token,
+            #[cfg(feature = "prometheus")]
+            prometheus_handle: Self::global_prometheus_handle(),
+        }
+    }
+
+    /// Install (or reuse) a global Prometheus recorder and return its handle.
+    #[cfg(feature = "prometheus")]
+    fn global_prometheus_handle() -> PrometheusHandle {
+        static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+        HANDLE
+            .get_or_init(|| {
+                PrometheusBuilder::new()
+                    .install_recorder()
+                    .expect("failed to install Prometheus recorder")
+            })
+            .clone()
+    }
+
     /// Fetch a run by ID or return 404.
     ///
     /// # Errors
@@ -99,7 +161,7 @@ mod tests {
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store = Arc::new(InMemoryStore::new());
+        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(JwtConfig {
@@ -109,13 +171,13 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
-        AppState {
+        AppState::new(
             store,
             user_store,
             engine,
             jwt_config,
-            worker_token: "test-worker-token".to_string(),
-        }
+            "test-worker-token".to_string(),
+        )
     }
 
     #[test]

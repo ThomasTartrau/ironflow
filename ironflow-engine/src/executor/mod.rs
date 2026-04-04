@@ -92,7 +92,15 @@ pub async fn execute_step_config(
     config: &StepConfig,
     provider: &Arc<dyn AgentProvider>,
 ) -> Result<StepOutput, EngineError> {
-    match config {
+    let _kind = match config {
+        StepConfig::Shell(_) => "shell",
+        StepConfig::Http(_) => "http",
+        StepConfig::Agent(_) => "agent",
+        StepConfig::Workflow(_) => "workflow",
+        StepConfig::Approval(_) => "approval",
+    };
+
+    let result = match config {
         StepConfig::Shell(cfg) => ShellExecutor::new(cfg).execute(provider).await,
         StepConfig::Http(cfg) => HttpExecutor::new(cfg).execute(provider).await,
         StepConfig::Agent(cfg) => AgentExecutor::new(cfg).execute(provider).await,
@@ -102,5 +110,25 @@ pub async fn execute_step_config(
         StepConfig::Approval(_) => Err(EngineError::StepConfig(
             "approval steps are executed by WorkflowContext, not the executor".to_string(),
         )),
+    };
+
+    #[cfg(feature = "prometheus")]
+    {
+        use ironflow_core::metric_names::{
+            STATUS_ERROR, STATUS_SUCCESS, STEP_DURATION_SECONDS, STEPS_TOTAL,
+        };
+        use metrics::{counter, histogram};
+        let status = if result.is_ok() {
+            STATUS_SUCCESS
+        } else {
+            STATUS_ERROR
+        };
+        counter!(STEPS_TOTAL, "kind" => _kind, "status" => status).increment(1);
+        if let Ok(ref output) = result {
+            histogram!(STEP_DURATION_SECONDS, "kind" => _kind)
+                .record(output.duration_ms as f64 / 1000.0);
+        }
     }
+
+    result
 }

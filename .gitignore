@@ -8,3 +8,4 @@ plan.md
 ironflow-api/dashboard/
 .codegraph
 .codegraph.cache
+.envrc

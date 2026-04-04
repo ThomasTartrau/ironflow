@@ -49,6 +49,32 @@ pub async fn worker_token_auth(req: Request, next: Next) -> Response {
 #[derive(Clone)]
 pub struct WorkerToken(pub String);
 
+/// Middleware that records API request metrics (counter + duration histogram).
+///
+/// Emits `ironflow_api_requests_total` and `ironflow_api_request_duration_seconds`
+/// for every request. Only compiled when the `prometheus` feature is enabled.
+#[cfg(feature = "prometheus")]
+pub async fn request_metrics(req: Request, next: Next) -> Response {
+    use std::time::Instant;
+
+    use ironflow_core::metric_names::{API_REQUEST_DURATION_SECONDS, API_REQUESTS_TOTAL};
+    use metrics::{counter, histogram};
+
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let start = Instant::now();
+
+    let resp = next.run(req).await;
+
+    let status = resp.status().as_u16().to_string();
+    let duration = start.elapsed().as_secs_f64();
+
+    counter!(API_REQUESTS_TOTAL, "method" => method.clone(), "path" => path.clone(), "status" => status).increment(1);
+    histogram!(API_REQUEST_DURATION_SECONDS, "method" => method, "path" => path).record(duration);
+
+    resp
+}
+
 /// Middleware that injects standard HTTP security headers on every response.
 ///
 /// Headers set:
@@ -93,10 +119,11 @@ mod tests {
 
     use crate::routes::create_router;
     use crate::state::AppState;
+    use ironflow_store::user_store::UserStore;
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store = Arc::new(InMemoryStore::new());
+        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -106,13 +133,13 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
-        AppState {
+        AppState::new(
             store,
             user_store,
             engine,
             jwt_config,
-            worker_token: "test-worker-token".to_string(),
-        }
+            "test-worker-token".to_string(),
+        )
     }
 
     #[tokio::test]

@@ -23,6 +23,8 @@ export function StatusBadge({ status }: StatusBadgeProps) {
 				return "bg-orange-100 text-orange-700 border-orange-200";
 			case "awaiting_approval":
 				return "bg-purple-100 text-purple-700 border-purple-200 animate-pulse";
+			case "rejected":
+				return "bg-rose-100 text-rose-700 border-rose-200";
 			case "cancelled":
 			case "skipped":
 				return "bg-gray-100 text-gray-600 border-gray-200";

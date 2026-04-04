@@ -68,6 +68,14 @@ impl StepExecutor for HttpExecutor<'_> {
             "http step completed"
         );
 
+        #[cfg(feature = "prometheus")]
+        {
+            use ironflow_core::metric_names::{HTTP_DURATION_SECONDS, HTTP_TOTAL, STATUS_SUCCESS};
+            use metrics::{counter, histogram};
+            counter!(HTTP_TOTAL, "method" => self.config.method.clone(), "status" => STATUS_SUCCESS).increment(1);
+            histogram!(HTTP_DURATION_SECONDS).record(duration_ms as f64 / 1000.0);
+        }
+
         Ok(StepOutput {
             output: json!({
                 "status": output.status(),

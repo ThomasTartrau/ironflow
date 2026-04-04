@@ -34,6 +34,8 @@ pub(crate) fn parse_step_status(s: &str) -> Result<StepStatus, StoreError> {
         "completed" => Ok(StepStatus::Completed),
         "failed" => Ok(StepStatus::Failed),
         "skipped" => Ok(StepStatus::Skipped),
+        "awaiting_approval" => Ok(StepStatus::AwaitingApproval),
+        "rejected" => Ok(StepStatus::Rejected),
         other => Err(StoreError::Database(format!(
             "unknown step status: {other}"
         ))),

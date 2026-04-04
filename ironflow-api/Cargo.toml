@@ -15,6 +15,7 @@ include = ["src/**", "Cargo.toml", "build.rs", "dashboard/**"]
 default = []
 sign-up = []
 dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
+prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
 
 [dependencies]
 ironflow-store = { version = "2.2.0", path = "../ironflow-store" }
@@ -36,9 +37,13 @@ subtle = "2"
 tracing = "0.1"
 thiserror = "2"
 validator = { version = "0.20", features = ["derive"] }
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 ironflow-store = { version = "2.2.0", path = "../ironflow-store", features = ["store-memory"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }

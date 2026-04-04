@@ -20,6 +20,8 @@ describe("StatusBadge", () => {
 		"completed",
 		"failed",
 		"skipped",
+		"awaiting_approval",
+		"rejected",
 	];
 
 	it.each(
@@ -73,6 +75,12 @@ describe("StatusBadge", () => {
 		const { container } = render(<StatusBadge status="skipped" />);
 		const badge = container.firstElementChild;
 		expect(badge?.className).toContain("bg-gray-100");
+	});
+
+	it("applies rose styles for rejected", () => {
+		const { container } = render(<StatusBadge status="rejected" />);
+		const badge = container.firstElementChild;
+		expect(badge?.className).toContain("bg-rose-100");
 	});
 
 	it("applies purple styles with pulse for awaiting_approval", () => {

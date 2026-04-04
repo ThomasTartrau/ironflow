@@ -140,7 +140,7 @@ impl WorkflowContext {
         for step in steps {
             let dominated = matches!(
                 step.status.state,
-                StepStatus::Completed | StepStatus::Running
+                StepStatus::Completed | StepStatus::Running | StepStatus::AwaitingApproval
             );
             if dominated {
                 self.replay_steps.insert(step.position, step);
@@ -484,7 +484,7 @@ impl WorkflowContext {
         if let Some(existing) = self.replay_steps.get(&position)
             && existing.kind == StepKind::Approval
         {
-            if existing.status.state == StepStatus::Running {
+            if existing.status.state == StepStatus::AwaitingApproval {
                 self.store
                     .update_step(
                         existing.id,
@@ -520,6 +520,18 @@ impl WorkflowContext {
             .await?;
 
         self.start_step(step.id, Utc::now()).await?;
+
+        // Transition the step to AwaitingApproval so it reflects
+        // the suspended state on the dashboard.
+        self.store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::AwaitingApproval),
+                    ..StepUpdate::default()
+                },
+            )
+            .await?;
 
         self.last_step_ids = vec![step.id];
 

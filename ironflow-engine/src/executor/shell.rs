@@ -58,6 +58,16 @@ impl StepExecutor for ShellExecutor<'_> {
             "shell step completed"
         );
 
+        #[cfg(feature = "prometheus")]
+        {
+            use ironflow_core::metric_names::{
+                SHELL_DURATION_SECONDS, SHELL_TOTAL, STATUS_SUCCESS,
+            };
+            use metrics::{counter, histogram};
+            counter!(SHELL_TOTAL, "status" => STATUS_SUCCESS).increment(1);
+            histogram!(SHELL_DURATION_SECONDS).record(duration_ms as f64 / 1000.0);
+        }
+
         Ok(StepOutput {
             output: json!({
                 "stdout": output.stdout(),

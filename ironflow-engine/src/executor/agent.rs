@@ -90,6 +90,32 @@ impl StepExecutor for AgentExecutor<'_> {
             "agent step completed"
         );
 
+        #[cfg(feature = "prometheus")]
+        {
+            use ironflow_core::metric_names::{
+                AGENT_COST_USD_TOTAL, AGENT_DURATION_SECONDS, AGENT_TOKENS_INPUT_TOTAL,
+                AGENT_TOKENS_OUTPUT_TOTAL, AGENT_TOTAL, STATUS_SUCCESS,
+            };
+            use metrics::{counter, gauge, histogram};
+            let model_label = self
+                .config
+                .model
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            counter!(AGENT_TOTAL, "model" => model_label.clone(), "status" => STATUS_SUCCESS)
+                .increment(1);
+            histogram!(AGENT_DURATION_SECONDS, "model" => model_label.clone())
+                .record(duration_ms as f64 / 1000.0);
+            gauge!(AGENT_COST_USD_TOTAL, "model" => model_label.clone())
+                .increment(cost.to_string().parse::<f64>().unwrap_or(0.0));
+            if let Some(inp) = input_tokens {
+                counter!(AGENT_TOKENS_INPUT_TOTAL, "model" => model_label.clone()).increment(inp);
+            }
+            if let Some(out) = output_tokens {
+                counter!(AGENT_TOKENS_OUTPUT_TOTAL, "model" => model_label).increment(out);
+            }
+        }
+
         Ok(StepOutput {
             output: json!({
                 "value": result.value(),

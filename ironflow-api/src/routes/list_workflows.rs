@@ -106,13 +106,13 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
-        AppState {
+        AppState::new(
             store,
             user_store,
-            engine: Arc::new(engine),
+            Arc::new(engine),
             jwt_config,
-            worker_token: "test-worker-token".to_string(),
-        }
+            "test-worker-token".to_string(),
+        )
     }
 
     #[tokio::test]
@@ -129,13 +129,13 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
-        let state = AppState {
+        let state = AppState::new(
             store,
             user_store,
             engine,
             jwt_config,
-            worker_token: "test-worker-token".to_string(),
-        };
+            "test-worker-token".to_string(),
+        );
         let auth_header = make_auth_header(&state);
 
         let app = Router::new()

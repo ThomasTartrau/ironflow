@@ -27,6 +27,34 @@ pub const HTTP_TOTAL: &str = "ironflow_http_total";
 /// Histogram: HTTP request duration in seconds.
 pub const HTTP_DURATION_SECONDS: &str = "ironflow_http_duration_seconds";
 
+// ── Run metrics ────────────────────────────────────────────────────
+/// Counter: total workflow runs (labels: workflow, status, trigger).
+pub const RUNS_TOTAL: &str = "ironflow_runs_total";
+/// Gauge: currently active (running) workflow runs (label: workflow).
+pub const RUNS_ACTIVE: &str = "ironflow_runs_active";
+/// Histogram: run wall-clock duration in seconds (labels: workflow, status).
+pub const RUN_DURATION_SECONDS: &str = "ironflow_run_duration_seconds";
+/// Histogram: run total cost in USD (label: workflow).
+pub const RUN_COST_USD: &str = "ironflow_run_cost_usd";
+
+// ── Step metrics ───────────────────────────────────────────────────
+/// Counter: total steps executed (labels: kind, status).
+pub const STEPS_TOTAL: &str = "ironflow_steps_total";
+/// Histogram: step duration in seconds (label: kind).
+pub const STEP_DURATION_SECONDS: &str = "ironflow_step_duration_seconds";
+
+// ── Worker metrics ─────────────────────────────────────────────────
+/// Gauge: number of currently active worker tasks.
+pub const WORKER_ACTIVE: &str = "ironflow_worker_active";
+/// Counter: total poll attempts by the worker (label: result).
+pub const WORKER_POLLS_TOTAL: &str = "ironflow_worker_polls_total";
+
+// ── API metrics ────────────────────────────────────────────────────
+/// Counter: total API requests (labels: method, path, status).
+pub const API_REQUESTS_TOTAL: &str = "ironflow_api_requests_total";
+/// Histogram: API request duration in seconds (labels: method, path).
+pub const API_REQUEST_DURATION_SECONDS: &str = "ironflow_api_request_duration_seconds";
+
 // ── Status labels ───────────────────────────────────────────────────
 /// Label value for successful operations.
 pub const STATUS_SUCCESS: &str = "success";

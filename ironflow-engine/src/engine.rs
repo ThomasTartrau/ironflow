@@ -16,10 +16,14 @@ use serde_json::Value;
 use tracing::{error, info};
 use uuid::Uuid;
 
+#[cfg(feature = "prometheus")]
+use ironflow_core::metric_names::{RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{NewRun, Run, RunStatus, RunUpdate, TriggerKind};
 use ironflow_store::store::RunStore;
+#[cfg(feature = "prometheus")]
+use metrics::{counter, gauge, histogram};
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
@@ -310,11 +314,14 @@ impl Engine {
             .update_run_status(run_id, RunStatus::Running)
             .await?;
 
+        #[cfg(feature = "prometheus")]
+        gauge!(RUNS_ACTIVE, "workflow" => handler_name.to_string()).increment(1.0);
+
         let run_start = Instant::now();
         let mut ctx = self.build_context(run_id);
 
         let result = handler.execute(&mut ctx).await;
-        self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
+        self.finalize_run(run_id, handler_name, result, &ctx, run_start)
             .await
     }
 
@@ -380,6 +387,9 @@ impl Engine {
                 ))
             })?
             .clone();
+
+        #[cfg(feature = "prometheus")]
+        gauge!(RUNS_ACTIVE, "workflow" => run.workflow_name.clone()).increment(1.0);
 
         let run_start = Instant::now();
         let mut ctx = self.build_context(run_id);
@@ -543,6 +553,10 @@ impl Engine {
                     ctx,
                     total_duration,
                 );
+
+                #[cfg(feature = "prometheus")]
+                self.emit_run_metrics(workflow_name, final_status, total_duration, ctx);
+
                 return Err(err);
             }
         }
@@ -556,10 +570,37 @@ impl Engine {
             total_duration,
         );
 
+        #[cfg(feature = "prometheus")]
+        self.emit_run_metrics(workflow_name, final_status, total_duration, ctx);
+
         self.store
             .get_run(run_id)
             .await?
             .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))
+    }
+
+    /// Emit Prometheus metrics for a completed run.
+    #[cfg(feature = "prometheus")]
+    fn emit_run_metrics(
+        &self,
+        workflow_name: &str,
+        status: RunStatus,
+        duration_ms: u64,
+        ctx: &WorkflowContext,
+    ) {
+        let status_str = status.to_string();
+        let wf = workflow_name.to_string();
+
+        counter!(RUNS_TOTAL, "workflow" => wf.clone(), "status" => status_str.clone()).increment(1);
+        histogram!(RUN_DURATION_SECONDS, "workflow" => wf.clone(), "status" => status_str)
+            .record(duration_ms as f64 / 1000.0);
+        histogram!(RUN_COST_USD, "workflow" => wf.clone()).record(
+            ctx.total_cost_usd()
+                .to_string()
+                .parse::<f64>()
+                .unwrap_or(0.0),
+        );
+        gauge!(RUNS_ACTIVE, "workflow" => wf).decrement(1.0);
     }
 
     /// Publish a run status changed event to all registered subscribers.
@@ -1000,7 +1041,7 @@ mod tests {
         assert_eq!(steps[0].kind, StepKind::Shell);
         assert_eq!(steps[0].status.state, StepStatus::Completed);
         assert_eq!(steps[1].kind, StepKind::Approval);
-        assert_eq!(steps[1].status.state, StepStatus::Running);
+        assert_eq!(steps[1].status.state, StepStatus::AwaitingApproval);
     }
 
     #[tokio::test]
