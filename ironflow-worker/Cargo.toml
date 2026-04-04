@@ -28,6 +28,7 @@ metrics = { version = "0.24", optional = true }
 [features]
 default = []
 prometheus = ["metrics", "ironflow-engine/prometheus"]
+heartbeat = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

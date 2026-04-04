@@ -16,12 +16,16 @@ use ironflow_engine::handler::WorkflowHandler;
 use ironflow_store::store::RunStore;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge};
+#[cfg(feature = "heartbeat")]
+use reqwest::Client;
 
 use crate::api_store::ApiRunStore;
 use crate::error::WorkerError;
 
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+#[cfg(feature = "heartbeat")]
+const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Builder for configuring and creating a [`Worker`].
 ///
@@ -51,6 +55,10 @@ pub struct WorkerBuilder {
     handlers: Vec<Box<dyn WorkflowHandler>>,
     concurrency: usize,
     poll_interval: Duration,
+    #[cfg(feature = "heartbeat")]
+    heartbeat_url: Option<String>,
+    #[cfg(feature = "heartbeat")]
+    heartbeat_interval: Duration,
 }
 
 impl WorkerBuilder {
@@ -63,6 +71,10 @@ impl WorkerBuilder {
             handlers: Vec::new(),
             concurrency: DEFAULT_CONCURRENCY,
             poll_interval: DEFAULT_POLL_INTERVAL,
+            #[cfg(feature = "heartbeat")]
+            heartbeat_url: None,
+            #[cfg(feature = "heartbeat")]
+            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
         }
     }
 
@@ -90,6 +102,53 @@ impl WorkerBuilder {
         self
     }
 
+    /// Set the heartbeat URL (dead man's switch).
+    ///
+    /// The worker pings this URL at every heartbeat interval with an HTTP
+    /// HEAD request. Compatible with BetterStack Heartbeats, Cronitor,
+    /// Healthchecks.io, or any dead man's switch service.
+    ///
+    /// If not set, no heartbeat is emitted even when the feature is enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .heartbeat_url("https://uptime.betterstack.com/api/v1/heartbeat/abc123");
+    /// # }
+    /// ```
+    #[cfg(feature = "heartbeat")]
+    pub fn heartbeat_url(mut self, url: &str) -> Self {
+        self.heartbeat_url = Some(url.to_string());
+        self
+    }
+
+    /// Set the heartbeat interval.
+    ///
+    /// Controls how often the worker pings the [`heartbeat_url`](Self::heartbeat_url).
+    /// Defaults to 30 seconds.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .heartbeat_url("https://uptime.betterstack.com/api/v1/heartbeat/abc123")
+    ///     .heartbeat_interval(Duration::from_secs(60));
+    /// # }
+    /// ```
+    #[cfg(feature = "heartbeat")]
+    pub fn heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.heartbeat_interval = interval;
+        self
+    }
+
     /// Build the worker.
     ///
     /// # Errors
@@ -111,10 +170,22 @@ impl WorkerBuilder {
                 .map_err(WorkerError::Engine)?;
         }
 
+        #[cfg(feature = "heartbeat")]
+        let heartbeat_client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("failed to build heartbeat HTTP client");
+
         Ok(Worker {
             engine: Arc::new(engine),
             concurrency: self.concurrency,
             poll_interval: self.poll_interval,
+            #[cfg(feature = "heartbeat")]
+            heartbeat_url: self.heartbeat_url,
+            #[cfg(feature = "heartbeat")]
+            heartbeat_interval: self.heartbeat_interval,
+            #[cfg(feature = "heartbeat")]
+            heartbeat_client,
         })
     }
 }
@@ -124,6 +195,12 @@ pub struct Worker {
     engine: Arc<Engine>,
     concurrency: usize,
     poll_interval: Duration,
+    #[cfg(feature = "heartbeat")]
+    heartbeat_url: Option<String>,
+    #[cfg(feature = "heartbeat")]
+    heartbeat_interval: Duration,
+    #[cfg(feature = "heartbeat")]
+    heartbeat_client: Client,
 }
 
 impl Worker {
@@ -141,6 +218,41 @@ impl Worker {
             poll_interval_ms = self.poll_interval.as_millis() as u64,
             "worker started"
         );
+
+        #[cfg(feature = "heartbeat")]
+        if let Some(ref url) = self.heartbeat_url {
+            let interval = self.heartbeat_interval;
+            let url = url.clone();
+            let client = self.heartbeat_client.clone();
+
+            spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                // skip the first immediate tick
+                ticker.tick().await;
+                loop {
+                    ticker.tick().await;
+                    match client.head(&url).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            info!(url = %url, "heartbeat sent");
+                        }
+                        Ok(resp) => {
+                            warn!(
+                                url = %url,
+                                status = %resp.status(),
+                                "heartbeat ping returned non-success status"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(
+                                url = %url,
+                                error = %err,
+                                "heartbeat ping failed"
+                            );
+                        }
+                    }
+                }
+            });
+        }
 
         loop {
             let run = self.engine.store().pick_next_pending().await;
@@ -341,5 +453,62 @@ mod tests {
         let builder = WorkerBuilder::new("http://localhost:3000", "").provider(provider);
         let result = builder.build();
         assert!(result.is_ok());
+    }
+
+    #[cfg(feature = "heartbeat")]
+    #[test]
+    fn builder_heartbeat_defaults() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token");
+        assert!(builder.heartbeat_url.is_none());
+        assert_eq!(builder.heartbeat_interval, DEFAULT_HEARTBEAT_INTERVAL);
+    }
+
+    #[cfg(feature = "heartbeat")]
+    #[test]
+    fn builder_heartbeat_url_sets_url() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token")
+            .heartbeat_url("https://uptime.betterstack.com/api/v1/heartbeat/abc");
+        assert_eq!(
+            builder.heartbeat_url.as_deref(),
+            Some("https://uptime.betterstack.com/api/v1/heartbeat/abc")
+        );
+    }
+
+    #[cfg(feature = "heartbeat")]
+    #[test]
+    fn builder_heartbeat_custom_interval() {
+        let interval = Duration::from_secs(10);
+        let builder =
+            WorkerBuilder::new("http://localhost:3000", "token").heartbeat_interval(interval);
+        assert_eq!(builder.heartbeat_interval, interval);
+    }
+
+    #[cfg(feature = "heartbeat")]
+    #[test]
+    fn builder_build_preserves_heartbeat_config() {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let interval = Duration::from_secs(15);
+        let worker = WorkerBuilder::new("http://localhost:3000", "token")
+            .provider(provider)
+            .heartbeat_url("https://example.com/heartbeat")
+            .heartbeat_interval(interval)
+            .build()
+            .unwrap();
+        assert_eq!(
+            worker.heartbeat_url.as_deref(),
+            Some("https://example.com/heartbeat")
+        );
+        assert_eq!(worker.heartbeat_interval, interval);
+    }
+
+    #[cfg(feature = "heartbeat")]
+    #[test]
+    fn builder_build_without_heartbeat_url_has_none() {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let worker = WorkerBuilder::new("http://localhost:3000", "token")
+            .provider(provider)
+            .build()
+            .unwrap();
+        assert!(worker.heartbeat_url.is_none());
     }
 }

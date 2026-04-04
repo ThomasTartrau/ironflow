@@ -5,8 +5,9 @@
 //! is handled by the publisher at subscription time -- subscribers only
 //! receive events they signed up for.
 //!
-//! Built-in subscriber: [`WebhookSubscriber`] -- POSTs JSON to a URL with
-//! retry and exponential backoff.
+//! Built-in subscribers:
+//! - [`WebhookSubscriber`] -- POSTs JSON to a URL with retry and exponential backoff.
+//! - [`BetterStackSubscriber`] -- forwards error events to BetterStack Logs.
 //!
 //! # Architecture
 //!
@@ -28,11 +29,13 @@
 //! );
 //! ```
 
+mod betterstack;
 mod event;
 mod publisher;
 mod subscriber;
 mod webhook;
 
+pub use betterstack::BetterStackSubscriber;
 pub use event::Event;
 pub use publisher::EventPublisher;
 pub use subscriber::{EventSubscriber, SubscriberFuture};
