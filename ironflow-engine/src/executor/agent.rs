@@ -101,8 +101,6 @@ impl StepExecutor for AgentExecutor<'_> {
 mod tests {
     use ironflow_core::operations::agent::PermissionMode;
 
-    use super::*;
-
     #[test]
     fn parse_permission_mode_via_serde() {
         let json = r#""auto""#;
