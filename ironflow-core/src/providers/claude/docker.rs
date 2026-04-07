@@ -279,7 +279,7 @@ impl AgentProvider for DockerProvider {
 
             debug!(stdout_len = stdout.len(), "docker claude process completed");
 
-            common::parse_response(&stdout, config, duration_ms)
+            common::parse_output(&stdout, config, duration_ms)
         })
     }
 }

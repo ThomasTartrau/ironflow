@@ -37,7 +37,7 @@ use tracing::{info, warn};
 use crate::error::OperationError;
 #[cfg(feature = "prometheus")]
 use crate::metric_names;
-use crate::provider::{AgentConfig, AgentOutput, AgentProvider};
+use crate::provider::{AgentConfig, AgentOutput, AgentProvider, DebugMessage};
 use crate::retry::RetryPolicy;
 
 /// Provider-agnostic model identifiers.
@@ -392,6 +392,40 @@ impl Agent {
         self
     }
 
+    /// Enable verbose/debug mode to capture the full conversation trace.
+    ///
+    /// When enabled, the provider captures every assistant message and tool
+    /// call into [`AgentResult::debug_messages`]. Useful for understanding
+    /// why the agent returned an unexpected result.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    ///
+    /// let result = Agent::new()
+    ///     .prompt("Analyze src/")
+    ///     .verbose()
+    ///     .max_budget_usd(0.10)
+    ///     .run(&provider)
+    ///     .await?;
+    ///
+    /// if let Some(messages) = result.debug_messages() {
+    ///     for msg in messages {
+    ///         println!("{msg}");
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn verbose(mut self) -> Self {
+        self.config.verbose = true;
+        self
+    }
+
     /// Resume a previous agent conversation by session ID.
     ///
     /// Pass the session ID from a previous [`AgentResult::session_id()`] to
@@ -663,6 +697,15 @@ impl AgentResult {
     pub fn model(&self) -> Option<&str> {
         self.output.model.as_deref()
     }
+
+    /// Return the conversation trace captured during a verbose invocation.
+    ///
+    /// Returns `None` when [`Agent::verbose`] was not called. When present,
+    /// each [`DebugMessage`] contains the
+    /// assistant's text and tool calls for one conversation turn.
+    pub fn debug_messages(&self) -> Option<&[DebugMessage]> {
+        self.output.debug_messages.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -687,6 +730,7 @@ mod tests {
                     output_tokens: self.output.output_tokens,
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
+                    debug_messages: None,
                 })
             })
         }
@@ -708,6 +752,7 @@ mod tests {
                     output_tokens: self.output.output_tokens,
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
+                    debug_messages: None,
                 })
             })
         }
@@ -722,6 +767,7 @@ mod tests {
             output_tokens: Some(50),
             model: Some("sonnet".to_string()),
             duration_ms: 1500,
+            debug_messages: None,
         }
     }
 
@@ -917,6 +963,7 @@ mod tests {
                 output_tokens: Some(456),
                 model: Some("opus".to_string()),
                 duration_ms: 2000,
+                debug_messages: None,
             },
         };
         let result = Agent::new().prompt("test").run(&provider).await.unwrap();
@@ -1012,6 +1059,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.value()["model"], json!("mistral-large-latest"));
+    }
+
+    #[tokio::test]
+    async fn verbose_sets_config_flag() {
+        let provider = ConfigCapture {
+            output: default_output(),
+        };
+        let result = Agent::new()
+            .prompt("hi")
+            .verbose()
+            .run(&provider)
+            .await
+            .unwrap();
+        assert_eq!(result.value()["verbose"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn verbose_not_set_by_default() {
+        let provider = ConfigCapture {
+            output: default_output(),
+        };
+        let result = Agent::new().prompt("hi").run(&provider).await.unwrap();
+        assert_eq!(result.value()["verbose"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn debug_messages_none_without_verbose() {
+        let provider = TestProvider {
+            output: default_output(),
+        };
+        let result = Agent::new().prompt("test").run(&provider).await.unwrap();
+        assert!(result.debug_messages().is_none());
     }
 
     #[tokio::test]
@@ -1155,6 +1234,7 @@ mod tests {
                         output_tokens: self.output.output_tokens,
                         model: self.output.model.clone(),
                         duration_ms: self.output.duration_ms,
+                        debug_messages: None,
                     })
                 }
             })

@@ -317,7 +317,7 @@ impl AgentProvider for K8sEphemeralProvider {
 
             debug!(stdout_len = logs.len(), "ephemeral claude pod completed");
 
-            claude_common::parse_response(&logs, config, duration_ms)
+            claude_common::parse_output(&logs, config, duration_ms)
         })
     }
 }

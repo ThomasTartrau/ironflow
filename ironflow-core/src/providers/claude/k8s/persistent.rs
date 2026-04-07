@@ -367,7 +367,7 @@ impl AgentProvider for K8sPersistentProvider {
                 "persistent pod claude process completed"
             );
 
-            claude_common::parse_response(&stdout, config, duration_ms)
+            claude_common::parse_output(&stdout, config, duration_ms)
         })
     }
 }

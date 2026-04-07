@@ -375,7 +375,7 @@ impl AgentProvider for SshProvider {
 
             debug!(stdout_len = stdout.len(), "remote claude process completed");
 
-            common::parse_response(&stdout, config, duration_ms)
+            common::parse_output(&stdout, config, duration_ms)
         })
     }
 }

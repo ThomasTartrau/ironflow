@@ -275,6 +275,7 @@ mod tests {
             output_tokens: Some(50),
             model: Some("claude-sonnet".to_string()),
             duration_ms: 100,
+            debug_messages: None,
         }
     }
 
@@ -486,6 +487,7 @@ mod tests {
             output_tokens: Some(100),
             model: Some("claude-sonnet".to_string()),
             duration_ms: 500,
+            debug_messages: None,
         };
 
         let provider = replay_provider(&dir);

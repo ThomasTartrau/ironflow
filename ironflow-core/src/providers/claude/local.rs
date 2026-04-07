@@ -165,7 +165,7 @@ impl AgentProvider for ClaudeCodeProvider {
             let stdout = truncate_output(&output.stdout, "claude stdout");
             debug!(stdout_len = stdout.len(), "claude process completed");
 
-            common::parse_response(&stdout, config, duration_ms)
+            common::parse_output(&stdout, config, duration_ms)
         })
     }
 }
