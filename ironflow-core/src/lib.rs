@@ -66,7 +66,7 @@ pub mod prelude {
     pub use crate::operations::http::{Http, HttpOutput};
     pub use crate::operations::shell::{Shell, ShellOutput};
     pub use crate::parallel::{try_join_all, try_join_all_limited};
-    pub use crate::provider::AgentProvider;
+    pub use crate::provider::{AgentProvider, DebugMessage, DebugToolCall};
     pub use crate::providers::claude::ClaudeCodeProvider;
     pub use crate::providers::record_replay::RecordReplayProvider;
     pub use crate::retry::RetryPolicy;

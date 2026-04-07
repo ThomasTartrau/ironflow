@@ -14,6 +14,7 @@
 //! * [`RecordReplayProvider`](crate::providers::record_replay::RecordReplayProvider) -
 //!   records and replays fixtures for deterministic testing.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -74,6 +75,14 @@ pub struct AgentConfig {
     /// When set, the provider should continue the conversation from the
     /// specified session rather than starting a new one.
     pub resume_session_id: Option<String>,
+
+    /// Enable verbose/debug mode to capture the full conversation trace.
+    ///
+    /// When `true`, the provider uses streaming output (`stream-json`) to
+    /// record every assistant message and tool call. The resulting
+    /// [`AgentOutput::debug_messages`] field will contain the conversation
+    /// trace for inspection.
+    pub verbose: bool,
 }
 
 /// Raw output returned by an [`AgentProvider`] after a successful invocation.
@@ -103,6 +112,82 @@ pub struct AgentOutput {
 
     /// Wall-clock duration of the invocation in milliseconds.
     pub duration_ms: u64,
+
+    /// Conversation trace captured when [`AgentConfig::verbose`] is `true`.
+    ///
+    /// Contains every assistant message and tool call made during the
+    /// invocation, in chronological order. `None` when verbose mode is off.
+    pub debug_messages: Option<Vec<DebugMessage>>,
+}
+
+/// A single assistant turn captured during a verbose invocation.
+///
+/// Each `DebugMessage` represents one assistant response, which may contain
+/// free-form text, tool calls, or both.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_core::prelude::*;
+///
+/// # async fn example() -> Result<(), OperationError> {
+/// let provider = ClaudeCodeProvider::new();
+/// let result = Agent::new()
+///     .prompt("List files in src/")
+///     .verbose()
+///     .run(&provider)
+///     .await?;
+///
+/// if let Some(messages) = result.debug_messages() {
+///     for msg in messages {
+///         println!("{msg}");
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DebugMessage {
+    /// Free-form text produced by the assistant in this turn, if any.
+    pub text: Option<String>,
+
+    /// Tool calls made by the assistant in this turn.
+    pub tool_calls: Vec<DebugToolCall>,
+
+    /// The model's stop reason for this turn (e.g. `"end_turn"`, `"tool_use"`).
+    pub stop_reason: Option<String>,
+}
+
+impl fmt::Display for DebugMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(ref text) = self.text {
+            writeln!(f, "[assistant] {text}")?;
+        }
+        for tc in &self.tool_calls {
+            write!(f, "{tc}")?;
+        }
+        Ok(())
+    }
+}
+
+/// A single tool call captured during a verbose invocation.
+///
+/// Records the tool name and its input arguments as a raw JSON value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DebugToolCall {
+    /// Name of the tool invoked (e.g. `"Read"`, `"Bash"`, `"Grep"`).
+    pub name: String,
+
+    /// Input arguments passed to the tool, as raw JSON.
+    pub input: Value,
+}
+
+impl fmt::Display for DebugToolCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "  [tool_use] {} -> {}", self.name, self.input)
+    }
 }
 
 impl AgentConfig {
@@ -120,6 +205,7 @@ impl AgentConfig {
             permission_mode: PermissionMode::Default,
             json_schema: None,
             resume_session_id: None,
+            verbose: false,
         }
     }
 }
@@ -135,6 +221,7 @@ impl AgentOutput {
             output_tokens: None,
             model: None,
             duration_ms: 0,
+            debug_messages: None,
         }
     }
 }
@@ -189,6 +276,7 @@ mod tests {
             permission_mode: PermissionMode::Auto,
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
             resume_session_id: None,
+            verbose: false,
         }
     }
 
@@ -222,6 +310,7 @@ mod tests {
             permission_mode: PermissionMode::Default,
             json_schema: None,
             resume_session_id: None,
+            verbose: false,
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: AgentConfig = serde_json::from_str(&json).unwrap();
@@ -246,6 +335,7 @@ mod tests {
             output_tokens: Some(200),
             model: Some("claude-sonnet".to_string()),
             duration_ms: 3000,
+            debug_messages: None,
         };
         let json = serde_json::to_string(&output).unwrap();
         let back: AgentOutput = serde_json::from_str(&json).unwrap();
@@ -273,6 +363,7 @@ mod tests {
         assert!(matches!(config.permission_mode, PermissionMode::Default));
         assert_eq!(config.json_schema, None);
         assert_eq!(config.resume_session_id, None);
+        assert!(!config.verbose);
     }
 
     #[test]
@@ -285,6 +376,7 @@ mod tests {
         assert_eq!(output.output_tokens, None);
         assert_eq!(output.model, None);
         assert_eq!(output.duration_ms, 0);
+        assert!(output.debug_messages.is_none());
     }
 
     #[test]
@@ -306,6 +398,7 @@ mod tests {
             output_tokens: None,
             model: None,
             duration_ms: 0,
+            debug_messages: None,
         };
         let debug_str = format!("{:?}", output);
         assert!(!debug_str.is_empty());

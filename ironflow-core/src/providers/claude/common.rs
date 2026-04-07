@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::error::AgentError;
 use crate::operations::agent::PermissionMode;
-use crate::provider::{AgentConfig, AgentOutput};
+use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall};
 use crate::utils::estimate_tokens;
 
 /// Default timeout for a single Claude CLI invocation (5 minutes).
@@ -161,11 +161,17 @@ pub fn push_opt(args: &mut Vec<String>, flag: &str, value: &Option<impl ToString
 /// Returns [`AgentError::ProcessFailed`] if `BypassPermissions` is requested
 /// without the `IRONFLOW_ALLOW_BYPASS=1` environment variable.
 pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
+    let output_format = if config.verbose {
+        "stream-json"
+    } else {
+        "json"
+    };
+
     let mut args: Vec<String> = vec![
         "-p".to_string(),
         config.prompt.clone(),
         "--output-format".to_string(),
-        "json".to_string(),
+        output_format.to_string(),
     ];
 
     push_opt(&mut args, "--system-prompt", &config.system_prompt);
@@ -314,7 +320,125 @@ pub fn parse_response(
         output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
         model: model_name,
         duration_ms: parsed.duration_ms.unwrap_or(fallback_duration_ms),
+        debug_messages: None,
     })
+}
+
+/// Parse `stream-json` output from the `claude` CLI into an [`AgentOutput`]
+/// with conversation trace in [`AgentOutput::debug_messages`].
+///
+/// The `stream-json` format emits one JSON object per line. Lines with
+/// `"type":"assistant"` carry conversation content (text and tool calls).
+/// The final `"type":"result"` line carries the same payload as the `json`
+/// format and is used to populate the standard output fields.
+///
+/// # Errors
+///
+/// Returns [`AgentError::SchemaValidation`] if the result line is missing
+/// or cannot be parsed.
+pub fn parse_stream_response(
+    stdout: &str,
+    config: &AgentConfig,
+    fallback_duration_ms: u64,
+) -> Result<AgentOutput, AgentError> {
+    let mut debug_messages: Vec<DebugMessage> = Vec::new();
+    let mut result_line: Option<&str> = None;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parsed: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        match parsed.get("type").and_then(|t| t.as_str()) {
+            Some("assistant") => {
+                let message = parsed.get("message");
+                let content = message
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array());
+                let stop_reason = message
+                    .and_then(|m| m.get("stop_reason"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+
+                let mut text_parts: Vec<String> = Vec::new();
+                let mut tool_calls: Vec<DebugToolCall> = Vec::new();
+
+                if let Some(blocks) = content {
+                    for block in blocks {
+                        match block.get("type").and_then(|t| t.as_str()) {
+                            Some("text") => {
+                                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                                    text_parts.push(t.to_string());
+                                }
+                            }
+                            Some("tool_use") => {
+                                let name = block
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                let input = block.get("input").cloned().unwrap_or(Value::Null);
+                                tool_calls.push(DebugToolCall { name, input });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let text = if text_parts.is_empty() {
+                    None
+                } else {
+                    Some(text_parts.join("\n"))
+                };
+
+                debug_messages.push(DebugMessage {
+                    text,
+                    tool_calls,
+                    stop_reason,
+                });
+            }
+            Some("result") => {
+                result_line = Some(trimmed);
+            }
+            _ => {}
+        }
+    }
+
+    let result_str = result_line.ok_or_else(|| AgentError::SchemaValidation {
+        expected: "stream-json result line".to_string(),
+        got: "no result line found in stream output".to_string(),
+    })?;
+
+    let mut output = parse_response(result_str, config, fallback_duration_ms)?;
+    output.debug_messages = Some(debug_messages);
+    Ok(output)
+}
+
+/// Parse CLI output, dispatching to the correct parser based on verbose mode.
+///
+/// When [`AgentConfig::verbose`] is `true`, uses [`parse_stream_response`] to
+/// extract the full conversation trace. Otherwise uses [`parse_response`] for
+/// the standard single-JSON output.
+///
+/// # Errors
+///
+/// Returns [`AgentError`] if parsing fails (see individual parsers).
+pub fn parse_output(
+    stdout: &str,
+    config: &AgentConfig,
+    fallback_duration_ms: u64,
+) -> Result<AgentOutput, AgentError> {
+    if config.verbose {
+        parse_stream_response(stdout, config, fallback_duration_ms)
+    } else {
+        parse_response(stdout, config, fallback_duration_ms)
+    }
 }
 
 #[cfg(test)]
@@ -631,5 +755,114 @@ mod tests {
         let config = AgentConfig::new("test");
         let result = parse_response("not json", &config, 0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_args_verbose_uses_stream_json() {
+        let mut config = AgentConfig::new("hello");
+        config.verbose = true;
+        let args = build_args(&config).unwrap();
+        assert_eq!(args[2], "--output-format");
+        assert_eq!(args[3], "stream-json");
+    }
+
+    #[test]
+    fn build_args_non_verbose_uses_json() {
+        let config = AgentConfig::new("hello");
+        let args = build_args(&config).unwrap();
+        assert_eq!(args[3], "json");
+    }
+
+    #[test]
+    fn parse_stream_response_extracts_messages_and_result() {
+        let stream = [
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me read that file."},{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"/tmp/test.rs"}}],"stop_reason":"tool_use"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"}}"#,
+            r#"{"type":"result","session_id":"s1","result":"Done.","usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.02,"duration_ms":500}"#,
+        ]
+        .join("\n");
+
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 999).unwrap();
+
+        assert_eq!(output.value, Value::String("Done.".to_string()));
+        assert_eq!(output.session_id, Some("s1".to_string()));
+        assert_eq!(output.duration_ms, 500);
+
+        let messages = output.debug_messages.unwrap();
+        assert_eq!(messages.len(), 2);
+
+        assert_eq!(messages[0].text.as_deref(), Some("Let me read that file."));
+        assert_eq!(messages[0].tool_calls.len(), 1);
+        assert_eq!(messages[0].tool_calls[0].name, "Read");
+        assert_eq!(messages[0].stop_reason.as_deref(), Some("tool_use"));
+
+        assert_eq!(messages[1].text.as_deref(), Some("Done."));
+        assert!(messages[1].tool_calls.is_empty());
+        assert_eq!(messages[1].stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
+    fn parse_stream_response_no_result_line_errors() {
+        let stream = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}}"#;
+        let config = AgentConfig::new("test");
+        let result = parse_stream_response(stream, &config, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_stream_response_empty_stream_errors() {
+        let config = AgentConfig::new("test");
+        let result = parse_stream_response("", &config, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_stream_response_skips_invalid_lines() {
+        let stream = [
+            "not json",
+            "",
+            r#"{"type":"result","result":"ok","duration_ms":100}"#,
+        ]
+        .join("\n");
+
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 999).unwrap();
+        assert_eq!(output.value, Value::String("ok".to_string()));
+        let messages = output.debug_messages.unwrap();
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn parse_stream_response_multiple_tool_calls_in_one_turn() {
+        let stream = [
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Grep","input":{"pattern":"foo"}},{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/tmp/bar"}}],"stop_reason":"tool_use"}}"#,
+            r#"{"type":"result","result":"done","duration_ms":200}"#,
+        ]
+        .join("\n");
+
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 0).unwrap();
+        let messages = output.debug_messages.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tool_calls.len(), 2);
+        assert_eq!(messages[0].tool_calls[0].name, "Grep");
+        assert_eq!(messages[0].tool_calls[1].name, "Read");
+        assert!(messages[0].text.is_none());
+    }
+
+    #[test]
+    fn debug_message_display_format() {
+        let msg = DebugMessage {
+            text: Some("Analyzing...".to_string()),
+            tool_calls: vec![DebugToolCall {
+                name: "Read".to_string(),
+                input: json!({"file_path": "/tmp/test.rs"}),
+            }],
+            stop_reason: Some("tool_use".to_string()),
+        };
+        let display = format!("{msg}");
+        assert!(display.contains("[assistant] Analyzing..."));
+        assert!(display.contains("[tool_use] Read"));
     }
 }
