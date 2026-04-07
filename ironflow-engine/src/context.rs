@@ -639,6 +639,7 @@ impl WorkflowContext {
                     cost_usd: Decimal::ZERO,
                     input_tokens: None,
                     output_tokens: None,
+                    debug_messages: None,
                 })
             }
             Err(err) => {
@@ -847,6 +848,7 @@ impl WorkflowContext {
                     cost_usd: child_ctx.total_cost_usd,
                     input_tokens: None,
                     output_tokens: None,
+                    debug_messages: None,
                 })
             }
             Err(err) => {
@@ -892,6 +894,7 @@ impl WorkflowContext {
             cost_usd: step.cost_usd,
             input_tokens: step.input_tokens,
             output_tokens: step.output_tokens,
+            debug_messages: None,
         };
         self.total_cost_usd += output.cost_usd;
         self.total_duration_ms += output.duration_ms;
