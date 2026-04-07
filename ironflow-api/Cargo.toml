@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.6.0"
+version = "2.6.1"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -19,8 +19,8 @@ prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometh
 
 [dependencies]
 ironflow-store = { version = "2.4.0", path = "../ironflow-store" }
-ironflow-engine = { version = "2.5.1", path = "../ironflow-engine" }
-ironflow-core = { version = "2.2.0", path = "../ironflow-core" }
+ironflow-engine = { version = "2.5.2", path = "../ironflow-engine" }
+ironflow-core = { version = "2.3.0", path = "../ironflow-core" }
 ironflow-auth = { version = "2.0.0", path = "../ironflow-auth" }
 
 axum = { version = "0.8", features = ["json"] }
