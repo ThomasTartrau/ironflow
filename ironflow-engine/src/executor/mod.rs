@@ -15,7 +15,7 @@ use rust_decimal::Decimal;
 use serde_json::Value;
 use uuid::Uuid;
 
-use ironflow_core::provider::AgentProvider;
+use ironflow_core::provider::{AgentProvider, DebugMessage};
 
 use crate::config::StepConfig;
 use crate::error::EngineError;
@@ -37,6 +37,8 @@ pub struct StepOutput {
     pub input_tokens: Option<u64>,
     /// Output token count (agent steps only).
     pub output_tokens: Option<u64>,
+    /// Conversation trace from verbose agent invocations.
+    pub debug_messages: Option<Vec<DebugMessage>>,
 }
 
 /// Result of a single step within a [`parallel`](crate::context::WorkflowContext::parallel) batch.

@@ -18,8 +18,10 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::error::AgentError;
 use crate::operations::agent::{Model, PermissionMode};
@@ -33,7 +35,7 @@ pub type InvokeFuture<'a> =
 /// Built by [`Agent::run`](crate::operations::agent::Agent::run) from the builder state.
 /// Provider implementations translate these fields into whatever format the underlying
 /// backend expects.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct AgentConfig {
     /// Optional system prompt that sets the agent's persona or constraints.
@@ -46,9 +48,11 @@ pub struct AgentConfig {
     ///
     /// Accepts any string. Use [`Model`] constants for well-known Claude models
     /// (e.g. `Model::SONNET`), or pass a custom identifier for other providers.
+    #[serde(default = "default_model")]
     pub model: String,
 
     /// Allowlist of tool names the agent may invoke (empty = provider default).
+    #[serde(default)]
     pub allowed_tools: Vec<String>,
 
     /// Maximum number of agentic turns before the provider should stop.
@@ -64,10 +68,12 @@ pub struct AgentConfig {
     pub mcp_config: Option<String>,
 
     /// Permission mode controlling how the agent handles tool-use approvals.
+    #[serde(default)]
     pub permission_mode: PermissionMode,
 
     /// Optional JSON Schema string. When set, the provider should request
     /// structured (typed) output from the model.
+    #[serde(alias = "output_schema")]
     pub json_schema: Option<String>,
 
     /// Optional session ID to resume a previous conversation.
@@ -82,7 +88,12 @@ pub struct AgentConfig {
     /// record every assistant message and tool call. The resulting
     /// [`AgentOutput::debug_messages`] field will contain the conversation
     /// trace for inspection.
+    #[serde(default)]
     pub verbose: bool,
+}
+
+fn default_model() -> String {
+    Model::SONNET.to_string()
 }
 
 /// Raw output returned by an [`AgentProvider`] after a successful invocation.
@@ -207,6 +218,94 @@ impl AgentConfig {
             resume_session_id: None,
             verbose: false,
         }
+    }
+
+    /// Set the system prompt.
+    pub fn system_prompt(mut self, prompt: &str) -> Self {
+        self.system_prompt = Some(prompt.to_string());
+        self
+    }
+
+    /// Set the model name.
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = model.to_string();
+        self
+    }
+
+    /// Set the maximum budget in USD.
+    pub fn max_budget_usd(mut self, budget: f64) -> Self {
+        self.max_budget_usd = Some(budget);
+        self
+    }
+
+    /// Set the maximum number of turns.
+    pub fn max_turns(mut self, turns: u32) -> Self {
+        self.max_turns = Some(turns);
+        self
+    }
+
+    /// Add an allowed tool.
+    pub fn allow_tool(mut self, tool: &str) -> Self {
+        self.allowed_tools.push(tool.to_string());
+        self
+    }
+
+    /// Set the working directory.
+    pub fn working_dir(mut self, dir: &str) -> Self {
+        self.working_dir = Some(dir.to_string());
+        self
+    }
+
+    /// Set the permission mode.
+    pub fn permission_mode(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = mode;
+        self
+    }
+
+    /// Enable verbose/debug mode.
+    pub fn verbose(mut self, enabled: bool) -> Self {
+        self.verbose = enabled;
+        self
+    }
+
+    /// Set structured output from a Rust type implementing [`JsonSchema`].
+    ///
+    /// The schema is serialized once at build time. When set, the provider
+    /// will request typed output conforming to this schema.
+    ///
+    /// **Important:** structured output requires `max_turns >= 2`.
+    pub fn output<T: JsonSchema>(mut self) -> Self {
+        let schema = schemars::schema_for!(T);
+        self.json_schema = match serde_json::to_string(&schema) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    type_name = std::any::type_name::<T>(),
+                    "failed to serialize JSON schema, structured output disabled"
+                );
+                None
+            }
+        };
+        self
+    }
+
+    /// Set structured output from a pre-serialized JSON Schema string.
+    pub fn output_schema_raw(mut self, schema: &str) -> Self {
+        self.json_schema = Some(schema.to_string());
+        self
+    }
+
+    /// Set the MCP server configuration file path.
+    pub fn mcp_config(mut self, config: &str) -> Self {
+        self.mcp_config = Some(config.to_string());
+        self
+    }
+
+    /// Set a session ID to resume a previous conversation.
+    pub fn resume(mut self, session_id: &str) -> Self {
+        self.resume_session_id = Some(session_id.to_string());
+        self
     }
 }
 

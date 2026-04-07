@@ -13,6 +13,8 @@ stages:
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
+  GIT_DEPTH: 0
+  GIT_STRATEGY: clone
 
 .rust-cache: &rust-cache
   cache:

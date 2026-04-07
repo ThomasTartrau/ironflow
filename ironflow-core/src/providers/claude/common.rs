@@ -174,6 +174,11 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
         output_format.to_string(),
     ];
 
+    // Claude CLI requires --verbose when using --output-format=stream-json with -p
+    if config.verbose {
+        args.push("--verbose".to_string());
+    }
+
     push_opt(&mut args, "--system-prompt", &config.system_prompt);
     push_flag(&mut args, "--model", &config.model);
     if !config.allowed_tools.is_empty() {
@@ -758,12 +763,16 @@ mod tests {
     }
 
     #[test]
-    fn build_args_verbose_uses_stream_json() {
+    fn build_args_verbose_uses_stream_json_and_verbose_flag() {
         let mut config = AgentConfig::new("hello");
         config.verbose = true;
         let args = build_args(&config).unwrap();
         assert_eq!(args[2], "--output-format");
         assert_eq!(args[3], "stream-json");
+        assert!(
+            args.contains(&"--verbose".to_string()),
+            "stream-json with -p requires --verbose flag, got: {args:?}"
+        );
     }
 
     #[test]
@@ -771,6 +780,10 @@ mod tests {
         let config = AgentConfig::new("hello");
         let args = build_args(&config).unwrap();
         assert_eq!(args[3], "json");
+        assert!(
+            !args.contains(&"--verbose".to_string()),
+            "--verbose should not be present when verbose is false"
+        );
     }
 
     #[test]

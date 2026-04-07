@@ -106,9 +106,10 @@ impl Model {
 ///
 /// These map to the `--permission-mode` and `--dangerously-skip-permissions`
 /// flags in the Claude CLI.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub enum PermissionMode {
     /// Use the CLI default permission behavior.
+    #[default]
     Default,
     /// Automatically approve tool-use requests.
     Auto,
@@ -118,6 +119,21 @@ pub enum PermissionMode {
     ///
     /// **Warning**: the agent will have unrestricted filesystem and shell access.
     BypassPermissions,
+}
+
+impl<'de> Deserialize<'de> for PermissionMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.to_lowercase().replace('_', "").as_str() {
+            "auto" => Self::Auto,
+            "dontask" => Self::DontAsk,
+            "bypass" | "bypasspermissions" => Self::BypassPermissions,
+            _ => Self::Default,
+        })
+    }
 }
 
 /// Builder for a single agent invocation.
@@ -164,6 +180,32 @@ impl Agent {
     pub fn new() -> Self {
         Self {
             config: AgentConfig::new(""),
+            dry_run: None,
+            retry_policy: None,
+        }
+    }
+
+    /// Create an agent builder from an existing [`AgentConfig`].
+    ///
+    /// Useful when the config comes from a serialized workflow definition
+    /// rather than being built programmatically.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let config = AgentConfig::new("Summarize the README");
+    /// let result = Agent::from_config(config).run(&provider).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_config(config: AgentConfig) -> Self {
+        Self {
+            config,
             dry_run: None,
             retry_policy: None,
         }

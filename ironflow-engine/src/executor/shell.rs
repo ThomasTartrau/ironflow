@@ -78,6 +78,7 @@ impl StepExecutor for ShellExecutor<'_> {
             cost_usd: Decimal::ZERO,
             input_tokens: None,
             output_tokens: None,
+            debug_messages: None,
         })
     }
 }
