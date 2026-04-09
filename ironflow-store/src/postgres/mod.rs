@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::{ConnectOptions, PgPool, Row};
+use sqlx::{PgPool, Row};
 use tracing::info;
 use uuid::Uuid;
 
@@ -159,8 +159,7 @@ impl PostgresStore {
     pub async fn with_config(database_url: &str, config: PoolConfig) -> Result<Self, StoreError> {
         let connect_options = database_url
             .parse::<PgConnectOptions>()
-            .map_err(|e| StoreError::Database(e.to_string()))?
-            .connect_timeout(config.connect_timeout);
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let mut pool_options = PgPoolOptions::new()
             .max_connections(config.max_connections)
@@ -195,7 +194,6 @@ impl PostgresStore {
 
         info!(
             max_connections = config.max_connections,
-            connect_timeout_secs = config.connect_timeout.as_secs(),
             acquire_timeout_secs = config.acquire_timeout.as_secs(),
             "PostgresStore connected and migrations applied"
         );
