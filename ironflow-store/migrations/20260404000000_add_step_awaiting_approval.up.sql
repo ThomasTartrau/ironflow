@@ -9,16 +9,16 @@ DECLARE
     v_failed_id UUID;
 BEGIN
     -- Look up existing machine and states
-    SELECT id INTO v_machine_id
-    FROM lib_fsm.abstract_machines
+    SELECT abstract_machine__id INTO v_machine_id
+    FROM lib_fsm.abstract_state_machine
     WHERE name = 'step_lifecycle';
 
-    SELECT id INTO v_running_id
-    FROM lib_fsm.abstract_states
+    SELECT abstract_state__id INTO v_running_id
+    FROM lib_fsm.abstract_state
     WHERE abstract_machine__id = v_machine_id AND name = 'running';
 
-    SELECT id INTO v_failed_id
-    FROM lib_fsm.abstract_states
+    SELECT abstract_state__id INTO v_failed_id
+    FROM lib_fsm.abstract_state
     WHERE abstract_machine__id = v_machine_id AND name = 'failed';
 
     -- Create the new states
