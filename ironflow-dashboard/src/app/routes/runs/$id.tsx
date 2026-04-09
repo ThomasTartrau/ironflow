@@ -14,9 +14,11 @@ import { StatCard } from "@/app/components/StatCard";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TriggerBadge } from "@/app/components/TriggerBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
+import { CollapsibleSection } from "@/app/components/CollapsibleSection";
 import { RunActions } from "./_components/RunActions";
 import { StepList } from "./_components/StepList";
 import { StepFlow } from "./_components/StepFlow";
+import { StepTimeline } from "./_components/StepTimeline";
 import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
 import { Clock, DollarSign, RotateCcw, Calendar } from "lucide-react";
@@ -120,11 +122,24 @@ export function Component() {
 					<h2 className="text-base font-semibold tracking-tight">
 						Steps ({steps.length})
 					</h2>
-					<StepFlow
-						steps={steps}
-						workflowName={run.workflow_name}
-						runId={run.id}
-					/>
+					<CollapsibleSection
+						storageKey="steps-timeline"
+						title="Timeline"
+						defaultOpen
+					>
+						<StepTimeline
+							steps={steps}
+							runStartedAt={run.started_at}
+							runId={run.id}
+						/>
+					</CollapsibleSection>
+					<CollapsibleSection storageKey="steps-flow" title="Flow">
+						<StepFlow
+							steps={steps}
+							workflowName={run.workflow_name}
+							runId={run.id}
+						/>
+					</CollapsibleSection>
 					<StepList steps={steps} />
 				</div>
 			</div>
