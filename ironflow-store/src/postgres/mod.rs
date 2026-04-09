@@ -22,8 +22,8 @@ mod helpers;
 use std::time::Duration;
 
 use chrono::Utc;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Row};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{ConnectOptions, PgPool, Row};
 use tracing::info;
 use uuid::Uuid;
 
@@ -157,11 +157,15 @@ impl PostgresStore {
     /// # }
     /// ```
     pub async fn with_config(database_url: &str, config: PoolConfig) -> Result<Self, StoreError> {
+        let connect_options = database_url
+            .parse::<PgConnectOptions>()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .connect_timeout(config.connect_timeout);
+
         let mut pool_options = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .min_connections(config.min_connections)
-            .acquire_timeout(config.acquire_timeout)
-            .connect_timeout(config.connect_timeout);
+            .acquire_timeout(config.acquire_timeout);
 
         if let Some(idle_timeout) = config.idle_timeout {
             pool_options = pool_options.idle_timeout(idle_timeout);
@@ -171,7 +175,7 @@ impl PostgresStore {
         }
 
         let pool = pool_options
-            .connect(database_url)
+            .connect_with(connect_options)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
