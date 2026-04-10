@@ -288,6 +288,113 @@ impl PostgresStore {
         }
     }
 
+    /// Apply a partial update to a run within an existing transaction.
+    ///
+    /// Handles FSM status transition and dynamic SQL UPDATE building.
+    /// Callers are responsible for committing the transaction.
+    async fn apply_run_update(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+        update: &RunUpdate,
+    ) -> Result<(), StoreError> {
+        if let Some(new_status) = update.status {
+            let row = sqlx::query(
+                r#"
+                SELECT ast.name as state_name, r.state_machine__id
+                FROM ironflow.runs r
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE r.id = $1
+                FOR UPDATE
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .ok_or(StoreError::RunNotFound(id))?;
+
+            let current_state_name: &str = row.get("state_name");
+            let current = helpers::parse_run_status(current_state_name)?;
+
+            if !current.can_transition_to(&new_status) {
+                return Err(StoreError::InvalidTransition {
+                    from: current,
+                    to: new_status,
+                });
+            }
+
+            let event = Self::run_status_to_event(current, new_status)?;
+            let state_machine_id: Uuid = row.get("state_machine__id");
+
+            sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                .bind(state_machine_id)
+                .bind(event)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+
+        let now = Utc::now();
+        let mut sets = vec!["updated_at = $1".to_string()];
+        let mut bind_idx = 2u32;
+
+        macro_rules! push_set {
+            ($field:expr, $val:expr) => {
+                if $val.is_some() {
+                    sets.push(format!("{} = ${}", $field, bind_idx));
+                    bind_idx += 1;
+                }
+            };
+        }
+
+        push_set!("error", update.error);
+        push_set!("cost_usd", update.cost_usd);
+        push_set!("duration_ms", update.duration_ms);
+        push_set!("started_at", update.started_at);
+        push_set!("completed_at", update.completed_at);
+
+        if update.increment_retry {
+            sets.push("retry_count = retry_count + 1".to_string());
+        }
+
+        let sql = format!(
+            "UPDATE ironflow.runs SET {} WHERE id = ${bind_idx}",
+            sets.join(", ")
+        );
+
+        let mut query = sqlx::query(&sql).bind(now);
+
+        if let Some(ref error) = update.error {
+            query = query.bind(error);
+        }
+        if let Some(cost) = update.cost_usd {
+            query = query.bind(cost);
+        }
+        if let Some(dur) = update.duration_ms {
+            query = query.bind(dur as i64);
+        }
+        if let Some(started) = update.started_at {
+            query = query.bind(started);
+        }
+        if let Some(completed) = update.completed_at {
+            query = query.bind(completed);
+        }
+
+        query = query.bind(id);
+
+        let result = query
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::RunNotFound(id));
+        }
+
+        Ok(())
+    }
+
     /// Map StepStatus to FSM event name.
     fn step_status_to_event(
         from: crate::entities::StepStatus,
@@ -581,108 +688,48 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            // Handle status transition if provided
-            if let Some(new_status) = update.status {
-                let row = sqlx::query(
-                    r#"
-                    SELECT ast.name as state_name, r.state_machine__id
-                    FROM ironflow.runs r
-                    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
-                    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
-                    WHERE r.id = $1
-                    FOR UPDATE
-                    "#
-                )
-                .bind(id)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?
-                .ok_or(StoreError::RunNotFound(id))?;
-
-                let current_state_name: &str = row.get("state_name");
-                let current = helpers::parse_run_status(current_state_name)?;
-
-                if !current.can_transition_to(&new_status) {
-                    return Err(StoreError::InvalidTransition {
-                        from: current,
-                        to: new_status,
-                    });
-                }
-
-                let event = Self::run_status_to_event(current, new_status)?;
-                let state_machine_id: Uuid = row.get("state_machine__id");
-
-                // Perform FSM transition
-                sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
-                    .bind(state_machine_id)
-                    .bind(event)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-
-            let now = Utc::now();
-            let mut sets = vec!["updated_at = $1".to_string()];
-            let mut bind_idx = 2u32;
-
-            macro_rules! push_set {
-                ($field:expr, $val:expr) => {
-                    if $val.is_some() {
-                        sets.push(format!("{} = ${}", $field, bind_idx));
-                        bind_idx += 1;
-                    }
-                };
-            }
-
-            push_set!("error", update.error);
-            push_set!("cost_usd", update.cost_usd);
-            push_set!("duration_ms", update.duration_ms);
-            push_set!("started_at", update.started_at);
-            push_set!("completed_at", update.completed_at);
-
-            if update.increment_retry {
-                sets.push("retry_count = retry_count + 1".to_string());
-            }
-
-            let sql = format!(
-                "UPDATE ironflow.runs SET {} WHERE id = ${bind_idx}",
-                sets.join(", ")
-            );
-
-            let mut query = sqlx::query(&sql).bind(now);
-
-            if let Some(ref error) = update.error {
-                query = query.bind(error);
-            }
-            if let Some(cost) = update.cost_usd {
-                query = query.bind(cost);
-            }
-            if let Some(dur) = update.duration_ms {
-                query = query.bind(dur as i64);
-            }
-            if let Some(started) = update.started_at {
-                query = query.bind(started);
-            }
-            if let Some(completed) = update.completed_at {
-                query = query.bind(completed);
-            }
-
-            query = query.bind(id);
-
-            let result = query
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            if result.rows_affected() == 0 {
-                return Err(StoreError::RunNotFound(id));
-            }
+            Self::apply_run_update(&mut tx, id, &update).await?;
 
             tx.commit()
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(())
+        })
+    }
+
+    fn update_run_returning(&self, id: Uuid, update: RunUpdate) -> StoreFuture<'_, Run> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Self::apply_run_update(&mut tx, id, &update).await?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT r.*, ast.name as state_name
+                FROM ironflow.runs r
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE r.id = $1
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .ok_or(StoreError::RunNotFound(id))?;
+
+            let run = row_to_run(&row)?;
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(run)
         })
     }
 

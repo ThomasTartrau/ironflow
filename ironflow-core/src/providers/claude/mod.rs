@@ -25,7 +25,7 @@ pub mod k8s;
 pub use local::ClaudeCodeProvider;
 
 #[cfg(feature = "transport-ssh")]
-pub use ssh::SshProvider;
+pub use ssh::{HostKeyPolicy, SshProvider};
 
 #[cfg(feature = "transport-docker")]
 pub use docker::DockerProvider;
