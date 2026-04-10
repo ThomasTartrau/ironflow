@@ -459,9 +459,6 @@ impl Engine {
     /// On success: updates run to Completed with cost, duration, and completed_at.
     /// On failure: updates run to Failed with error, cost, duration, and completed_at.
     /// Always: fetches and returns the final Run.
-    ///
-    /// TODO: `get_run` at the end could be optimized by using an `update_run_returning`
-    /// method if the store supports it.
     async fn finalize_run(
         &self,
         run_id: Uuid,
@@ -474,12 +471,14 @@ impl Engine {
         let completed_at = Utc::now();
 
         let final_status;
+        let final_run;
 
         match result {
             Ok(()) => {
                 final_status = RunStatus::Completed;
-                self.store
-                    .update_run(
+                final_run = self
+                    .store
+                    .update_run_returning(
                         run_id,
                         RunUpdate {
                             status: Some(RunStatus::Completed),
@@ -504,8 +503,9 @@ impl Engine {
                 ref message,
             }) => {
                 final_status = RunStatus::AwaitingApproval;
-                self.store
-                    .update_run(
+                final_run = self
+                    .store
+                    .update_run_returning(
                         run_id,
                         RunUpdate {
                             status: Some(RunStatus::AwaitingApproval),
@@ -573,10 +573,7 @@ impl Engine {
         #[cfg(feature = "prometheus")]
         self.emit_run_metrics(workflow_name, final_status, total_duration, ctx);
 
-        self.store
-            .get_run(run_id)
-            .await?
-            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))
+        Ok(final_run)
     }
 
     /// Emit Prometheus metrics for a completed run.

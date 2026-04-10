@@ -54,12 +54,41 @@ enum SshAuth {
     },
 }
 
-/// SSH client handler that accepts any server key.
+/// Policy for verifying the remote SSH server's host key.
 ///
-/// In production you should verify the server's public key against a known
-/// hosts database. This implementation unconditionally trusts the server for
-/// simplicity, so callers should layer their own verification if needed.
-struct SshHandler;
+/// Controls how [`SshProvider`] handles the server's public key during the
+/// SSH handshake. The default is [`AcceptAll`](Self::AcceptAll), which is
+/// convenient for development but **insecure** for production.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_core::providers::claude::SshProvider;
+/// use ironflow_core::providers::claude::ssh::HostKeyPolicy;
+///
+/// let provider = SshProvider::new("host.example.com", "deploy")
+///     .host_key_policy(HostKeyPolicy::RejectAll)
+///     .password("s3cret");
+/// ```
+#[derive(Clone, Default, Debug)]
+pub enum HostKeyPolicy {
+    /// Accept any server key without verification (**INSECURE**).
+    ///
+    /// Suitable only for development and testing. A warning is logged
+    /// every time a connection is made with this policy.
+    #[default]
+    AcceptAll,
+    /// Reject all server keys unconditionally.
+    ///
+    /// Useful for testing error paths or as a safeguard when no
+    /// verification mechanism is configured yet.
+    RejectAll,
+}
+
+/// SSH client handler that applies a [`HostKeyPolicy`] during the handshake.
+struct SshHandler {
+    policy: HostKeyPolicy,
+}
 
 impl russh::client::Handler for SshHandler {
     type Error = russh::Error;
@@ -68,8 +97,16 @@ impl russh::client::Handler for SshHandler {
         &mut self,
         _server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // TODO: add known_hosts verification option
-        Ok(true)
+        match self.policy {
+            HostKeyPolicy::AcceptAll => {
+                debug!("accepting SSH server key without verification (HostKeyPolicy::AcceptAll)");
+                Ok(true)
+            }
+            HostKeyPolicy::RejectAll => {
+                warn!("rejecting SSH server key (HostKeyPolicy::RejectAll)");
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -102,6 +139,7 @@ pub struct SshProvider {
     claude_path: String,
     working_dir: Option<String>,
     timeout: Duration,
+    host_key_policy: HostKeyPolicy,
 }
 
 impl SshProvider {
@@ -119,6 +157,7 @@ impl SshProvider {
             claude_path: "claude".to_string(),
             working_dir: None,
             timeout: DEFAULT_TIMEOUT,
+            host_key_policy: HostKeyPolicy::default(),
         }
     }
 
@@ -167,6 +206,23 @@ impl SshProvider {
     /// Override the default timeout (default: 5 minutes).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set the host key verification policy (default: [`HostKeyPolicy::AcceptAll`]).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::SshProvider;
+    /// use ironflow_core::providers::claude::ssh::HostKeyPolicy;
+    ///
+    /// let provider = SshProvider::new("host.example.com", "user")
+    ///     .host_key_policy(HostKeyPolicy::RejectAll)
+    ///     .password("s3cret");
+    /// ```
+    pub fn host_key_policy(mut self, policy: HostKeyPolicy) -> Self {
+        self.host_key_policy = policy;
         self
     }
 
@@ -261,9 +317,12 @@ impl AgentProvider for SshProvider {
 
             // Connect
             let ssh_config = Arc::new(russh::client::Config::default());
+            let handler = SshHandler {
+                policy: self.host_key_policy.clone(),
+            };
             let mut session = time::timeout(
                 Duration::from_secs(30),
-                russh::client::connect(ssh_config, (&*self.host, self.port), SshHandler),
+                russh::client::connect(ssh_config, (&*self.host, self.port), handler),
             )
             .await
             .map_err(|_| AgentError::Timeout {
@@ -394,6 +453,7 @@ mod tests {
         assert!(provider.working_dir.is_none());
         assert_eq!(provider.timeout, DEFAULT_TIMEOUT);
         assert!(provider.auth.is_none());
+        assert!(matches!(provider.host_key_policy, HostKeyPolicy::AcceptAll));
     }
 
     #[test]
@@ -443,5 +503,48 @@ mod tests {
         let cloned = provider.clone();
         assert_eq!(cloned.host, "host");
         assert_eq!(cloned.port, 2222);
+    }
+
+    #[test]
+    fn host_key_policy_default_is_accept_all() {
+        let policy = HostKeyPolicy::default();
+        assert!(matches!(policy, HostKeyPolicy::AcceptAll));
+    }
+
+    #[test]
+    fn host_key_policy_builder_method() {
+        let provider = SshProvider::new("host", "user").host_key_policy(HostKeyPolicy::RejectAll);
+        assert!(matches!(provider.host_key_policy, HostKeyPolicy::RejectAll));
+    }
+
+    /// A valid Ed25519 public key in OpenSSH format for testing.
+    const TEST_PUBKEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBOZMtGiPyW0pMN+JJuYjIGJfqyO5MHBsFkzseVSp60M test@example";
+
+    fn test_public_key() -> russh::keys::PublicKey {
+        russh::keys::PublicKey::from_openssh(TEST_PUBKEY).expect("parse test public key")
+    }
+
+    #[tokio::test]
+    async fn host_key_policy_accept_all_returns_true() {
+        use russh::client::Handler;
+
+        let mut handler = SshHandler {
+            policy: HostKeyPolicy::AcceptAll,
+        };
+        let key = test_public_key();
+        let result = handler.check_server_key(&key).await;
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn host_key_policy_reject_all_returns_false() {
+        use russh::client::Handler;
+
+        let mut handler = SshHandler {
+            policy: HostKeyPolicy::RejectAll,
+        };
+        let key = test_public_key();
+        let result = handler.check_server_key(&key).await;
+        assert_eq!(result.unwrap(), false);
     }
 }

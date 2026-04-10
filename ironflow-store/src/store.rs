@@ -120,4 +120,23 @@ pub trait RunStore: Send + Sync {
     /// Returns every edge where either `step_id` or `depends_on` belongs
     /// to the run. Ordered by `created_at` ascending.
     fn list_step_dependencies(&self, run_id: Uuid) -> StoreFuture<'_, Vec<StepDependency>>;
+
+    /// Apply a partial update to a run and return the updated run.
+    ///
+    /// Combines [`update_run`](Self::update_run) and [`get_run`](Self::get_run) in
+    /// a single operation to avoid an extra round-trip. Store implementations
+    /// may override this for efficiency (e.g. reading within the same transaction).
+    ///
+    /// The default implementation calls `update_run` followed by `get_run`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::RunNotFound`] if the run does not exist.
+    /// Returns [`StoreError::InvalidTransition`] if the status transition is not allowed.
+    fn update_run_returning(&self, id: Uuid, update: RunUpdate) -> StoreFuture<'_, Run> {
+        Box::pin(async move {
+            self.update_run(id, update).await?;
+            self.get_run(id).await?.ok_or(StoreError::RunNotFound(id))
+        })
+    }
 }

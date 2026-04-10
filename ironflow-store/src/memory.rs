@@ -1550,4 +1550,71 @@ mod tests {
         assert_eq!(r4.trigger, TriggerKind::Api);
         assert!(matches!(r5.trigger, TriggerKind::Retry { .. }));
     }
+
+    // ---- update_run_returning ----
+
+    #[tokio::test]
+    async fn update_run_returning_applies_and_returns() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        // Transition Pending -> Running first
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        let updated = store
+            .update_run_returning(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Completed),
+                    cost_usd: Some(Decimal::new(4200, 2)),
+                    duration_ms: Some(1500),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.id, run.id);
+        assert_eq!(updated.status.state, RunStatus::Completed);
+        assert_eq!(updated.cost_usd, Decimal::new(4200, 2));
+        assert_eq!(updated.duration_ms, 1500);
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_run_returning_not_found() {
+        let store = InMemoryStore::new();
+        let result = store
+            .update_run_returning(
+                Uuid::nil(),
+                RunUpdate {
+                    status: Some(RunStatus::Running),
+                    ..RunUpdate::default()
+                },
+            )
+            .await;
+
+        assert!(matches!(result, Err(StoreError::RunNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn update_run_returning_invalid_transition() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        let result = store
+            .update_run_returning(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Completed),
+                    ..RunUpdate::default()
+                },
+            )
+            .await;
+
+        assert!(matches!(result, Err(StoreError::InvalidTransition { .. })));
+    }
 }
