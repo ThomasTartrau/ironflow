@@ -1,11 +1,13 @@
-//! Worker — polls the API for pending runs and executes them.
+//! Worker -- polls the API for pending runs and executes them.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tokio::spawn;
-use tokio::sync::Semaphore;
-use tokio::time::sleep;
+use tokio::sync::{Semaphore, mpsc};
+use tokio::time::{sleep, timeout};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 #[cfg(feature = "prometheus")]
@@ -13,6 +15,7 @@ use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
+use ironflow_store::entities::RunStatus;
 use ironflow_store::store::RunStore;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge};
@@ -24,6 +27,9 @@ use crate::error::WorkerError;
 
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const DEFAULT_MAX_CONSECUTIVE_PANICS: u32 = 3;
+const DEFAULT_PANIC_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 #[cfg(feature = "heartbeat")]
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -42,6 +48,8 @@ const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 ///     .provider(Arc::new(ClaudeCodeProvider::new()))
 ///     .concurrency(4)
 ///     .poll_interval(Duration::from_secs(2))
+///     .run_timeout(Duration::from_secs(600))
+///     .max_consecutive_panics(5)
 ///     .build()?;
 ///
 /// worker.run().await?;
@@ -55,6 +63,9 @@ pub struct WorkerBuilder {
     handlers: Vec<Box<dyn WorkflowHandler>>,
     concurrency: usize,
     poll_interval: Duration,
+    run_timeout: Duration,
+    max_consecutive_panics: u32,
+    panic_cooldown: Duration,
     #[cfg(feature = "heartbeat")]
     heartbeat_url: Option<String>,
     #[cfg(feature = "heartbeat")]
@@ -71,6 +82,9 @@ impl WorkerBuilder {
             handlers: Vec::new(),
             concurrency: DEFAULT_CONCURRENCY,
             poll_interval: DEFAULT_POLL_INTERVAL,
+            run_timeout: DEFAULT_RUN_TIMEOUT,
+            max_consecutive_panics: DEFAULT_MAX_CONSECUTIVE_PANICS,
+            panic_cooldown: DEFAULT_PANIC_COOLDOWN,
             #[cfg(feature = "heartbeat")]
             heartbeat_url: None,
             #[cfg(feature = "heartbeat")]
@@ -99,6 +113,70 @@ impl WorkerBuilder {
     /// Set the interval between polls for new runs.
     pub fn poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
+        self
+    }
+
+    /// Set the maximum execution time per run.
+    ///
+    /// If a run exceeds this duration, it is cancelled and marked as `Failed`
+    /// with a timeout error. Defaults to 30 minutes.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .run_timeout(Duration::from_secs(600));
+    /// # }
+    /// ```
+    pub fn run_timeout(mut self, timeout: Duration) -> Self {
+        self.run_timeout = timeout;
+        self
+    }
+
+    /// Set the maximum number of consecutive panics per workflow before
+    /// the worker stops picking runs for that workflow (poison pill guard).
+    ///
+    /// When a workflow panics `max_consecutive_panics` times in a row without
+    /// a single success, the worker skips it for a cooldown period (see
+    /// [`panic_cooldown`](Self::panic_cooldown)). Defaults to 3.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .max_consecutive_panics(5);
+    /// # }
+    /// ```
+    pub fn max_consecutive_panics(mut self, n: u32) -> Self {
+        self.max_consecutive_panics = n;
+        self
+    }
+
+    /// Set the cooldown duration after a workflow is flagged as a poison pill.
+    ///
+    /// After `max_consecutive_panics` is reached, runs for that workflow are
+    /// skipped until this duration elapses. Defaults to 5 minutes.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .panic_cooldown(Duration::from_secs(600));
+    /// # }
+    /// ```
+    pub fn panic_cooldown(mut self, cooldown: Duration) -> Self {
+        self.panic_cooldown = cooldown;
         self
     }
 
@@ -180,6 +258,9 @@ impl WorkerBuilder {
             engine: Arc::new(engine),
             concurrency: self.concurrency,
             poll_interval: self.poll_interval,
+            run_timeout: self.run_timeout,
+            max_consecutive_panics: self.max_consecutive_panics,
+            panic_cooldown: self.panic_cooldown,
             #[cfg(feature = "heartbeat")]
             heartbeat_url: self.heartbeat_url,
             #[cfg(feature = "heartbeat")]
@@ -195,6 +276,9 @@ pub struct Worker {
     engine: Arc<Engine>,
     concurrency: usize,
     poll_interval: Duration,
+    run_timeout: Duration,
+    max_consecutive_panics: u32,
+    panic_cooldown: Duration,
     #[cfg(feature = "heartbeat")]
     heartbeat_url: Option<String>,
     #[cfg(feature = "heartbeat")]
@@ -203,21 +287,81 @@ pub struct Worker {
     heartbeat_client: Client,
 }
 
+/// Tracks consecutive failures per workflow for poison pill detection.
+struct PoisonPillTracker {
+    max_consecutive: u32,
+    cooldown: Duration,
+    /// Maps workflow name to (consecutive panic count, last panic time).
+    state: HashMap<String, (u32, Instant)>,
+}
+
+impl PoisonPillTracker {
+    fn new(max_consecutive: u32, cooldown: Duration) -> Self {
+        Self {
+            max_consecutive,
+            cooldown,
+            state: HashMap::new(),
+        }
+    }
+
+    /// Record a panic for a workflow. Returns `true` if the workflow is now
+    /// considered a poison pill.
+    fn record_panic(&mut self, workflow: &str) -> bool {
+        let entry = self
+            .state
+            .entry(workflow.to_string())
+            .or_insert((0, Instant::now()));
+        entry.0 += 1;
+        entry.1 = Instant::now();
+        entry.0 >= self.max_consecutive
+    }
+
+    /// Record a successful execution, resetting the panic counter.
+    fn record_success(&mut self, workflow: &str) {
+        self.state.remove(workflow);
+    }
+
+    /// Returns `true` if the workflow is currently blocked as a poison pill.
+    fn is_blocked(&self, workflow: &str) -> bool {
+        self.state.get(workflow).is_some_and(|(count, last_panic)| {
+            *count >= self.max_consecutive && last_panic.elapsed() < self.cooldown
+        })
+    }
+}
+
 impl Worker {
-    /// Run the worker loop. Blocks until an error occurs or the process exits.
+    /// Run the worker loop until a shutdown signal (SIGTERM/SIGINT) is received.
+    ///
+    /// On shutdown, the worker stops picking new runs and waits for all
+    /// in-flight executions to complete before returning.
     ///
     /// # Errors
     ///
     /// Returns [`WorkerError`] if the polling loop encounters an unrecoverable error.
     pub async fn run(&self) -> Result<(), WorkerError> {
         let semaphore = Arc::new(Semaphore::new(self.concurrency));
+        let shutdown = CancellationToken::new();
         let mut idle_streak = 0u32;
+        let poison_tracker = Arc::new(Mutex::new(PoisonPillTracker::new(
+            self.max_consecutive_panics,
+            self.panic_cooldown,
+        )));
+        let (outcome_tx, mut outcome_rx) = mpsc::unbounded_channel::<RunOutcome>();
 
         info!(
             concurrency = self.concurrency,
             poll_interval_ms = self.poll_interval.as_millis() as u64,
+            run_timeout_secs = self.run_timeout.as_secs(),
             "worker started"
         );
+
+        // Spawn shutdown signal handler
+        let shutdown_clone = shutdown.clone();
+        spawn(async move {
+            shutdown_signal().await;
+            info!("shutdown signal received, draining in-flight runs...");
+            shutdown_clone.cancel();
+        });
 
         #[cfg(feature = "heartbeat")]
         if let Some(ref url) = self.heartbeat_url {
@@ -254,13 +398,53 @@ impl Worker {
             });
         }
 
-        loop {
+        while !shutdown.is_cancelled() {
+            // Drain outcome channel to update poison pill tracker
+            while let Ok(outcome) = outcome_rx.try_recv() {
+                let mut tracker = poison_tracker.lock().expect("poison tracker lock poisoned");
+                match outcome {
+                    RunOutcome::Success(ref wf) => tracker.record_success(wf),
+                    RunOutcome::Failed(ref wf) | RunOutcome::Timeout(ref wf) => {
+                        if tracker.record_panic(wf) {
+                            warn!(workflow = %wf, "workflow flagged as poison pill after consecutive failures");
+                        }
+                    }
+                    RunOutcome::Panicked(ref wf) => {
+                        if tracker.record_panic(wf) {
+                            error!(workflow = %wf, "workflow flagged as poison pill after consecutive panics");
+                        }
+                    }
+                }
+            }
+
             let run = self.engine.store().pick_next_pending().await;
 
             match run {
                 Ok(Some(run)) => {
                     #[cfg(feature = "prometheus")]
                     counter!(WORKER_POLLS_TOTAL, "result" => "hit").increment(1);
+
+                    // Poison pill check: skip workflows that keep failing
+                    let is_blocked = {
+                        let tracker = poison_tracker.lock().expect("poison tracker lock poisoned");
+                        tracker.is_blocked(&run.workflow_name)
+                    };
+                    if is_blocked {
+                        warn!(
+                            workflow = %run.workflow_name,
+                            run_id = %run.id,
+                            "skipping run: workflow flagged as poison pill, marking as failed"
+                        );
+                        if let Err(e) = self
+                            .engine
+                            .store()
+                            .update_run_status(run.id, RunStatus::Failed)
+                            .await
+                        {
+                            error!(run_id = %run.id, error = %e, "failed to mark poisoned run as failed");
+                        }
+                        continue;
+                    }
 
                     let permit = semaphore
                         .clone()
@@ -272,6 +456,8 @@ impl Worker {
                     let engine = self.engine.clone();
                     let run_id = run.id;
                     let workflow = run.workflow_name.clone();
+                    let workflow_for_watcher = workflow.clone();
+                    let run_timeout = self.run_timeout;
 
                     info!(run_id = %run_id, workflow = %workflow, "executing run");
 
@@ -280,33 +466,56 @@ impl Worker {
 
                     let handle = spawn(async move {
                         let _permit = permit;
-                        match engine.execute_handler_run(run_id).await {
-                            Ok(_) => {
+                        let result = timeout(run_timeout, engine.execute_handler_run(run_id)).await;
+
+                        match result {
+                            Ok(Ok(_)) => {
                                 info!(run_id = %run_id, workflow = %workflow, "run completed");
+                                RunOutcome::Success(workflow)
+                            }
+                            Ok(Err(e)) => {
+                                error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
+                                RunOutcome::Failed(workflow)
+                            }
+                            Err(_) => {
+                                error!(
+                                    run_id = %run_id,
+                                    workflow = %workflow,
+                                    timeout_secs = run_timeout.as_secs(),
+                                    "run timed out"
+                                );
+                                if let Err(e) = engine
+                                    .store()
+                                    .update_run_status(run_id, RunStatus::Failed)
+                                    .await
+                                {
+                                    error!(run_id = %run_id, error = %e, "failed to mark timed-out run as failed");
+                                }
+                                RunOutcome::Timeout(workflow)
+                            }
+                        }
+                    });
+
+                    // Spawn a watcher to catch panics and report outcomes
+                    let store = self.engine.store().clone();
+                    let tx = outcome_tx.clone();
+                    spawn(async move {
+                        match handle.await {
+                            Ok(outcome) => {
+                                let _ = tx.send(outcome);
                             }
                             Err(e) => {
-                                error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
+                                error!(run_id = %run_id, "spawned task panicked: {e}");
+                                if let Err(store_err) =
+                                    store.update_run_status(run_id, RunStatus::Failed).await
+                                {
+                                    error!(run_id = %run_id, error = %store_err, "failed to mark panicked run as failed");
+                                }
+                                let _ = tx.send(RunOutcome::Panicked(workflow_for_watcher));
                             }
                         }
                         #[cfg(feature = "prometheus")]
                         gauge!(WORKER_ACTIVE).decrement(1.0);
-                    });
-
-                    // Spawn a watcher to catch panics and mark the run as failed
-                    let store = self.engine.store().clone();
-                    spawn(async move {
-                        if let Err(e) = handle.await {
-                            error!(run_id = %run_id, "spawned task panicked: {e}");
-                            if let Err(store_err) = store
-                                .update_run_status(
-                                    run_id,
-                                    ironflow_store::entities::RunStatus::Failed,
-                                )
-                                .await
-                            {
-                                error!(run_id = %run_id, error = %store_err, "failed to mark panicked run as failed");
-                            }
-                        }
                     });
                 }
                 Ok(None) => {
@@ -329,6 +538,63 @@ impl Worker {
                 }
             }
         }
+
+        // Graceful drain: wait for all in-flight tasks to release their permits
+        info!(
+            in_flight = self.concurrency - semaphore.available_permits(),
+            "waiting for in-flight runs to complete..."
+        );
+        let _ = semaphore
+            .acquire_many(self.concurrency as u32)
+            .await
+            .map_err(|_| WorkerError::Shutdown("semaphore closed during drain".to_string()))?;
+
+        info!("all in-flight runs completed, worker shut down");
+        Ok(())
+    }
+}
+
+/// Outcome of a single run execution, used for poison pill tracking.
+enum RunOutcome {
+    /// Run completed successfully.
+    Success(String),
+    /// Run failed with an error (engine returned Err).
+    Failed(String),
+    /// Run exceeded its timeout.
+    Timeout(String),
+    /// Run panicked (task JoinError).
+    Panicked(String),
+}
+
+/// Wait for SIGTERM or SIGINT (Ctrl+C).
+async fn shutdown_signal() {
+    use tokio::signal;
+
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = {
+        use std::future::pending;
+        pending::<()>()
+    };
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
     }
 }
 
@@ -344,6 +610,12 @@ mod tests {
         assert_eq!(builder.worker_token, "my-token");
         assert_eq!(builder.concurrency, DEFAULT_CONCURRENCY);
         assert_eq!(builder.poll_interval, DEFAULT_POLL_INTERVAL);
+        assert_eq!(builder.run_timeout, DEFAULT_RUN_TIMEOUT);
+        assert_eq!(
+            builder.max_consecutive_panics,
+            DEFAULT_MAX_CONSECUTIVE_PANICS
+        );
+        assert_eq!(builder.panic_cooldown, DEFAULT_PANIC_COOLDOWN);
         assert!(builder.provider.is_none());
     }
 
@@ -381,6 +653,27 @@ mod tests {
         let interval = Duration::from_secs(5);
         let builder = WorkerBuilder::new("http://localhost:3000", "token").poll_interval(interval);
         assert_eq!(builder.poll_interval, interval);
+    }
+
+    #[test]
+    fn builder_run_timeout_sets_timeout() {
+        let dur = Duration::from_secs(120);
+        let builder = WorkerBuilder::new("http://localhost:3000", "token").run_timeout(dur);
+        assert_eq!(builder.run_timeout, dur);
+    }
+
+    #[test]
+    fn builder_max_consecutive_panics_sets_value() {
+        let builder =
+            WorkerBuilder::new("http://localhost:3000", "token").max_consecutive_panics(10);
+        assert_eq!(builder.max_consecutive_panics, 10);
+    }
+
+    #[test]
+    fn builder_panic_cooldown_sets_value() {
+        let dur = Duration::from_secs(600);
+        let builder = WorkerBuilder::new("http://localhost:3000", "token").panic_cooldown(dur);
+        assert_eq!(builder.panic_cooldown, dur);
     }
 
     #[test]
@@ -426,17 +719,49 @@ mod tests {
     }
 
     #[test]
+    fn builder_build_preserves_timeout() {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let dur = Duration::from_secs(300);
+        let worker = WorkerBuilder::new("http://localhost:3000", "token")
+            .provider(provider)
+            .run_timeout(dur)
+            .build()
+            .unwrap();
+        assert_eq!(worker.run_timeout, dur);
+    }
+
+    #[test]
+    fn builder_build_preserves_poison_pill_config() {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let cooldown = Duration::from_secs(120);
+        let worker = WorkerBuilder::new("http://localhost:3000", "token")
+            .provider(provider)
+            .max_consecutive_panics(7)
+            .panic_cooldown(cooldown)
+            .build()
+            .unwrap();
+        assert_eq!(worker.max_consecutive_panics, 7);
+        assert_eq!(worker.panic_cooldown, cooldown);
+    }
+
+    #[test]
     fn builder_chaining_works() {
         let provider = Arc::new(ClaudeCodeProvider::new());
         let result = WorkerBuilder::new("http://localhost:3000", "token")
             .provider(provider)
             .concurrency(4)
             .poll_interval(Duration::from_secs(3))
+            .run_timeout(Duration::from_secs(600))
+            .max_consecutive_panics(5)
+            .panic_cooldown(Duration::from_secs(120))
             .build();
         assert!(result.is_ok());
         let worker = result.unwrap();
         assert_eq!(worker.concurrency, 4);
         assert_eq!(worker.poll_interval, Duration::from_secs(3));
+        assert_eq!(worker.run_timeout, Duration::from_secs(600));
+        assert_eq!(worker.max_consecutive_panics, 5);
+        assert_eq!(worker.panic_cooldown, Duration::from_secs(120));
     }
 
     #[test]
@@ -510,5 +835,51 @@ mod tests {
             .build()
             .unwrap();
         assert!(worker.heartbeat_url.is_none());
+    }
+
+    // --- PoisonPillTracker tests ---
+
+    #[test]
+    fn poison_tracker_not_blocked_initially() {
+        let tracker = PoisonPillTracker::new(3, Duration::from_secs(300));
+        assert!(!tracker.is_blocked("my-workflow"));
+    }
+
+    #[test]
+    fn poison_tracker_blocked_after_max_panics() {
+        let mut tracker = PoisonPillTracker::new(3, Duration::from_secs(300));
+        assert!(!tracker.record_panic("wf"));
+        assert!(!tracker.record_panic("wf"));
+        assert!(tracker.record_panic("wf"));
+        assert!(tracker.is_blocked("wf"));
+    }
+
+    #[test]
+    fn poison_tracker_success_resets_count() {
+        let mut tracker = PoisonPillTracker::new(3, Duration::from_secs(300));
+        tracker.record_panic("wf");
+        tracker.record_panic("wf");
+        tracker.record_success("wf");
+        assert!(!tracker.is_blocked("wf"));
+        // After reset, need 3 more panics to block
+        assert!(!tracker.record_panic("wf"));
+    }
+
+    #[test]
+    fn poison_tracker_independent_per_workflow() {
+        let mut tracker = PoisonPillTracker::new(2, Duration::from_secs(300));
+        tracker.record_panic("wf-a");
+        tracker.record_panic("wf-a");
+        assert!(tracker.is_blocked("wf-a"));
+        assert!(!tracker.is_blocked("wf-b"));
+    }
+
+    #[test]
+    fn poison_tracker_unblocks_after_cooldown() {
+        let mut tracker = PoisonPillTracker::new(2, Duration::from_millis(0));
+        tracker.record_panic("wf");
+        tracker.record_panic("wf");
+        // Cooldown is 0ms, should immediately unblock
+        assert!(!tracker.is_blocked("wf"));
     }
 }

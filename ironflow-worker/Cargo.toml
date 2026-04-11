@@ -16,7 +16,8 @@ ironflow-store = { version = "2.5.0", path = "../ironflow-store", default-featur
 ironflow-engine = { version = "2.6.0", path = "../ironflow-engine" }
 
 reqwest = { version = "0.12", features = ["json"] }
-tokio = { version = "1", features = ["time", "sync", "macros"] }
+tokio = { version = "1", features = ["time", "sync", "macros", "signal"] }
+tokio-util = "0.7"
 tracing = "0.1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }

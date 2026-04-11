@@ -117,7 +117,7 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::routes::create_router;
+    use crate::routes::{RouterConfig, create_router};
     use crate::state::AppState;
     use ironflow_store::user_store::UserStore;
 
@@ -145,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn worker_token_valid() {
         let state = test_state();
-        let app = create_router(state.clone(), None);
+        let app = create_router(state.clone(), RouterConfig::default());
 
         let req = Request::builder()
             .uri("/api/v1/internal/runs/next")
@@ -160,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn worker_token_missing() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let req = Request::builder()
             .uri("/api/v1/internal/runs/next")
@@ -178,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn worker_token_invalid() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let req = Request::builder()
             .uri("/api/v1/internal/runs/next")
@@ -197,7 +197,7 @@ mod tests {
     #[tokio::test]
     async fn security_headers_present() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let req = Request::builder()
             .uri("/api/v1/health-check")

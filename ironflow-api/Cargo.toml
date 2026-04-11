@@ -34,6 +34,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde-float"] }
 subtle = "2"
+governor = { version = "0.10", features = ["std"] }
 tracing = "0.1"
 thiserror = "2"
 validator = { version = "0.20", features = ["derive"] }

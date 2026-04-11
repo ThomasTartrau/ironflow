@@ -13,7 +13,7 @@ use ironflow_engine::engine::Engine;
 use ironflow_store::memory::InMemoryStore;
 use tower::ServiceExt;
 
-use ironflow_api::routes::create_router;
+use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::state::AppState;
 
 fn test_state() -> AppState {
@@ -41,7 +41,7 @@ fn test_state() -> AppState {
 #[tokio::test]
 async fn metrics_endpoint_returns_prometheus_format() {
     let state = test_state();
-    let app = create_router(state, None);
+    let app = create_router(state, RouterConfig::default());
 
     let req = Request::builder()
         .uri("/api/v1/metrics")
@@ -66,7 +66,7 @@ async fn metrics_endpoint_returns_prometheus_format() {
 #[tokio::test]
 async fn metrics_endpoint_includes_api_request_metrics() {
     let state = test_state();
-    let app = create_router(state, None);
+    let app = create_router(state, RouterConfig::default());
 
     // First, make a request to health-check to generate some metrics
     let health_req = Request::builder()
