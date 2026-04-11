@@ -33,7 +33,7 @@
 //!
 //! ```no_run
 //! use ironflow_api::prelude::*;
-//! use ironflow_api::routes::create_router;
+//! use ironflow_api::routes::{RouterConfig, create_router};
 //! use ironflow_store::prelude::*;
 //! use ironflow_engine::engine::Engine;
 //! use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -53,7 +53,7 @@
 //!     cookie_secure: false,
 //! });
 //! let state = AppState::new(store, user_store, engine, jwt_config, "token".to_string());
-//! let app = create_router(state, None);
+//! let app = create_router(state, RouterConfig::default());
 //!
 //! let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
 //!     .await
@@ -68,6 +68,7 @@ pub mod dashboard;
 pub mod entities;
 pub mod error;
 pub mod middleware;
+pub mod rate_limit;
 pub mod response;
 pub mod routes;
 pub mod state;
@@ -76,9 +77,9 @@ pub mod state;
 pub mod prelude {
     pub use crate::error::ApiError;
     pub use crate::response::{ApiMeta, ApiResponse, ok, ok_paged};
-    pub use crate::routes::create_router;
+    pub use crate::routes::{RouterConfig, create_router};
     pub use crate::state::AppState;
 }
 
-pub use routes::create_router;
+pub use routes::{RouterConfig, create_router};
 pub use state::AppState;

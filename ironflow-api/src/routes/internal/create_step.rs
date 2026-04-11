@@ -38,7 +38,7 @@ mod tests {
     use tower::ServiceExt;
     use uuid::Uuid;
 
-    use crate::routes::create_router;
+    use crate::routes::{RouterConfig, create_router};
     use crate::state::AppState;
     use ironflow_store::user_store::UserStore;
 
@@ -77,7 +77,7 @@ mod tests {
             .await
             .unwrap();
 
-        let app = create_router(state.clone(), None);
+        let app = create_router(state.clone(), RouterConfig::default());
 
         let new_step = NewStep {
             run_id: run.id,
@@ -106,7 +106,7 @@ mod tests {
     #[tokio::test]
     async fn create_step_run_not_found() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let fake_run_id = Uuid::now_v7();
         let new_step = NewStep {

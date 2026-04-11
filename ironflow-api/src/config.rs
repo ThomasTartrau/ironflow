@@ -15,6 +15,8 @@
 //! | `DASHBOARD_DIR` | no | embedded | Filesystem path to dashboard assets |
 //! | `WEBHOOK_URL` | no | - | Outbound webhook URL for notifications |
 //! | `IRONFLOW_ENV` | no | `development` | `production` or `development` |
+//! | `RATE_LIMIT_AUTH` | no | `10` | Auth rate limit (req/min/IP). `0` = disabled |
+//! | `RATE_LIMIT_GENERAL` | no | `60` | General rate limit (req/min/IP). `0` = disabled |
 //!
 //! # Examples
 //!
@@ -67,6 +69,12 @@ pub struct ServerConfig {
     pub webhook_url: Option<String>,
     /// Whether the server is running in production mode.
     pub is_production: bool,
+    /// Rate limit for auth credential routes (sign-in, sign-up) in requests
+    /// per minute per IP. `None` disables rate limiting on these routes.
+    pub rate_limit_auth: Option<u32>,
+    /// Rate limit for general public API routes in requests per minute per IP.
+    /// `None` disables rate limiting on these routes.
+    pub rate_limit_general: Option<u32>,
 }
 
 /// Configuration validation error.
@@ -109,6 +117,25 @@ impl std::error::Error for ConfigError {}
 
 const DEV_JWT_SECRET: &str = "ironflow-dev-secret";
 const DEV_WORKER_TOKEN: &str = "ironflow-dev-worker-token";
+
+/// Parse an optional u32 env var. Returns `Some(default)` if unset,
+/// `Some(value)` if set to a positive number, `None` if set to `0`
+/// (meaning disabled). Pushes to `errors` if the value is not a valid u32.
+fn parse_optional_u32(name: &str, default: u32, errors: &mut Vec<String>) -> Option<u32> {
+    match env::var(name).ok() {
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(0) => None,
+            Ok(v) => Some(v),
+            Err(_) => {
+                errors.push(format!(
+                    "{name} must be a valid u32 (0 to disable), got: {raw}"
+                ));
+                Some(default)
+            }
+        },
+        None => Some(default),
+    }
+}
 
 impl ServerConfig {
     /// Load configuration from environment variables and validate.
@@ -186,6 +213,9 @@ impl ServerConfig {
         let dashboard_dir = env::var("DASHBOARD_DIR").ok().map(PathBuf::from);
         let webhook_url = env::var("WEBHOOK_URL").ok();
 
+        let rate_limit_auth = parse_optional_u32("RATE_LIMIT_AUTH", 10, &mut errors);
+        let rate_limit_general = parse_optional_u32("RATE_LIMIT_GENERAL", 60, &mut errors);
+
         if !errors.is_empty() {
             return Err(ConfigError::new(errors));
         }
@@ -199,6 +229,8 @@ impl ServerConfig {
             dashboard_dir,
             webhook_url,
             is_production,
+            rate_limit_auth,
+            rate_limit_general,
         })
     }
 }
@@ -225,6 +257,8 @@ mod tests {
             env::remove_var("ALLOWED_ORIGINS");
             env::remove_var("DASHBOARD_DIR");
             env::remove_var("WEBHOOK_URL");
+            env::remove_var("RATE_LIMIT_AUTH");
+            env::remove_var("RATE_LIMIT_GENERAL");
         }
     }
 
@@ -291,5 +325,69 @@ mod tests {
         assert!(err.errors.iter().any(|e| e.contains("PORT")));
 
         unsafe { env::remove_var("PORT") };
+    }
+
+    #[test]
+    fn default_rate_limits() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { clear_env() };
+
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.rate_limit_auth, Some(10));
+        assert_eq!(config.rate_limit_general, Some(60));
+    }
+
+    #[test]
+    fn custom_rate_limits() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            clear_env();
+            env::set_var("RATE_LIMIT_AUTH", "20");
+            env::set_var("RATE_LIMIT_GENERAL", "120");
+        }
+
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.rate_limit_auth, Some(20));
+        assert_eq!(config.rate_limit_general, Some(120));
+
+        unsafe {
+            env::remove_var("RATE_LIMIT_AUTH");
+            env::remove_var("RATE_LIMIT_GENERAL");
+        }
+    }
+
+    #[test]
+    fn zero_rate_limit_disables() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            clear_env();
+            env::set_var("RATE_LIMIT_AUTH", "0");
+            env::set_var("RATE_LIMIT_GENERAL", "0");
+        }
+
+        let config = ServerConfig::from_env().unwrap();
+        assert!(config.rate_limit_auth.is_none());
+        assert!(config.rate_limit_general.is_none());
+
+        unsafe {
+            env::remove_var("RATE_LIMIT_AUTH");
+            env::remove_var("RATE_LIMIT_GENERAL");
+        }
+    }
+
+    #[test]
+    fn invalid_rate_limit_returns_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            clear_env();
+            env::set_var("RATE_LIMIT_AUTH", "not-a-number");
+        }
+
+        let result = ServerConfig::from_env();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.errors.iter().any(|e| e.contains("RATE_LIMIT_AUTH")));
+
+        unsafe { env::remove_var("RATE_LIMIT_AUTH") };
     }
 }

@@ -33,7 +33,7 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::routes::create_router;
+    use crate::routes::{RouterConfig, create_router};
     use crate::state::AppState;
     use ironflow_store::user_store::UserStore;
 
@@ -61,7 +61,7 @@ mod tests {
     #[tokio::test]
     async fn create_run_returns_pending() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let req = Request::builder()
             .method("POST")

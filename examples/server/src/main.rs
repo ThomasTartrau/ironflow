@@ -27,7 +27,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use ironflow_api::config::ServerConfig;
-use ironflow_api::routes::create_router;
+use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::state::AppState;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -85,7 +85,12 @@ async fn main() {
         jwt_config,
         config.worker_token.clone(),
     );
-    let app = create_router(state, config.dashboard_dir.clone())
+    let router_config = RouterConfig {
+        dashboard_dir: config.dashboard_dir.clone(),
+        rate_limit_auth: config.rate_limit_auth,
+        rate_limit_general: config.rate_limit_general,
+    };
+    let app = create_router(state, router_config)
         .layer(cors)
         .into_make_service();
 

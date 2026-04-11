@@ -25,28 +25,68 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::middleware::{WorkerToken, security_headers, worker_token_auth};
+use crate::rate_limit::{per_minute, rate_limit};
 use crate::state::AppState;
 
 /// Maximum request body size: 2 MiB.
 const MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 
-/// Create the main application router.
+/// Router-level configuration with sensible defaults.
 ///
-/// If `dashboard_dir` is provided, the router serves the SPA dashboard from
-/// that directory. Any request that doesn't match an API route is served from
-/// the directory, with a fallback to `index.html` for client-side routing.
+/// Controls dashboard serving, rate limiting, and other router behaviors.
+/// Use [`Default::default()`] for production-ready defaults, then override
+/// individual fields as needed.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::routes::RouterConfig;
+///
+/// // All defaults: rate limiting enabled, no custom dashboard dir
+/// let config = RouterConfig::default();
+/// assert_eq!(config.rate_limit_auth, Some(10));
+///
+/// // Disable auth rate limiting, custom dashboard
+/// let config = RouterConfig {
+///     rate_limit_auth: None,
+///     ..RouterConfig::default()
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct RouterConfig {
+    /// Filesystem path to dashboard assets. When set, serves the SPA
+    /// from this directory instead of the embedded build.
+    pub dashboard_dir: Option<PathBuf>,
+    /// Rate limit for auth credential routes (sign-in, sign-up) in
+    /// requests per minute per IP. `None` disables the limiter.
+    pub rate_limit_auth: Option<u32>,
+    /// Rate limit for general public API routes in requests per minute
+    /// per IP. `None` disables the limiter.
+    pub rate_limit_general: Option<u32>,
+}
+
+impl Default for RouterConfig {
+    fn default() -> Self {
+        Self {
+            dashboard_dir: None,
+            rate_limit_auth: Some(10),
+            rate_limit_general: Some(60),
+        }
+    }
+}
+
+/// Create the main application router.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use ironflow_api::routes::create_router;
+/// use ironflow_api::routes::{RouterConfig, create_router};
 /// use ironflow_api::state::AppState;
 /// use ironflow_auth::jwt::JwtConfig;
 /// use ironflow_store::prelude::*;
 /// use ironflow_engine::engine::Engine;
 /// use ironflow_core::providers::claude::ClaudeCodeProvider;
 /// use std::sync::Arc;
-/// use std::path::PathBuf;
 ///
 /// # async fn example() {
 /// let store = Arc::new(InMemoryStore::new());
@@ -61,10 +101,10 @@ const MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 ///     cookie_secure: false,
 /// });
 /// let state = AppState::new(store, user_store, engine, jwt_config, "token".to_string());
-/// let router = create_router(state, None);
+/// let router = create_router(state, RouterConfig::default());
 /// # }
 /// ```
-pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router {
+pub fn create_router(state: AppState, config: RouterConfig) -> Router {
     // Internal routes (worker-to-API, protected by WORKER_TOKEN)
     let internal_routes = Router::new()
         .route("/runs", post(internal::create_run::create_run))
@@ -87,7 +127,32 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         .layer(Extension(WorkerToken(state.worker_token.clone())))
         .with_state(state.clone());
 
-    // Public + user-authenticated routes
+    // Auth credential routes (rate-limited when configured)
+    #[allow(unused_mut)]
+    let mut auth_credential_routes = Router::new();
+
+    #[cfg(feature = "sign-up")]
+    {
+        auth_credential_routes =
+            auth_credential_routes.route("/sign-up", post(auth::sign_up::sign_up));
+    }
+
+    let mut auth_credential_routes =
+        auth_credential_routes.route("/sign-in", post(auth::sign_in::sign_in));
+
+    if let Some(rpm) = config.rate_limit_auth {
+        auth_credential_routes = auth_credential_routes
+            .layer(axum_mw::from_fn(rate_limit))
+            .layer(Extension(per_minute(rpm)));
+    }
+
+    // Auth session routes (no strict rate limiting, covered by general limiter)
+    let auth_session_routes = Router::new()
+        .route("/refresh", post(auth::refresh::refresh))
+        .route("/sign-out", post(auth::sign_out::sign_out))
+        .route("/me", get(auth::me::me));
+
+    // Public + user-authenticated routes (rate-limited when configured)
     #[allow(unused_mut)]
     let mut api_v1 = Router::new()
         .route("/health-check", get(health_check::health_check))
@@ -109,15 +174,17 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         api_v1 = api_v1.route("/metrics", get(metrics::metrics));
     }
 
-    #[cfg(feature = "sign-up")]
-    let api_v1 = api_v1.route("/auth/sign-up", post(auth::sign_up::sign_up));
+    let mut api_v1 = api_v1
+        .nest("/auth", auth_credential_routes)
+        .nest("/auth", auth_session_routes);
 
-    let api_v1 = api_v1
-        .route("/auth/sign-in", post(auth::sign_in::sign_in))
-        .route("/auth/refresh", post(auth::refresh::refresh))
-        .route("/auth/sign-out", post(auth::sign_out::sign_out))
-        .route("/auth/me", get(auth::me::me))
-        .with_state(state.clone());
+    if let Some(rpm) = config.rate_limit_general {
+        api_v1 = api_v1
+            .layer(axum_mw::from_fn(rate_limit))
+            .layer(Extension(per_minute(rpm)));
+    }
+
+    let api_v1 = api_v1.with_state(state.clone());
 
     #[allow(unused_mut)]
     let mut app = Router::new()
@@ -132,7 +199,7 @@ pub fn create_router(state: AppState, dashboard_dir: Option<PathBuf>) -> Router 
         app = app.layer(axum_mw::from_fn(crate::middleware::request_metrics));
     }
 
-    match dashboard_dir {
+    match config.dashboard_dir {
         Some(dir) => {
             let index = dir.join("index.html");
             let serve = ServeDir::new(dir).fallback(ServeFile::new(index));
@@ -181,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn health_check_route() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let req = Request::builder()
             .uri("/api/v1/health-check")
@@ -207,7 +274,7 @@ mod tests {
     #[tokio::test]
     async fn runs_route_exists() {
         let state = test_state();
-        let app = create_router(state.clone(), None);
+        let app = create_router(state.clone(), RouterConfig::default());
         let auth_header = make_auth_header(&state);
 
         let req = Request::builder()
@@ -223,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn stats_route_exists() {
         let state = test_state();
-        let app = create_router(state.clone(), None);
+        let app = create_router(state.clone(), RouterConfig::default());
         let auth_header = make_auth_header(&state);
 
         let req = Request::builder()
@@ -239,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn responses_include_security_headers() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let req = Request::builder()
             .uri("/api/v1/health-check")
@@ -274,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn body_size_limit_rejects_oversized_payload() {
         let state = test_state();
-        let app = create_router(state.clone(), None);
+        let app = create_router(state.clone(), RouterConfig::default());
         let auth_header = make_auth_header(&state);
 
         // 3 MiB payload — exceeds the 2 MiB limit

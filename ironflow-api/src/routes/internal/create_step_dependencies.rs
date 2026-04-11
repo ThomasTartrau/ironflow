@@ -33,7 +33,7 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::routes::create_router;
+    use crate::routes::{RouterConfig, create_router};
     use crate::state::AppState;
     use ironflow_store::user_store::UserStore;
 
@@ -97,7 +97,7 @@ mod tests {
             .await
             .unwrap();
 
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let body = json!([
             { "step_id": step_b.id, "depends_on": step_a.id }
@@ -118,7 +118,7 @@ mod tests {
     #[tokio::test]
     async fn create_dependencies_empty_array() {
         let state = test_state();
-        let app = create_router(state, None);
+        let app = create_router(state, RouterConfig::default());
 
         let req = Request::builder()
             .method("POST")
