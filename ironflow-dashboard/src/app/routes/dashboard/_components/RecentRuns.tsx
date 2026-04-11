@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import type { RunResponse } from "@/app/lib/types";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TriggerBadge } from "@/app/components/TriggerBadge";
@@ -19,6 +19,12 @@ interface RecentRunsProps {
 }
 
 export function RecentRuns({ runs }: RecentRunsProps) {
+	const navigate = useNavigate();
+
+	const handleRowClick = (runId: string) => {
+		navigate(`/runs/${runId}`);
+	};
+
 	return (
 		<div className="mt-8">
 			<div className="flex items-center justify-between mb-4">
@@ -46,14 +52,16 @@ export function RecentRuns({ runs }: RecentRunsProps) {
 						</TableHeader>
 						<TableBody>
 							{runs.map((run) => (
-								<TableRow key={run.id} className="hover:bg-muted/50">
+								<TableRow
+									key={run.id}
+									onClick={() => handleRowClick(run.id)}
+									className="cursor-pointer hover:bg-muted/50"
+								>
 									<TableCell>
 										<StatusBadge status={run.status} />
 									</TableCell>
-									<TableCell>
-										<Link to={`/runs/${run.id}`} className="hover:underline">
-											{run.workflow_name}
-										</Link>
+									<TableCell className="font-medium">
+										{run.workflow_name}
 									</TableCell>
 									<TableCell>
 										<TriggerBadge trigger={run.trigger} />
