@@ -184,7 +184,7 @@ function StepOutput({ step }: { step: StepResponse }) {
 		const value =
 			typeof output.value === "string"
 				? output.value
-				: JSON.stringify(output.value, null, 2);
+				: (JSON.stringify(output.value, null, 2) ?? "");
 		const model = typeof output.model === "string" ? output.model : null;
 		const hasContent = value.trim().length > 0;
 
@@ -261,7 +261,7 @@ function StepOutput({ step }: { step: StepResponse }) {
 		const body =
 			typeof output.body === "string"
 				? output.body
-				: JSON.stringify(output.body, null, 2);
+				: (JSON.stringify(output.body, null, 2) ?? "");
 
 		return (
 			<div>
