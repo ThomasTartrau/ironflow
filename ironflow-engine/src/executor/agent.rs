@@ -20,6 +20,16 @@ use super::{StepExecutor, StepOutput};
 /// value is returned directly so that callers can deserialize it as `T`.
 /// Otherwise the value is wrapped in `{"value": ..., "model": ...}` for
 /// backward compatibility with text-mode consumers.
+///
+/// **Note:** the structured value passed here may not strictly conform to
+/// the requested schema. Claude CLI can non-deterministically flatten
+/// wrapper objects with a single array field, returning a bare array
+/// instead of `{"items": [...]}`. See upstream issues:
+/// - <https://github.com/anthropics/claude-agent-sdk-python/issues/502>
+/// - <https://github.com/anthropics/claude-agent-sdk-python/issues/374>
+///
+/// Callers that deserialize the output should handle both the expected
+/// wrapper and a bare array/value as a fallback.
 fn format_agent_output(value: &Value, model: Option<&str>, has_schema: bool) -> Value {
     if has_schema {
         value.clone()

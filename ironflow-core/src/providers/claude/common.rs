@@ -241,6 +241,30 @@ fn shell_escape(s: &str) -> String {
 ///
 /// Prefers `structured_output`; falls back to parsing `result` as JSON
 /// (direct parse, code-fence extraction, or brace extraction).
+///
+/// # Why the fallbacks exist
+///
+/// Claude CLI has several known bugs around structured output that make
+/// the `structured_output` field unreliable:
+///
+/// - When tools are used alongside `--json-schema`, `structured_output`
+///   is always `null` (the result lands in `result` as markdown text).
+///   See <https://github.com/anthropics/claude-code/issues/18536>.
+///   This case is blocked at compile time by the typestate, but defensive
+///   fallbacks remain for forward compatibility.
+/// - The CLI does not validate output against the schema; it may return
+///   malformed or non-conforming JSON.
+///   See <https://github.com/anthropics/claude-code/issues/9058>.
+/// - Wrapper objects with a single array field may be flattened to a bare
+///   array non-deterministically.
+///   See <https://github.com/anthropics/claude-agent-sdk-python/issues/502>
+///   and <https://github.com/anthropics/claude-agent-sdk-python/issues/374>.
+///
+/// Because of these issues, we try multiple extraction strategies in order:
+/// 1. `structured_output` field (when non-null)
+/// 2. Direct JSON parse of `result`
+/// 3. JSON code fence extraction from `result`
+/// 4. First `{...}` brace extraction from `result`
 pub fn extract_structured_value(parsed: &ClaudeJsonOutput) -> Option<Value> {
     let from_structured = parsed.structured_output.as_ref().filter(|v| !v.is_null());
     if let Some(v) = from_structured {

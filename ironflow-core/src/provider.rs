@@ -319,6 +319,28 @@ impl<Schema> AgentConfig<NoTools, Schema> {
     /// **Workaround**: use two sequential agent steps -- one with tools to
     /// gather data, then one with `.output::<T>()` to structure the result.
     ///
+    /// # Known limitations of Claude CLI structured output
+    ///
+    /// The Claude CLI does not guarantee strict schema conformance for
+    /// structured output. The following upstream bugs affect the behavior:
+    ///
+    /// - **Schema flattening** ([anthropics/claude-agent-sdk-python#502]):
+    ///   a schema like `{"type":"object","properties":{"items":{"type":"array",...}}}`
+    ///   may return a bare array instead of the wrapper object. The CLI
+    ///   non-deterministically flattens schemas with a single array field.
+    /// - **Non-deterministic wrapping** ([anthropics/claude-agent-sdk-python#374]):
+    ///   the same prompt can produce differently wrapped output across runs.
+    /// - **No conformance guarantee** ([anthropics/claude-code#9058]):
+    ///   the CLI does not validate output against the provided JSON schema.
+    ///
+    /// Because of these bugs, ironflow's provider layer applies multiple
+    /// fallback strategies when extracting the structured value (see
+    /// [`extract_structured_value`](crate::providers::claude::common::extract_structured_value)).
+    ///
+    /// [anthropics/claude-agent-sdk-python#502]: https://github.com/anthropics/claude-agent-sdk-python/issues/502
+    /// [anthropics/claude-agent-sdk-python#374]: https://github.com/anthropics/claude-agent-sdk-python/issues/374
+    /// [anthropics/claude-code#9058]: https://github.com/anthropics/claude-code/issues/9058
+    ///
     /// # Examples
     ///
     /// ```
