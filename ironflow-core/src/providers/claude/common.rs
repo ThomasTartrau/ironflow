@@ -941,8 +941,11 @@ mod tests {
         assert!(args.contains(&"--allowedTools".to_string()));
         assert!(args.contains(&"WebSearch,WebFetch".to_string()));
         assert!(args.contains(&"--json-schema".to_string()));
-        assert!(args
-            .contains(&r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()));
+        assert!(
+            args.contains(
+                &r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()
+            )
+        );
         assert!(args.contains(&"--output-format".to_string()));
         assert!(args.contains(&"json".to_string()));
     }
