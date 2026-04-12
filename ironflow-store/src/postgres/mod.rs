@@ -956,6 +956,7 @@ impl RunStore for PostgresStore {
             push_set!("output_tokens", update.output_tokens);
             push_set!("started_at", update.started_at);
             push_set!("completed_at", update.completed_at);
+            push_set!("debug_messages", update.debug_messages);
 
             let sql = format!(
                 "UPDATE ironflow.steps SET {} WHERE id = ${bind_idx}",
@@ -987,6 +988,9 @@ impl RunStore for PostgresStore {
             }
             if let Some(completed) = update.completed_at {
                 query = query.bind(completed);
+            }
+            if let Some(ref debug_msgs) = update.debug_messages {
+                query = query.bind(debug_msgs);
             }
 
             query = query.bind(id);

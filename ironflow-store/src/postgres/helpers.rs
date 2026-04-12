@@ -143,5 +143,6 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
         updated_at: row.get("updated_at"),
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
+        debug_messages: row.get("debug_messages"),
     })
 }

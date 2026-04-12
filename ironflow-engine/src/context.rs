@@ -34,6 +34,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::models::{
     NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind, StepStatus,
@@ -267,6 +268,8 @@ impl WorkflowContext {
                     self.total_cost_usd += output.cost_usd;
                     self.total_duration_ms += output.duration_ms;
 
+                    let debug_messages_json = output.debug_messages_json();
+
                     self.store
                         .update_step(
                             *step_id,
@@ -278,6 +281,7 @@ impl WorkflowContext {
                                 input_tokens: output.input_tokens,
                                 output_tokens: output.output_tokens,
                                 completed_at: Some(completed_at),
+                                debug_messages: debug_messages_json,
                                 ..StepUpdate::default()
                             },
                         )
@@ -294,6 +298,7 @@ impl WorkflowContext {
                 }
                 Err(err) => {
                     let err_msg = err.to_string();
+                    let debug_messages_json = extract_debug_messages_from_error(&err);
 
                     if let Err(store_err) = self
                         .store
@@ -303,6 +308,7 @@ impl WorkflowContext {
                                 status: Some(StepStatus::Failed),
                                 error: Some(err_msg.clone()),
                                 completed_at: Some(completed_at),
+                                debug_messages: debug_messages_json,
                                 ..StepUpdate::default()
                             },
                         )
@@ -435,9 +441,9 @@ impl WorkflowContext {
     pub async fn agent(
         &mut self,
         name: &str,
-        config: AgentStepConfig,
+        config: impl Into<AgentStepConfig>,
     ) -> Result<StepOutput, EngineError> {
-        self.execute_step(name, StepKind::Agent, StepConfig::Agent(config))
+        self.execute_step(name, StepKind::Agent, StepConfig::Agent(config.into()))
             .await
     }
 
@@ -942,6 +948,8 @@ impl WorkflowContext {
                 self.total_cost_usd += output.cost_usd;
                 self.total_duration_ms += output.duration_ms;
 
+                let debug_messages_json = output.debug_messages_json();
+
                 let completed_at = Utc::now();
                 self.store
                     .update_step(
@@ -954,6 +962,7 @@ impl WorkflowContext {
                             input_tokens: output.input_tokens,
                             output_tokens: output.output_tokens,
                             completed_at: Some(completed_at),
+                            debug_messages: debug_messages_json,
                             ..StepUpdate::default()
                         },
                     )
@@ -972,6 +981,8 @@ impl WorkflowContext {
             }
             Err(err) => {
                 let completed_at = Utc::now();
+                let debug_messages_json = extract_debug_messages_from_error(&err);
+
                 if let Err(store_err) = self
                     .store
                     .update_step(
@@ -980,6 +991,7 @@ impl WorkflowContext {
                             status: Some(StepStatus::Failed),
                             error: Some(err.to_string()),
                             completed_at: Some(completed_at),
+                            debug_messages: debug_messages_json,
                             ..StepUpdate::default()
                         },
                     )
@@ -1056,4 +1068,18 @@ impl fmt::Debug for WorkflowContext {
             .field("total_cost_usd", &self.total_cost_usd)
             .finish_non_exhaustive()
     }
+}
+
+/// Extract debug messages from an engine error, if it wraps a schema validation
+/// failure that carries a verbose conversation trace.
+fn extract_debug_messages_from_error(err: &EngineError) -> Option<Value> {
+    if let EngineError::Operation(OperationError::Agent(AgentError::SchemaValidation {
+        debug_messages,
+        ..
+    })) = err
+        && !debug_messages.is_empty()
+    {
+        return serde_json::to_value(debug_messages).ok();
+    }
+    None
 }

@@ -41,6 +41,17 @@ pub struct StepOutput {
     pub debug_messages: Option<Vec<DebugMessage>>,
 }
 
+impl StepOutput {
+    /// Serialize debug messages to a JSON [`Value`] for store persistence.
+    ///
+    /// Returns `None` when verbose mode was off (no messages captured).
+    pub fn debug_messages_json(&self) -> Option<Value> {
+        self.debug_messages
+            .as_ref()
+            .and_then(|msgs| serde_json::to_value(msgs).ok())
+    }
+}
+
 /// Result of a single step within a [`parallel`](crate::context::WorkflowContext::parallel) batch.
 #[derive(Debug, Clone)]
 pub struct ParallelStepResult {

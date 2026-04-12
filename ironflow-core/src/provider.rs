@@ -16,12 +16,12 @@
 
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::warn;
 
 use crate::error::AgentError;
 use crate::operations::agent::{Model, PermissionMode};
@@ -30,14 +30,69 @@ use crate::operations::agent::{Model, PermissionMode};
 pub type InvokeFuture<'a> =
     Pin<Box<dyn Future<Output = Result<AgentOutput, AgentError>> + Send + 'a>>;
 
+// ── Typestate markers ──────────────────────────────────────────────
+
+/// Marker: no tools have been added via the builder.
+#[derive(Debug, Clone, Copy)]
+pub struct NoTools;
+
+/// Marker: at least one tool has been added via [`AgentConfig::allow_tool`].
+#[derive(Debug, Clone, Copy)]
+pub struct WithTools;
+
+/// Marker: no JSON schema has been set via the builder.
+#[derive(Debug, Clone, Copy)]
+pub struct NoSchema;
+
+/// Marker: a JSON schema has been set via [`AgentConfig::output`] or
+/// [`AgentConfig::output_schema_raw`].
+#[derive(Debug, Clone, Copy)]
+pub struct WithSchema;
+
+// ── AgentConfig ────────────────────────────────────────────────────
+
 /// Serializable configuration passed to an [`AgentProvider`] for a single invocation.
 ///
 /// Built by [`Agent::run`](crate::operations::agent::Agent::run) from the builder state.
 /// Provider implementations translate these fields into whatever format the underlying
 /// backend expects.
+///
+/// # Typestate: tools vs structured output
+///
+/// Claude CLI has a [known bug](https://github.com/anthropics/claude-code/issues/18536)
+/// where combining `--json-schema` with `--allowedTools` always returns
+/// `structured_output: null`. To prevent this at compile time, [`allow_tool`](Self::allow_tool)
+/// and [`output`](Self::output) / [`output_schema_raw`](Self::output_schema_raw) are mutually
+/// exclusive: using one removes the other from the available API.
+///
+/// ```
+/// use ironflow_core::provider::AgentConfig;
+///
+/// // OK: tools only
+/// let _ = AgentConfig::new("search").allow_tool("WebSearch");
+///
+/// // OK: structured output only
+/// let _ = AgentConfig::new("classify").output_schema_raw(r#"{"type":"object"}"#);
+/// ```
+///
+/// ```compile_fail
+/// use ironflow_core::provider::AgentConfig;
+/// // COMPILE ERROR: cannot add tools after setting structured output
+/// let _ = AgentConfig::new("x").output_schema_raw("{}").allow_tool("Read");
+/// ```
+///
+/// ```compile_fail
+/// use ironflow_core::provider::AgentConfig;
+/// // COMPILE ERROR: cannot set structured output after adding tools
+/// let _ = AgentConfig::new("x").allow_tool("Read").output_schema_raw("{}");
+/// ```
+///
+/// **Workaround**: split the work into two steps -- one agent with tools to
+/// gather data, then a second agent with `.output::<T>()` to structure the result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
 #[non_exhaustive]
-pub struct AgentConfig {
+pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// Optional system prompt that sets the agent's persona or constraints.
     pub system_prompt: Option<String>,
 
@@ -90,11 +145,266 @@ pub struct AgentConfig {
     /// trace for inspection.
     #[serde(default)]
     pub verbose: bool,
+
+    /// Zero-sized typestate marker (not serialized).
+    #[serde(skip)]
+    pub(crate) _marker: PhantomData<(Tools, Schema)>,
 }
 
 fn default_model() -> String {
     Model::SONNET.to_string()
 }
+
+// ── Constructor (base type only) ───────────────────────────────────
+
+impl AgentConfig {
+    /// Create an `AgentConfig` with required fields and defaults for the rest.
+    pub fn new(prompt: &str) -> Self {
+        Self {
+            system_prompt: None,
+            prompt: prompt.to_string(),
+            model: Model::SONNET.to_string(),
+            allowed_tools: Vec::new(),
+            max_turns: None,
+            max_budget_usd: None,
+            working_dir: None,
+            mcp_config: None,
+            permission_mode: PermissionMode::Default,
+            json_schema: None,
+            resume_session_id: None,
+            verbose: false,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// ── Methods available on ALL typestate variants ────────────────────
+
+impl<Tools, Schema> AgentConfig<Tools, Schema> {
+    /// Set the system prompt.
+    pub fn system_prompt(mut self, prompt: &str) -> Self {
+        self.system_prompt = Some(prompt.to_string());
+        self
+    }
+
+    /// Set the model name.
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = model.to_string();
+        self
+    }
+
+    /// Set the maximum budget in USD.
+    pub fn max_budget_usd(mut self, budget: f64) -> Self {
+        self.max_budget_usd = Some(budget);
+        self
+    }
+
+    /// Set the maximum number of turns.
+    pub fn max_turns(mut self, turns: u32) -> Self {
+        self.max_turns = Some(turns);
+        self
+    }
+
+    /// Set the working directory.
+    pub fn working_dir(mut self, dir: &str) -> Self {
+        self.working_dir = Some(dir.to_string());
+        self
+    }
+
+    /// Set the permission mode.
+    pub fn permission_mode(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = mode;
+        self
+    }
+
+    /// Enable verbose/debug mode.
+    pub fn verbose(mut self, enabled: bool) -> Self {
+        self.verbose = enabled;
+        self
+    }
+
+    /// Set the MCP server configuration file path.
+    pub fn mcp_config(mut self, config: &str) -> Self {
+        self.mcp_config = Some(config.to_string());
+        self
+    }
+
+    /// Set a session ID to resume a previous conversation.
+    pub fn resume(mut self, session_id: &str) -> Self {
+        self.resume_session_id = Some(session_id.to_string());
+        self
+    }
+
+    /// Convert to a different typestate by moving all fields.
+    ///
+    /// Safe because the marker is a zero-sized [`PhantomData`] -- no
+    /// runtime data changes.
+    fn change_state<T2, S2>(self) -> AgentConfig<T2, S2> {
+        AgentConfig {
+            system_prompt: self.system_prompt,
+            prompt: self.prompt,
+            model: self.model,
+            allowed_tools: self.allowed_tools,
+            max_turns: self.max_turns,
+            max_budget_usd: self.max_budget_usd,
+            working_dir: self.working_dir,
+            mcp_config: self.mcp_config,
+            permission_mode: self.permission_mode,
+            json_schema: self.json_schema,
+            resume_session_id: self.resume_session_id,
+            verbose: self.verbose,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// ── allow_tool: only when no schema is set ─────────────────────────
+
+impl<Tools> AgentConfig<Tools, NoSchema> {
+    /// Add an allowed tool.
+    ///
+    /// Can be called multiple times to allow several tools. Returns an
+    /// [`AgentConfig<WithTools, NoSchema>`], which **cannot** call
+    /// [`output`](AgentConfig::output) or [`output_schema_raw`](AgentConfig::output_schema_raw).
+    ///
+    /// This restriction exists because Claude CLI has a
+    /// [known bug](https://github.com/anthropics/claude-code/issues/18536)
+    /// where `--json-schema` combined with `--allowedTools` always returns
+    /// `structured_output: null`.
+    ///
+    /// **Workaround**: use two sequential agent steps -- one with tools to
+    /// gather data, then one with `.output::<T>()` to structure the result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("search the web")
+    ///     .allow_tool("WebSearch")
+    ///     .allow_tool("WebFetch");
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use ironflow_core::provider::AgentConfig;
+    /// // ERROR: cannot set structured output after adding tools
+    /// let _ = AgentConfig::new("x")
+    ///     .allow_tool("Read")
+    ///     .output_schema_raw(r#"{"type":"object"}"#);
+    /// ```
+    pub fn allow_tool(mut self, tool: &str) -> AgentConfig<WithTools, NoSchema> {
+        self.allowed_tools.push(tool.to_string());
+        self.change_state()
+    }
+}
+
+// ── output: only when no tools are set ─────────────────────────────
+
+impl<Schema> AgentConfig<NoTools, Schema> {
+    /// Set structured output from a Rust type implementing [`JsonSchema`].
+    ///
+    /// The schema is serialized once at build time. When set, the provider
+    /// will request typed output conforming to this schema.
+    ///
+    /// **Important:** structured output requires `max_turns >= 2`.
+    ///
+    /// Returns an [`AgentConfig<NoTools, WithSchema>`], which **cannot**
+    /// call [`allow_tool`](AgentConfig::allow_tool).
+    ///
+    /// This restriction exists because Claude CLI has a
+    /// [known bug](https://github.com/anthropics/claude-code/issues/18536)
+    /// where `--json-schema` combined with `--allowedTools` always returns
+    /// `structured_output: null`.
+    ///
+    /// **Workaround**: use two sequential agent steps -- one with tools to
+    /// gather data, then one with `.output::<T>()` to structure the result.
+    ///
+    /// # Known limitations of Claude CLI structured output
+    ///
+    /// The Claude CLI does not guarantee strict schema conformance for
+    /// structured output. The following upstream bugs affect the behavior:
+    ///
+    /// - **Schema flattening** ([anthropics/claude-agent-sdk-python#502]):
+    ///   a schema like `{"type":"object","properties":{"items":{"type":"array",...}}}`
+    ///   may return a bare array instead of the wrapper object. The CLI
+    ///   non-deterministically flattens schemas with a single array field.
+    /// - **Non-deterministic wrapping** ([anthropics/claude-agent-sdk-python#374]):
+    ///   the same prompt can produce differently wrapped output across runs.
+    /// - **No conformance guarantee** ([anthropics/claude-code#9058]):
+    ///   the CLI does not validate output against the provided JSON schema.
+    ///
+    /// Because of these bugs, ironflow's provider layer applies multiple
+    /// fallback strategies when extracting the structured value (see
+    /// [`extract_structured_value`](crate::providers::claude::common::extract_structured_value)).
+    ///
+    /// [anthropics/claude-agent-sdk-python#502]: https://github.com/anthropics/claude-agent-sdk-python/issues/502
+    /// [anthropics/claude-agent-sdk-python#374]: https://github.com/anthropics/claude-agent-sdk-python/issues/374
+    /// [anthropics/claude-code#9058]: https://github.com/anthropics/claude-code/issues/9058
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(serde::Deserialize, JsonSchema)]
+    /// struct Labels { labels: Vec<String> }
+    ///
+    /// let config = AgentConfig::new("classify this text")
+    ///     .output::<Labels>();
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use ironflow_core::provider::AgentConfig;
+    /// use schemars::JsonSchema;
+    /// #[derive(serde::Deserialize, JsonSchema)]
+    /// struct Out { x: i32 }
+    /// // ERROR: cannot add tools after setting structured output
+    /// let _ = AgentConfig::new("x").output::<Out>().allow_tool("Read");
+    /// ```
+    /// # Panics
+    ///
+    /// Panics if the schema generated by `schemars` cannot be serialized
+    /// to JSON. This indicates a bug in the type's `JsonSchema` derive,
+    /// not a recoverable runtime error.
+    pub fn output<T: JsonSchema>(mut self) -> AgentConfig<NoTools, WithSchema> {
+        let schema = schemars::schema_for!(T);
+        let serialized = serde_json::to_string(&schema).unwrap_or_else(|e| {
+            panic!(
+                "failed to serialize JSON schema for {}: {e}",
+                std::any::type_name::<T>()
+            )
+        });
+        self.json_schema = Some(serialized);
+        self.change_state()
+    }
+
+    /// Set structured output from a pre-serialized JSON Schema string.
+    ///
+    /// Returns an [`AgentConfig<NoTools, WithSchema>`], which **cannot**
+    /// call [`allow_tool`](AgentConfig::allow_tool). See [`output`](Self::output)
+    /// for the rationale and workaround.
+    pub fn output_schema_raw(mut self, schema: &str) -> AgentConfig<NoTools, WithSchema> {
+        self.json_schema = Some(schema.to_string());
+        self.change_state()
+    }
+}
+
+// ── From conversions to base type ──────────────────────────────────
+
+impl From<AgentConfig<WithTools, NoSchema>> for AgentConfig {
+    fn from(config: AgentConfig<WithTools, NoSchema>) -> Self {
+        config.change_state()
+    }
+}
+
+impl From<AgentConfig<NoTools, WithSchema>> for AgentConfig {
+    fn from(config: AgentConfig<NoTools, WithSchema>) -> Self {
+        config.change_state()
+    }
+}
+
+// ── AgentOutput ────────────────────────────────────────────────────
 
 /// Raw output returned by an [`AgentProvider`] after a successful invocation.
 ///
@@ -201,114 +511,6 @@ impl fmt::Display for DebugToolCall {
     }
 }
 
-impl AgentConfig {
-    /// Create an `AgentConfig` with required fields and defaults for the rest.
-    pub fn new(prompt: &str) -> Self {
-        Self {
-            system_prompt: None,
-            prompt: prompt.to_string(),
-            model: Model::SONNET.to_string(),
-            allowed_tools: Vec::new(),
-            max_turns: None,
-            max_budget_usd: None,
-            working_dir: None,
-            mcp_config: None,
-            permission_mode: PermissionMode::Default,
-            json_schema: None,
-            resume_session_id: None,
-            verbose: false,
-        }
-    }
-
-    /// Set the system prompt.
-    pub fn system_prompt(mut self, prompt: &str) -> Self {
-        self.system_prompt = Some(prompt.to_string());
-        self
-    }
-
-    /// Set the model name.
-    pub fn model(mut self, model: &str) -> Self {
-        self.model = model.to_string();
-        self
-    }
-
-    /// Set the maximum budget in USD.
-    pub fn max_budget_usd(mut self, budget: f64) -> Self {
-        self.max_budget_usd = Some(budget);
-        self
-    }
-
-    /// Set the maximum number of turns.
-    pub fn max_turns(mut self, turns: u32) -> Self {
-        self.max_turns = Some(turns);
-        self
-    }
-
-    /// Add an allowed tool.
-    pub fn allow_tool(mut self, tool: &str) -> Self {
-        self.allowed_tools.push(tool.to_string());
-        self
-    }
-
-    /// Set the working directory.
-    pub fn working_dir(mut self, dir: &str) -> Self {
-        self.working_dir = Some(dir.to_string());
-        self
-    }
-
-    /// Set the permission mode.
-    pub fn permission_mode(mut self, mode: PermissionMode) -> Self {
-        self.permission_mode = mode;
-        self
-    }
-
-    /// Enable verbose/debug mode.
-    pub fn verbose(mut self, enabled: bool) -> Self {
-        self.verbose = enabled;
-        self
-    }
-
-    /// Set structured output from a Rust type implementing [`JsonSchema`].
-    ///
-    /// The schema is serialized once at build time. When set, the provider
-    /// will request typed output conforming to this schema.
-    ///
-    /// **Important:** structured output requires `max_turns >= 2`.
-    pub fn output<T: JsonSchema>(mut self) -> Self {
-        let schema = schemars::schema_for!(T);
-        self.json_schema = match serde_json::to_string(&schema) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    type_name = std::any::type_name::<T>(),
-                    "failed to serialize JSON schema, structured output disabled"
-                );
-                None
-            }
-        };
-        self
-    }
-
-    /// Set structured output from a pre-serialized JSON Schema string.
-    pub fn output_schema_raw(mut self, schema: &str) -> Self {
-        self.json_schema = Some(schema.to_string());
-        self
-    }
-
-    /// Set the MCP server configuration file path.
-    pub fn mcp_config(mut self, config: &str) -> Self {
-        self.mcp_config = Some(config.to_string());
-        self
-    }
-
-    /// Set a session ID to resume a previous conversation.
-    pub fn resume(mut self, session_id: &str) -> Self {
-        self.resume_session_id = Some(session_id.to_string());
-        self
-    }
-}
-
 impl AgentOutput {
     /// Create an `AgentOutput` with the given value and sensible defaults.
     pub fn new(value: Value) -> Self {
@@ -324,6 +526,8 @@ impl AgentOutput {
         }
     }
 }
+
+// ── Provider trait ─────────────────────────────────────────────────
 
 /// Trait for AI agent backends.
 ///
@@ -376,6 +580,7 @@ mod tests {
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
             resume_session_id: None,
             verbose: false,
+            _marker: PhantomData,
         }
     }
 
@@ -397,7 +602,7 @@ mod tests {
 
     #[test]
     fn agent_config_with_all_optional_fields_none() {
-        let config = AgentConfig {
+        let config: AgentConfig = AgentConfig {
             system_prompt: None,
             prompt: "hello".to_string(),
             model: Model::HAIKU.to_string(),
@@ -410,6 +615,7 @@ mod tests {
             json_schema: None,
             resume_session_id: None,
             verbose: false,
+            _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: AgentConfig = serde_json::from_str(&json).unwrap();
@@ -501,5 +707,45 @@ mod tests {
         };
         let debug_str = format!("{:?}", output);
         assert!(!debug_str.is_empty());
+    }
+
+    #[test]
+    fn allow_tool_transitions_to_with_tools() {
+        let config = AgentConfig::new("test").allow_tool("Read");
+        assert_eq!(config.allowed_tools, vec!["Read"]);
+
+        // Can add more tools
+        let config = config.allow_tool("Write");
+        assert_eq!(config.allowed_tools, vec!["Read", "Write"]);
+    }
+
+    #[test]
+    fn output_schema_raw_transitions_to_with_schema() {
+        let config = AgentConfig::new("test").output_schema_raw(r#"{"type":"object"}"#);
+        assert_eq!(config.json_schema.as_deref(), Some(r#"{"type":"object"}"#));
+    }
+
+    #[test]
+    fn with_tools_converts_to_base_type() {
+        let typed = AgentConfig::new("test").allow_tool("Read");
+        let base: AgentConfig = typed.into();
+        assert_eq!(base.allowed_tools, vec!["Read"]);
+    }
+
+    #[test]
+    fn with_schema_converts_to_base_type() {
+        let typed = AgentConfig::new("test").output_schema_raw(r#"{"type":"object"}"#);
+        let base: AgentConfig = typed.into();
+        assert_eq!(base.json_schema.as_deref(), Some(r#"{"type":"object"}"#));
+    }
+
+    #[test]
+    fn serde_roundtrip_ignores_marker() {
+        let config = AgentConfig::new("test").allow_tool("Read");
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("marker"));
+
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.allowed_tools, vec!["Read"]);
     }
 }

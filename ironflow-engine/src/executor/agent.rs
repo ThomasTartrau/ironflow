@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rust_decimal::Decimal;
-use serde_json::json;
+use serde_json::{Value, json};
 use tracing::{info, warn};
 
 use ironflow_core::operations::agent::Agent;
@@ -13,6 +13,33 @@ use ironflow_core::provider::{AgentConfig, AgentProvider};
 use crate::error::EngineError;
 
 use super::{StepExecutor, StepOutput};
+
+/// Format the agent output value for [`StepOutput`].
+///
+/// When a JSON schema was requested (`has_schema = true`), the structured
+/// value is returned directly so that callers can deserialize it as `T`.
+/// Otherwise the value is wrapped in `{"value": ..., "model": ...}` for
+/// backward compatibility with text-mode consumers.
+///
+/// **Note:** the structured value passed here may not strictly conform to
+/// the requested schema. Claude CLI can non-deterministically flatten
+/// wrapper objects with a single array field, returning a bare array
+/// instead of `{"items": [...]}`. See upstream issues:
+/// - <https://github.com/anthropics/claude-agent-sdk-python/issues/502>
+/// - <https://github.com/anthropics/claude-agent-sdk-python/issues/374>
+///
+/// Callers that deserialize the output should handle both the expected
+/// wrapper and a bare array/value as a fallback.
+fn format_agent_output(value: &Value, model: Option<&str>, has_schema: bool) -> Value {
+    if has_schema {
+        value.clone()
+    } else {
+        json!({
+            "value": value,
+            "model": model,
+        })
+    }
+}
 
 /// Executor for agent (AI) steps.
 ///
@@ -83,11 +110,14 @@ impl StepExecutor for AgentExecutor<'_> {
 
         let debug_messages = result.debug_messages().map(|msgs| msgs.to_vec());
 
+        let output = format_agent_output(
+            result.value(),
+            result.model(),
+            self.config.json_schema.is_some(),
+        );
+
         Ok(StepOutput {
-            output: json!({
-                "value": result.value(),
-                "model": result.model(),
-            }),
+            output,
             duration_ms,
             cost_usd: cost,
             input_tokens,
@@ -138,5 +168,37 @@ mod tests {
         let json = r#""unknown""#;
         let mode: PermissionMode = serde_json::from_str(json).unwrap();
         assert!(matches!(mode, PermissionMode::Default));
+    }
+
+    #[test]
+    fn structured_output_not_wrapped_in_value_model() {
+        use serde::Deserialize;
+        use serde_json::json;
+
+        use super::format_agent_output;
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct TechDigest {
+            items: Vec<String>,
+        }
+
+        let structured = json!({"items": ["news1", "news2"]});
+        let output = format_agent_output(&structured, Some("sonnet"), true);
+
+        let digest: TechDigest = serde_json::from_value(output).unwrap();
+        assert_eq!(digest.items, vec!["news1", "news2"]);
+    }
+
+    #[test]
+    fn text_output_wrapped_in_value_model() {
+        use serde_json::json;
+
+        use super::format_agent_output;
+
+        let text_value = json!("Hello, world!");
+        let output = format_agent_output(&text_value, Some("sonnet"), false);
+
+        assert_eq!(output["value"], "Hello, world!");
+        assert_eq!(output["model"], "sonnet");
     }
 }

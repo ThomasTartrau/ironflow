@@ -94,7 +94,11 @@ impl AgentProvider for ClaudeCodeProvider {
                 model = %config.model,
                 has_system_prompt = config.system_prompt.is_some(),
                 has_json_schema = config.json_schema.is_some(),
+                has_tools = !config.allowed_tools.is_empty(),
+                tools = ?config.allowed_tools,
                 permission_mode = ?config.permission_mode,
+                verbose = config.verbose,
+                arg_count = args.len(),
                 "spawning claude process"
             );
 

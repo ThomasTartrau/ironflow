@@ -306,6 +306,7 @@ impl RunStore for InMemoryStore {
                 updated_at: now,
                 started_at: None,
                 completed_at: None,
+                debug_messages: None,
             };
 
             state.steps.insert(step.id, step.clone());
@@ -366,6 +367,9 @@ impl RunStore for InMemoryStore {
             }
             if let Some(completed) = update.completed_at {
                 step.completed_at = Some(completed);
+            }
+            if let Some(debug_msgs) = update.debug_messages {
+                step.debug_messages = Some(debug_msgs);
             }
 
             step.updated_at = now;

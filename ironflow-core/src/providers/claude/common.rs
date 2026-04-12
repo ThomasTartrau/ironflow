@@ -241,6 +241,30 @@ fn shell_escape(s: &str) -> String {
 ///
 /// Prefers `structured_output`; falls back to parsing `result` as JSON
 /// (direct parse, code-fence extraction, or brace extraction).
+///
+/// # Why the fallbacks exist
+///
+/// Claude CLI has several known bugs around structured output that make
+/// the `structured_output` field unreliable:
+///
+/// - When tools are used alongside `--json-schema`, `structured_output`
+///   is always `null` (the result lands in `result` as markdown text).
+///   See <https://github.com/anthropics/claude-code/issues/18536>.
+///   This case is blocked at compile time by the typestate, but defensive
+///   fallbacks remain for forward compatibility.
+/// - The CLI does not validate output against the schema; it may return
+///   malformed or non-conforming JSON.
+///   See <https://github.com/anthropics/claude-code/issues/9058>.
+/// - Wrapper objects with a single array field may be flattened to a bare
+///   array non-deterministically.
+///   See <https://github.com/anthropics/claude-agent-sdk-python/issues/502>
+///   and <https://github.com/anthropics/claude-agent-sdk-python/issues/374>.
+///
+/// Because of these issues, we try multiple extraction strategies in order:
+/// 1. `structured_output` field (when non-null)
+/// 2. Direct JSON parse of `result`
+/// 3. JSON code fence extraction from `result`
+/// 4. First `{...}` brace extraction from `result`
 pub fn extract_structured_value(parsed: &ClaudeJsonOutput) -> Option<Value> {
     let from_structured = parsed.structured_output.as_ref().filter(|v| !v.is_null());
     if let Some(v) = from_structured {
@@ -283,10 +307,23 @@ pub fn parse_response(
         serde_json::from_str(stdout).map_err(|e| AgentError::SchemaValidation {
             expected: "ClaudeJsonOutput".to_string(),
             got: format!("parse error: {e}"),
+            debug_messages: Vec::new(),
         })?;
 
     let value = if config.json_schema.is_some() {
         extract_structured_value(&parsed).ok_or_else(|| {
+            warn!(
+                subtype = ?parsed.subtype,
+                result_is_null = parsed.result.as_ref().is_none_or(|v| v.is_null()),
+                structured_output_is_null = parsed.structured_output.as_ref().is_none_or(|v| v.is_null()),
+                has_tools = !config.allowed_tools.is_empty(),
+                "structured_output extraction failed, dumping response fields for diagnosis"
+            );
+            if let Some(ref result) = parsed.result {
+                let preview = result.to_string();
+                let truncated = &preview[..preview.len().min(2000)];
+                warn!(result_preview = truncated, "result field content (truncated to 2000 chars)");
+            }
             let hint = match parsed.subtype.as_deref() {
                 Some("error_max_budget_usd") => {
                     " (budget exceeded before structured output was generated)"
@@ -303,6 +340,7 @@ pub fn parse_response(
             AgentError::SchemaValidation {
                 expected: "structured_output field".to_string(),
                 got: format!("null{hint}"),
+                debug_messages: Vec::new(),
             }
         })?
     } else {
@@ -415,14 +453,31 @@ pub fn parse_stream_response(
         }
     }
 
-    let result_str = result_line.ok_or_else(|| AgentError::SchemaValidation {
-        expected: "stream-json result line".to_string(),
-        got: "no result line found in stream output".to_string(),
-    })?;
+    let result_str = match result_line {
+        Some(line) => line,
+        None => {
+            return Err(AgentError::SchemaValidation {
+                expected: "stream-json result line".to_string(),
+                got: "no result line found in stream output".to_string(),
+                debug_messages,
+            });
+        }
+    };
 
-    let mut output = parse_response(result_str, config, fallback_duration_ms)?;
-    output.debug_messages = Some(debug_messages);
-    Ok(output)
+    match parse_response(result_str, config, fallback_duration_ms) {
+        Ok(mut output) => {
+            output.debug_messages = Some(debug_messages);
+            Ok(output)
+        }
+        Err(AgentError::SchemaValidation { expected, got, .. }) => {
+            Err(AgentError::SchemaValidation {
+                expected,
+                got,
+                debug_messages,
+            })
+        }
+        Err(other) => Err(other),
+    }
 }
 
 /// Parse CLI output, dispatching to the correct parser based on verbose mode.
@@ -877,5 +932,88 @@ mod tests {
         let display = format!("{msg}");
         assert!(display.contains("[assistant] Analyzing..."));
         assert!(display.contains("[tool_use] Read"));
+    }
+
+    #[test]
+    fn build_args_includes_both_tools_and_json_schema() {
+        use std::marker::PhantomData;
+
+        use crate::operations::agent::PermissionMode;
+
+        // Use direct field access to bypass typestate (testing CLI arg construction,
+        // not the builder API -- this combination triggers a Claude CLI bug).
+        let config = AgentConfig {
+            prompt: "test prompt".to_string(),
+            model: "sonnet".to_string(),
+            json_schema: Some(
+                r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string(),
+            ),
+            allowed_tools: vec!["WebSearch".to_string(), "WebFetch".to_string()],
+            max_turns: Some(5),
+            permission_mode: PermissionMode::Default,
+            system_prompt: None,
+            max_budget_usd: None,
+            working_dir: None,
+            mcp_config: None,
+            resume_session_id: None,
+            verbose: false,
+            _marker: PhantomData,
+        };
+
+        let args = build_args(&config).unwrap();
+
+        assert!(args.contains(&"--allowedTools".to_string()));
+        assert!(args.contains(&"WebSearch,WebFetch".to_string()));
+        assert!(args.contains(&"--json-schema".to_string()));
+        assert!(
+            args.contains(
+                &r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()
+            )
+        );
+        assert!(args.contains(&"--output-format".to_string()));
+        assert!(args.contains(&"json".to_string()));
+    }
+
+    #[test]
+    fn stream_response_preserves_debug_messages_on_schema_validation_error() {
+        let assistant_line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Searching..."},{"type":"tool_use","name":"WebSearch","input":{"query":"AI news"}}],"stop_reason":"tool_use"}}"#;
+        let result_line = r#"{"type":"result","session_id":"s1","subtype":"success","result":"text response","usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.01,"duration_ms":500}"#;
+
+        let stdout = format!("{assistant_line}\n{result_line}");
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+        let config = config.verbose(true);
+
+        let err = parse_stream_response(&stdout, &config, 500).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { debug_messages, .. } => {
+                assert_eq!(debug_messages.len(), 1);
+                assert_eq!(debug_messages[0].text.as_deref(), Some("Searching..."));
+                assert_eq!(debug_messages[0].tool_calls.len(), 1);
+                assert_eq!(debug_messages[0].tool_calls[0].name, "WebSearch");
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_schema_validation_error_has_empty_debug_messages() {
+        let stdout = r#"{"session_id":"s1","subtype":"success","result":"plain text","usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.01,"duration_ms":100}"#;
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let err = parse_response(stdout, &config, 100).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { debug_messages, .. } => {
+                assert!(debug_messages.is_empty());
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
     }
 }
