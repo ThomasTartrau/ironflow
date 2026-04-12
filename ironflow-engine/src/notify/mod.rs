@@ -15,6 +15,8 @@
 //! - [`EventSubscriber`] -- trait: receives and handles a single event.
 //! - [`EventPublisher`] -- holds subscriptions (subscriber + event type filter),
 //!   dispatches matching events via `tokio::spawn`.
+//! - [`MessageFormatter`] -- trait: converts events into platform-specific messages.
+//! - [`RetryConfig`] -- shared retry/backoff configuration for HTTP subscribers.
 //! - [`WebhookSubscriber`] -- built-in HTTP POST implementation.
 //!
 //! # Examples
@@ -31,12 +33,16 @@
 
 mod betterstack;
 mod event;
+mod formatter;
 mod publisher;
+mod retry;
 mod subscriber;
 mod webhook;
 
 pub use betterstack::BetterStackSubscriber;
 pub use event::Event;
+pub use formatter::{FormattedMessage, MessageFormatter};
 pub use publisher::EventPublisher;
+pub use retry::{RetryConfig, deliver_with_retry, is_accepted_202, is_success_2xx};
 pub use subscriber::{EventSubscriber, SubscriberFuture};
 pub use webhook::WebhookSubscriber;
