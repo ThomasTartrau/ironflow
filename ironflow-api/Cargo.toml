@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.7.2"
+version = "2.7.3"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -18,9 +18,9 @@ dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
 
 [dependencies]
-ironflow-store = { version = "2.5.0", path = "../ironflow-store" }
-ironflow-engine = { version = "2.7.1", path = "../ironflow-engine" }
-ironflow-core = { version = "2.4.0", path = "../ironflow-core" }
+ironflow-store = { version = "2.5.1", path = "../ironflow-store" }
+ironflow-engine = { version = "2.7.2", path = "../ironflow-engine" }
+ironflow-core = { version = "2.4.1", path = "../ironflow-core" }
 ironflow-auth = { version = "2.0.0", path = "../ironflow-auth" }
 
 axum = { version = "0.8", features = ["json"] }
@@ -45,6 +45,6 @@ metrics-exporter-prometheus = { version = "0.18", optional = true, default-featu
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-ironflow-store = { version = "2.5.0", path = "../ironflow-store", features = ["store-memory"] }
+ironflow-store = { version = "2.5.1", path = "../ironflow-store", features = ["store-memory"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
