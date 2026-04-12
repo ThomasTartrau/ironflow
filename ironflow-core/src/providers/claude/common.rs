@@ -290,8 +290,8 @@ pub fn parse_response(
         extract_structured_value(&parsed).ok_or_else(|| {
             warn!(
                 subtype = ?parsed.subtype,
-                result_is_null = parsed.result.as_ref().map_or(true, |v| v.is_null()),
-                structured_output_is_null = parsed.structured_output.as_ref().map_or(true, |v| v.is_null()),
+                result_is_null = parsed.result.as_ref().is_none_or(|v| v.is_null()),
+                structured_output_is_null = parsed.structured_output.as_ref().is_none_or(|v| v.is_null()),
                 has_tools = !config.allowed_tools.is_empty(),
                 "structured_output extraction failed, dumping response fields for diagnosis"
             );
@@ -941,11 +941,8 @@ mod tests {
         assert!(args.contains(&"--allowedTools".to_string()));
         assert!(args.contains(&"WebSearch,WebFetch".to_string()));
         assert!(args.contains(&"--json-schema".to_string()));
-        assert!(
-            args.contains(
-                &r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()
-            )
-        );
+        assert!(args
+            .contains(&r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()));
         assert!(args.contains(&"--output-format".to_string()));
         assert!(args.contains(&"json".to_string()));
     }
