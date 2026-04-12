@@ -1,21 +1,10 @@
 //! [`BetterStackSubscriber`] -- forwards error events to BetterStack Logs.
 
-use std::time::Duration;
-
+use reqwest::Client;
 use serde::Serialize;
-use tokio::time::sleep;
-use tracing::{error, info, warn};
 
+use super::retry::{RetryConfig, deliver_with_retry, is_accepted_202};
 use super::{Event, EventSubscriber, SubscriberFuture};
-
-/// Default timeout for outbound HTTP calls.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Maximum number of retry attempts for failed deliveries.
-const MAX_RETRIES: u32 = 3;
-
-/// Base delay for exponential backoff (doubled each retry).
-const BASE_BACKOFF: Duration = Duration::from_millis(500);
 
 /// Default BetterStack Logs ingestion endpoint.
 const DEFAULT_INGEST_URL: &str = "https://in.logs.betterstack.com";
@@ -61,13 +50,15 @@ pub struct BetterStackSubscriber {
     source_token: String,
     authorization_header: String,
     ingest_url: String,
-    client: reqwest::Client,
+    client: Client,
+    retry_config: RetryConfig,
 }
 
 impl BetterStackSubscriber {
     /// Create a new subscriber with the given BetterStack source token.
     ///
-    /// Uses the default ingestion endpoint (`https://in.logs.betterstack.com`).
+    /// Uses the default ingestion endpoint (`https://in.logs.betterstack.com`)
+    /// and default [`RetryConfig`].
     ///
     /// # Panics
     ///
@@ -105,15 +96,43 @@ impl BetterStackSubscriber {
     /// assert_eq!(subscriber.ingest_url(), "https://custom.logs.example.com");
     /// ```
     pub fn with_url(source_token: &str, ingest_url: &str) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .build()
-            .expect("failed to build HTTP client");
+        Self::with_url_and_retry(source_token, ingest_url, RetryConfig::default())
+    }
+
+    /// Create a subscriber with a custom ingestion URL and retry configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client cannot be built (TLS backend unavailable).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::notify::{BetterStackSubscriber, RetryConfig};
+    ///
+    /// let config = RetryConfig::new(
+    ///     5,
+    ///     std::time::Duration::from_secs(10),
+    ///     std::time::Duration::from_secs(1),
+    /// );
+    /// let subscriber = BetterStackSubscriber::with_url_and_retry(
+    ///     "my-source-token",
+    ///     "https://custom.logs.example.com",
+    ///     config,
+    /// );
+    /// ```
+    pub fn with_url_and_retry(
+        source_token: &str,
+        ingest_url: &str,
+        retry_config: RetryConfig,
+    ) -> Self {
+        let client = retry_config.build_client();
         Self {
             authorization_header: format!("Bearer {}", source_token),
             source_token: source_token.to_string(),
             ingest_url: ingest_url.to_string(),
             client,
+            retry_config,
         }
     }
 
@@ -188,63 +207,6 @@ impl BetterStackSubscriber {
             _ => None,
         }
     }
-
-    /// Deliver with retry + exponential backoff.
-    async fn deliver(&self, payload: &LogPayload) {
-        for attempt in 0..MAX_RETRIES {
-            let result = self
-                .client
-                .post(&self.ingest_url)
-                .header("Authorization", &self.authorization_header)
-                .json(payload)
-                .send()
-                .await;
-
-            match result {
-                Ok(resp) if resp.status().as_u16() == 202 => {
-                    info!(
-                        ingest_url = %self.ingest_url,
-                        message = %payload.message,
-                        "betterstack log delivered"
-                    );
-                    return;
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    self.log_retry_or_fail(attempt, &payload.message, &format!("HTTP {status}"));
-                }
-                Err(err) => {
-                    self.log_retry_or_fail(attempt, &payload.message, &err.to_string());
-                }
-            }
-
-            if attempt + 1 < MAX_RETRIES {
-                let delay = BASE_BACKOFF * 2u32.pow(attempt);
-                sleep(delay).await;
-            }
-        }
-    }
-
-    fn log_retry_or_fail(&self, attempt: u32, message: &str, err_msg: &str) {
-        let remaining = MAX_RETRIES - attempt - 1;
-        if remaining > 0 {
-            warn!(
-                ingest_url = %self.ingest_url,
-                message,
-                attempt = attempt + 1,
-                remaining,
-                error = %err_msg,
-                "betterstack delivery failed, retrying"
-            );
-        } else {
-            error!(
-                ingest_url = %self.ingest_url,
-                message,
-                error = %err_msg,
-                "betterstack delivery failed after all retries"
-            );
-        }
-    }
 }
 
 impl EventSubscriber for BetterStackSubscriber {
@@ -255,7 +217,19 @@ impl EventSubscriber for BetterStackSubscriber {
     fn handle<'a>(&'a self, event: &'a Event) -> SubscriberFuture<'a> {
         Box::pin(async move {
             if let Some(payload) = Self::build_payload(event) {
-                self.deliver(&payload).await;
+                deliver_with_retry(
+                    &self.retry_config,
+                    || {
+                        self.client
+                            .post(&self.ingest_url)
+                            .header("Authorization", &self.authorization_header)
+                            .json(&payload)
+                    },
+                    is_accepted_202,
+                    "betterstack",
+                    &payload.message,
+                )
+                .await;
             }
         })
     }
