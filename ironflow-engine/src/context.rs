@@ -1077,10 +1077,9 @@ fn extract_debug_messages_from_error(err: &EngineError) -> Option<Value> {
         debug_messages,
         ..
     })) = err
+        && !debug_messages.is_empty()
     {
-        if !debug_messages.is_empty() {
-            return serde_json::to_value(debug_messages).ok();
-        }
+        return serde_json::to_value(debug_messages).ok();
     }
     None
 }
