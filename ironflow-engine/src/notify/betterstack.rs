@@ -6,8 +6,6 @@ use serde::Serialize;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use ironflow_store::models::RunStatus;
-
 use super::{Event, EventSubscriber, SubscriberFuture};
 
 /// Default timeout for outbound HTTP calls.
@@ -39,7 +37,7 @@ struct LogPayload {
 ///
 /// Only acts on events that represent failures:
 /// - [`Event::StepFailed`]
-/// - [`Event::RunStatusChanged`] when `to` is [`Failed`](ironflow_store::models::RunStatus::Failed)
+/// - [`Event::RunFailed`]
 ///
 /// All other events are silently ignored (filtering by event type
 /// should already be done at subscription time, but this subscriber
@@ -56,7 +54,7 @@ struct LogPayload {
 /// let mut publisher = EventPublisher::new();
 /// publisher.subscribe(
 ///     BetterStackSubscriber::new("my-source-token"),
-///     &[Event::STEP_FAILED, Event::RUN_STATUS_CHANGED],
+///     &[Event::STEP_FAILED, Event::RUN_FAILED],
 /// );
 /// ```
 pub struct BetterStackSubscriber {
@@ -159,15 +157,13 @@ impl BetterStackSubscriber {
                     event: event_json,
                 })
             }
-            Event::RunStatusChanged {
+            Event::RunFailed {
                 run_id,
                 workflow_name,
-                to: RunStatus::Failed,
                 error,
                 cost_usd,
                 duration_ms,
                 at,
-                ..
             } => {
                 let error_detail = error.as_deref().unwrap_or("unknown error");
                 let message = format!(
@@ -316,11 +312,9 @@ mod tests {
 
     #[test]
     fn build_payload_run_failed() {
-        let event = Event::RunStatusChanged {
+        let event = Event::RunFailed {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
-            from: RunStatus::Running,
-            to: RunStatus::Failed,
             error: Some("step 'build' failed".to_string()),
             cost_usd: Decimal::new(42, 2),
             duration_ms: 5000,
@@ -339,11 +333,9 @@ mod tests {
 
     #[test]
     fn build_payload_run_failed_without_error_message() {
-        let event = Event::RunStatusChanged {
+        let event = Event::RunFailed {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
-            from: RunStatus::Running,
-            to: RunStatus::Failed,
             error: None,
             cost_usd: Decimal::ZERO,
             duration_ms: 1000,

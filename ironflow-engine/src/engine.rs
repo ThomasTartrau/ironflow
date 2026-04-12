@@ -613,16 +613,31 @@ impl Engine {
         ctx: &WorkflowContext,
         duration_ms: u64,
     ) {
+        let now = Utc::now();
+        let cost_usd = ctx.total_cost_usd();
+        let wf = workflow_name.to_string();
+
         self.event_publisher.publish(Event::RunStatusChanged {
             run_id,
-            workflow_name: workflow_name.to_string(),
+            workflow_name: wf.clone(),
             from: RunStatus::Running,
             to,
-            error,
-            cost_usd: ctx.total_cost_usd(),
+            error: error.clone(),
+            cost_usd,
             duration_ms,
-            at: Utc::now(),
+            at: now,
         });
+
+        if to == RunStatus::Failed {
+            self.event_publisher.publish(Event::RunFailed {
+                run_id,
+                workflow_name: wf,
+                error,
+                cost_usd,
+                duration_ms,
+                at: now,
+            });
+        }
     }
 }
 

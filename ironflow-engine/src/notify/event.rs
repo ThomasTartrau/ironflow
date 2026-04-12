@@ -65,6 +65,26 @@ pub enum Event {
         at: DateTime<Utc>,
     },
 
+    /// A run transitioned to [`Failed`](ironflow_store::models::RunStatus::Failed).
+    ///
+    /// This is a convenience event emitted alongside [`RunStatusChanged`](Event::RunStatusChanged)
+    /// when the target status is `Failed`. Subscribe to this instead of
+    /// `RUN_STATUS_CHANGED` when you only care about failures.
+    RunFailed {
+        /// Run identifier.
+        run_id: Uuid,
+        /// Workflow name.
+        workflow_name: String,
+        /// Error message.
+        error: Option<String>,
+        /// Aggregated cost in USD at the time of failure.
+        cost_usd: Decimal,
+        /// Aggregated duration in milliseconds at the time of failure.
+        duration_ms: u64,
+        /// When the failure occurred.
+        at: DateTime<Utc>,
+    },
+
     // -- Step lifecycle --
     /// A step completed successfully.
     StepCompleted {
@@ -168,6 +188,8 @@ impl Event {
     pub const RUN_CREATED: &'static str = "run_created";
     /// Event type constant for [`RunStatusChanged`](Event::RunStatusChanged).
     pub const RUN_STATUS_CHANGED: &'static str = "run_status_changed";
+    /// Event type constant for [`RunFailed`](Event::RunFailed).
+    pub const RUN_FAILED: &'static str = "run_failed";
     /// Event type constant for [`StepCompleted`](Event::StepCompleted).
     pub const STEP_COMPLETED: &'static str = "step_completed";
     /// Event type constant for [`StepFailed`](Event::StepFailed).
@@ -203,6 +225,7 @@ impl Event {
     pub const ALL: &'static [&'static str] = &[
         Self::RUN_CREATED,
         Self::RUN_STATUS_CHANGED,
+        Self::RUN_FAILED,
         Self::STEP_COMPLETED,
         Self::STEP_FAILED,
         Self::APPROVAL_REQUESTED,
@@ -235,6 +258,7 @@ impl Event {
         match self {
             Event::RunCreated { .. } => Self::RUN_CREATED,
             Event::RunStatusChanged { .. } => Self::RUN_STATUS_CHANGED,
+            Event::RunFailed { .. } => Self::RUN_FAILED,
             Event::StepCompleted { .. } => Self::STEP_COMPLETED,
             Event::StepFailed { .. } => Self::STEP_FAILED,
             Event::ApprovalRequested { .. } => Self::APPROVAL_REQUESTED,
@@ -269,6 +293,25 @@ mod tests {
 
         assert_eq!(back.event_type(), "run_status_changed");
         assert!(json.contains("\"type\":\"run_status_changed\""));
+    }
+
+    #[test]
+    fn run_failed_serde_roundtrip() {
+        let event = Event::RunFailed {
+            run_id: Uuid::now_v7(),
+            workflow_name: "deploy".to_string(),
+            error: Some("step crashed".to_string()),
+            cost_usd: Decimal::new(10, 2),
+            duration_ms: 3000,
+            at: Utc::now(),
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.event_type(), "run_failed");
+        assert!(json.contains("\"type\":\"run_failed\""));
+        assert!(json.contains("step crashed"));
     }
 
     #[test]
@@ -342,6 +385,17 @@ mod tests {
                     at: now,
                 },
                 "run_status_changed",
+            ),
+            (
+                Event::RunFailed {
+                    run_id: id,
+                    workflow_name: "w".to_string(),
+                    error: Some("boom".to_string()),
+                    cost_usd: Decimal::ZERO,
+                    duration_ms: 0,
+                    at: now,
+                },
+                "run_failed",
             ),
             (
                 Event::StepCompleted {
