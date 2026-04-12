@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.3.1"
+version = "2.3.2"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -13,7 +13,7 @@ categories = ["asynchronous"]
 [dependencies]
 ironflow-core = { version = "2.4.0", path = "../ironflow-core" }
 ironflow-store = { version = "2.5.0", path = "../ironflow-store", default-features = false }
-ironflow-engine = { version = "2.7.0", path = "../ironflow-engine" }
+ironflow-engine = { version = "2.7.1", path = "../ironflow-engine" }
 
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["time", "sync", "macros", "signal"] }
