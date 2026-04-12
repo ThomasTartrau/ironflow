@@ -14,6 +14,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::provider::DebugMessage;
+
 /// Top-level error for any workflow operation (shell or agent).
 ///
 /// Every public operation in ironflow returns `Result<T, OperationError>`.
@@ -101,6 +103,11 @@ pub enum AgentError {
         expected: String,
         /// What was actually received.
         got: String,
+        /// Verbose conversation trace captured before the validation failure.
+        ///
+        /// Populated when the agent ran in verbose (stream-json) mode so that
+        /// callers can persist the debug trail even on error paths.
+        debug_messages: Vec<DebugMessage>,
     },
 
     /// The prompt exceeds the model's context window.
@@ -195,6 +202,7 @@ mod tests {
         let err = AgentError::SchemaValidation {
             expected: "object".to_string(),
             got: "string".to_string(),
+            debug_messages: Vec::new(),
         };
         assert_eq!(
             err.to_string(),
@@ -228,6 +236,7 @@ mod tests {
         let agent_err = AgentError::SchemaValidation {
             expected: "a".to_string(),
             got: "b".to_string(),
+            debug_messages: Vec::new(),
         };
         let op_err: OperationError = agent_err.into();
         assert!(matches!(

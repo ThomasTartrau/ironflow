@@ -61,6 +61,8 @@ pub struct Step {
     pub started_at: Option<DateTime<Utc>>,
     /// When step execution finished.
     pub completed_at: Option<DateTime<Utc>>,
+    /// Debug messages (verbose conversation trace), stored as JSON.
+    pub debug_messages: Option<Value>,
 }
 
 /// Request to create a new step.
@@ -130,6 +132,8 @@ pub struct StepUpdate {
     pub started_at: Option<DateTime<Utc>>,
     /// When execution completed.
     pub completed_at: Option<DateTime<Utc>>,
+    /// Debug messages (verbose conversation trace), stored as JSON.
+    pub debug_messages: Option<Value>,
 }
 
 #[cfg(test)]
@@ -181,6 +185,7 @@ mod tests {
             updated_at: now,
             started_at: Some(now),
             completed_at: Some(now),
+            debug_messages: None,
         };
 
         let json = serde_json::to_string(&step).expect("serialize");
@@ -213,6 +218,7 @@ mod tests {
         assert!(update.output_tokens.is_none());
         assert!(update.started_at.is_none());
         assert!(update.completed_at.is_none());
+        assert!(update.debug_messages.is_none());
     }
 
     #[test]
@@ -227,6 +233,7 @@ mod tests {
             output_tokens: Some(75),
             started_at: None,
             completed_at: None,
+            debug_messages: None,
         };
 
         let json = serde_json::to_string(&update).expect("serialize");

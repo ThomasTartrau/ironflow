@@ -116,6 +116,7 @@ mod tests {
             output_tokens: None,
             started_at: None,
             completed_at: None,
+            debug_messages: None,
         };
 
         let req = Request::builder()
@@ -159,6 +160,7 @@ mod tests {
             output_tokens: None,
             started_at: None,
             completed_at: None,
+            debug_messages: None,
         };
 
         let req = Request::builder()

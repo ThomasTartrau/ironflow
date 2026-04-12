@@ -203,9 +203,9 @@ impl Agent {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_config(config: AgentConfig) -> Self {
+    pub fn from_config(config: impl Into<AgentConfig>) -> Self {
         Self {
-            config,
+            config: config.into(),
             dry_run: None,
             retry_policy: None,
         }
@@ -1333,6 +1333,7 @@ mod tests {
                     Err(AgentError::SchemaValidation {
                         expected: "object".to_string(),
                         got: "string".to_string(),
+                        debug_messages: Vec::new(),
                     })
                 })
             }

@@ -427,6 +427,7 @@ mod tests {
         let err = OperationError::Agent(AgentError::SchemaValidation {
             expected: "object".to_string(),
             got: "string".to_string(),
+            debug_messages: Vec::new(),
         });
         assert!(!is_retryable(&err));
     }
