@@ -72,11 +72,7 @@ cargo-audit:
   before_script:
     - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
   script:
-    - |
-      AUDIT_VERSION="0.21.2"
-      AUDIT_URL="https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${AUDIT_VERSION}/cargo-audit-x86_64-unknown-linux-musl-v${AUDIT_VERSION}.tgz"
-      mkdir -p "$CARGO_HOME/bin"
-      curl -sSfL "$AUDIT_URL" | tar xz -C "$CARGO_HOME/bin/" --strip-components=1
+    - cargo install cargo-audit --locked
     - cargo audit
   allow_failure: false
 
