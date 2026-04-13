@@ -16,6 +16,7 @@ export interface MultiSelectOption {
 }
 
 interface MultiSelectProps {
+	id?: string;
 	options: MultiSelectOption[];
 	value: string[];
 	onChange: (value: string[]) => void;
@@ -24,6 +25,7 @@ interface MultiSelectProps {
 }
 
 export function MultiSelect({
+	id,
 	options,
 	value,
 	onChange,
@@ -71,6 +73,7 @@ export function MultiSelect({
 			<PopoverTrigger
 				render={
 					<button
+						id={id}
 						type="button"
 						className={cn(
 							"flex min-h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background",

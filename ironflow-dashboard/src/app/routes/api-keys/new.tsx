@@ -127,8 +127,11 @@ export function Component() {
 				</div>
 
 				<div>
-					<label className="text-sm font-medium">Scopes</label>
+					<label htmlFor="scopes" className="text-sm font-medium">
+						Scopes
+					</label>
 					<MultiSelect
+						id="scopes"
 						options={SCOPE_OPTIONS}
 						value={scopes}
 						onChange={setScopes}
@@ -138,10 +141,7 @@ export function Component() {
 				</div>
 
 				<div className="flex gap-3">
-					<Button
-						variant="outline"
-						onClick={() => navigate("/api-keys")}
-					>
+					<Button variant="outline" onClick={() => navigate("/api-keys")}>
 						Cancel
 					</Button>
 					<Button onClick={handleCreate} disabled={!canCreate}>
