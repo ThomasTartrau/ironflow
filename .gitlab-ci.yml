@@ -13,16 +13,26 @@ stages:
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
-  GIT_DEPTH: 0
-  GIT_STRATEGY: clone
+  GIT_DEPTH: 1
+  GIT_STRATEGY: fetch
 
 .rust-cache: &rust-cache
   cache:
-    key: "${CI_COMMIT_REF_SLUG}"
+    key: rust-${CI_COMMIT_REF_SLUG}
+    fallback_keys:
+      - rust-${CI_DEFAULT_BRANCH}
     paths:
       - .cargo/registry/
       - .cargo/git/
       - target/
+
+.dashboard-cache: &dashboard-cache
+  cache:
+    key: dashboard-${CI_COMMIT_REF_SLUG}
+    fallback_keys:
+      - dashboard-${CI_DEFAULT_BRANCH}
+    paths:
+      - ironflow-dashboard/node_modules/
 
 cargo-fmt:
   stage: check
@@ -31,7 +41,6 @@ cargo-fmt:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - rustup component add rustfmt
     - cargo fmt --all -- --check
 
 cargo-clippy:
@@ -41,53 +50,75 @@ cargo-clippy:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - rustup component add clippy
     - cargo clippy --workspace --all-targets --exclude ironflow-example-server -- -D warnings
     - cargo clippy --workspace --all-targets --exclude ironflow-example-server --features prometheus -- -D warnings
 
-cargo-check:
+dashboard-check:
+  stage: check
+  image: node:22
+  <<: *dashboard-cache
+  script:
+    - corepack enable
+    - cd ironflow-dashboard && pnpm install --frozen-lockfile
+    - pnpm run lint
+    - pnpm tsc -b --noEmit
+
+cargo-audit:
   stage: check
   image: rust:1.94.0
   <<: *rust-cache
+  before_script:
+    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
+  script:
+    - |
+      AUDIT_VERSION="0.21.2"
+      AUDIT_URL="https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${AUDIT_VERSION}/cargo-audit-x86_64-unknown-linux-musl-v${AUDIT_VERSION}.tgz"
+      curl -sSfL "$AUDIT_URL" | tar xz -C "$CARGO_HOME/bin/" --strip-components=1
+    - cargo audit
+  allow_failure: false
+
+unit-tests:
+  stage: test
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - cargo-clippy
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo check --workspace --all-targets --exclude ironflow-example-server
+    - cargo test --workspace --exclude ironflow-example-server
 
-dashboard-lint:
-  stage: check
-  image: node:22
-  cache:
-    key: dashboard-${CI_COMMIT_REF_SLUG}
-    paths:
-      - ironflow-dashboard/node_modules/
+test-prometheus:
+  stage: test
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - cargo-clippy
+  variables:
+    RUSTFLAGS: "-D warnings"
   script:
-    - cd ironflow-dashboard && npm install --legacy-peer-deps
-    - npm run lint
+    - cargo test --workspace --exclude ironflow-example-server --features prometheus
 
-dashboard-typecheck:
-  stage: check
-  image: node:22
-  cache:
-    key: dashboard-${CI_COMMIT_REF_SLUG}
-    paths:
-      - ironflow-dashboard/node_modules/
+doc-tests:
+  stage: test
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - cargo-clippy
+  variables:
+    RUSTFLAGS: "-D warnings"
   script:
-    - cd ironflow-dashboard && npm install --legacy-peer-deps
-    - npx tsc -b --noEmit
+    - cargo test --workspace --exclude ironflow-example-server --doc
 
 dashboard-build:
   stage: build
   image: node:22
   needs:
-    - dashboard-lint
-    - dashboard-typecheck
-  cache:
-    key: dashboard-${CI_COMMIT_REF_SLUG}
-    paths:
-      - ironflow-dashboard/node_modules/
+    - dashboard-check
+  <<: *dashboard-cache
   script:
-    - cd ironflow-dashboard && npm install --legacy-peer-deps && npm run build
+    - corepack enable
+    - cd ironflow-dashboard && pnpm install --frozen-lockfile && pnpm run build
   artifacts:
     paths:
       - ironflow-dashboard/dist/
@@ -108,61 +139,6 @@ cargo-check-dashboard:
     - ls ironflow-api/dashboard/
     - cargo check -p ironflow-api --features dashboard
     - cargo check -p ironflow-example-server
-
-cargo-audit:
-  stage: check
-  image: rust:1.94.0
-  <<: *rust-cache
-  before_script:
-    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
-  script:
-    - cargo install cargo-audit --locked
-    - cargo audit
-  allow_failure: false
-
-unit-tests:
-  stage: test
-  image: rust:1.94.0
-  <<: *rust-cache
-  needs:
-    - cargo-check
-  variables:
-    RUSTFLAGS: "-D warnings"
-  script:
-    - cargo test --workspace --exclude ironflow-example-server
-
-test-prometheus:
-  stage: test
-  image: rust:1.94.0
-  <<: *rust-cache
-  needs:
-    - cargo-check
-  variables:
-    RUSTFLAGS: "-D warnings"
-  script:
-    - cargo test --workspace --exclude ironflow-example-server --features prometheus
-
-doc-tests:
-  stage: test
-  image: rust:1.94.0
-  <<: *rust-cache
-  needs:
-    - cargo-check
-  variables:
-    RUSTFLAGS: "-D warnings"
-  script:
-    - cargo test --workspace --exclude ironflow-example-server --doc
-
-build-debug:
-  stage: build
-  image: rust:1.94.0
-  <<: *rust-cache
-  needs:
-    - unit-tests
-    - test-prometheus
-    - doc-tests
-  script:
-    - cargo build --workspace --exclude ironflow-example-server
 
 build-release:
   stage: build
@@ -185,6 +161,8 @@ release-plz-update:
   needs:
     - build-release
     - cargo-audit
+  variables:
+    GIT_DEPTH: 0
   before_script:
     - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
     - cargo install release-plz --locked
@@ -205,12 +183,13 @@ release-plz-release:
   needs:
     - build-release
     - cargo-audit
+    - dashboard-build
+  variables:
+    GIT_DEPTH: 0
   before_script:
     - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
     - cargo install release-plz --locked
-    - apt-get update -qq && apt-get install -y -qq nodejs npm
-    - cd ironflow-dashboard && npm install --legacy-peer-deps && npm run build
-    - cd .. && mkdir -p ironflow-api/dashboard
+    - mkdir -p ironflow-api/dashboard
     - cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
   script:
     - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
