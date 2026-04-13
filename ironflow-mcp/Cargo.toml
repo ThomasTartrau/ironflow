@@ -1,0 +1,23 @@
+[package]
+name = "ironflow-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+description = "MCP server for Ironflow workflow orchestration"
+license = "MIT"
+
+[[bin]]
+name = "ironflow-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
+rust-mcp-sdk = { version = "0.9", default-features = false, features = ["server", "macros", "stdio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -3,6 +3,8 @@
 //! Each entity lives in its own file. All types are re-exported here
 //! for convenient `use ironflow_store::entities::*` access.
 
+pub mod api_key;
+pub mod api_key_scope;
 mod fsm_state;
 mod page;
 mod run;
@@ -15,6 +17,8 @@ mod step_status;
 mod trigger_kind;
 mod user;
 
+pub use api_key::{ApiKey, ApiKeyUpdate, NewApiKey};
+pub use api_key_scope::ApiKeyScope;
 pub use fsm_state::FsmState;
 pub use page::Page;
 pub use run::{NewRun, Run, RunFilter, RunUpdate};

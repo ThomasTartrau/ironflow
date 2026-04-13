@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use ironflow_auth::extractor::AuthenticatedUser;
+use ironflow_auth::extractor::Authenticated;
 use ironflow_store::models::TriggerKind;
 use serde_json::json;
 
@@ -18,7 +18,7 @@ use crate::state::AppState;
 /// Returns 201 Created with the newly enqueued run.
 /// Returns 400 Bad Request if the workflow is unknown.
 pub async fn create_run(
-    _user: AuthenticatedUser,
+    _auth: Authenticated,
     State(state): State<AppState>,
     Json(req): Json<CreateRunRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -57,6 +57,7 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
@@ -87,6 +88,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
             Arc::new(InMemoryStore::new());
+        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine.register(TestWorkflow).unwrap();
@@ -100,6 +102,7 @@ mod tests {
         AppState::new(
             store,
             user_store,
+            api_key_store,
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),

@@ -2,7 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use ironflow_auth::extractor::AuthenticatedUser;
+use ironflow_auth::extractor::Authenticated;
 use ironflow_store::models::RunStatus;
 use uuid::Uuid;
 
@@ -16,7 +16,7 @@ use crate::state::AppState;
 /// Transitions the run to `Cancelled` status. Returns 400 if the run
 /// is already in a terminal state.
 pub async fn cancel_run(
-    _user: AuthenticatedUser,
+    _auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -49,6 +49,7 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
@@ -68,6 +69,7 @@ mod tests {
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
         let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
             Arc::new(InMemoryStore::new());
+        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -80,6 +82,7 @@ mod tests {
         AppState::new(
             store,
             user_store,
+            api_key_store,
             engine,
             jwt_config,
             "test-worker-token".to_string(),

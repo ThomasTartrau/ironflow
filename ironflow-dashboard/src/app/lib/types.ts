@@ -105,3 +105,37 @@ export interface WorkflowDetailResponse {
 	source_code: string | null;
 	sub_workflows: SubWorkflowDetail[];
 }
+
+export type ApiKeyScope =
+	| "workflows_read"
+	| "runs_read"
+	| "runs_write"
+	| "runs_manage"
+	| "stats_read";
+
+export interface ApiKeyResponse {
+	id: string;
+	name: string;
+	key_prefix: string;
+	scopes: ApiKeyScope[];
+	is_active: boolean;
+	expires_at: string | null;
+	last_used_at: string | null;
+	created_at: string;
+}
+
+export interface CreateApiKeyRequest {
+	name: string;
+	scopes: ApiKeyScope[];
+	expires_at?: string;
+}
+
+export interface CreateApiKeyResponse {
+	id: string;
+	key: string;
+	key_prefix: string;
+	name: string;
+	scopes: ApiKeyScope[];
+	expires_at: string | null;
+	created_at: string;
+}

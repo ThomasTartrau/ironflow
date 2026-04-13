@@ -1,5 +1,6 @@
 //! Router assembly — one module per route.
 
+mod api_keys;
 mod approve_run;
 mod auth;
 mod cancel_run;
@@ -20,7 +21,7 @@ use std::path::PathBuf;
 use axum::Extension;
 use axum::Router;
 use axum::middleware as axum_mw;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -84,6 +85,7 @@ impl Default for RouterConfig {
 /// use ironflow_api::state::AppState;
 /// use ironflow_auth::jwt::JwtConfig;
 /// use ironflow_store::prelude::*;
+/// use ironflow_store::api_key_store::ApiKeyStore;
 /// use ironflow_engine::engine::Engine;
 /// use ironflow_core::providers::claude::ClaudeCodeProvider;
 /// use std::sync::Arc;
@@ -91,6 +93,7 @@ impl Default for RouterConfig {
 /// # async fn example() {
 /// let store = Arc::new(InMemoryStore::new());
 /// let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
+/// let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
 /// let provider = Arc::new(ClaudeCodeProvider::new());
 /// let engine = Arc::new(Engine::new(store.clone(), provider));
 /// let jwt_config = Arc::new(JwtConfig {
@@ -100,7 +103,7 @@ impl Default for RouterConfig {
 ///     cookie_domain: None,
 ///     cookie_secure: false,
 /// });
-/// let state = AppState::new(store, user_store, engine, jwt_config, "token".to_string());
+/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string());
 /// let router = create_router(state, RouterConfig::default());
 /// # }
 /// ```
@@ -167,7 +170,12 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/runs/{id}/retry", post(retry_run::retry_run))
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
-        .route("/stats", get(get_stats::get_stats));
+        .route("/stats", get(get_stats::get_stats))
+        .route(
+            "/api-keys",
+            get(api_keys::list::list_api_keys).post(api_keys::create::create_api_key),
+        )
+        .route("/api-keys/{id}", delete(api_keys::delete::delete_api_key));
 
     #[cfg(feature = "prometheus")]
     {
@@ -220,6 +228,7 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use std::sync::Arc;
@@ -227,6 +236,7 @@ mod tests {
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
+        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -239,6 +249,7 @@ mod tests {
         AppState::new(
             store,
             user_store,
+            api_key_store,
             engine,
             jwt_config,
             "test-worker-token".to_string(),

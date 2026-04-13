@@ -33,9 +33,11 @@ use uuid::Uuid;
 
 use rust_decimal::Decimal;
 
+use crate::api_key_store::ApiKeyStore;
 use crate::entities::{
-    FsmState, NewRun, NewStep, NewStepDependency, NewUser, Page, Run, RunFilter, RunStats,
-    RunStatus, RunUpdate, Step, StepDependency, StepStatus, StepUpdate, User,
+    ApiKey, ApiKeyUpdate, FsmState, NewApiKey, NewRun, NewStep, NewStepDependency, NewUser, Page,
+    Run, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency, StepStatus, StepUpdate,
+    User,
 };
 use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
@@ -47,6 +49,7 @@ struct State {
     steps: HashMap<Uuid, Step>,
     step_dependencies: Vec<StepDependency>,
     users: HashMap<Uuid, User>,
+    api_keys: HashMap<Uuid, ApiKey>,
 }
 
 /// In-memory store backed by `Arc<RwLock<..>>`.
@@ -530,6 +533,105 @@ impl UserStore for InMemoryStore {
         Box::pin(async move {
             let state = self.state.read().await;
             Ok(state.users.get(&id).cloned())
+        })
+    }
+}
+
+impl ApiKeyStore for InMemoryStore {
+    fn create_api_key(&self, req: NewApiKey) -> StoreFuture<'_, ApiKey> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let now = Utc::now();
+            let id = Uuid::now_v7();
+            let key = ApiKey {
+                id,
+                user_id: req.user_id,
+                name: req.name,
+                key_hash: req.key_hash,
+                key_prefix: req.key_prefix,
+                scopes: req.scopes,
+                is_active: true,
+                expires_at: req.expires_at,
+                last_used_at: None,
+                created_at: now,
+                updated_at: now,
+            };
+            state.api_keys.insert(id, key.clone());
+            Ok(key)
+        })
+    }
+
+    fn find_api_key_by_prefix(&self, prefix: &str) -> StoreFuture<'_, Option<ApiKey>> {
+        let prefix = prefix.to_string();
+        Box::pin(async move {
+            let state = self.state.read().await;
+            Ok(state
+                .api_keys
+                .values()
+                .find(|k| k.key_prefix == prefix && k.is_active)
+                .cloned())
+        })
+    }
+
+    fn find_api_key_by_id(&self, id: Uuid) -> StoreFuture<'_, Option<ApiKey>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            Ok(state.api_keys.get(&id).cloned())
+        })
+    }
+
+    fn list_api_keys_by_user(&self, user_id: Uuid) -> StoreFuture<'_, Vec<ApiKey>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            let keys: Vec<ApiKey> = state
+                .api_keys
+                .values()
+                .filter(|k| k.user_id == user_id)
+                .cloned()
+                .collect();
+            Ok(keys)
+        })
+    }
+
+    fn update_api_key(&self, id: Uuid, update: ApiKeyUpdate) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let key = state
+                .api_keys
+                .get_mut(&id)
+                .ok_or(StoreError::Database(format!("API key {id} not found")))?;
+            if let Some(name) = update.name {
+                key.name = name;
+            }
+            if let Some(scopes) = update.scopes {
+                key.scopes = scopes;
+            }
+            if let Some(is_active) = update.is_active {
+                key.is_active = is_active;
+            }
+            if let Some(expires_at) = update.expires_at {
+                key.expires_at = expires_at;
+            }
+            key.updated_at = Utc::now();
+            Ok(())
+        })
+    }
+
+    fn touch_api_key(&self, id: Uuid) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            if let Some(key) = state.api_keys.get_mut(&id) {
+                key.last_used_at = Some(Utc::now());
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_api_key(&self, id: Uuid) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            state.api_keys.remove(&id);
+            Ok(())
         })
     }
 }

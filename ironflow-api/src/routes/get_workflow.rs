@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use ironflow_auth::extractor::AuthenticatedUser;
+use ironflow_auth::extractor::Authenticated;
 use serde::Serialize;
 
 use crate::error::ApiError;
@@ -41,7 +41,7 @@ struct WorkflowDetailResponse {
 ///
 /// - 404 if the workflow is not registered
 pub async fn get_workflow(
-    _user: AuthenticatedUser,
+    _auth: Authenticated,
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -106,6 +106,7 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::Value as JsonValue;
     use std::sync::Arc;
@@ -128,6 +129,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
             Arc::new(InMemoryStore::new());
+        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine.register(DescribedWorkflow).unwrap();
@@ -141,6 +143,7 @@ mod tests {
         AppState::new(
             store,
             user_store,
+            api_key_store,
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),

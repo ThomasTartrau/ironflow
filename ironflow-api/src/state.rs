@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_engine::engine::Engine;
+use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::entities::Run;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
@@ -30,6 +31,7 @@ use crate::error::ApiError;
 /// use ironflow_api::state::AppState;
 /// use ironflow_auth::jwt::JwtConfig;
 /// use ironflow_store::prelude::*;
+/// use ironflow_store::api_key_store::ApiKeyStore;
 /// use ironflow_engine::engine::Engine;
 /// use ironflow_core::providers::claude::ClaudeCodeProvider;
 /// use std::sync::Arc;
@@ -37,6 +39,7 @@ use crate::error::ApiError;
 /// # async fn example() {
 /// let store = Arc::new(InMemoryStore::new());
 /// let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
+/// let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
 /// let provider = Arc::new(ClaudeCodeProvider::new());
 /// let engine = Arc::new(Engine::new(store.clone(), provider));
 /// let jwt_config = Arc::new(JwtConfig {
@@ -46,7 +49,7 @@ use crate::error::ApiError;
 ///     cookie_domain: None,
 ///     cookie_secure: false,
 /// });
-/// let state = AppState::new(store, user_store, engine, jwt_config, "token".to_string());
+/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string());
 /// # }
 /// ```
 #[derive(Clone)]
@@ -55,6 +58,8 @@ pub struct AppState {
     pub store: Arc<dyn RunStore>,
     /// The backing store for users.
     pub user_store: Arc<dyn UserStore>,
+    /// The backing store for API keys.
+    pub api_key_store: Arc<dyn ApiKeyStore>,
     /// The workflow orchestration engine.
     pub engine: Arc<Engine>,
     /// JWT configuration for auth tokens.
@@ -75,6 +80,12 @@ impl FromRef<AppState> for Arc<dyn RunStore> {
 impl FromRef<AppState> for Arc<dyn UserStore> {
     fn from_ref(state: &AppState) -> Self {
         Arc::clone(&state.user_store)
+    }
+}
+
+impl FromRef<AppState> for Arc<dyn ApiKeyStore> {
+    fn from_ref(state: &AppState) -> Self {
+        Arc::clone(&state.api_key_store)
     }
 }
 
@@ -110,6 +121,7 @@ impl AppState {
     pub fn new(
         store: Arc<dyn RunStore>,
         user_store: Arc<dyn UserStore>,
+        api_key_store: Arc<dyn ApiKeyStore>,
         engine: Arc<Engine>,
         jwt_config: Arc<JwtConfig>,
         worker_token: String,
@@ -117,6 +129,7 @@ impl AppState {
         Self {
             store,
             user_store,
+            api_key_store,
             engine,
             jwt_config,
             worker_token,
@@ -162,6 +175,7 @@ mod tests {
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
+        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(JwtConfig {
@@ -174,6 +188,7 @@ mod tests {
         AppState::new(
             store,
             user_store,
+            api_key_store,
             engine,
             jwt_config,
             "test-worker-token".to_string(),

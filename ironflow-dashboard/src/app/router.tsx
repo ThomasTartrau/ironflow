@@ -6,6 +6,7 @@ import { RunsListSkeleton } from "./components/skeletons/RunsListSkeleton";
 import { RunDetailSkeleton } from "./components/skeletons/RunDetailSkeleton";
 import { WorkflowsListSkeleton } from "./components/skeletons/WorkflowsSkeleton";
 import { WorkflowDetailSkeleton } from "./components/skeletons/WorkflowDetailSkeleton";
+import { ApiKeysListSkeleton } from "./components/skeletons/ApiKeysSkeleton";
 
 export const router = createBrowserRouter([
 	{
@@ -53,6 +54,17 @@ export const router = createBrowserRouter([
 				lazy: () => import("./routes/runs/$id"),
 				errorElement: <ErrorBoundary />,
 				HydrateFallback: RunDetailSkeleton,
+			},
+			{
+				path: "/api-keys",
+				lazy: () => import("./routes/api-keys"),
+				errorElement: <ErrorBoundary />,
+				HydrateFallback: ApiKeysListSkeleton,
+			},
+			{
+				path: "/api-keys/new",
+				lazy: () => import("./routes/api-keys/new"),
+				errorElement: <ErrorBoundary />,
 			},
 			{
 				path: "*",

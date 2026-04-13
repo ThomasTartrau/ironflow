@@ -11,6 +11,7 @@ keywords = ["auth", "jwt", "argon2"]
 categories = ["authentication"]
 
 [dependencies]
+ironflow-store = { version = "2.5.1", path = "../ironflow-store" }
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 argon2 = { version = "0.5", features = ["std", "rand"] }
 serde_json = "1"
