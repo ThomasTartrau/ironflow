@@ -110,4 +110,5 @@ export const api = {
 			method: "POST",
 			body: body != null ? JSON.stringify(body) : undefined,
 		}),
+	del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };

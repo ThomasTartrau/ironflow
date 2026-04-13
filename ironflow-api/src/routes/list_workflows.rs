@@ -2,7 +2,7 @@
 
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
-use ironflow_auth::extractor::AuthenticatedUser;
+use ironflow_auth::extractor::Authenticated;
 use serde::Deserialize;
 
 use crate::error::ApiError;
@@ -22,7 +22,7 @@ pub struct ListWorkflowsQuery {
 ///
 /// - `name` — Filter by workflow name, case-insensitive partial match (optional)
 pub async fn list_workflows(
-    _user: AuthenticatedUser,
+    _auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<ListWorkflowsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -53,6 +53,7 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::{Value as JsonValue, from_slice, from_value};
     use std::sync::Arc;
@@ -95,6 +96,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
             Arc::new(InMemoryStore::new());
+        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine.register(TestWorkflow).unwrap();
@@ -109,6 +111,7 @@ mod tests {
         AppState::new(
             store,
             user_store,
+            api_key_store,
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),
@@ -120,6 +123,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
             Arc::new(InMemoryStore::new());
+        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -132,6 +136,7 @@ mod tests {
         let state = AppState::new(
             store,
             user_store,
+            api_key_store,
             engine,
             jwt_config,
             "test-worker-token".to_string(),

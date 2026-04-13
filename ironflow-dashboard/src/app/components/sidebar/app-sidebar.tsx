@@ -1,8 +1,10 @@
 import {
 	BarChart3,
 	BookOpen,
+	KeyRound,
 	LayoutDashboard,
 	Play,
+	Settings,
 	Workflow,
 } from "lucide-react";
 import {
@@ -44,6 +46,18 @@ const navItems: NavItem[] = [
 				title: "All Runs",
 				url: "/runs",
 				icon: Play,
+			},
+		],
+	},
+	{
+		title: "Settings",
+		url: "/api-keys",
+		icon: Settings,
+		items: [
+			{
+				title: "API Keys",
+				url: "/api-keys",
+				icon: KeyRound,
 			},
 		],
 	},

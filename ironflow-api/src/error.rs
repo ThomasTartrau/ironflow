@@ -72,6 +72,14 @@ pub enum ApiError {
     #[error("username already exists")]
     DuplicateUsername,
 
+    /// API key not found (404).
+    #[error("API key not found")]
+    ApiKeyNotFound(Uuid),
+
+    /// Insufficient scope (403).
+    #[error("insufficient scope")]
+    InsufficientScope,
+
     /// Store operation failed (500).
     #[error("database error")]
     Store(#[from] StoreError),
@@ -93,6 +101,8 @@ impl ApiError {
             ApiError::InvalidCredentials => "INVALID_CREDENTIALS",
             ApiError::DuplicateEmail => "DUPLICATE_EMAIL",
             ApiError::DuplicateUsername => "DUPLICATE_USERNAME",
+            ApiError::ApiKeyNotFound(_) => "API_KEY_NOT_FOUND",
+            ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
         }
@@ -109,6 +119,8 @@ impl ApiError {
             ApiError::InvalidCredentials => StatusCode::UNAUTHORIZED,
             ApiError::DuplicateEmail => StatusCode::CONFLICT,
             ApiError::DuplicateUsername => StatusCode::CONFLICT,
+            ApiError::ApiKeyNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::InsufficientScope => StatusCode::FORBIDDEN,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

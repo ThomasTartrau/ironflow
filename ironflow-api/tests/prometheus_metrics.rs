@@ -10,6 +10,7 @@ use http_body_util::BodyExt;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
+use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::memory::InMemoryStore;
 use tower::ServiceExt;
 
@@ -19,6 +20,7 @@ use ironflow_api::state::AppState;
 fn test_state() -> AppState {
     let store = Arc::new(InMemoryStore::new());
     let user_store: Arc<dyn ironflow_store::user_store::UserStore> = Arc::new(InMemoryStore::new());
+    let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
     let provider = Arc::new(ClaudeCodeProvider::new());
     let engine = Arc::new(Engine::new(store.clone(), provider));
     let jwt_config = Arc::new(JwtConfig {
@@ -32,6 +34,7 @@ fn test_state() -> AppState {
     AppState::new(
         store,
         user_store,
+        api_key_store,
         engine,
         jwt_config,
         "test-worker-token".to_string(),

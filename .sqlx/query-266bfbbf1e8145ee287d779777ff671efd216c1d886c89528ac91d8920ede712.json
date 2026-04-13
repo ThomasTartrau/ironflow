@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE iam.api_keys\n                SET name       = COALESCE($2, name),\n                    scopes     = COALESCE($3, scopes),\n                    is_active  = COALESCE($4, is_active),\n                    expires_at = CASE WHEN $5 THEN $6 ELSE expires_at END,\n                    updated_at = $7\n                WHERE id = $1\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "TextArray",
+        "Bool",
+        "Bool",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "266bfbbf1e8145ee287d779777ff671efd216c1d886c89528ac91d8920ede712"
+}
