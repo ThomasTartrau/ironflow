@@ -180,7 +180,7 @@ impl PostgresStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         // Verify connection is actually usable (not just pooled)
-        sqlx::query!("SELECT 1 as ok")
+        sqlx::query("SELECT 1 as ok")
             .fetch_one(&pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -239,7 +239,7 @@ impl PostgresStore {
     /// # }
     /// ```
     pub async fn test_connection(&self) -> Result<(), StoreError> {
-        sqlx::query!("SELECT 1 as ok")
+        sqlx::query("SELECT 1 as ok")
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -248,15 +248,15 @@ impl PostgresStore {
 
     /// Fetch a machine ID by name from the database.
     async fn fetch_machine_id(pool: &PgPool, name: &str) -> Result<Uuid, StoreError> {
-        let row = sqlx::query!(
+        let row = sqlx::query(
             "SELECT abstract_machine__id FROM lib_fsm.abstract_state_machine WHERE name = $1",
-            name,
         )
+        .bind(name)
         .fetch_one(pool)
         .await
         .map_err(|e| StoreError::Database(format!("failed to get {name} FSM: {e}")))?;
 
-        Ok(row.abstract_machine__id)
+        Ok(row.get("abstract_machine__id"))
     }
 
     /// Get the cached abstract machine ID for run_lifecycle FSM.
@@ -328,14 +328,12 @@ impl PostgresStore {
             let event = Self::run_status_to_event(current, new_status)?;
             let state_machine_id: Uuid = row.get("state_machine__id");
 
-            sqlx::query!(
-                "SELECT lib_fsm.state_machine_transition($1, $2)",
-                state_machine_id,
-                event,
-            )
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                .bind(state_machine_id)
+                .bind(event)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
         }
 
         let now = Utc::now();
@@ -437,29 +435,28 @@ impl RunStore for PostgresStore {
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
             // Create FSM instance at initial state (pending)
-            let state_machine_id: Uuid = sqlx::query_scalar!(
-                "SELECT lib_fsm.state_machine_create($1) as \"state_machine__id!\"",
-                fsm_machine_id,
-            )
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
+            let row = sqlx::query("SELECT lib_fsm.state_machine_create($1) as state_machine__id")
+                .bind(fsm_machine_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
+            let state_machine_id: Uuid = row.get("state_machine__id");
 
             // Insert run with FSM reference
-            sqlx::query!(
+            sqlx::query(
                 r#"
                 INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 "#,
-                id,
-                &req.workflow_name,
-                state_machine_id,
-                &trigger_json,
-                &req.payload,
-                req.max_retries as i32,
-                now,
-                now,
             )
+            .bind(id)
+            .bind(&req.workflow_name)
+            .bind(state_machine_id)
+            .bind(&trigger_json)
+            .bind(&req.payload)
+            .bind(req.max_retries as i32)
+            .bind(now)
+            .bind(now)
             .execute(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -636,14 +633,12 @@ impl RunStore for PostgresStore {
             let state_machine_id: Uuid = row.get("state_machine__id");
 
             // Perform FSM transition
-            sqlx::query!(
-                "SELECT lib_fsm.state_machine_transition($1, $2)",
-                state_machine_id,
-                event,
-            )
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                .bind(state_machine_id)
+                .bind(event)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
 
             // Update timestamps with dynamic bind indices
             let mut sql = String::from("UPDATE ironflow.runs SET updated_at = $1");
@@ -768,21 +763,19 @@ impl RunStore for PostgresStore {
                 let state_machine_id: Uuid = run_row.get("state_machine__id");
 
                 // Perform FSM transition
-                sqlx::query!(
-                    "SELECT lib_fsm.state_machine_transition($1, $2)",
-                    state_machine_id,
-                    event,
-                )
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                    .bind(state_machine_id)
+                    .bind(event)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
 
                 // Update timestamps
-                sqlx::query!(
+                sqlx::query(
                     "UPDATE ironflow.runs SET started_at = COALESCE(started_at, $1), updated_at = $1 WHERE id = $2",
-                    now,
-                    run_id,
                 )
+                .bind(now)
+                .bind(run_id)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -830,30 +823,29 @@ impl RunStore for PostgresStore {
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
             // Create FSM instance at initial state (pending)
-            let state_machine_id: Uuid = sqlx::query_scalar!(
-                "SELECT lib_fsm.state_machine_create($1) as \"state_machine__id!\"",
-                fsm_machine_id,
-            )
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
+            let row = sqlx::query("SELECT lib_fsm.state_machine_create($1) as state_machine__id")
+                .bind(fsm_machine_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
+            let state_machine_id: Uuid = row.get("state_machine__id");
 
             let kind_str = helpers::step_kind_to_str(&req.kind);
-            sqlx::query!(
+            sqlx::query(
                 r#"
                 INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 "#,
-                id,
-                req.run_id,
-                &req.name,
-                kind_str.as_ref(),
-                req.position as i32,
-                state_machine_id,
-                req.input.as_ref(),
-                now,
-                now,
             )
+            .bind(id)
+            .bind(req.run_id)
+            .bind(&req.name)
+            .bind(kind_str.as_ref())
+            .bind(req.position as i32)
+            .bind(state_machine_id)
+            .bind(req.input.as_ref())
+            .bind(now)
+            .bind(now)
             .execute(&mut *tx)
             .await
             .map_err(|e| {
@@ -929,14 +921,12 @@ impl RunStore for PostgresStore {
                 let state_machine_id: Uuid = row.get("state_machine__id");
 
                 // Perform FSM transition
-                sqlx::query!(
-                    "SELECT lib_fsm.state_machine_transition($1, $2)",
-                    state_machine_id,
-                    event,
-                )
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                    .bind(state_machine_id)
+                    .bind(event)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
             }
 
             let now = Utc::now();
@@ -1141,19 +1131,19 @@ impl UserStore for PostgresStore {
             let id = Uuid::now_v7();
             let now = Utc::now();
 
-            let row = sqlx::query!(
+            let row = sqlx::query(
                 r#"
                 INSERT INTO iam.users (id, email, username, password_hash, is_admin, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, FALSE, $5, $6)
                 RETURNING id, email, username, password_hash, is_admin, created_at, updated_at
                 "#,
-                id,
-                &req.email,
-                &req.username,
-                &req.password_hash,
-                now,
-                now,
             )
+            .bind(id)
+            .bind(&req.email)
+            .bind(&req.username)
+            .bind(&req.password_hash)
+            .bind(now)
+            .bind(now)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| {
@@ -1168,13 +1158,13 @@ impl UserStore for PostgresStore {
             })?;
 
             Ok(User {
-                id: row.id,
-                email: row.email,
-                username: row.username,
-                password_hash: row.password_hash,
-                is_admin: row.is_admin,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
+                id: row.get("id"),
+                email: row.get("email"),
+                username: row.get("username"),
+                password_hash: row.get("password_hash"),
+                is_admin: row.get("is_admin"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
             })
         })
     }
@@ -1182,44 +1172,44 @@ impl UserStore for PostgresStore {
     fn find_user_by_email(&self, email: &str) -> StoreFuture<'_, Option<User>> {
         let email = email.to_string();
         Box::pin(async move {
-            let row = sqlx::query!(
+            let row = sqlx::query(
                 "SELECT id, email, username, password_hash, is_admin, created_at, updated_at FROM iam.users WHERE email = $1",
-                &email,
             )
+            .bind(&email)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(row.map(|r| User {
-                id: r.id,
-                email: r.email,
-                username: r.username,
-                password_hash: r.password_hash,
-                is_admin: r.is_admin,
-                created_at: r.created_at,
-                updated_at: r.updated_at,
+                id: r.get("id"),
+                email: r.get("email"),
+                username: r.get("username"),
+                password_hash: r.get("password_hash"),
+                is_admin: r.get("is_admin"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
             }))
         })
     }
 
     fn find_user_by_id(&self, id: Uuid) -> StoreFuture<'_, Option<User>> {
         Box::pin(async move {
-            let row = sqlx::query!(
+            let row = sqlx::query(
                 "SELECT id, email, username, password_hash, is_admin, created_at, updated_at FROM iam.users WHERE id = $1",
-                id,
             )
+            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(row.map(|r| User {
-                id: r.id,
-                email: r.email,
-                username: r.username,
-                password_hash: r.password_hash,
-                is_admin: r.is_admin,
-                created_at: r.created_at,
-                updated_at: r.updated_at,
+                id: r.get("id"),
+                email: r.get("email"),
+                username: r.get("username"),
+                password_hash: r.get("password_hash"),
+                is_admin: r.get("is_admin"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
             }))
         })
     }
@@ -1245,38 +1235,38 @@ impl ApiKeyStore for PostgresStore {
             let now = Utc::now();
             let scopes_str = scopes_to_strings(&req.scopes);
 
-            let row = sqlx::query!(
+            let row = sqlx::query(
                 r#"
                 INSERT INTO iam.api_keys (id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9)
                 RETURNING id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, last_used_at, created_at, updated_at
                 "#,
-                id,
-                req.user_id,
-                &req.name,
-                &req.key_hash,
-                &req.key_prefix,
-                &scopes_str,
-                req.expires_at,
-                now,
-                now,
             )
+            .bind(id)
+            .bind(req.user_id)
+            .bind(&req.name)
+            .bind(&req.key_hash)
+            .bind(&req.key_prefix)
+            .bind(&scopes_str)
+            .bind(req.expires_at)
+            .bind(now)
+            .bind(now)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(ApiKey {
-                id: row.id,
-                user_id: row.user_id,
-                name: row.name,
-                key_hash: row.key_hash,
-                key_prefix: row.key_prefix,
-                scopes: parse_scopes(row.scopes)?,
-                is_active: row.is_active,
-                expires_at: row.expires_at,
-                last_used_at: row.last_used_at,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
+                id: row.get("id"),
+                user_id: row.get("user_id"),
+                name: row.get("name"),
+                key_hash: row.get("key_hash"),
+                key_prefix: row.get("key_prefix"),
+                scopes: parse_scopes(row.get("scopes"))?,
+                is_active: row.get("is_active"),
+                expires_at: row.get("expires_at"),
+                last_used_at: row.get("last_used_at"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
             })
         })
     }
@@ -1284,30 +1274,30 @@ impl ApiKeyStore for PostgresStore {
     fn find_api_key_by_prefix(&self, prefix: &str) -> StoreFuture<'_, Option<ApiKey>> {
         let prefix = prefix.to_string();
         Box::pin(async move {
-            let row = sqlx::query!(
+            let row = sqlx::query(
                 r#"
                 SELECT id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, last_used_at, created_at, updated_at
                 FROM iam.api_keys WHERE key_prefix = $1 AND is_active = TRUE
                 "#,
-                &prefix,
             )
+            .bind(&prefix)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             row.map(|r| {
                 Ok(ApiKey {
-                    id: r.id,
-                    user_id: r.user_id,
-                    name: r.name,
-                    key_hash: r.key_hash,
-                    key_prefix: r.key_prefix,
-                    scopes: parse_scopes(r.scopes)?,
-                    is_active: r.is_active,
-                    expires_at: r.expires_at,
-                    last_used_at: r.last_used_at,
-                    created_at: r.created_at,
-                    updated_at: r.updated_at,
+                    id: r.get("id"),
+                    user_id: r.get("user_id"),
+                    name: r.get("name"),
+                    key_hash: r.get("key_hash"),
+                    key_prefix: r.get("key_prefix"),
+                    scopes: parse_scopes(r.get("scopes"))?,
+                    is_active: r.get("is_active"),
+                    expires_at: r.get("expires_at"),
+                    last_used_at: r.get("last_used_at"),
+                    created_at: r.get("created_at"),
+                    updated_at: r.get("updated_at"),
                 })
             })
             .transpose()
@@ -1316,30 +1306,30 @@ impl ApiKeyStore for PostgresStore {
 
     fn find_api_key_by_id(&self, id: Uuid) -> StoreFuture<'_, Option<ApiKey>> {
         Box::pin(async move {
-            let row = sqlx::query!(
+            let row = sqlx::query(
                 r#"
                 SELECT id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, last_used_at, created_at, updated_at
                 FROM iam.api_keys WHERE id = $1
                 "#,
-                id,
             )
+            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             row.map(|r| {
                 Ok(ApiKey {
-                    id: r.id,
-                    user_id: r.user_id,
-                    name: r.name,
-                    key_hash: r.key_hash,
-                    key_prefix: r.key_prefix,
-                    scopes: parse_scopes(r.scopes)?,
-                    is_active: r.is_active,
-                    expires_at: r.expires_at,
-                    last_used_at: r.last_used_at,
-                    created_at: r.created_at,
-                    updated_at: r.updated_at,
+                    id: r.get("id"),
+                    user_id: r.get("user_id"),
+                    name: r.get("name"),
+                    key_hash: r.get("key_hash"),
+                    key_prefix: r.get("key_prefix"),
+                    scopes: parse_scopes(r.get("scopes"))?,
+                    is_active: r.get("is_active"),
+                    expires_at: r.get("expires_at"),
+                    last_used_at: r.get("last_used_at"),
+                    created_at: r.get("created_at"),
+                    updated_at: r.get("updated_at"),
                 })
             })
             .transpose()
@@ -1348,31 +1338,31 @@ impl ApiKeyStore for PostgresStore {
 
     fn list_api_keys_by_user(&self, user_id: Uuid) -> StoreFuture<'_, Vec<ApiKey>> {
         Box::pin(async move {
-            let rows = sqlx::query!(
+            let rows = sqlx::query(
                 r#"
                 SELECT id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, last_used_at, created_at, updated_at
                 FROM iam.api_keys WHERE user_id = $1 ORDER BY created_at DESC
                 "#,
-                user_id,
             )
+            .bind(user_id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            rows.into_iter()
+            rows.iter()
                 .map(|r| {
                     Ok(ApiKey {
-                        id: r.id,
-                        user_id: r.user_id,
-                        name: r.name,
-                        key_hash: r.key_hash,
-                        key_prefix: r.key_prefix,
-                        scopes: parse_scopes(r.scopes)?,
-                        is_active: r.is_active,
-                        expires_at: r.expires_at,
-                        last_used_at: r.last_used_at,
-                        created_at: r.created_at,
-                        updated_at: r.updated_at,
+                        id: r.get("id"),
+                        user_id: r.get("user_id"),
+                        name: r.get("name"),
+                        key_hash: r.get("key_hash"),
+                        key_prefix: r.get("key_prefix"),
+                        scopes: parse_scopes(r.get("scopes"))?,
+                        is_active: r.get("is_active"),
+                        expires_at: r.get("expires_at"),
+                        last_used_at: r.get("last_used_at"),
+                        created_at: r.get("created_at"),
+                        updated_at: r.get("updated_at"),
                     })
                 })
                 .collect()
@@ -1387,7 +1377,7 @@ impl ApiKeyStore for PostgresStore {
             let has_expires_at = update.expires_at.is_some();
             let expires_at_value = update.expires_at.flatten();
 
-            sqlx::query!(
+            sqlx::query(
                 r#"
                 UPDATE iam.api_keys
                 SET name       = COALESCE($2, name),
@@ -1397,14 +1387,14 @@ impl ApiKeyStore for PostgresStore {
                     updated_at = $7
                 WHERE id = $1
                 "#,
-                id,
-                update.name,
-                scopes_str.as_deref(),
-                update.is_active,
-                has_expires_at,
-                expires_at_value,
-                now,
             )
+            .bind(id)
+            .bind(update.name)
+            .bind(scopes_str.as_deref())
+            .bind(update.is_active)
+            .bind(has_expires_at)
+            .bind(expires_at_value)
+            .bind(now)
             .execute(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1415,13 +1405,11 @@ impl ApiKeyStore for PostgresStore {
 
     fn touch_api_key(&self, id: Uuid) -> StoreFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query!(
-                "UPDATE iam.api_keys SET last_used_at = NOW() WHERE id = $1",
-                id,
-            )
-            .execute(&self.pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            sqlx::query("UPDATE iam.api_keys SET last_used_at = NOW() WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(())
         })
@@ -1429,7 +1417,8 @@ impl ApiKeyStore for PostgresStore {
 
     fn delete_api_key(&self, id: Uuid) -> StoreFuture<'_, ()> {
         Box::pin(async move {
-            sqlx::query!("DELETE FROM iam.api_keys WHERE id = $1", id)
+            sqlx::query("DELETE FROM iam.api_keys WHERE id = $1")
+                .bind(id)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
