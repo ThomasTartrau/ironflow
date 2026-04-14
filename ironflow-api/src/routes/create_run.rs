@@ -18,10 +18,14 @@ use crate::state::AppState;
 /// Returns 201 Created with the newly enqueued run.
 /// Returns 400 Bad Request if the workflow is unknown.
 pub async fn create_run(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Json(req): Json<CreateRunRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_admin() {
+        return Err(ApiError::Forbidden);
+    }
+
     if !state
         .engine
         .handler_names()
@@ -68,7 +72,7 @@ mod tests {
 
     fn make_auth_header(state: &AppState) -> String {
         let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
+        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
         format!("Bearer {}", token.0)
     }
 

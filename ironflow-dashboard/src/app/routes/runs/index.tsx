@@ -10,6 +10,7 @@ import { RunFilters } from "./_components/RunFilters";
 import { RunsTable } from "./_components/RunsTable";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
+import { useAppSelector } from "@/app/store";
 
 const PER_PAGE = 20;
 
@@ -41,6 +42,8 @@ export function Component() {
 	const { runs, meta } = useLoaderData() as RunsListLoaderData;
 	const navigation = useNavigation();
 	const isLoading = navigation.state === "loading";
+	const auth = useAppSelector((state) => state.auth);
+	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
 	useDocumentMeta({
 		title: "Runs",
 		description: "Monitor and manage workflow executions.",
@@ -65,12 +68,14 @@ export function Component() {
 			title="Runs"
 			description="Monitor and manage workflow executions."
 			titleItem={
-				<Link to="/workflows" className="block">
-					<Button className="w-full sm:w-fit gap-1.5">
-						<Plus className="w-4 h-4" />
-						New Run
-					</Button>
-				</Link>
+				isAdmin ? (
+					<Link to="/workflows" className="block">
+						<Button className="w-full sm:w-fit gap-1.5">
+							<Plus className="w-4 h-4" />
+							New Run
+						</Button>
+					</Link>
+				) : undefined
 			}
 		>
 			<div className="space-y-6">

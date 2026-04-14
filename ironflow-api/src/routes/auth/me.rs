@@ -116,6 +116,7 @@ mod tests {
                 email: "test@example.com".to_string(),
                 username: "testuser".to_string(),
                 password_hash: hash,
+                is_admin: None,
             })
             .await
             .expect("failed to create user");

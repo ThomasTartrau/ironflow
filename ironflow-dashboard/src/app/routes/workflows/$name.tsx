@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/table";
 import { formatDuration, formatCost } from "@/app/lib/format";
 import { Play } from "lucide-react";
+import { useAppSelector } from "@/app/store";
 
 interface LoaderData {
 	workflow: WorkflowDetailResponse;
@@ -43,6 +44,8 @@ export function Component() {
 	const { workflow, recentRuns } = useLoaderData() as LoaderData;
 	const [loading, setLoading] = useState(false);
 	const navigate = useNavigate();
+	const auth = useAppSelector((state) => state.auth);
+	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
 	useDocumentMeta({
 		title: workflow.name,
 		description: workflow.description || "Workflow details and recent runs.",
@@ -70,14 +73,16 @@ export function Component() {
 			title={workflow.name}
 			description={workflow.description || "No description provided."}
 			titleItem={
-				<Button
-					className="w-full sm:w-fit gap-1.5"
-					onClick={handleRun}
-					disabled={loading}
-				>
-					<Play className="size-4" />
-					{loading ? "Starting..." : "Run"}
-				</Button>
+				isAdmin ? (
+					<Button
+						className="w-full sm:w-fit gap-1.5"
+						onClick={handleRun}
+						disabled={loading}
+					>
+						<Play className="size-4" />
+						{loading ? "Starting..." : "Run"}
+					</Button>
+				) : undefined
 			}
 		>
 			<div className="space-y-8">

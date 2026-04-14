@@ -76,6 +76,14 @@ pub enum ApiError {
     #[error("API key not found")]
     ApiKeyNotFound(Uuid),
 
+    /// User not found (404).
+    #[error("user not found")]
+    UserNotFound(Uuid),
+
+    /// Insufficient permissions for this action (403).
+    #[error("insufficient permissions")]
+    Forbidden,
+
     /// Insufficient scope (403).
     #[error("insufficient scope")]
     InsufficientScope,
@@ -102,6 +110,8 @@ impl ApiError {
             ApiError::DuplicateEmail => "DUPLICATE_EMAIL",
             ApiError::DuplicateUsername => "DUPLICATE_USERNAME",
             ApiError::ApiKeyNotFound(_) => "API_KEY_NOT_FOUND",
+            ApiError::UserNotFound(_) => "USER_NOT_FOUND",
+            ApiError::Forbidden => "FORBIDDEN",
             ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
@@ -120,6 +130,8 @@ impl ApiError {
             ApiError::DuplicateEmail => StatusCode::CONFLICT,
             ApiError::DuplicateUsername => StatusCode::CONFLICT,
             ApiError::ApiKeyNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::UserNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::InsufficientScope => StatusCode::FORBIDDEN,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -225,5 +237,19 @@ mod tests {
         let err = ApiError::StepNotFound(Uuid::nil());
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         assert_eq!(err.code(), "STEP_NOT_FOUND");
+    }
+
+    #[test]
+    fn user_not_found_status() {
+        let err = ApiError::UserNotFound(Uuid::nil());
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(err.code(), "USER_NOT_FOUND");
+    }
+
+    #[test]
+    fn forbidden_status() {
+        let err = ApiError::Forbidden;
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+        assert_eq!(err.code(), "FORBIDDEN");
     }
 }

@@ -33,6 +33,9 @@ pub struct NewUser {
     pub username: String,
     /// Pre-hashed password (Argon2id).
     pub password_hash: String,
+    /// Explicit admin flag. When `Some(true)`, the user is created as admin.
+    /// When `None`, the store decides (first user = admin, others = member).
+    pub is_admin: Option<bool>,
 }
 
 #[cfg(test)]
@@ -87,10 +90,12 @@ mod tests {
             email: "bob@example.com".to_string(),
             username: "bob".to_string(),
             password_hash: "hash123".to_string(),
+            is_admin: None,
         };
 
         assert_eq!(new_user.email, "bob@example.com");
         assert_eq!(new_user.username, "bob");
         assert_eq!(new_user.password_hash, "hash123");
+        assert_eq!(new_user.is_admin, None);
     }
 }

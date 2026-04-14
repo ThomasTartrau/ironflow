@@ -41,6 +41,7 @@ pub async fn sign_up(
             email: req.email,
             username: req.username,
             password_hash: hash,
+            is_admin: None,
         })
         .await
         .map_err(|e| match e {

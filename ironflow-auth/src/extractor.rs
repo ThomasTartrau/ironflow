@@ -17,6 +17,7 @@ use axum_extra::extract::cookie::CookieJar;
 use chrono::Utc;
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::entities::ApiKeyScope;
+use ironflow_store::user_store::UserStore;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -144,6 +145,8 @@ pub struct ApiKeyAuth {
     pub key_name: String,
     /// Scopes granted to this key.
     pub scopes: Vec<ApiKeyScope>,
+    /// Whether the key owner is an admin (checked at request time).
+    pub owner_is_admin: bool,
 }
 
 impl ApiKeyAuth {
@@ -176,11 +179,13 @@ impl<S> FromRequestParts<S> for ApiKeyAuth
 where
     S: Send + Sync,
     Arc<dyn ApiKeyStore>: FromRef<S>,
+    Arc<dyn UserStore>: FromRef<S>,
 {
     type Rejection = ApiKeyRejection;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let api_key_store = Arc::<dyn ApiKeyStore>::from_ref(state);
+        let user_store = Arc::<dyn UserStore>::from_ref(state);
 
         let token = parts
             .headers
@@ -252,11 +257,22 @@ where
 
         let _ = api_key_store.touch_api_key(api_key.id).await;
 
+        let owner = user_store
+            .find_user_by_id(api_key.user_id)
+            .await
+            .map_err(|_| ApiKeyRejection {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "INTERNAL_ERROR",
+                message: "Failed to look up API key owner",
+            })?;
+        let owner_is_admin = owner.map(|u| u.is_admin).unwrap_or(false);
+
         Ok(ApiKeyAuth {
             key_id: api_key.id,
             user_id: api_key.user_id,
             key_name: api_key.name,
             scopes: api_key.scopes,
+            owner_is_admin,
         })
     }
 }
@@ -305,7 +321,23 @@ pub enum AuthMethod {
         key_name: String,
         /// Scopes granted to this key.
         scopes: Vec<ApiKeyScope>,
+        /// Whether the key owner is an admin (checked at request time).
+        owner_is_admin: bool,
     },
+}
+
+impl Authenticated {
+    /// Whether the authenticated caller has admin privileges.
+    ///
+    /// For JWT users, checks the `is_admin` claim.
+    /// For API key users, checks the owner's current admin status
+    /// (fetched at request time, so demotions take effect immediately).
+    pub fn is_admin(&self) -> bool {
+        match &self.method {
+            AuthMethod::Jwt { is_admin, .. } => *is_admin,
+            AuthMethod::ApiKey { owner_is_admin, .. } => *owner_is_admin,
+        }
+    }
 }
 
 impl<S> FromRequestParts<S> for Authenticated
@@ -313,6 +345,7 @@ where
     S: Send + Sync,
     Arc<JwtConfig>: FromRef<S>,
     Arc<dyn ApiKeyStore>: FromRef<S>,
+    Arc<dyn UserStore>: FromRef<S>,
 {
     type Rejection = AuthRejection;
 
@@ -345,6 +378,7 @@ where
                     key_id: api_key_auth.key_id,
                     key_name: api_key_auth.key_name,
                     scopes: api_key_auth.scopes,
+                    owner_is_admin: api_key_auth.owner_is_admin,
                 },
             });
         }

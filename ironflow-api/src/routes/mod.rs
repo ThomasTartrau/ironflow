@@ -15,13 +15,14 @@ mod list_workflows;
 #[cfg(feature = "prometheus")]
 pub mod metrics;
 mod retry_run;
+mod users;
 
 use std::path::PathBuf;
 
 use axum::Extension;
 use axum::Router;
 use axum::middleware as axum_mw;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -186,7 +187,17 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             "/api-keys",
             get(api_keys::list::list_api_keys).post(api_keys::create::create_api_key),
         )
-        .route("/api-keys/{id}", delete(api_keys::delete::delete_api_key));
+        .route(
+            "/api-keys/scopes",
+            get(api_keys::available_scopes::available_scopes),
+        )
+        .route("/api-keys/{id}", delete(api_keys::delete::delete_api_key))
+        .route(
+            "/users",
+            get(users::list::list_users).post(users::create::create_user),
+        )
+        .route("/users/{id}", delete(users::delete::delete_user))
+        .route("/users/{id}/role", patch(users::update_role::update_role));
 
     #[cfg(feature = "prometheus")]
     {

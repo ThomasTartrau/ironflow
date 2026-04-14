@@ -5,6 +5,7 @@ import {
 	LayoutDashboard,
 	Play,
 	Settings,
+	Users,
 	Workflow,
 } from "lucide-react";
 import {
@@ -16,8 +17,9 @@ import {
 } from "@/components/ui/sidebar";
 import { NavMain, type NavItem } from "./nav-main";
 import { NavUser } from "./nav-user";
+import { useAppSelector } from "@/app/store";
 
-const navItems: NavItem[] = [
+const baseNavItems: NavItem[] = [
 	{
 		title: "Overview",
 		url: "/",
@@ -63,7 +65,25 @@ const navItems: NavItem[] = [
 	},
 ];
 
+const adminNavItem: NavItem = {
+	title: "Administration",
+	url: "/users",
+	icon: Users,
+	items: [
+		{
+			title: "Users",
+			url: "/users",
+			icon: Users,
+		},
+	],
+};
+
 export function AppSidebar() {
+	const auth = useAppSelector((state) => state.auth);
+	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
+
+	const navItems = isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
+
 	return (
 		<Sidebar collapsible="icon">
 			<SidebarHeader className="px-4 py-6">

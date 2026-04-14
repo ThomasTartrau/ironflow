@@ -17,10 +17,14 @@ use crate::state::AppState;
 /// Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
 /// original. Returns 400 if the run is not in a retryable state.
 pub async fn retry_run(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_admin() {
+        return Err(ApiError::Forbidden);
+    }
+
     let original = state.get_run_or_404(id).await?;
 
     if !matches!(
@@ -69,7 +73,7 @@ mod tests {
 
     fn make_auth_header(state: &AppState) -> String {
         let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
+        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
         format!("Bearer {}", token.0)
     }
 
