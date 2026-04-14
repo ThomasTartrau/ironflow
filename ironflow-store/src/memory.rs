@@ -154,6 +154,12 @@ impl RunStore for InMemoryStore {
                     {
                         return false;
                     }
+                    if let Some(has_steps) = filter.has_steps {
+                        let run_has_steps = state.steps.values().any(|s| s.run_id == r.id);
+                        if has_steps != run_has_steps {
+                            return false;
+                        }
+                    }
                     true
                 })
                 .collect();
@@ -1563,6 +1569,92 @@ mod tests {
         };
         let page = store.list_runs(filter, 1, 100).await.unwrap();
         assert_eq!(page.total, 0);
+    }
+
+    #[tokio::test]
+    async fn list_runs_has_steps_true_only_returns_runs_with_steps() {
+        let store = InMemoryStore::new();
+        let run_with = store.create_run(new_run_req("with-steps")).await.unwrap();
+        let _run_without = store
+            .create_run(new_run_req("without-steps"))
+            .await
+            .unwrap();
+
+        store
+            .create_step(NewStep {
+                run_id: run_with.id,
+                name: "build".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let filter = RunFilter {
+            has_steps: Some(true),
+            ..RunFilter::default()
+        };
+        let page = store.list_runs(filter, 1, 100).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, run_with.id);
+    }
+
+    #[tokio::test]
+    async fn list_runs_has_steps_false_only_returns_runs_without_steps() {
+        let store = InMemoryStore::new();
+        let run_with = store.create_run(new_run_req("with-steps")).await.unwrap();
+        let run_without = store
+            .create_run(new_run_req("without-steps"))
+            .await
+            .unwrap();
+
+        store
+            .create_step(NewStep {
+                run_id: run_with.id,
+                name: "build".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let filter = RunFilter {
+            has_steps: Some(false),
+            ..RunFilter::default()
+        };
+        let page = store.list_runs(filter, 1, 100).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, run_without.id);
+    }
+
+    #[tokio::test]
+    async fn list_runs_has_steps_none_returns_all() {
+        let store = InMemoryStore::new();
+        let run_with = store.create_run(new_run_req("with-steps")).await.unwrap();
+        let _run_without = store
+            .create_run(new_run_req("without-steps"))
+            .await
+            .unwrap();
+
+        store
+            .create_step(NewStep {
+                run_id: run_with.id,
+                name: "build".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let filter = RunFilter {
+            has_steps: None,
+            ..RunFilter::default()
+        };
+        let page = store.list_runs(filter, 1, 100).await.unwrap();
+        assert_eq!(page.total, 2);
     }
 
     #[tokio::test]

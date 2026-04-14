@@ -531,6 +531,18 @@ impl RunStore for PostgresStore {
                 conditions.push(format!("r.created_at <= ${bind_idx}"));
                 bind_idx += 1;
             }
+            if let Some(has_steps) = filter.has_steps {
+                if has_steps {
+                    conditions.push(
+                        "EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)".to_string(),
+                    );
+                } else {
+                    conditions.push(
+                        "NOT EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
+                            .to_string(),
+                    );
+                }
+            }
 
             let where_clause = if conditions.is_empty() {
                 String::new()

@@ -84,6 +84,9 @@ pub struct ListRunsQuery {
     pub workflow: Option<String>,
     /// Filter by run status.
     pub status: Option<RunStatus>,
+    /// When `true`, only return runs with at least one step.
+    /// When `false`, only return runs with no steps.
+    pub has_steps: Option<bool>,
     /// Page number (1-based).
     pub page: Option<u32>,
     /// Items per page.

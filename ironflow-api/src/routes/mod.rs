@@ -76,6 +76,12 @@ impl Default for RouterConfig {
     }
 }
 
+/// Handler that returns a JSON 404 when the `sign-up` feature is disabled.
+#[cfg(not(feature = "sign-up"))]
+async fn sign_up_disabled() -> impl axum::response::IntoResponse {
+    crate::error::ApiError::BadRequest("sign-up is disabled".to_string())
+}
+
 /// Create the main application router.
 ///
 /// # Examples
@@ -138,6 +144,11 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
     {
         auth_credential_routes =
             auth_credential_routes.route("/sign-up", post(auth::sign_up::sign_up));
+    }
+
+    #[cfg(not(feature = "sign-up"))]
+    {
+        auth_credential_routes = auth_credential_routes.route("/sign-up", post(sign_up_disabled));
     }
 
     let mut auth_credential_routes =

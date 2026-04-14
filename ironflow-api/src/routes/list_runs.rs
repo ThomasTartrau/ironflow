@@ -31,6 +31,7 @@ pub async fn list_runs(
         status: params.status,
         created_after: None,
         created_before: None,
+        has_steps: params.has_steps,
     };
 
     let page_result = state.store.list_runs(filter, page, per_page).await?;
@@ -55,7 +56,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, TriggerKind};
+    use ironflow_store::models::{NewRun, NewStep, StepKind, TriggerKind};
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -254,5 +255,113 @@ mod tests {
         let json_val: JsonValue = from_slice(&body).unwrap();
         // per_page should be capped to 100
         assert_eq!(json_val["meta"]["per_page"], 100);
+    }
+
+    #[tokio::test]
+    async fn has_steps_true_filters_empty_runs() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+
+        let run_with = state
+            .store
+            .create_run(NewRun {
+                workflow_name: "with-steps".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+
+        state
+            .store
+            .create_run(NewRun {
+                workflow_name: "without-steps".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+
+        state
+            .store
+            .create_step(NewStep {
+                run_id: run_with.id,
+                name: "build".to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let app = Router::new().route("/", get(list_runs)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/?has_steps=true")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 1);
+        assert_eq!(json_val["data"][0]["workflow_name"], "with-steps");
+    }
+
+    #[tokio::test]
+    async fn has_steps_false_returns_only_empty_runs() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+
+        let run_with = state
+            .store
+            .create_run(NewRun {
+                workflow_name: "with-steps".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+
+        state
+            .store
+            .create_run(NewRun {
+                workflow_name: "without-steps".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+
+        state
+            .store
+            .create_step(NewStep {
+                run_id: run_with.id,
+                name: "build".to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let app = Router::new().route("/", get(list_runs)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/?has_steps=false")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 1);
+        assert_eq!(json_val["data"][0]["workflow_name"], "without-steps");
     }
 }
