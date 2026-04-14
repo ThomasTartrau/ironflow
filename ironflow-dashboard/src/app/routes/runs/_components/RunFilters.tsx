@@ -1,4 +1,4 @@
-import { useQueryStates, parseAsString, debounce } from "nuqs";
+import { useQueryStates, parseAsString, parseAsBoolean, debounce } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -8,6 +8,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { RunStatus } from "@/app/lib/types";
 import { capitalize } from "@/app/lib/format";
 
@@ -31,6 +32,9 @@ export function RunFilters() {
 			status: parseAsString.withDefault("").withOptions({
 				shallow: false,
 			}),
+			has_steps: parseAsBoolean.withDefault(true).withOptions({
+				shallow: false,
+			}),
 			page: parseAsString.withDefault("1").withOptions({
 				shallow: false,
 			}),
@@ -46,8 +50,12 @@ export function RunFilters() {
 		setFilters({ status: value || null, page: "1" });
 	};
 
+	const handleHasStepsChange = (checked: boolean) => {
+		setFilters({ has_steps: checked || null, page: "1" });
+	};
+
 	const handleReset = () => {
-		setFilters({ workflow: null, status: null, page: null });
+		setFilters({ workflow: null, status: null, has_steps: null, page: null });
 	};
 
 	return (
@@ -82,6 +90,17 @@ export function RunFilters() {
 						))}
 					</SelectContent>
 				</Select>
+			</div>
+
+			<div className="flex items-center gap-2 pb-0.5">
+				<Checkbox
+					id="filter-has-steps"
+					checked={filters.has_steps}
+					onCheckedChange={handleHasStepsChange}
+				/>
+				<label htmlFor="filter-has-steps" className="text-sm font-medium cursor-pointer select-none">
+					Hide empty runs
+				</label>
 			</div>
 
 			<Button onClick={handleReset} variant="outline">

@@ -24,11 +24,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	const workflow = url.searchParams.get("workflow") ?? "";
 	const status = url.searchParams.get("status") ?? "";
 
+	const hasSteps = url.searchParams.get("has_steps");
+
 	const params = new URLSearchParams();
 	params.set("page", page);
 	params.set("per_page", String(PER_PAGE));
 	if (workflow) params.set("workflow", workflow);
 	if (status) params.set("status", status);
+	if (hasSteps) params.set("has_steps", hasSteps);
 
 	const res = await api.get<RunResponse[]>(`/runs?${params}`);
 	return { runs: res.data, meta: res.meta };

@@ -106,6 +106,10 @@ pub struct RunFilter {
     pub created_after: Option<DateTime<Utc>>,
     /// Only include runs created before this timestamp.
     pub created_before: Option<DateTime<Utc>>,
+    /// When `Some(true)`, only include runs that have at least one step.
+    /// When `Some(false)`, only include runs with no steps.
+    /// When `None`, no filtering on steps.
+    pub has_steps: Option<bool>,
 }
 
 /// Partial update for a run.
