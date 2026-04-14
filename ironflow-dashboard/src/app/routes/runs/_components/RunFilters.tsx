@@ -98,7 +98,10 @@ export function RunFilters() {
 					checked={filters.has_steps}
 					onCheckedChange={handleHasStepsChange}
 				/>
-				<label htmlFor="filter-has-steps" className="text-sm font-medium cursor-pointer select-none">
+				<label
+					htmlFor="filter-has-steps"
+					className="text-sm font-medium cursor-pointer select-none"
+				>
 					Hide empty runs
 				</label>
 			</div>
