@@ -67,6 +67,16 @@ export const router = createBrowserRouter([
 				errorElement: <ErrorBoundary />,
 			},
 			{
+				path: "/users",
+				lazy: () => import("./routes/users"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
+				path: "/users/new",
+				lazy: () => import("./routes/users/new"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
 				path: "*",
 				element: <Navigate to="/" replace />,
 			},

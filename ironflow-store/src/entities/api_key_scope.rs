@@ -50,6 +50,24 @@ impl ApiKeyScope {
             ApiKeyScope::StatsRead,
         ]
     }
+
+    /// Scopes a non-admin member is allowed to use.
+    ///
+    /// Whitelist approach: only these scopes are permitted for members.
+    /// Any scope not listed here is forbidden for non-admin users.
+    pub fn member_allowed() -> &'static [ApiKeyScope] {
+        &[
+            ApiKeyScope::WorkflowsRead,
+            ApiKeyScope::RunsRead,
+            ApiKeyScope::StatsRead,
+        ]
+    }
+
+    /// Check whether all scopes in the set are allowed for a non-admin member.
+    pub fn all_allowed_for_member(scopes: &[ApiKeyScope]) -> bool {
+        let allowed = Self::member_allowed();
+        scopes.iter().all(|s| allowed.contains(s))
+    }
 }
 
 impl fmt::Display for ApiKeyScope {
@@ -168,5 +186,34 @@ mod tests {
         let scopes = ApiKeyScope::all_non_admin();
         assert!(!scopes.contains(&ApiKeyScope::Admin));
         assert_eq!(scopes.len(), 5);
+    }
+
+    #[test]
+    fn member_allowed_is_read_only() {
+        let allowed = ApiKeyScope::member_allowed();
+        assert!(allowed.contains(&ApiKeyScope::WorkflowsRead));
+        assert!(allowed.contains(&ApiKeyScope::RunsRead));
+        assert!(allowed.contains(&ApiKeyScope::StatsRead));
+        assert!(!allowed.contains(&ApiKeyScope::RunsWrite));
+        assert!(!allowed.contains(&ApiKeyScope::RunsManage));
+        assert!(!allowed.contains(&ApiKeyScope::Admin));
+    }
+
+    #[test]
+    fn all_allowed_for_member_accepts_read_scopes() {
+        let scopes = vec![ApiKeyScope::WorkflowsRead, ApiKeyScope::RunsRead];
+        assert!(ApiKeyScope::all_allowed_for_member(&scopes));
+    }
+
+    #[test]
+    fn all_allowed_for_member_rejects_write_scopes() {
+        let scopes = vec![ApiKeyScope::RunsRead, ApiKeyScope::RunsWrite];
+        assert!(!ApiKeyScope::all_allowed_for_member(&scopes));
+    }
+
+    #[test]
+    fn all_allowed_for_member_rejects_admin() {
+        let scopes = vec![ApiKeyScope::Admin];
+        assert!(!ApiKeyScope::all_allowed_for_member(&scopes));
     }
 }

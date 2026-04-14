@@ -68,6 +68,10 @@ pub async fn create_api_key(
         ));
     }
 
+    if !user.is_admin && !ApiKeyScope::all_allowed_for_member(&req.scopes) {
+        return Err(ApiError::Forbidden);
+    }
+
     let raw_key = generate_api_key();
     let key_prefix = raw_key[..API_KEY_PREFIX.len() + 8].to_string();
     let key_hash =

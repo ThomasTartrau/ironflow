@@ -39,12 +39,16 @@ pub async fn reject_run(
 }
 
 async fn resolve_approval(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     target_status: RunStatus,
     verb: &str,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !auth.is_admin() {
+        return Err(ApiError::Forbidden);
+    }
+
     let run = state.get_run_or_404(id).await?;
 
     if run.status.state != RunStatus::AwaitingApproval {
@@ -118,7 +122,7 @@ mod tests {
 
     fn make_auth_header(state: &AppState) -> String {
         let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
+        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
         format!("Bearer {}", token.0)
     }
 

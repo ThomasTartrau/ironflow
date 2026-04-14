@@ -9,6 +9,7 @@ import {
 	retryRun,
 } from "../_actions/actions";
 import { Button } from "@/components/ui/button";
+import { useAppSelector } from "@/app/store";
 
 interface RunActionsProps {
 	run: RunResponse;
@@ -25,6 +26,10 @@ export function RunActions({ run }: RunActionsProps) {
 	const revalidator = useRevalidator();
 	const navigate = useNavigate();
 	const [pendingAction, setPendingAction] = useState<PendingAction>("idle");
+	const auth = useAppSelector((state) => state.auth);
+	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
+
+	if (!isAdmin) return null;
 
 	const canCancel =
 		run.status === "pending" ||

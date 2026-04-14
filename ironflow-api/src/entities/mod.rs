@@ -8,9 +8,11 @@ mod create_run;
 mod run;
 mod stats;
 mod step;
+mod user;
 
 pub use auth::{MeResponse, SignInRequest, SignUpRequest};
 pub use create_run::CreateRunRequest;
 pub use run::{ListRunsQuery, RunDetailResponse, RunResponse};
 pub use stats::StatsResponse;
 pub use step::StepResponse;
+pub use user::{CreateUserRequest, UpdateRoleRequest, UserResponse};

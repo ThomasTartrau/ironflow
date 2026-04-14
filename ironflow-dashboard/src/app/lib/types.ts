@@ -130,6 +130,28 @@ export interface CreateApiKeyRequest {
 	expires_at?: string;
 }
 
+export interface UserResponse {
+	id: string;
+	email: string;
+	username: string;
+	is_admin: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface CreateUserRequest {
+	email: string;
+	username: string;
+	password: string;
+	is_admin: boolean;
+}
+
+export interface ScopeEntry {
+	value: string;
+	label: string;
+	description: string;
+}
+
 export interface CreateApiKeyResponse {
 	id: string;
 	key: string;

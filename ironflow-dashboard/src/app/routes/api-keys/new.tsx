@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,37 +8,16 @@ import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { withToast } from "@/app/lib/api-toast";
 import { createApiKey } from "./_actions/actions";
-import type { ApiKeyScope } from "@/app/lib/types";
+import { api } from "@/app/lib/api";
+import type { ApiKeyScope, ScopeEntry } from "@/app/lib/types";
 
-const SCOPE_OPTIONS = [
-	{
-		value: "workflows_read",
-		label: "Workflows Read",
-		description: "Read workflow definitions",
-	},
-	{
-		value: "runs_read",
-		label: "Runs Read",
-		description: "Read runs and their steps",
-	},
-	{
-		value: "runs_write",
-		label: "Runs Write",
-		description: "Create new runs",
-	},
-	{
-		value: "runs_manage",
-		label: "Runs Manage",
-		description: "Cancel, approve, reject, retry",
-	},
-	{
-		value: "stats_read",
-		label: "Stats Read",
-		description: "Read aggregated statistics",
-	},
-];
+export async function loader() {
+	const res = await api.get<ScopeEntry[]>("/api-keys/scopes");
+	return { availableScopes: res.data };
+}
 
 export function Component() {
+	const { availableScopes } = useLoaderData<typeof loader>();
 	const navigate = useNavigate();
 	const [name, setName] = useState("");
 	const [scopes, setScopes] = useState<string[]>([]);
@@ -50,6 +29,12 @@ export function Component() {
 		title: "New API Key",
 		description: "Create a new API key for programmatic access.",
 	});
+
+	const scopeOptions = availableScopes.map((s) => ({
+		value: s.value,
+		label: s.label,
+		description: s.description,
+	}));
 
 	function handleCreate() {
 		setPending(true);
@@ -132,7 +117,7 @@ export function Component() {
 					</label>
 					<MultiSelect
 						id="scopes"
-						options={SCOPE_OPTIONS}
+						options={scopeOptions}
 						value={scopes}
 						onChange={setScopes}
 						placeholder="Select scopes..."
