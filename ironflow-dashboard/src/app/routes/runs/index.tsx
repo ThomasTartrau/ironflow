@@ -24,15 +24,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	const page = url.searchParams.get("page") ?? "1";
 	const workflow = url.searchParams.get("workflow") ?? "";
 	const status = url.searchParams.get("status") ?? "";
-
-	const hasSteps = url.searchParams.get("has_steps");
+	const hasSteps = url.searchParams.get("has_steps") ?? "true";
 
 	const params = new URLSearchParams();
 	params.set("page", page);
 	params.set("per_page", String(PER_PAGE));
 	if (workflow) params.set("workflow", workflow);
 	if (status) params.set("status", status);
-	if (hasSteps) params.set("has_steps", hasSteps);
+	if (hasSteps === "true") params.set("has_steps", "true");
 
 	const res = await api.get<RunResponse[]>(`/runs?${params}`);
 	return { runs: res.data, meta: res.meta };
@@ -51,7 +50,9 @@ export function Component() {
 
 	const [queryFilters, setQueryFilters] = useQueryStates(
 		{
-			page: parseAsInteger.withDefault(1),
+			page: parseAsInteger.withDefault(1).withOptions({
+				shallow: false,
+			}),
 		},
 		{ history: "push" },
 	);
