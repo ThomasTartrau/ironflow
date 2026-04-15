@@ -19,6 +19,7 @@ rust_decimal = { version = "1", features = ["serde-float"] }
 tokio = { version = "1", features = ["sync"] }
 thiserror = "2"
 tracing = "0.1"
+utoipa = { version = "5", features = ["uuid", "chrono", "decimal"], optional = true }
 
 # PostgreSQL (Phase 2)
 sqlx = { version = "0.8", features = [
@@ -35,6 +36,7 @@ sqlx = { version = "0.8", features = [
 default = ["store-memory"]
 store-memory = []
 store-postgres = ["sqlx"]
+openapi = ["utoipa"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

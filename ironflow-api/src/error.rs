@@ -4,9 +4,9 @@
 //! [`IntoResponse`] to serialize errors to JSON
 //! with proper HTTP status codes.
 
-use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use ironflow_store::error::StoreError;
 use serde::Serialize;
 use serde_json::json;
@@ -17,6 +17,7 @@ use uuid::Uuid;
 /// API error response envelope.
 ///
 /// Serialized to JSON as: `{ "error": { "code": "...", "message": "..." } }`
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct ErrorEnvelope {
     /// Machine-readable error code (e.g., "RUN_NOT_FOUND").

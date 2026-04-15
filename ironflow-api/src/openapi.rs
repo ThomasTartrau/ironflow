@@ -1,0 +1,170 @@
+//! OpenAPI/Swagger documentation for ironflow-api.
+
+use crate::entities::{
+    CreateRunRequest, CreateUserRequest, ListRunsQuery, MeResponse, RunDetailResponse, RunResponse,
+    SignInRequest, StatsResponse, UpdateRoleRequest, UserResponse,
+};
+use crate::routes::api_keys::available_scopes::ScopeEntry;
+use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
+use crate::routes::api_keys::list::ApiKeyResponse;
+use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
+use crate::routes::list_workflows::ListWorkflowsQuery;
+use crate::routes::users::list::ListUsersQuery;
+use crate::routes::{
+    api_keys, approve_run, auth, cancel_run, create_run, get_run, get_stats, get_workflow,
+    health_check, list_runs, list_workflows, retry_run, users,
+};
+use utoipa::OpenApi;
+
+#[cfg(feature = "sign-up")]
+mod with_signup {
+    use super::*;
+    use crate::entities::SignUpRequest;
+
+    /// OpenAPI documentation for ironflow REST API (with sign-up).
+    #[derive(OpenApi)]
+    #[openapi(
+        info(
+            title = "Ironflow REST API",
+            description = "REST API for the ironflow workflow engine",
+            version = "1.0.0"
+        ),
+        paths(
+            health_check::health_check,
+            list_runs::list_runs,
+            create_run::create_run,
+            get_run::get_run,
+            cancel_run::cancel_run,
+            approve_run::approve_run,
+            approve_run::reject_run,
+            retry_run::retry_run,
+            list_workflows::list_workflows,
+            get_workflow::get_workflow,
+            get_stats::get_stats,
+            auth::sign_up::sign_up,
+            auth::sign_in::sign_in,
+            auth::refresh::refresh,
+            auth::sign_out::sign_out,
+            auth::me::me,
+            api_keys::list::list_api_keys,
+            api_keys::create::create_api_key,
+            api_keys::available_scopes::available_scopes,
+            api_keys::delete::delete_api_key,
+            users::list::list_users,
+            users::create::create_user,
+            users::delete::delete_user,
+            users::update_role::update_role,
+        ),
+        components(
+            schemas(
+                RunResponse,
+                RunDetailResponse,
+                CreateRunRequest,
+                StatsResponse,
+                MeResponse,
+                SignInRequest,
+                SignUpRequest,
+                CreateUserRequest,
+                UserResponse,
+                UpdateRoleRequest,
+                ListWorkflowsQuery,
+                WorkflowDetailResponse,
+                SubWorkflowDetail,
+                ListRunsQuery,
+                ApiKeyResponse,
+                CreateApiKeyRequest,
+                CreateApiKeyResponse,
+                ScopeEntry,
+                ListUsersQuery,
+            )
+        ),
+        tags(
+            (name = "health", description = "Health check endpoints"),
+            (name = "runs", description = "Workflow run management"),
+            (name = "workflows", description = "Workflow definitions"),
+            (name = "stats", description = "Aggregated statistics"),
+            (name = "auth", description = "Authentication and authorization"),
+            (name = "api-keys", description = "API key management"),
+            (name = "users", description = "User management (admin only)"),
+        )
+    )]
+    pub struct ApiDoc;
+}
+
+#[cfg(not(feature = "sign-up"))]
+mod without_signup {
+    use super::*;
+
+    /// OpenAPI documentation for ironflow REST API (without sign-up).
+    #[derive(OpenApi)]
+    #[openapi(
+        info(
+            title = "Ironflow REST API",
+            description = "REST API for the ironflow workflow engine",
+            version = "1.0.0"
+        ),
+        paths(
+            health_check::health_check,
+            list_runs::list_runs,
+            create_run::create_run,
+            get_run::get_run,
+            cancel_run::cancel_run,
+            approve_run::approve_run,
+            approve_run::reject_run,
+            retry_run::retry_run,
+            list_workflows::list_workflows,
+            get_workflow::get_workflow,
+            get_stats::get_stats,
+            auth::sign_in::sign_in,
+            auth::refresh::refresh,
+            auth::sign_out::sign_out,
+            auth::me::me,
+            api_keys::list::list_api_keys,
+            api_keys::create::create_api_key,
+            api_keys::available_scopes::available_scopes,
+            api_keys::delete::delete_api_key,
+            users::list::list_users,
+            users::create::create_user,
+            users::delete::delete_user,
+            users::update_role::update_role,
+        ),
+        components(
+            schemas(
+                RunResponse,
+                RunDetailResponse,
+                CreateRunRequest,
+                StatsResponse,
+                MeResponse,
+                SignInRequest,
+                CreateUserRequest,
+                UserResponse,
+                UpdateRoleRequest,
+                ListWorkflowsQuery,
+                WorkflowDetailResponse,
+                SubWorkflowDetail,
+                ListRunsQuery,
+                ApiKeyResponse,
+                CreateApiKeyRequest,
+                CreateApiKeyResponse,
+                ScopeEntry,
+                ListUsersQuery,
+            )
+        ),
+        tags(
+            (name = "health", description = "Health check endpoints"),
+            (name = "runs", description = "Workflow run management"),
+            (name = "workflows", description = "Workflow definitions"),
+            (name = "stats", description = "Aggregated statistics"),
+            (name = "auth", description = "Authentication and authorization"),
+            (name = "api-keys", description = "API key management"),
+            (name = "users", description = "User management (admin only)"),
+        )
+    )]
+    pub struct ApiDoc;
+}
+
+#[cfg(feature = "sign-up")]
+pub use with_signup::ApiDoc;
+
+#[cfg(not(feature = "sign-up"))]
+pub use without_signup::ApiDoc;

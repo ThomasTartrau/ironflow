@@ -15,6 +15,7 @@ use uuid::Uuid;
 /// use ironflow_store::models::Step;
 /// use ironflow_api::entities::StepResponse;
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StepResponse {
     /// Unique step identifier.
@@ -24,6 +25,7 @@ pub struct StepResponse {
     /// Step name.
     pub name: String,
     /// Step operation type.
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub kind: StepKind,
     /// Execution order (0-based).
     pub position: u32,

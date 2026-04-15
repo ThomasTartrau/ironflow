@@ -18,6 +18,23 @@ use crate::state::AppState;
 ///
 /// Transitions the run from `AwaitingApproval` back to `Running`.
 /// Returns 400 if the run is not in `AwaitingApproval` state.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/runs/{id}/approve",
+        tags = ["runs"],
+        params(("id" = Uuid, Path, description = "Run ID")),
+        responses(
+            (status = 200, description = "Run approved successfully", body = RunResponse),
+            (status = 400, description = "Run not awaiting approval"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden"),
+            (status = 404, description = "Run not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn approve_run(
     auth: Authenticated,
     state: State<AppState>,
@@ -30,6 +47,23 @@ pub async fn approve_run(
 ///
 /// Transitions the run from `AwaitingApproval` to `Failed`.
 /// Returns 400 if the run is not in `AwaitingApproval` state.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/runs/{id}/reject",
+        tags = ["runs"],
+        params(("id" = Uuid, Path, description = "Run ID")),
+        responses(
+            (status = 200, description = "Run rejected successfully", body = RunResponse),
+            (status = 400, description = "Run not awaiting approval"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden"),
+            (status = 404, description = "Run not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn reject_run(
     auth: Authenticated,
     state: State<AppState>,
@@ -109,12 +143,14 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, StepStatus, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -139,6 +175,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -146,6 +183,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

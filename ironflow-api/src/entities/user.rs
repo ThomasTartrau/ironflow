@@ -7,6 +7,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 /// Response DTO for a user (never exposes password hash).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct UserResponse {
     /// User ID.
@@ -37,6 +38,7 @@ impl From<User> for UserResponse {
 }
 
 /// Request body for creating a user (admin only).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Deserialize, Validate)]
 pub struct CreateUserRequest {
     /// Email address.
@@ -53,6 +55,7 @@ pub struct CreateUserRequest {
 }
 
 /// Request body for updating a user's role (admin only).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct UpdateRoleRequest {
     /// New admin status.

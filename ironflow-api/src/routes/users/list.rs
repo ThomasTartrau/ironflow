@@ -12,6 +12,7 @@ use crate::response::ok_paged;
 use crate::state::AppState;
 
 /// Query parameters for listing users.
+#[cfg_attr(feature = "openapi", derive(utoipa::IntoParams, utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct ListUsersQuery {
     /// Page number (1-based, defaults to 1).
@@ -25,6 +26,21 @@ pub struct ListUsersQuery {
 /// # Errors
 ///
 /// - 403 if the caller is not an admin
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/users",
+        tags = ["users"],
+        params(ListUsersQuery),
+        responses(
+            (status = 200, description = "Paginated list of users", body = Vec<UserResponse>),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden (not an admin)")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn list_users(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -56,12 +72,14 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use serde_json::Value as JsonValue;
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -98,6 +116,7 @@ mod tests {
         engine
             .register(TestWorkflow)
             .expect("failed to register test workflow");
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -105,6 +124,7 @@ mod tests {
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

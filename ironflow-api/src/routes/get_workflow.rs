@@ -12,27 +12,29 @@ use crate::response::ok;
 use crate::state::AppState;
 
 /// Sub-workflow detail included in the workflow response.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
-struct SubWorkflowDetail {
+pub struct SubWorkflowDetail {
     /// Sub-workflow name.
-    name: String,
+    pub name: String,
     /// Human-readable description.
-    description: String,
+    pub description: String,
     /// Optional Rust source code of the handler.
-    source_code: Option<String>,
+    pub source_code: Option<String>,
 }
 
 /// Workflow detail response.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
-struct WorkflowDetailResponse {
+pub struct WorkflowDetailResponse {
     /// Workflow name.
-    name: String,
+    pub name: String,
     /// Human-readable description.
-    description: String,
+    pub description: String,
     /// Optional Rust source code of the handler.
-    source_code: Option<String>,
+    pub source_code: Option<String>,
     /// Sub-workflows invoked by this handler (recursive, depth-limited).
-    sub_workflows: Vec<SubWorkflowDetail>,
+    pub sub_workflows: Vec<SubWorkflowDetail>,
 }
 
 /// Get details about a registered workflow.
@@ -40,6 +42,21 @@ struct WorkflowDetailResponse {
 /// # Errors
 ///
 /// - 404 if the workflow is not registered
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/workflows/{name}",
+        tags = ["workflows"],
+        params(("name" = String, Path, description = "Workflow name")),
+        responses(
+            (status = 200, description = "Workflow details", body = WorkflowDetailResponse),
+            (status = 401, description = "Unauthorized"),
+            (status = 404, description = "Workflow not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn get_workflow(
     _auth: Authenticated,
     State(state): State<AppState>,
@@ -106,10 +123,12 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::Value as JsonValue;
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -140,6 +159,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -147,6 +167,7 @@ mod tests {
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

@@ -18,6 +18,20 @@ use crate::state::AppState;
 /// - `status` — Filter by run status (optional)
 /// - `page` — Page number, 1-based (default: 1)
 /// - `per_page` — Items per page (default: 20, max: 100)
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/runs",
+        tags = ["runs"],
+        params(ListRunsQuery),
+        responses(
+            (status = 200, description = "List of runs with pagination"),
+            (status = 401, description = "Unauthorized")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn list_runs(
     _auth: Authenticated,
     State(state): State<AppState>,
@@ -54,11 +68,13 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, NewStep, StepKind, TriggerKind};
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
 
     fn test_state() -> AppState {
@@ -75,6 +91,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -82,6 +99,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

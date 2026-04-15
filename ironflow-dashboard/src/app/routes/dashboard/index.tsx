@@ -3,6 +3,7 @@ import type { RunResponse, StatsResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
+import { useRevalidateOnEvent } from "@/app/hooks/use-revalidate-on-event";
 import { StatsCards } from "./_components/StatsCards";
 import { RecentRuns } from "./_components/RecentRuns";
 
@@ -25,6 +26,7 @@ export function Component() {
 		title: "Dashboard",
 		description: "Overview of your workflow executions.",
 	});
+	useRevalidateOnEvent();
 
 	return (
 		<HeaderApp

@@ -1,6 +1,17 @@
 //! `GET /api/v1/health-check` — Liveness probe.
 
 /// Health check handler. Always returns 200 OK.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/health-check",
+        tags = ["health"],
+        responses(
+            (status = 200, description = "Service is healthy")
+        )
+    )
+)]
 pub async fn health_check() -> &'static str {
     "OK"
 }

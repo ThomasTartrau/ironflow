@@ -15,6 +15,18 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// - 401 if the refresh token is missing, invalid, or expired
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/auth/refresh",
+        tags = ["auth"],
+        responses(
+            (status = 204, description = "Access token refreshed successfully, new cookies set"),
+            (status = 401, description = "Invalid or expired refresh token")
+        )
+    )
+)]
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,

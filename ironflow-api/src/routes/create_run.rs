@@ -17,6 +17,22 @@ use crate::state::AppState;
 ///
 /// Returns 201 Created with the newly enqueued run.
 /// Returns 400 Bad Request if the workflow is unknown.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/runs",
+        tags = ["runs"],
+        request_body(content = CreateRunRequest, description = "Workflow to trigger"),
+        responses(
+            (status = 201, description = "Run created successfully", body = RunResponse),
+            (status = 400, description = "Unknown workflow"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn create_run(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -61,10 +77,12 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -103,6 +121,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -110,6 +129,7 @@ mod tests {
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

@@ -16,6 +16,23 @@ use crate::state::AppState;
 ///
 /// Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
 /// original. Returns 400 if the run is not in a retryable state.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/runs/{id}/retry",
+        tags = ["runs"],
+        params(("id" = Uuid, Path, description = "Run ID")),
+        responses(
+            (status = 201, description = "Run retry created successfully", body = RunResponse),
+            (status = 400, description = "Run cannot be retried"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden"),
+            (status = 404, description = "Run not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn retry_run(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -60,12 +77,14 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, from_slice, from_value, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -90,6 +109,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -97,6 +117,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

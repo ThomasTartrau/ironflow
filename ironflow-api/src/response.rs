@@ -22,6 +22,7 @@ use serde::Serialize;
 /// };
 /// assert_eq!(meta.page, Some(1));
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize, Clone)]
 pub struct ApiMeta {
     /// Current page number (1-based).
@@ -67,6 +68,7 @@ impl ApiMeta {
 /// };
 /// assert_eq!(response.data, "hello");
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T: Serialize> {
     /// The response payload.

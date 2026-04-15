@@ -29,6 +29,9 @@
 //! ## Statistics
 //! - `GET /api/v1/stats` — Aggregate statistics (total runs, success rate, cost, etc.)
 //!
+//! ## Events (SSE)
+//! - `GET /api/v1/events` — Server-Sent Events stream for real-time updates
+//!
 //! # Quick start
 //!
 //! ```no_run
@@ -54,7 +57,8 @@
 //!     cookie_domain: None,
 //!     cookie_secure: false,
 //! });
-//! let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string());
+//! let broadcaster = ironflow_api::sse::SseBroadcaster::new();
+//! let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string(), broadcaster.sender());
 //! let app = create_router(state, RouterConfig::default());
 //!
 //! let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
@@ -70,9 +74,12 @@ pub mod dashboard;
 pub mod entities;
 pub mod error;
 pub mod middleware;
+#[cfg(feature = "openapi")]
+pub mod openapi;
 pub mod rate_limit;
 pub mod response;
 pub mod routes;
+pub mod sse;
 pub mod state;
 
 /// Convenience re-exports for common API usage.

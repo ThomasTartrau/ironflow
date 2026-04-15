@@ -20,6 +20,19 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// - 401 if email not found or password is wrong
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/auth/sign-in",
+        tags = ["auth"],
+        request_body(content = SignInRequest, description = "Sign in credentials"),
+        responses(
+            (status = 204, description = "User authenticated successfully, cookies set"),
+            (status = 401, description = "Invalid email or password")
+        )
+    )
+)]
 pub async fn sign_in(
     State(state): State<AppState>,
     Json(req): Json<SignInRequest>,
@@ -65,12 +78,14 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use serde_json::{json, to_string};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
 
     use super::*;
@@ -106,6 +121,7 @@ mod tests {
         engine
             .register(TestWorkflow)
             .expect("failed to register test workflow");
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -113,6 +129,7 @@ mod tests {
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

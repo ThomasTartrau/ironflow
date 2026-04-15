@@ -18,6 +18,7 @@ use crate::state::AppState;
 use ironflow_auth::extractor::API_KEY_PREFIX;
 
 /// Request body for creating an API key.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct CreateApiKeyRequest {
     /// Human-readable name for this key.
@@ -30,6 +31,7 @@ pub struct CreateApiKeyRequest {
 
 /// Response returned when creating an API key.
 /// The raw key is only shown once.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct CreateApiKeyResponse {
     /// API key ID.
@@ -53,6 +55,22 @@ pub struct CreateApiKeyResponse {
 /// # Errors
 ///
 /// - 400 if the name is empty or scopes are invalid
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/api-keys",
+        tags = ["api-keys"],
+        request_body(content = CreateApiKeyRequest, description = "API key configuration"),
+        responses(
+            (status = 201, description = "API key created successfully", body = CreateApiKeyResponse),
+            (status = 400, description = "Invalid input"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden (member trying to assign forbidden scopes)")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn create_api_key(
     user: AuthenticatedUser,
     State(state): State<AppState>,

@@ -14,6 +14,7 @@ use uuid::Uuid;
 /// let json = serde_json::to_string(&trigger).unwrap();
 /// assert!(json.contains("manual"));
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TriggerKind {

@@ -18,6 +18,7 @@ use super::StepResponse;
 /// use ironflow_store::models::{Run, RunStatus, TriggerKind};
 /// use ironflow_api::entities::RunResponse;
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RunResponse {
     /// Unique run identifier.
@@ -69,6 +70,7 @@ impl From<Run> for RunResponse {
 }
 
 /// Run detail response — includes steps.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct RunDetailResponse {
     /// The run.
@@ -78,6 +80,7 @@ pub struct RunDetailResponse {
 }
 
 /// Query parameters for listing runs.
+#[cfg_attr(feature = "openapi", derive(utoipa::IntoParams, utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct ListRunsQuery {
     /// Filter by workflow name.

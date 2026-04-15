@@ -17,6 +17,7 @@ use serde_json::Value;
 /// };
 /// assert_eq!(req.workflow, "deploy");
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct CreateRunRequest {
     /// The workflow name to trigger.

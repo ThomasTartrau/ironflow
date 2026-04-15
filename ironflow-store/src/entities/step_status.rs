@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// assert!(!StepStatus::Pending.is_terminal());
 /// assert!(StepStatus::Completed.is_terminal());
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {

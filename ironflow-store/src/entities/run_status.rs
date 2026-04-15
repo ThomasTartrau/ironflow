@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
 /// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {

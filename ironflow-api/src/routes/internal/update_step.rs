@@ -31,6 +31,7 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::{NewStep, StepKind, StepStatus};
     use ironflow_store::memory::InMemoryStore;
@@ -38,6 +39,7 @@ mod tests {
     use ironflow_store::user_store::UserStore;
     use serde_json::{Value as JsonValue, from_slice, json, to_string};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -57,6 +59,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -64,6 +67,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

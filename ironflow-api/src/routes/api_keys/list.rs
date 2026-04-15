@@ -13,6 +13,7 @@ use crate::response::ok;
 use crate::state::AppState;
 
 /// API key summary (never includes the hash or raw key).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct ApiKeyResponse {
     /// API key ID.
@@ -34,6 +35,19 @@ pub struct ApiKeyResponse {
 }
 
 /// List all API keys for the authenticated user.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/api-keys",
+        tags = ["api-keys"],
+        responses(
+            (status = 200, description = "List of API keys", body = Vec<ApiKeyResponse>),
+            (status = 401, description = "Unauthorized")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn list_api_keys(
     user: AuthenticatedUser,
     State(state): State<AppState>,

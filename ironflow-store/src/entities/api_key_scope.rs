@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Each scope grants access to a specific set of actions.
 /// A key with no scopes has no permissions.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiKeyScope {
