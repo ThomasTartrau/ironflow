@@ -595,6 +595,295 @@ export interface components {
 			/** @description Display username. */
 			username: string;
 		};
+		/**
+		 * @description A domain event emitted by the ironflow system.
+		 *
+		 *     Covers the full lifecycle: runs, steps, approvals, and authentication.
+		 *     Subscribers receive these via [`EventPublisher`](super::EventPublisher)
+		 *     and pattern-match on the variants they care about.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::Event;
+		 *     use ironflow_store::models::RunStatus;
+		 *     use uuid::Uuid;
+		 *
+		 *     let event = Event::RunStatusChanged {
+		 *         run_id: Uuid::now_v7(),
+		 *         workflow_name: "deploy".to_string(),
+		 *         from: RunStatus::Running,
+		 *         to: RunStatus::Completed,
+		 *         error: None,
+		 *         cost_usd: rust_decimal::Decimal::ZERO,
+		 *         duration_ms: 5000,
+		 *         at: chrono::Utc::now(),
+		 *     };
+		 *     ```
+		 */
+		Event:
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the run was created.
+					 */
+					at: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/** @enum {string} */
+					type: "run_created";
+					/** @description Workflow name. */
+					workflow_name: string;
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the transition occurred.
+					 */
+					at: string;
+					/**
+					 * Format: double
+					 * @description Aggregated cost in USD at the time of transition.
+					 */
+					cost_usd: number;
+					/**
+					 * Format: int64
+					 * @description Aggregated duration in milliseconds at the time of transition.
+					 */
+					duration_ms: number;
+					/** @description Error message (when transitioning to Failed). */
+					error?: string | null;
+					/** @description Previous status. */
+					from: components["schemas"]["RunStatus"];
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/** @description New status. */
+					to: components["schemas"]["RunStatus"];
+					/** @enum {string} */
+					type: "run_status_changed";
+					/** @description Workflow name. */
+					workflow_name: string;
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the failure occurred.
+					 */
+					at: string;
+					/**
+					 * Format: double
+					 * @description Aggregated cost in USD at the time of failure.
+					 */
+					cost_usd: number;
+					/**
+					 * Format: int64
+					 * @description Aggregated duration in milliseconds at the time of failure.
+					 */
+					duration_ms: number;
+					/** @description Error message. */
+					error?: string | null;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/** @enum {string} */
+					type: "run_failed";
+					/** @description Workflow name. */
+					workflow_name: string;
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the step completed.
+					 */
+					at: string;
+					/**
+					 * Format: double
+					 * @description Step cost in USD.
+					 */
+					cost_usd: number;
+					/**
+					 * Format: int64
+					 * @description Step duration in milliseconds.
+					 */
+					duration_ms: number;
+					/** @description Step operation kind. */
+					kind: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/**
+					 * Format: uuid
+					 * @description Step identifier.
+					 */
+					step_id: string;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/** @enum {string} */
+					type: "step_completed";
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the step failed.
+					 */
+					at: string;
+					/** @description Error message. */
+					error: string;
+					/** @description Step operation kind. */
+					kind: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/**
+					 * Format: uuid
+					 * @description Step identifier.
+					 */
+					step_id: string;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/** @enum {string} */
+					type: "step_failed";
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the approval was requested.
+					 */
+					at: string;
+					/** @description Message displayed to reviewers. */
+					message: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/**
+					 * Format: uuid
+					 * @description Approval step identifier.
+					 */
+					step_id: string;
+					/** @enum {string} */
+					type: "approval_requested";
+			  }
+			| {
+					/** @description User who approved (ID or username). */
+					approved_by: string;
+					/**
+					 * Format: date-time
+					 * @description When the approval was granted.
+					 */
+					at: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/** @enum {string} */
+					type: "approval_granted";
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the rejection occurred.
+					 */
+					at: string;
+					/** @description User who rejected (ID or username). */
+					rejected_by: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/** @enum {string} */
+					type: "approval_rejected";
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the sign-in occurred.
+					 */
+					at: string;
+					/** @enum {string} */
+					type: "user_signed_in";
+					/**
+					 * Format: uuid
+					 * @description User identifier.
+					 */
+					user_id: string;
+					/** @description Username. */
+					username: string;
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the sign-up occurred.
+					 */
+					at: string;
+					/** @enum {string} */
+					type: "user_signed_up";
+					/**
+					 * Format: uuid
+					 * @description User identifier.
+					 */
+					user_id: string;
+					/** @description Username. */
+					username: string;
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the sign-out occurred.
+					 */
+					at: string;
+					/** @enum {string} */
+					type: "user_signed_out";
+					/**
+					 * Format: uuid
+					 * @description User identifier.
+					 */
+					user_id: string;
+			  };
+		/**
+		 * @description Strongly-typed event kind matching [`Event`] variants.
+		 *
+		 *     Serializes to/from the same `snake_case` strings as
+		 *     [`Event::event_type()`].
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::routes::events::EventKind;
+		 *
+		 *     let kind: EventKind = "run_status_changed".parse().unwrap();
+		 *     assert_eq!(kind, EventKind::RunStatusChanged);
+		 *     assert_eq!(kind.as_str(), "run_status_changed");
+		 *     ```
+		 * @enum {string}
+		 */
+		EventKind:
+			| "run_created"
+			| "run_status_changed"
+			| "run_failed"
+			| "step_completed"
+			| "step_failed"
+			| "approval_requested"
+			| "approval_granted"
+			| "approval_rejected"
+			| "user_signed_in"
+			| "user_signed_up"
+			| "user_signed_out";
 		/** @description Query parameters for listing runs. */
 		ListRunsQuery: {
 			/**

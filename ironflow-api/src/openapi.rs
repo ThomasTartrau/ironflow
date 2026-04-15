@@ -7,6 +7,7 @@ use crate::entities::{
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
 use crate::routes::api_keys::list::ApiKeyResponse;
+use crate::routes::events::EventKind;
 use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
 use crate::routes::list_workflows::ListWorkflowsQuery;
 use crate::routes::users::list::ListUsersQuery;
@@ -14,6 +15,7 @@ use crate::routes::{
     api_keys, approve_run, auth, cancel_run, create_run, get_run, get_stats, get_workflow,
     health_check, list_runs, list_workflows, retry_run, users,
 };
+use ironflow_engine::notify::Event;
 use utoipa::OpenApi;
 
 #[cfg(feature = "sign-up")]
@@ -76,6 +78,8 @@ mod with_signup {
                 CreateApiKeyResponse,
                 ScopeEntry,
                 ListUsersQuery,
+                EventKind,
+                Event,
             )
         ),
         tags(
@@ -148,6 +152,8 @@ mod without_signup {
                 CreateApiKeyResponse,
                 ScopeEntry,
                 ListUsersQuery,
+                EventKind,
+                Event,
             )
         ),
         tags(

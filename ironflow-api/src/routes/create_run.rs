@@ -4,7 +4,9 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_engine::notify::Event;
 use ironflow_store::models::TriggerKind;
 use serde_json::json;
 
@@ -60,6 +62,12 @@ pub async fn create_run(
         .enqueue_handler(&req.workflow, TriggerKind::Api, payload, 3)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    state.engine.event_publisher().publish(Event::RunCreated {
+        run_id: run.id,
+        workflow_name: run.workflow_name.clone(),
+        at: Utc::now(),
+    });
 
     let response = RunResponse::from(run);
     Ok((StatusCode::CREATED, ok(response)))

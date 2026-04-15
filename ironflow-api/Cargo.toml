@@ -16,11 +16,11 @@ default = []
 sign-up = []
 dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
-openapi = ["utoipa", "ironflow-store/openapi"]
+openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi"]
 
 [dependencies]
 ironflow-store = { version = "2.8.0", path = "../ironflow-store" }
-utoipa = { version = "5", features = ["uuid", "chrono", "decimal", "axum_extras"], optional = true }
+utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
 ironflow-engine = { version = "2.7.6", path = "../ironflow-engine" }
 ironflow-core = { version = "2.4.1", path = "../ironflow-core" }
 ironflow-auth = { version = "2.2.0", path = "../ironflow-auth" }

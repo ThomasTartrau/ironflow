@@ -16,6 +16,12 @@ export type TriggerKind = components["schemas"]["TriggerKind"];
 // StepKind is a plain string in the OpenAPI spec (built-in + custom values)
 export type StepKind = string;
 
+// -- Events (SSE) --
+export type EventKind = components["schemas"]["EventKind"];
+export type Event = components["schemas"]["Event"];
+/** Map from event type discriminant to the matching payload variant. */
+export type EventPayload<K extends EventKind> = Extract<Event, { type: K }>;
+
 // -- Run --
 export type RunResponse = components["schemas"]["RunResponse"];
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];

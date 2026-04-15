@@ -2,7 +2,9 @@
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_engine::notify::Event;
 use ironflow_store::models::RunStatus;
 use uuid::Uuid;
 
@@ -56,6 +58,20 @@ pub async fn cancel_run(
         .await?;
 
     let cancelled = state.get_run_or_404(id).await?;
+
+    state
+        .engine
+        .event_publisher()
+        .publish(Event::RunStatusChanged {
+            run_id: id,
+            workflow_name: cancelled.workflow_name.clone(),
+            from: run.status.state,
+            to: RunStatus::Cancelled,
+            error: None,
+            cost_usd: cancelled.cost_usd,
+            duration_ms: cancelled.duration_ms,
+            at: Utc::now(),
+        });
 
     Ok(ok(RunResponse::from(cancelled)))
 }

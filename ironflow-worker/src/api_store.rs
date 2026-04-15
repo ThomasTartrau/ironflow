@@ -222,6 +222,13 @@ impl RunStore for ApiRunStore {
         })
     }
 
+    fn get_step(&self, _id: Uuid) -> StoreFuture<'_, Option<Step>> {
+        // The worker never reads a step back through its store — step lookup
+        // lives on the API side. Return None so this trait method stays total
+        // without adding a dedicated HTTP route the worker doesn't use.
+        Box::pin(async move { Ok(None) })
+    }
+
     fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>> {
         Box::pin(async move {
             let resp = self

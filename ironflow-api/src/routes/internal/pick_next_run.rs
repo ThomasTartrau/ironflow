@@ -2,6 +2,11 @@
 
 use axum::extract::State;
 use axum::response::IntoResponse;
+use chrono::Utc;
+use rust_decimal::Decimal;
+
+use ironflow_engine::notify::Event;
+use ironflow_store::models::RunStatus;
 
 use crate::error::ApiError;
 use crate::response::ok;
@@ -14,6 +19,23 @@ use crate::state::AppState;
 /// needs the full `FsmState<RunStatus>` and `payload` fields.
 pub async fn pick_next_run(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let run = state.store.pick_next_pending().await?;
+
+    if let Some(ref picked) = run {
+        state
+            .engine
+            .event_publisher()
+            .publish(Event::RunStatusChanged {
+                run_id: picked.id,
+                workflow_name: picked.workflow_name.clone(),
+                from: RunStatus::Pending,
+                to: RunStatus::Running,
+                error: None,
+                cost_usd: Decimal::ZERO,
+                duration_ms: 0,
+                at: Utc::now(),
+            });
+    }
+
     Ok(ok(run))
 }
 

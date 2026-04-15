@@ -3,7 +3,9 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_engine::notify::Event;
 use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
 use uuid::Uuid;
 
@@ -63,6 +65,12 @@ pub async fn retry_run(
             max_retries: original.max_retries,
         })
         .await?;
+
+    state.engine.event_publisher().publish(Event::RunCreated {
+        run_id: new_run.id,
+        workflow_name: new_run.workflow_name.clone(),
+        at: Utc::now(),
+    });
 
     Ok((StatusCode::CREATED, ok(RunResponse::from(new_run))))
 }

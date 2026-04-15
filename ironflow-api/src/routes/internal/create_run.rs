@@ -3,7 +3,9 @@
 use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
+use chrono::Utc;
 
+use ironflow_engine::notify::Event;
 use ironflow_store::entities::NewRun;
 
 use crate::error::ApiError;
@@ -18,6 +20,11 @@ pub async fn create_run(
     Json(req): Json<NewRun>,
 ) -> Result<impl IntoResponse, ApiError> {
     let run = state.store.create_run(req).await?;
+    state.engine.event_publisher().publish(Event::RunCreated {
+        run_id: run.id,
+        workflow_name: run.workflow_name.clone(),
+        at: Utc::now(),
+    });
     Ok(ok(run))
 }
 

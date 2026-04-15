@@ -4,7 +4,9 @@
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use ironflow_auth::extractor::Authenticated;
+use chrono::Utc;
+use ironflow_auth::extractor::{AuthMethod, Authenticated};
+use ironflow_engine::notify::Event;
 use ironflow_store::models::{RunStatus, StepStatus, StepUpdate};
 use tokio::spawn;
 use uuid::Uuid;
@@ -114,6 +116,26 @@ async fn resolve_approval(
     }
 
     state.store.update_run_status(id, target_status).await?;
+
+    let publisher = state.engine.event_publisher();
+    let now = Utc::now();
+    let actor = match &auth.method {
+        AuthMethod::Jwt { username, .. } => username.clone(),
+        AuthMethod::ApiKey { key_name, .. } => key_name.clone(),
+    };
+    if target_status == RunStatus::Running {
+        publisher.publish(Event::ApprovalGranted {
+            run_id: id,
+            approved_by: actor,
+            at: now,
+        });
+    } else {
+        publisher.publish(Event::ApprovalRejected {
+            run_id: id,
+            rejected_by: actor,
+            at: now,
+        });
+    }
 
     // On approval, resume the run in the background.
     // The handler is re-executed with step replay: completed steps

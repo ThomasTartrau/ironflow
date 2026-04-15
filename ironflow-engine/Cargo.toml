@@ -25,10 +25,12 @@ tracing = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
 schemars = "1"
 metrics = { version = "0.24", optional = true }
+utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], optional = true }
 
 [features]
 default = []
 prometheus = ["metrics", "ironflow-core/prometheus"]
+openapi = ["utoipa", "ironflow-store/openapi"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

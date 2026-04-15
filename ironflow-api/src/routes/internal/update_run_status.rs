@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use serde_json::json;
 
+use ironflow_engine::notify::Event;
 use ironflow_store::entities::{RunStatus, RunUpdate};
 
 use crate::error::ApiError;
@@ -50,8 +51,19 @@ pub async fn update_run_status(
         None
     };
 
+    let previous = state
+        .store
+        .get_run(id)
+        .await?
+        .ok_or(ApiError::RunNotFound(id))?;
+
+    let new_status = req.status;
+    let error_msg = req.error.clone();
+    let cost_usd = req.cost_usd.unwrap_or(previous.cost_usd);
+    let duration_ms = req.duration_ms.unwrap_or(previous.duration_ms);
+
     let update = RunUpdate {
-        status: Some(req.status),
+        status: Some(new_status),
         error: req.error,
         cost_usd: req.cost_usd,
         duration_ms: req.duration_ms,
@@ -60,6 +72,30 @@ pub async fn update_run_status(
         increment_retry: false,
     };
     state.store.update_run(id, update).await?;
+
+    if previous.status.state != new_status {
+        let publisher = state.engine.event_publisher();
+        publisher.publish(Event::RunStatusChanged {
+            run_id: id,
+            workflow_name: previous.workflow_name.clone(),
+            from: previous.status.state,
+            to: new_status,
+            error: error_msg.clone(),
+            cost_usd,
+            duration_ms,
+            at: now,
+        });
+        if new_status == RunStatus::Failed {
+            publisher.publish(Event::RunFailed {
+                run_id: id,
+                workflow_name: previous.workflow_name,
+                error: error_msg,
+                cost_usd,
+                duration_ms,
+                at: now,
+            });
+        }
+    }
 
     Ok(ok(json!({ "updated": true })))
 }
@@ -228,6 +264,6 @@ mod tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

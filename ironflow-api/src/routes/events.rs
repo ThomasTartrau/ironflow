@@ -33,6 +33,8 @@ use crate::state::AppState;
 /// assert_eq!(kind.as_str(), "run_status_changed");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(serde::Serialize, utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", serde(rename_all = "snake_case"))]
 pub enum EventKind {
     /// [`Event::RunCreated`]
     RunCreated,
