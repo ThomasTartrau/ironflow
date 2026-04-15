@@ -124,7 +124,7 @@ async fn cost_usd_zero_on_new_step() {
         .await
         .unwrap();
 
-    let step = store
+    store
         .create_step(new_step(run.id, "step-1", 1))
         .await
         .unwrap();
