@@ -28,6 +28,7 @@ use tracing_subscriber::EnvFilter;
 
 use ironflow_api::config::ServerConfig;
 use ironflow_api::routes::{RouterConfig, create_router};
+use ironflow_api::sse::SseBroadcaster;
 use ironflow_api::state::AppState;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -76,6 +77,10 @@ async fn main() {
         );
     }
 
+    let sse_broadcaster = SseBroadcaster::new();
+    let event_sender = sse_broadcaster.sender();
+    engine.subscribe(sse_broadcaster, Event::ALL);
+
     let engine = Arc::new(engine);
 
     let cors = build_cors(&config);
@@ -87,6 +92,7 @@ async fn main() {
         engine,
         jwt_config,
         config.worker_token.clone(),
+        event_sender,
     );
     let router_config = RouterConfig {
         dashboard_dir: config.dashboard_dir.clone(),

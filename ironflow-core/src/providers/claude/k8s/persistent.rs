@@ -46,8 +46,8 @@ use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
 use super::common::{
-    ImagePullPolicy, K8sClusterConfig, K8sResources, build_credentials_prefix, build_pod_spec,
-    create_client,
+    ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig, build_credentials_prefix,
+    build_pod_spec, create_client,
 };
 
 /// [`AgentProvider`] that reuses a persistent Kubernetes worker pod.
@@ -79,6 +79,7 @@ pub struct K8sPersistentProvider {
     service_account: Option<String>,
     image_pull_policy: ImagePullPolicy,
     env_vars: Vec<(String, String)>,
+    image_pull_secrets: Vec<String>,
     oauth_credentials: Option<String>,
     cluster_config: K8sClusterConfig,
     timeout: Duration,
@@ -97,6 +98,7 @@ impl K8sPersistentProvider {
             service_account: None,
             image_pull_policy: ImagePullPolicy::default(),
             env_vars: Vec::new(),
+            image_pull_secrets: Vec::new(),
             oauth_credentials: None,
             cluster_config: K8sClusterConfig::default(),
             timeout: DEFAULT_TIMEOUT,
@@ -155,6 +157,24 @@ impl K8sPersistentProvider {
     /// ```
     pub fn oauth_credentials(mut self, json: &str) -> Self {
         self.oauth_credentials = Some(json.to_string());
+        self
+    }
+
+    /// Add an image pull secret for pulling from private registries.
+    ///
+    /// The secret must already exist in the target namespace.
+    /// Can be called multiple times to add several secrets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sPersistentProvider;
+    ///
+    /// let provider = K8sPersistentProvider::new("registry.gitlab.com/org/image:v1")
+    ///     .image_pull_secret("gitlab-registry");
+    /// ```
+    pub fn image_pull_secret(mut self, secret_name: &str) -> Self {
+        self.image_pull_secrets.push(secret_name.to_string());
         self
     }
 
@@ -217,21 +237,22 @@ impl K8sPersistentProvider {
 
             debug!(pod = %self.pod_name, "creating persistent worker pod");
 
-            let pod_spec = build_pod_spec(
-                &self.pod_name,
-                &self.image,
-                vec![
+            let pod_spec = build_pod_spec(&PodConfig {
+                name: &self.pod_name,
+                image: &self.image,
+                command: vec![
                     "sh".to_string(),
                     "-c".to_string(),
                     "trap 'exit 0' TERM; while true; do sleep 3600 & wait; done".to_string(),
                 ],
-                &self.namespace,
-                &self.resources,
-                self.service_account.as_deref(),
-                "Always",
-                &self.image_pull_policy,
-                &self.env_vars,
-            )?;
+                namespace: &self.namespace,
+                resources: &self.resources,
+                service_account: self.service_account.as_deref(),
+                restart_policy: "Always",
+                image_pull_policy: &self.image_pull_policy,
+                env_vars: &self.env_vars,
+                image_pull_secrets: &self.image_pull_secrets,
+            })?;
 
             pods.create(&PostParams::default(), &pod_spec)
                 .await
@@ -404,6 +425,14 @@ mod tests {
         assert_eq!(provider.working_dir, Some("/app".to_string()));
         assert_eq!(provider.service_account, Some("worker-sa".to_string()));
         assert_eq!(provider.timeout, Duration::from_secs(900));
+    }
+
+    #[test]
+    fn persistent_provider_image_pull_secrets() {
+        let provider = K8sPersistentProvider::new("registry.gitlab.com/org/img:v1")
+            .image_pull_secret("gitlab-registry");
+        assert_eq!(provider.image_pull_secrets.len(), 1);
+        assert_eq!(provider.image_pull_secrets[0], "gitlab-registry");
     }
 
     #[test]

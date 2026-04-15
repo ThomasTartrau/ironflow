@@ -23,6 +23,7 @@
 //! # }
 //! ```
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -86,7 +87,7 @@ pub struct WorkflowContext {
     total_duration_ms: u64,
     /// Steps from a previous execution, keyed by position.
     /// Used when resuming after approval to replay completed steps.
-    replay_steps: std::collections::HashMap<u32, Step>,
+    replay_steps: HashMap<u32, Step>,
 }
 
 impl WorkflowContext {
@@ -104,7 +105,7 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
-            replay_steps: std::collections::HashMap::new(),
+            replay_steps: HashMap::new(),
         }
     }
 
@@ -127,7 +128,7 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
-            replay_steps: std::collections::HashMap::new(),
+            replay_steps: HashMap::new(),
         }
     }
 
@@ -820,7 +821,7 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
-            replay_steps: std::collections::HashMap::new(),
+            replay_steps: HashMap::new(),
         };
 
         let result = handler.execute(&mut child_ctx).await;

@@ -10,6 +10,19 @@ use crate::response::ok;
 use crate::state::AppState;
 
 /// Get aggregate statistics across all runs.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/stats",
+        tags = ["stats"],
+        responses(
+            (status = 200, description = "Aggregate statistics", body = StatsResponse),
+            (status = 401, description = "Unauthorized")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn get_stats(
     _auth: Authenticated,
     State(state): State<AppState>,
@@ -44,12 +57,14 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -74,6 +89,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -81,6 +97,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

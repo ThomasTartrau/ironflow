@@ -95,6 +95,9 @@ pub trait RunStore: Send + Sync {
     /// Returns [`StoreError::StepNotFound`] if the step does not exist.
     fn update_step(&self, id: Uuid, update: StepUpdate) -> StoreFuture<'_, ()>;
 
+    /// Get a single step by ID. Returns `None` if not found.
+    fn get_step(&self, id: Uuid) -> StoreFuture<'_, Option<Step>>;
+
     /// List all steps for a run, ordered by position ascending.
     fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>>;
 

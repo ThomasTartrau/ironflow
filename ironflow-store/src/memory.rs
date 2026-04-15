@@ -386,6 +386,13 @@ impl RunStore for InMemoryStore {
         })
     }
 
+    fn get_step(&self, id: Uuid) -> StoreFuture<'_, Option<Step>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            Ok(state.steps.get(&id).cloned())
+        })
+    }
+
     fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>> {
         Box::pin(async move {
             let state = self.state.read().await;

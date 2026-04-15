@@ -43,21 +43,16 @@ use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
 use super::common::{
-    ImagePullPolicy, K8sClusterConfig, K8sResources, build_credentials_prefix, build_pod_spec,
-    create_client, generate_pod_name,
+    ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig, build_credentials_prefix,
+    build_pod_spec, create_client, generate_pod_name,
 };
 
 /// Returns `true` when the pod has terminated (Succeeded or Failed).
 fn is_pod_completed() -> impl kube::runtime::wait::Condition<Pod> {
     |obj: Option<&Pod>| {
-        if let Some(pod) = obj {
-            if let Some(status) = &pod.status {
-                if let Some(phase) = &status.phase {
-                    return phase == "Succeeded" || phase == "Failed";
-                }
-            }
-        }
-        false
+        obj.and_then(|pod| pod.status.as_ref())
+            .and_then(|status| status.phase.as_deref())
+            .is_some_and(|phase| phase == "Succeeded" || phase == "Failed")
     }
 }
 
@@ -77,9 +72,10 @@ fn is_pod_completed() -> impl kube::runtime::wait::Condition<Pod> {
 /// ```no_run
 /// use ironflow_core::providers::claude::K8sEphemeralProvider;
 ///
-/// let provider = K8sEphemeralProvider::new("my-registry/claude:v1")
+/// let provider = K8sEphemeralProvider::new("registry.gitlab.com/org/claude:v1")
 ///     .namespace("ci")
-///     .service_account("claude-sa");
+///     .service_account("claude-sa")
+///     .image_pull_secret("gitlab-registry");
 /// ```
 #[derive(Clone)]
 pub struct K8sEphemeralProvider {
@@ -91,6 +87,7 @@ pub struct K8sEphemeralProvider {
     service_account: Option<String>,
     image_pull_policy: ImagePullPolicy,
     env_vars: Vec<(String, String)>,
+    image_pull_secrets: Vec<String>,
     oauth_credentials: Option<String>,
     cluster_config: K8sClusterConfig,
     timeout: Duration,
@@ -108,6 +105,7 @@ impl K8sEphemeralProvider {
             service_account: None,
             image_pull_policy: ImagePullPolicy::default(),
             env_vars: Vec::new(),
+            image_pull_secrets: Vec::new(),
             oauth_credentials: None,
             cluster_config: K8sClusterConfig::default(),
             timeout: DEFAULT_TIMEOUT,
@@ -165,6 +163,24 @@ impl K8sEphemeralProvider {
     /// ```
     pub fn oauth_credentials(mut self, json: &str) -> Self {
         self.oauth_credentials = Some(json.to_string());
+        self
+    }
+
+    /// Add an image pull secret for pulling from private registries.
+    ///
+    /// The secret must already exist in the target namespace.
+    /// Can be called multiple times to add several secrets.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::new("registry.gitlab.com/org/image:v1")
+    ///     .image_pull_secret("gitlab-registry");
+    /// ```
+    pub fn image_pull_secret(mut self, secret_name: &str) -> Self {
+        self.image_pull_secrets.push(secret_name.to_string());
         self
     }
 
@@ -239,17 +255,18 @@ impl AgentProvider for K8sEphemeralProvider {
             let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
 
             // Create pod
-            let pod_spec = build_pod_spec(
-                &pod_name,
-                &self.image,
-                vec!["sh".to_string(), "-c".to_string(), full_cmd],
-                &self.namespace,
-                &self.resources,
-                self.service_account.as_deref(),
-                "Never",
-                &self.image_pull_policy,
-                &self.env_vars,
-            )?;
+            let pod_spec = build_pod_spec(&PodConfig {
+                name: &pod_name,
+                image: &self.image,
+                command: vec!["sh".to_string(), "-c".to_string(), full_cmd],
+                namespace: &self.namespace,
+                resources: &self.resources,
+                service_account: self.service_account.as_deref(),
+                restart_policy: "Never",
+                image_pull_policy: &self.image_pull_policy,
+                env_vars: &self.env_vars,
+                image_pull_secrets: &self.image_pull_secrets,
+            })?;
 
             pods.create(&PostParams::default(), &pod_spec)
                 .await
@@ -357,6 +374,16 @@ mod tests {
         assert_eq!(provider.resources.cpu_limit, Some("1".to_string()));
         assert_eq!(provider.resources.memory_limit, Some("2Gi".to_string()));
         assert_eq!(provider.timeout, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn ephemeral_provider_image_pull_secrets() {
+        let provider = K8sEphemeralProvider::new("registry.gitlab.com/org/img:v1")
+            .image_pull_secret("gitlab-registry")
+            .image_pull_secret("dockerhub");
+        assert_eq!(provider.image_pull_secrets.len(), 2);
+        assert_eq!(provider.image_pull_secrets[0], "gitlab-registry");
+        assert_eq!(provider.image_pull_secrets[1], "dockerhub");
     }
 
     #[test]

@@ -3,23 +3,64 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use chrono::Utc;
 use uuid::Uuid;
 
 use serde_json::json;
 
-use ironflow_store::entities::StepUpdate;
+use ironflow_engine::notify::Event;
+use ironflow_store::entities::{StepStatus, StepUpdate};
 
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
 
 /// Update a step's status, output, and metrics (used by the worker).
+///
+/// After persisting the update, broadcasts a matching [`Event::StepCompleted`]
+/// or [`Event::StepFailed`] so SSE subscribers see step-level progress while
+/// the worker is running the pipeline remotely.
 pub async fn update_step(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(update): Json<StepUpdate>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let terminal_status = update.status;
+    let duration_ms = update.duration_ms.unwrap_or(0);
+    let cost_usd = update.cost_usd.unwrap_or_default();
+    let error_msg = update.error.clone();
+
     state.store.update_step(id, update).await?;
+
+    if matches!(
+        terminal_status,
+        Some(StepStatus::Completed) | Some(StepStatus::Failed)
+    ) && let Some(step) = state.store.get_step(id).await?
+    {
+        let now = Utc::now();
+        let event = match terminal_status {
+            Some(StepStatus::Completed) => Event::StepCompleted {
+                run_id: step.run_id,
+                step_id: step.id,
+                step_name: step.name.clone(),
+                kind: step.kind.clone(),
+                duration_ms,
+                cost_usd,
+                at: now,
+            },
+            Some(StepStatus::Failed) => Event::StepFailed {
+                run_id: step.run_id,
+                step_id: step.id,
+                step_name: step.name.clone(),
+                kind: step.kind.clone(),
+                error: error_msg.unwrap_or_default(),
+                at: now,
+            },
+            _ => unreachable!(),
+        };
+        state.engine.event_publisher().publish(event);
+    }
+
     Ok(ok(json!({ "updated": true })))
 }
 
@@ -31,6 +72,7 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::{NewStep, StepKind, StepStatus};
     use ironflow_store::memory::InMemoryStore;
@@ -38,6 +80,7 @@ mod tests {
     use ironflow_store::user_store::UserStore;
     use serde_json::{Value as JsonValue, from_slice, json, to_string};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -57,6 +100,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -64,6 +108,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

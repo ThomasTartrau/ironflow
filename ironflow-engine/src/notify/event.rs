@@ -32,6 +32,7 @@ use ironflow_store::models::{RunStatus, StepKind};
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     // -- Run lifecycle --
@@ -95,6 +96,7 @@ pub enum Event {
         /// Human-readable step name.
         step_name: String,
         /// Step operation kind.
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
         kind: StepKind,
         /// Step duration in milliseconds.
         duration_ms: u64,
@@ -113,6 +115,7 @@ pub enum Event {
         /// Human-readable step name.
         step_name: String,
         /// Step operation kind.
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
         kind: StepKind,
         /// Error message.
         error: String,

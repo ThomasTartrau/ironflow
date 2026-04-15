@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: ensures openapi.json and types.generated.ts stay in sync
+# with API source changes.
+#
+# Install with: ./scripts/setup-hooks.sh
+
+API_SOURCES="ironflow-api/src/entities ironflow-api/src/routes ironflow-api/src/openapi.rs ironflow-store/src/entities"
+OPENAPI_FILE="ironflow-dashboard/openapi.json"
+TYPES_FILE="ironflow-dashboard/src/app/lib/types.generated.ts"
+
+staged_files=$(git diff --cached --name-only)
+
+api_changed=false
+for dir in $API_SOURCES; do
+    if echo "$staged_files" | grep -q "^${dir}"; then
+        api_changed=true
+        break
+    fi
+done
+
+openapi_staged=$(echo "$staged_files" | grep -q "^${OPENAPI_FILE}" && echo true || echo false)
+types_staged=$(echo "$staged_files" | grep -q "^${TYPES_FILE}" && echo true || echo false)
+
+if [ "$api_changed" = true ] && [ "$openapi_staged" = false ]; then
+    echo ""
+    echo "ERROR: API source files changed but ${OPENAPI_FILE} is not staged."
+    echo ""
+    echo "Run:"
+    echo "  UPDATE_OPENAPI=1 cargo test -p ironflow-api --features openapi openapi_spec_is_up_to_date"
+    echo "  cd ironflow-dashboard && pnpm generate:types"
+    echo "  git add ${OPENAPI_FILE} ${TYPES_FILE}"
+    echo ""
+    exit 1
+fi
+
+if [ "$openapi_staged" = true ] && [ "$types_staged" = false ]; then
+    echo ""
+    echo "ERROR: ${OPENAPI_FILE} changed but ${TYPES_FILE} is not staged."
+    echo ""
+    echo "Run:"
+    echo "  cd ironflow-dashboard && pnpm generate:types"
+    echo "  git add ${TYPES_FILE}"
+    echo ""
+    exit 1
+fi

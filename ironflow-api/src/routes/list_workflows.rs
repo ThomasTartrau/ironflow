@@ -10,6 +10,7 @@ use crate::response::ok;
 use crate::state::AppState;
 
 /// Query parameters for listing workflows.
+#[cfg_attr(feature = "openapi", derive(utoipa::IntoParams, utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct ListWorkflowsQuery {
     /// Optional case-insensitive partial match on workflow name.
@@ -21,6 +22,20 @@ pub struct ListWorkflowsQuery {
 /// # Query Parameters
 ///
 /// - `name` — Filter by workflow name, case-insensitive partial match (optional)
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/workflows",
+        tags = ["workflows"],
+        params(ListWorkflowsQuery),
+        responses(
+            (status = 200, description = "List of workflow names"),
+            (status = 401, description = "Unauthorized")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn list_workflows(
     _auth: Authenticated,
     State(state): State<AppState>,
@@ -53,10 +68,12 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::{Value as JsonValue, from_slice, from_value};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -108,6 +125,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -115,6 +133,7 @@ mod tests {
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 
@@ -133,6 +152,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         let state = AppState::new(
             store,
             user_store,
@@ -140,6 +160,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         );
         let auth_header = make_auth_header(&state);
 

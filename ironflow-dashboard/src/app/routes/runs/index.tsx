@@ -5,6 +5,7 @@ import type { RunResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
+import { useRevalidateOnEvent } from "@/app/hooks/use-revalidate-on-event";
 import { Pagination } from "@/app/components/Pagination";
 import { RunFilters } from "./_components/RunFilters";
 import { RunsTable } from "./_components/RunsTable";
@@ -47,6 +48,8 @@ export function Component() {
 		title: "Runs",
 		description: "Monitor and manage workflow executions.",
 	});
+
+	useRevalidateOnEvent();
 
 	const [queryFilters, setQueryFilters] = useQueryStates(
 		{

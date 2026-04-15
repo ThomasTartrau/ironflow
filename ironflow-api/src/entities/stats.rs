@@ -12,6 +12,7 @@ use serde::Serialize;
 /// ```
 /// use ironflow_api::entities::StatsResponse;
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct StatsResponse {
     /// Total number of runs.

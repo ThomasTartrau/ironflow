@@ -25,6 +25,20 @@ use crate::state::AppState;
 ///
 /// - 400 if email/username/password is invalid
 /// - 409 if email or username is already taken
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/auth/sign-up",
+        tags = ["auth"],
+        request_body(content = SignUpRequest, description = "Sign up credentials"),
+        responses(
+            (status = 204, description = "User registered successfully, cookies set"),
+            (status = 400, description = "Invalid email, username, or password"),
+            (status = 409, description = "Email or username already taken")
+        )
+    )
+)]
 pub async fn sign_up(
     State(state): State<AppState>,
     Json(req): Json<SignUpRequest>,
@@ -78,11 +92,13 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use serde_json::{json, to_string};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
 
     use super::*;
@@ -118,6 +134,7 @@ mod tests {
         engine
             .register(TestWorkflow)
             .expect("failed to register test workflow");
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -125,6 +142,7 @@ mod tests {
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

@@ -16,6 +16,21 @@ use crate::state::AppState;
 /// Get a run by ID, including all its steps and dependency edges.
 ///
 /// Returns 404 if the run does not exist.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/runs/{id}",
+        tags = ["runs"],
+        params(("id" = Uuid, Path, description = "Run ID")),
+        responses(
+            (status = 200, description = "Run details with steps", body = RunDetailResponse),
+            (status = 401, description = "Unauthorized"),
+            (status = 404, description = "Run not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn get_run(
     _auth: Authenticated,
     State(state): State<AppState>,
@@ -64,12 +79,14 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -95,6 +112,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -102,6 +120,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 
@@ -130,6 +149,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         let state = AppState::new(
             store,
             user_store,
@@ -137,6 +157,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         );
         let auth_header = make_auth_header(&state);
         let app = Router::new().route("/{id}", get(get_run)).with_state(state);

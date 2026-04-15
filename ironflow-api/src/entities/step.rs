@@ -15,6 +15,7 @@ use uuid::Uuid;
 /// use ironflow_store::models::Step;
 /// use ironflow_api::entities::StepResponse;
 /// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StepResponse {
     /// Unique step identifier.
@@ -24,20 +25,24 @@ pub struct StepResponse {
     /// Step name.
     pub name: String,
     /// Step operation type.
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub kind: StepKind,
     /// Execution order (0-based).
     pub position: u32,
     /// Current status.
     pub status: StepStatus,
     /// Input configuration.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub input: Option<Value>,
     /// Step output.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub output: Option<Value>,
     /// Optional error message.
     pub error: Option<String>,
     /// Execution duration in milliseconds.
     pub duration_ms: u64,
     /// Cost in USD.
+    #[cfg_attr(feature = "openapi", schema(value_type = f64))]
     pub cost_usd: Decimal,
     /// Input token count (agent steps).
     pub input_tokens: Option<u64>,

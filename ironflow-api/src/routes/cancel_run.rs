@@ -2,7 +2,9 @@
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_engine::notify::Event;
 use ironflow_store::models::RunStatus;
 use uuid::Uuid;
 
@@ -15,6 +17,23 @@ use crate::state::AppState;
 ///
 /// Transitions the run to `Cancelled` status. Returns 400 if the run
 /// is already in a terminal state.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/runs/{id}/cancel",
+        tags = ["runs"],
+        params(("id" = Uuid, Path, description = "Run ID")),
+        responses(
+            (status = 200, description = "Run cancelled successfully", body = RunResponse),
+            (status = 400, description = "Run cannot be cancelled"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden"),
+            (status = 404, description = "Run not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn cancel_run(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -40,6 +59,20 @@ pub async fn cancel_run(
 
     let cancelled = state.get_run_or_404(id).await?;
 
+    state
+        .engine
+        .event_publisher()
+        .publish(Event::RunStatusChanged {
+            run_id: id,
+            workflow_name: cancelled.workflow_name.clone(),
+            from: run.status.state,
+            to: RunStatus::Cancelled,
+            error: None,
+            cost_usd: cancelled.cost_usd,
+            duration_ms: cancelled.duration_ms,
+            at: Utc::now(),
+        });
+
     Ok(ok(RunResponse::from(cancelled)))
 }
 
@@ -53,12 +86,14 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -83,6 +118,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -90,6 +126,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

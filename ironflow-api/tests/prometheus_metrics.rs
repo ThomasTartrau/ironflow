@@ -10,8 +10,10 @@ use http_body_util::BodyExt;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
+use ironflow_engine::notify::Event;
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::memory::InMemoryStore;
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 use ironflow_api::routes::{RouterConfig, create_router};
@@ -30,6 +32,7 @@ fn test_state() -> AppState {
         cookie_domain: None,
         cookie_secure: false,
     });
+    let (event_sender, _) = broadcast::channel::<Event>(1);
 
     AppState::new(
         store,
@@ -38,6 +41,7 @@ fn test_state() -> AppState {
         engine,
         jwt_config,
         "test-worker-token".to_string(),
+        event_sender,
     )
 }
 

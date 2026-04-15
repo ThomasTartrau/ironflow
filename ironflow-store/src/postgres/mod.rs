@@ -1018,6 +1018,26 @@ impl RunStore for PostgresStore {
         })
     }
 
+    fn get_step(&self, id: Uuid) -> StoreFuture<'_, Option<Step>> {
+        Box::pin(async move {
+            let row = sqlx::query(
+                r#"
+                SELECT s.*, ast.name as state_name
+                FROM ironflow.steps s
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = s.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE s.id = $1
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            row.map(|r| row_to_step(&r)).transpose()
+        })
+    }
+
     fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>> {
         Box::pin(async move {
             let rows = sqlx::query(

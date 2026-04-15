@@ -17,6 +17,7 @@ use uuid::Uuid;
 /// API error response envelope.
 ///
 /// Serialized to JSON as: `{ "error": { "code": "...", "message": "..." } }`
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct ErrorEnvelope {
     /// Machine-readable error code (e.g., "RUN_NOT_FOUND").

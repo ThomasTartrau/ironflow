@@ -1,21 +1,23 @@
 //! Router assembly — one module per route.
 
-mod api_keys;
-mod approve_run;
-mod auth;
-mod cancel_run;
-mod create_run;
-mod get_run;
-mod get_stats;
-mod get_workflow;
-mod health_check;
+pub mod api_keys;
+pub mod approve_run;
+pub mod auth;
+pub mod cancel_run;
+pub mod create_run;
+pub mod events;
+pub mod get_run;
+pub mod get_stats;
+pub mod get_workflow;
+pub mod health_check;
 mod internal;
-mod list_runs;
-mod list_workflows;
+pub mod list_runs;
+pub mod list_workflows;
 #[cfg(feature = "prometheus")]
 pub mod metrics;
-mod retry_run;
-mod users;
+pub mod openapi_spec;
+pub mod retry_run;
+pub mod users;
 
 use std::path::PathBuf;
 
@@ -110,7 +112,8 @@ async fn sign_up_disabled() -> impl axum::response::IntoResponse {
 ///     cookie_domain: None,
 ///     cookie_secure: false,
 /// });
-/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string());
+/// let broadcaster = ironflow_api::sse::SseBroadcaster::new();
+/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string(), broadcaster.sender());
 /// let router = create_router(state, RouterConfig::default());
 /// # }
 /// ```
@@ -171,6 +174,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
     #[allow(unused_mut)]
     let mut api_v1 = Router::new()
         .route("/health-check", get(health_check::health_check))
+        .route("/openapi.json", get(openapi_spec::openapi_spec))
         .route(
             "/runs",
             get(list_runs::list_runs).post(create_run::create_run),
@@ -183,6 +187,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
         .route("/stats", get(get_stats::get_stats))
+        .route("/events", get(events::events))
         .route(
             "/api-keys",
             get(api_keys::list::list_api_keys).post(api_keys::create::create_api_key),
@@ -250,10 +255,12 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
@@ -268,6 +275,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -275,6 +283,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

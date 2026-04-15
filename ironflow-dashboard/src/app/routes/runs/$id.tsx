@@ -1,5 +1,4 @@
-import { useEffect, useRef } from "react";
-import { useLoaderData, useRevalidator } from "react-router";
+import { useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import type {
 	RunDetailResponse,
@@ -10,6 +9,7 @@ import type {
 import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
+import { useRevalidateOnEvent } from "@/app/hooks/use-revalidate-on-event";
 import { StatCard } from "@/app/components/StatCard";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TriggerBadge } from "@/app/components/TriggerBadge";
@@ -23,15 +23,17 @@ import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
 import { Clock, DollarSign, RotateCcw, Calendar } from "lucide-react";
 
-const POLL_INTERVAL_MS = 3000;
-
 export async function loader({ params }: LoaderFunctionArgs) {
 	const res = await api.get<RunDetailResponse>(`/runs/${params.id}`);
 	return res.data;
 }
 
 function isRunActive(status: RunStatus): boolean {
-	return status === "pending" || status === "running";
+	return (
+		status === "pending" ||
+		status === "running" ||
+		status === "awaiting_approval"
+	);
 }
 
 export function Component() {
@@ -43,28 +45,10 @@ export function Component() {
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
 		description: `Run ${run.id} of workflow ${run.workflow_name}.`,
 	});
-	const revalidator = useRevalidator();
-	const revalidatorRef = useRef(revalidator);
-	revalidatorRef.current = revalidator;
-	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-	useEffect(() => {
-		if (!isRunActive(run.status)) {
-			return;
-		}
-
-		intervalRef.current = setInterval(() => {
-			if (revalidatorRef.current.state === "idle") {
-				revalidatorRef.current.revalidate();
-			}
-		}, POLL_INTERVAL_MS);
-
-		return () => {
-			if (intervalRef.current) {
-				clearInterval(intervalRef.current);
-			}
-		};
-	}, [run.status]);
+	useRevalidateOnEvent({
+		runId: run.id,
+		enabled: isRunActive(run.status),
+	});
 
 	return (
 		<HeaderApp
@@ -129,7 +113,7 @@ export function Component() {
 					>
 						<StepTimeline
 							steps={steps}
-							runStartedAt={run.started_at}
+							runStartedAt={run.started_at ?? null}
 							runId={run.id}
 						/>
 					</CollapsibleSection>

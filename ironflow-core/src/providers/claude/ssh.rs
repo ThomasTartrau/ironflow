@@ -533,7 +533,7 @@ mod tests {
         };
         let key = test_public_key();
         let result = handler.check_server_key(&key).await;
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[tokio::test]
@@ -545,6 +545,6 @@ mod tests {
         };
         let key = test_public_key();
         let result = handler.check_server_key(&key).await;
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 }

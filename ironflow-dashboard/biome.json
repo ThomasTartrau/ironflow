@@ -11,7 +11,8 @@
 			"**/*.{js,jsx,mjs,cjs,ts,tsx,json}",
 			"!dist",
 			"!.vite",
-			"!src/components/ui"
+			"!src/components/ui",
+			"!openapi.json"
 		]
 	},
 	"formatter": {

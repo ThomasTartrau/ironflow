@@ -20,6 +20,26 @@ use crate::state::AppState;
 /// - 403 if the caller is not an admin
 /// - 400 if trying to change own role
 /// - 404 if the user does not exist
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        patch,
+        path = "/api/v1/users/{id}/role",
+        tags = ["users"],
+        params(
+            ("id" = Uuid, Path, description = "User ID")
+        ),
+        request_body(content = UpdateRoleRequest, description = "New role assignment"),
+        responses(
+            (status = 200, description = "User role updated successfully", body = UserResponse),
+            (status = 400, description = "Cannot change own role"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden (not an admin)"),
+            (status = 404, description = "User not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn update_role(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -60,12 +80,14 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use serde_json::{Value as JsonValue, json, to_string};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -102,6 +124,7 @@ mod tests {
         engine
             .register(TestWorkflow)
             .expect("failed to register test workflow");
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -109,6 +132,7 @@ mod tests {
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

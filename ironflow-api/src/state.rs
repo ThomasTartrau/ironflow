@@ -9,10 +9,12 @@ use std::sync::OnceLock;
 use axum::extract::FromRef;
 #[cfg(feature = "prometheus")]
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_engine::engine::Engine;
+use ironflow_engine::notify::Event;
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::entities::Run;
 use ironflow_store::store::RunStore;
@@ -49,7 +51,8 @@ use crate::error::ApiError;
 ///     cookie_domain: None,
 ///     cookie_secure: false,
 /// });
-/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string());
+/// let broadcaster = ironflow_api::sse::SseBroadcaster::new();
+/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string(), broadcaster.sender());
 /// # }
 /// ```
 #[derive(Clone)]
@@ -66,6 +69,8 @@ pub struct AppState {
     pub jwt_config: Arc<JwtConfig>,
     /// Static token for worker-to-API authentication.
     pub worker_token: String,
+    /// Broadcast sender for SSE event streaming.
+    pub event_sender: broadcast::Sender<Event>,
     /// Prometheus metrics handle (only when `prometheus` feature is enabled).
     #[cfg(feature = "prometheus")]
     pub prometheus_handle: PrometheusHandle,
@@ -125,6 +130,7 @@ impl AppState {
         engine: Arc<Engine>,
         jwt_config: Arc<JwtConfig>,
         worker_token: String,
+        event_sender: broadcast::Sender<Event>,
     ) -> Self {
         Self {
             store,
@@ -133,6 +139,7 @@ impl AppState {
             engine,
             jwt_config,
             worker_token,
+            event_sender,
             #[cfg(feature = "prometheus")]
             prometheus_handle: Self::global_prometheus_handle(),
         }
@@ -185,6 +192,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -192,6 +200,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

@@ -16,6 +16,19 @@ use crate::state::AppState;
 ///
 /// - 401 if no valid token is provided
 /// - 404 if the user no longer exists in the store
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/auth/me",
+        tags = ["auth"],
+        responses(
+            (status = 200, description = "Current user profile", body = MeResponse),
+            (status = 401, description = "Unauthorized")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn me(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -47,12 +60,14 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use serde_json::Value as JsonValue;
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -89,6 +104,7 @@ mod tests {
         engine
             .register(TestWorkflow)
             .expect("failed to register test workflow");
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -96,6 +112,7 @@ mod tests {
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

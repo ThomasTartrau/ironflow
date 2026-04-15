@@ -5,6 +5,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 /// Sign-up request body.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Deserialize, Validate)]
 pub struct SignUpRequest {
     /// Email address.
@@ -19,6 +20,7 @@ pub struct SignUpRequest {
 }
 
 /// Sign-in request body.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct SignInRequest {
     /// Email address.
@@ -28,6 +30,7 @@ pub struct SignInRequest {
 }
 
 /// Current user profile response.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
     /// User ID.

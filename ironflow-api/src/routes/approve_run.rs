@@ -4,7 +4,9 @@
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use ironflow_auth::extractor::Authenticated;
+use chrono::Utc;
+use ironflow_auth::extractor::{AuthMethod, Authenticated};
+use ironflow_engine::notify::Event;
 use ironflow_store::models::{RunStatus, StepStatus, StepUpdate};
 use tokio::spawn;
 use uuid::Uuid;
@@ -18,6 +20,23 @@ use crate::state::AppState;
 ///
 /// Transitions the run from `AwaitingApproval` back to `Running`.
 /// Returns 400 if the run is not in `AwaitingApproval` state.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/runs/{id}/approve",
+        tags = ["runs"],
+        params(("id" = Uuid, Path, description = "Run ID")),
+        responses(
+            (status = 200, description = "Run approved successfully", body = RunResponse),
+            (status = 400, description = "Run not awaiting approval"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden"),
+            (status = 404, description = "Run not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn approve_run(
     auth: Authenticated,
     state: State<AppState>,
@@ -30,6 +49,23 @@ pub async fn approve_run(
 ///
 /// Transitions the run from `AwaitingApproval` to `Failed`.
 /// Returns 400 if the run is not in `AwaitingApproval` state.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        post,
+        path = "/api/v1/runs/{id}/reject",
+        tags = ["runs"],
+        params(("id" = Uuid, Path, description = "Run ID")),
+        responses(
+            (status = 200, description = "Run rejected successfully", body = RunResponse),
+            (status = 400, description = "Run not awaiting approval"),
+            (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Forbidden"),
+            (status = 404, description = "Run not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn reject_run(
     auth: Authenticated,
     state: State<AppState>,
@@ -81,6 +117,26 @@ async fn resolve_approval(
 
     state.store.update_run_status(id, target_status).await?;
 
+    let publisher = state.engine.event_publisher();
+    let now = Utc::now();
+    let actor = match &auth.method {
+        AuthMethod::Jwt { username, .. } => username.clone(),
+        AuthMethod::ApiKey { key_name, .. } => key_name.clone(),
+    };
+    if target_status == RunStatus::Running {
+        publisher.publish(Event::ApprovalGranted {
+            run_id: id,
+            approved_by: actor,
+            at: now,
+        });
+    } else {
+        publisher.publish(Event::ApprovalRejected {
+            run_id: id,
+            rejected_by: actor,
+            at: now,
+        });
+    }
+
     // On approval, resume the run in the background.
     // The handler is re-executed with step replay: completed steps
     // return cached output, and execution continues from where it
@@ -109,12 +165,14 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, StepStatus, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -139,6 +197,7 @@ mod tests {
             cookie_domain: None,
             cookie_secure: false,
         });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -146,6 +205,7 @@ mod tests {
             engine,
             jwt_config,
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

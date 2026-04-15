@@ -9,6 +9,7 @@ use crate::error::ApiError;
 use crate::response::ok;
 
 /// A scope entry with its machine name and human-readable label.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct ScopeEntry {
     /// Machine-readable scope value (e.g. "runs_read").
@@ -22,6 +23,19 @@ pub struct ScopeEntry {
 /// Return the list of scopes the current user is allowed to assign to API keys.
 ///
 /// Admins get all scopes, members only get read-only scopes.
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        get,
+        path = "/api/v1/api-keys/scopes",
+        tags = ["api-keys"],
+        responses(
+            (status = 200, description = "List of available scopes", body = Vec<ScopeEntry>),
+            (status = 401, description = "Unauthorized")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn available_scopes(user: AuthenticatedUser) -> Result<impl IntoResponse, ApiError> {
     let scopes = if user.is_admin {
         ApiKeyScope::all_non_admin()
@@ -67,11 +81,13 @@ mod tests {
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::user_store::UserStore;
     use serde_json::Value as JsonValue;
     use std::sync::Arc;
+    use tokio::sync::broadcast;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -110,6 +126,7 @@ mod tests {
         engine
             .register(TestWorkflow)
             .expect("failed to register test workflow");
+        let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
             user_store,
@@ -117,6 +134,7 @@ mod tests {
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
+            event_sender,
         )
     }
 

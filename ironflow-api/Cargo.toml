@@ -16,9 +16,11 @@ default = []
 sign-up = []
 dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
+openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi"]
 
 [dependencies]
 ironflow-store = { version = "2.8.0", path = "../ironflow-store" }
+utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
 ironflow-engine = { version = "2.7.6", path = "../ironflow-engine" }
 ironflow-core = { version = "2.4.1", path = "../ironflow-core" }
 ironflow-auth = { version = "2.2.0", path = "../ironflow-auth" }
@@ -26,6 +28,8 @@ ironflow-auth = { version = "2.2.0", path = "../ironflow-auth" }
 axum = { version = "0.8", features = ["json"] }
 rust-embed = { version = "8", optional = true }
 tokio = { version = "1", features = ["macros"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "limit"] }
 serde = { version = "1", features = ["derive"] }

@@ -14,6 +14,23 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// - 404 if the key does not exist or belongs to another user
+#[cfg_attr(
+    feature = "openapi",
+    utoipa::path(
+        delete,
+        path = "/api/v1/api-keys/{id}",
+        tags = ["api-keys"],
+        params(
+            ("id" = Uuid, Path, description = "API key ID")
+        ),
+        responses(
+            (status = 204, description = "API key deleted successfully"),
+            (status = 401, description = "Unauthorized"),
+            (status = 404, description = "API key not found")
+        ),
+        security(("Bearer" = []))
+    )
+)]
 pub async fn delete_api_key(
     user: AuthenticatedUser,
     State(state): State<AppState>,
