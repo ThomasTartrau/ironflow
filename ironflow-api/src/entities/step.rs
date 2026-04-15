@@ -32,14 +32,17 @@ pub struct StepResponse {
     /// Current status.
     pub status: StepStatus,
     /// Input configuration.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub input: Option<Value>,
     /// Step output.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub output: Option<Value>,
     /// Optional error message.
     pub error: Option<String>,
     /// Execution duration in milliseconds.
     pub duration_ms: u64,
     /// Cost in USD.
+    #[cfg_attr(feature = "openapi", schema(value_type = f64))]
     pub cost_usd: Decimal,
     /// Input token count (agent steps).
     pub input_tokens: Option<u64>,

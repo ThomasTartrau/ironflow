@@ -13,6 +13,7 @@ stages:
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
+  IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"
   GIT_DEPTH: 1
   GIT_STRATEGY: fetch
 
@@ -52,8 +53,7 @@ cargo-clippy:
     RUSTFLAGS: "-D warnings"
   script:
     - rustup component add clippy
-    - cargo clippy --workspace --all-targets --exclude ironflow-example-server -- -D warnings
-    - cargo clippy --workspace --all-targets --exclude ironflow-example-server --features prometheus -- -D warnings
+    - cargo clippy --workspace --all-targets --exclude ironflow-example-server --features "$IRONFLOW_FEATURES" -- -D warnings
 
 dashboard-check:
   stage: check
@@ -85,18 +85,7 @@ unit-tests:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo test --workspace --exclude ironflow-example-server
-
-test-prometheus:
-  stage: test
-  image: rust:1.94.0
-  <<: *rust-cache
-  needs:
-    - cargo-clippy
-  variables:
-    RUSTFLAGS: "-D warnings"
-  script:
-    - cargo test --workspace --exclude ironflow-example-server --features prometheus
+    - cargo test --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES"
 
 doc-tests:
   stage: test
@@ -107,7 +96,19 @@ doc-tests:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo test --workspace --exclude ironflow-example-server --doc
+    - cargo test --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES" --doc
+
+check-openapi-types:
+  stage: test
+  image: node:22
+  needs:
+    - dashboard-check
+  <<: *dashboard-cache
+  script:
+    - corepack enable
+    - cd ironflow-dashboard && pnpm install --frozen-lockfile
+    - pnpm generate:types
+    - git diff --exit-code src/app/lib/types.generated.ts
 
 dashboard-build:
   stage: build
@@ -145,7 +146,6 @@ build-release:
   <<: *rust-cache
   needs:
     - unit-tests
-    - test-prometheus
     - doc-tests
   script:
     - cargo build --workspace --exclude ironflow-example-server --release

@@ -23,5 +23,6 @@ pub struct CreateRunRequest {
     /// The workflow name to trigger.
     pub workflow: String,
     /// Optional input payload for the workflow.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub payload: Option<Value>,
 }

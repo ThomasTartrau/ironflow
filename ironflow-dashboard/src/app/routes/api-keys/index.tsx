@@ -29,6 +29,7 @@ const SCOPE_LABELS: Record<ApiKeyScope, string> = {
 	runs_write: "Runs Write",
 	runs_manage: "Runs Manage",
 	stats_read: "Stats Read",
+	admin: "Admin",
 };
 
 function formatDate(iso: string): string {

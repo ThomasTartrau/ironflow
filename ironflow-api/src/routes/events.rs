@@ -8,8 +8,8 @@ use std::time::Duration;
 use axum::extract::{Query, State};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures_util::stream::{Stream, StreamExt};
-use serde::de::{self, Deserializer};
 use serde::Deserialize;
+use serde::de::{self, Deserializer};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
@@ -201,34 +201,31 @@ pub async fn events(
     let receiver = state.event_sender.subscribe();
     let type_filter = query.types;
 
-    let stream = BroadcastStream::new(receiver)
-        .filter_map(move |result: Result<Event, _>| {
-            let type_filter = type_filter.clone();
-            let run_id_filter = query.run_id;
-            async move {
-                let event = result.ok()?;
+    let stream = BroadcastStream::new(receiver).filter_map(move |result: Result<Event, _>| {
+        let type_filter = type_filter.clone();
+        let run_id_filter = query.run_id;
+        async move {
+            let event = result.ok()?;
 
-                if let Some(ref rid) = run_id_filter {
-                    if event_run_id(&event) != Some(*rid) {
-                        return None;
-                    }
-                }
-
-                if let Some(ref kinds) = type_filter {
-                    let event_type = event.event_type();
-                    if !kinds.iter().any(|k| k.as_str() == event_type) {
-                        return None;
-                    }
-                }
-
-                let data = serde_json::to_string(&event).ok()?;
-                let sse_event = SseEvent::default()
-                    .event(event.event_type())
-                    .data(data);
-
-                Some(Ok::<_, Infallible>(sse_event))
+            if let Some(ref rid) = run_id_filter
+                && event_run_id(&event) != Some(*rid)
+            {
+                return None;
             }
-        });
+
+            if let Some(ref kinds) = type_filter {
+                let event_type = event.event_type();
+                if !kinds.iter().any(|k| k.as_str() == event_type) {
+                    return None;
+                }
+            }
+
+            let data = serde_json::to_string(&event).ok()?;
+            let sse_event = SseEvent::default().event(event.event_type()).data(data);
+
+            Some(Ok::<_, Infallible>(sse_event))
+        }
+    });
 
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)))
 }
@@ -238,8 +235,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use axum::routing::get;
     use axum::Router;
+    use axum::routing::get;
     use chrono::Utc;
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -308,15 +305,12 @@ mod tests {
 
     fn make_auth_token(state: &AppState) -> String {
         let user_id = Uuid::now_v7();
-        let token =
-            AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
+        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
         format!("Bearer {}", token.0)
     }
 
     /// Start a real TCP server and return (address, sender, auth header).
-    async fn start_sse_server(
-        state: AppState,
-    ) -> (String, broadcast::Sender<Event>, String) {
+    async fn start_sse_server(state: AppState) -> (String, broadcast::Sender<Event>, String) {
         let sender = state.event_sender.clone();
         let auth = make_auth_token(&state);
         let app = Router::new()
@@ -332,11 +326,7 @@ mod tests {
     }
 
     /// Connect to the SSE endpoint with auth and return a line reader.
-    async fn connect_sse(
-        addr: &str,
-        query: &str,
-        auth: &str,
-    ) -> BufReader<tokio::net::TcpStream> {
+    async fn connect_sse(addr: &str, query: &str, auth: &str) -> BufReader<tokio::net::TcpStream> {
         let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let (reader, mut writer) = stream.into_split();
 
@@ -377,9 +367,7 @@ mod tests {
         })
         .await;
         if result.is_err() {
-            panic!(
-                "timeout waiting for '{needle}' in SSE stream. Data so far:\n{accumulated}"
-            );
+            panic!("timeout waiting for '{needle}' in SSE stream. Data so far:\n{accumulated}");
         }
         accumulated
     }
@@ -395,12 +383,8 @@ mod tests {
         let run_id = Uuid::now_v7();
         sender.send(sample_run_event(run_id)).unwrap();
 
-        let text = read_until_contains(
-            &mut reader,
-            &run_id.to_string(),
-            Duration::from_secs(5),
-        )
-        .await;
+        let text =
+            read_until_contains(&mut reader, &run_id.to_string(), Duration::from_secs(5)).await;
 
         assert!(text.contains("run_status_changed"));
         assert!(text.contains(&run_id.to_string()));
@@ -420,12 +404,8 @@ mod tests {
         sender.send(sample_run_event(other_run)).unwrap();
         sender.send(sample_run_event(target_run)).unwrap();
 
-        let text = read_until_contains(
-            &mut reader,
-            &target_run.to_string(),
-            Duration::from_secs(5),
-        )
-        .await;
+        let text =
+            read_until_contains(&mut reader, &target_run.to_string(), Duration::from_secs(5)).await;
 
         assert!(text.contains(&target_run.to_string()));
         assert!(!text.contains(&other_run.to_string()));
@@ -443,12 +423,7 @@ mod tests {
         sender.send(sample_run_event(run_id)).unwrap();
         sender.send(sample_user_event()).unwrap();
 
-        let text = read_until_contains(
-            &mut reader,
-            "user_signed_in",
-            Duration::from_secs(5),
-        )
-        .await;
+        let text = read_until_contains(&mut reader, "user_signed_in", Duration::from_secs(5)).await;
 
         assert!(text.contains("user_signed_in"));
         assert!(!text.contains("run_status_changed"));
@@ -460,12 +435,8 @@ mod tests {
         let (addr, _sender, auth) = start_sse_server(state).await;
         let mut reader = connect_sse(&addr, "", &auth).await;
 
-        let text = read_until_contains(
-            &mut reader,
-            "text/event-stream",
-            Duration::from_secs(5),
-        )
-        .await;
+        let text =
+            read_until_contains(&mut reader, "text/event-stream", Duration::from_secs(5)).await;
 
         assert!(text.contains("text/event-stream"));
     }
@@ -490,12 +461,7 @@ mod tests {
             .unwrap();
 
         let mut buf_reader = BufReader::new(reader.reunite(writer).unwrap());
-        let text = read_until_contains(
-            &mut buf_reader,
-            "401",
-            Duration::from_secs(5),
-        )
-        .await;
+        let text = read_until_contains(&mut buf_reader, "401", Duration::from_secs(5)).await;
 
         assert!(text.contains("401"));
     }

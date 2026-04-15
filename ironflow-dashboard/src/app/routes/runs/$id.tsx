@@ -29,7 +29,11 @@ export async function loader({ params }: LoaderFunctionArgs) {
 }
 
 function isRunActive(status: RunStatus): boolean {
-	return status === "pending" || status === "running" || status === "awaiting_approval";
+	return (
+		status === "pending" ||
+		status === "running" ||
+		status === "awaiting_approval"
+	);
 }
 
 export function Component() {
@@ -109,7 +113,7 @@ export function Component() {
 					>
 						<StepTimeline
 							steps={steps}
-							runStartedAt={run.started_at}
+							runStartedAt={run.started_at ?? null}
 							runId={run.id}
 						/>
 					</CollapsibleSection>

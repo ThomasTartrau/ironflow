@@ -1,163 +1,53 @@
-export type RunStatus =
-	| "pending"
-	| "running"
-	| "completed"
-	| "failed"
-	| "retrying"
-	| "cancelled"
-	| "awaiting_approval";
-export type StepKind =
-	| "shell"
-	| "http"
-	| "agent"
-	| "workflow"
-	| "approval"
-	| (string & {});
-export type StepStatus =
-	| "pending"
-	| "running"
-	| "completed"
-	| "failed"
-	| "skipped"
-	| "awaiting_approval"
-	| "rejected";
+/**
+ * Re-exports from the auto-generated OpenAPI types.
+ *
+ * Run `pnpm generate:types` to regenerate `types.generated.ts` from the backend.
+ * Import types from this file, NOT from `types.generated.ts` directly.
+ */
+export type { components, operations, paths } from "./types.generated";
+import type { components } from "./types.generated";
 
-export type TriggerKind =
-	| { kind: "manual" }
-	| { kind: "webhook"; path: string }
-	| { kind: "cron"; schedule: string }
-	| { kind: "api" }
-	| { kind: "retry"; parent_run_id: string }
-	| { kind: "workflow" };
+// -- Enums / union types --
+export type RunStatus = components["schemas"]["RunStatus"];
+export type StepStatus = components["schemas"]["StepStatus"];
+export type ApiKeyScope = components["schemas"]["ApiKeyScope"];
+export type TriggerKind = components["schemas"]["TriggerKind"];
 
-export interface RunResponse {
-	id: string;
-	workflow_name: string;
-	status: RunStatus;
-	trigger: TriggerKind;
-	error: string | null;
-	retry_count: number;
-	max_retries: number;
-	cost_usd: number;
-	duration_ms: number;
-	created_at: string;
-	updated_at: string;
-	started_at: string | null;
-	completed_at: string | null;
-}
+// StepKind is a plain string in the OpenAPI spec (built-in + custom values)
+export type StepKind = string;
 
-export interface RunDetailResponse {
-	run: RunResponse;
-	steps: StepResponse[];
-}
+// -- Run --
+export type RunResponse = components["schemas"]["RunResponse"];
+export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
+export type CreateRunRequest = components["schemas"]["CreateRunRequest"];
 
-export interface StepResponse {
-	id: string;
-	run_id: string;
-	name: string;
-	kind: StepKind;
-	position: number;
-	status: StepStatus;
-	input: Record<string, unknown> | null;
-	output: Record<string, unknown> | null;
-	error: string | null;
-	duration_ms: number;
-	cost_usd: number;
-	input_tokens: number | null;
-	output_tokens: number | null;
-	created_at: string;
-	updated_at: string;
-	started_at: string | null;
-	completed_at: string | null;
-	dependencies: string[];
-}
+// -- Step --
+export type StepResponse = components["schemas"]["StepResponse"];
 
-export interface StatsResponse {
-	total_runs: number;
-	completed_runs: number;
-	failed_runs: number;
-	cancelled_runs: number;
-	active_runs: number;
-	success_rate_percent: number;
-	total_cost_usd: number;
-	total_duration_ms: number;
-}
+// -- Stats --
+export type StatsResponse = components["schemas"]["StatsResponse"];
 
+// -- Users --
+export type UserResponse = components["schemas"]["UserResponse"];
+export type CreateUserRequest = components["schemas"]["CreateUserRequest"];
+
+// -- Auth --
+export type MeResponse = components["schemas"]["MeResponse"];
+
+// -- API Keys --
+export type ApiKeyResponse = components["schemas"]["ApiKeyResponse"];
+export type CreateApiKeyRequest = components["schemas"]["CreateApiKeyRequest"];
+export type CreateApiKeyResponse =
+	components["schemas"]["CreateApiKeyResponse"];
+export type ScopeEntry = components["schemas"]["ScopeEntry"];
+
+// -- Workflows --
+export type WorkflowDetailResponse =
+	components["schemas"]["WorkflowDetailResponse"];
+export type SubWorkflowDetail = components["schemas"]["SubWorkflowDetail"];
+
+// -- Response envelope (kept manually - generic wrapper not in OpenAPI) --
 export interface ApiResponse<T> {
 	data: T;
 	meta: { page: number; per_page: number; total: number } | null;
-}
-
-export interface CreateRunRequest {
-	workflow: string;
-	payload?: Record<string, unknown>;
-}
-
-export interface SubWorkflowDetail {
-	name: string;
-	description: string;
-	source_code: string | null;
-}
-
-export interface WorkflowDetailResponse {
-	name: string;
-	description: string;
-	source_code: string | null;
-	sub_workflows: SubWorkflowDetail[];
-}
-
-export type ApiKeyScope =
-	| "workflows_read"
-	| "runs_read"
-	| "runs_write"
-	| "runs_manage"
-	| "stats_read";
-
-export interface ApiKeyResponse {
-	id: string;
-	name: string;
-	key_prefix: string;
-	scopes: ApiKeyScope[];
-	is_active: boolean;
-	expires_at: string | null;
-	last_used_at: string | null;
-	created_at: string;
-}
-
-export interface CreateApiKeyRequest {
-	name: string;
-	scopes: ApiKeyScope[];
-	expires_at?: string;
-}
-
-export interface UserResponse {
-	id: string;
-	email: string;
-	username: string;
-	is_admin: boolean;
-	created_at: string;
-	updated_at: string;
-}
-
-export interface CreateUserRequest {
-	email: string;
-	username: string;
-	password: string;
-	is_admin: boolean;
-}
-
-export interface ScopeEntry {
-	value: string;
-	label: string;
-	description: string;
-}
-
-export interface CreateApiKeyResponse {
-	id: string;
-	key: string;
-	key_prefix: string;
-	name: string;
-	scopes: ApiKeyScope[];
-	expires_at: string | null;
-	created_at: string;
 }

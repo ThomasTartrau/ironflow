@@ -36,6 +36,7 @@ pub struct RunResponse {
     /// Maximum allowed retries.
     pub max_retries: u32,
     /// Aggregated cost in USD.
+    #[cfg_attr(feature = "openapi", schema(value_type = f64))]
     pub cost_usd: Decimal,
     /// Total duration in milliseconds.
     pub duration_ms: u64,
