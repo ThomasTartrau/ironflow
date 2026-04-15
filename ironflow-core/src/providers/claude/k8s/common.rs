@@ -134,23 +134,37 @@ impl ImagePullPolicy {
     }
 }
 
+/// Configuration for building a Kubernetes pod spec.
+pub struct PodConfig<'a> {
+    /// Pod name.
+    pub name: &'a str,
+    /// Container image.
+    pub image: &'a str,
+    /// Command to run in the container.
+    pub command: Vec<String>,
+    /// Kubernetes namespace.
+    pub namespace: &'a str,
+    /// CPU and memory limits.
+    pub resources: &'a K8sResources,
+    /// Service account name.
+    pub service_account: Option<&'a str>,
+    /// Pod restart policy (`"Never"`, `"Always"`, etc.).
+    pub restart_policy: &'a str,
+    /// Image pull policy.
+    pub image_pull_policy: &'a ImagePullPolicy,
+    /// Environment variables for the container.
+    pub env_vars: &'a [(String, String)],
+    /// Image pull secrets for private registries.
+    pub image_pull_secrets: &'a [String],
+}
+
 /// Build a Kubernetes pod spec for running claude.
-pub fn build_pod_spec(
-    name: &str,
-    image: &str,
-    command: Vec<String>,
-    namespace: &str,
-    resources: &K8sResources,
-    service_account: Option<&str>,
-    restart_policy: &str,
-    image_pull_policy: &ImagePullPolicy,
-    env_vars: &[(String, String)],
-) -> Result<Pod, AgentError> {
+pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
     let mut resource_limits: BTreeMap<String, Quantity> = BTreeMap::new();
-    if let Some(ref cpu) = resources.cpu_limit {
+    if let Some(ref cpu) = config.resources.cpu_limit {
         resource_limits.insert("cpu".to_string(), Quantity(cpu.clone()));
     }
-    if let Some(ref mem) = resources.memory_limit {
+    if let Some(ref mem) = config.resources.memory_limit {
         resource_limits.insert("memory".to_string(), Quantity(mem.clone()));
     }
 
@@ -164,31 +178,40 @@ pub fn build_pod_spec(
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": {
-            "name": name,
-            "namespace": namespace,
+            "name": config.name,
+            "namespace": config.namespace,
             "labels": {
                 "app.kubernetes.io/managed-by": "ironflow",
                 "app.kubernetes.io/component": "claude-runner"
             }
         },
         "spec": {
-            "restartPolicy": restart_policy,
+            "restartPolicy": config.restart_policy,
             "containers": [{
                 "name": "claude-code",
-                "image": image,
-                "imagePullPolicy": image_pull_policy.as_str(),
-                "command": command,
+                "image": config.image,
+                "imagePullPolicy": config.image_pull_policy.as_str(),
+                "command": &config.command,
                 "env": super::super::common::env_vars_to_remove()
                     .iter()
                     .map(|var| json!({"name": var, "value": ""}))
-                    .chain(env_vars.iter().map(|(k, v)| json!({"name": k, "value": v})))
+                    .chain(config.env_vars.iter().map(|(k, v)| json!({"name": k, "value": v})))
                     .collect::<Vec<_>>()
             }]
         }
     });
 
-    if let Some(sa) = service_account {
+    if let Some(sa) = config.service_account {
         pod_json["spec"]["serviceAccountName"] = json!(sa);
+    }
+    if !config.image_pull_secrets.is_empty() {
+        pod_json["spec"]["imagePullSecrets"] = json!(
+            config
+                .image_pull_secrets
+                .iter()
+                .map(|s| json!({"name": s}))
+                .collect::<Vec<_>>()
+        );
     }
     if let Some(res) = limits {
         pod_json["spec"]["containers"][0]["resources"] = res;
@@ -240,5 +263,45 @@ mod tests {
         let r = K8sResources::default();
         assert!(r.cpu_limit.is_none());
         assert!(r.memory_limit.is_none());
+    }
+
+    #[test]
+    fn build_pod_spec_without_image_pull_secrets() {
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+        })
+        .unwrap();
+        assert!(pod.spec.unwrap().image_pull_secrets.is_none());
+    }
+
+    #[test]
+    fn build_pod_spec_with_image_pull_secrets() {
+        let secrets = vec!["gitlab-registry".to_string(), "dockerhub".to_string()];
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "registry.gitlab.com/org/img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &secrets,
+        })
+        .unwrap();
+        let pull_secrets = pod.spec.unwrap().image_pull_secrets.unwrap();
+        assert_eq!(pull_secrets.len(), 2);
+        assert_eq!(pull_secrets[0].name, "gitlab-registry");
+        assert_eq!(pull_secrets[1].name, "dockerhub");
     }
 }
