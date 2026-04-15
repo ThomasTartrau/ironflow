@@ -22,6 +22,14 @@ describe("capitalize", () => {
 	it("preserves already capitalized string", () => {
 		expect(capitalize("Hello")).toBe("Hello");
 	});
+
+	it("replaces underscores with spaces and capitalizes each word", () => {
+		expect(capitalize("awaiting_approval")).toBe("Awaiting Approval");
+	});
+
+	it("handles multiple underscores", () => {
+		expect(capitalize("some_long_status_name")).toBe("Some Long Status Name");
+	});
 });
 
 describe("formatDuration", () => {
