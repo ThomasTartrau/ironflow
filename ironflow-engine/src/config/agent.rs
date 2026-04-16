@@ -133,4 +133,30 @@ mod tests {
         let config: AgentConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.json_schema.as_deref(), Some(r#"{"type":"object"}"#));
     }
+
+    #[test]
+    fn strict_mcp_config_defaults_to_false() {
+        let config = AgentStepConfig::new("test");
+        assert!(!config.strict_mcp_config);
+    }
+
+    #[test]
+    fn strict_mcp_config_builder_sets_flag() {
+        let config = AgentStepConfig::new("test").strict_mcp_config(true);
+        assert!(config.strict_mcp_config);
+    }
+
+    #[test]
+    fn strict_mcp_config_serde_default_when_missing() {
+        let json = r#"{"prompt":"test"}"#;
+        let config: AgentConfig = serde_json::from_str(json).unwrap();
+        assert!(!config.strict_mcp_config);
+    }
+
+    #[test]
+    fn strict_mcp_config_serde_roundtrip() {
+        let json = r#"{"prompt":"test","strict_mcp_config":true}"#;
+        let config: AgentConfig = serde_json::from_str(json).unwrap();
+        assert!(config.strict_mcp_config);
+    }
 }
