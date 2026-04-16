@@ -102,14 +102,22 @@ pub fn build_credentials_prefix(oauth_json: Option<&str>) -> String {
     }
 }
 
-/// Generate a unique pod name with a random suffix.
+/// Generate a unique pod name with a timestamp and random suffix.
+///
+/// Combines a millisecond timestamp with a random component to guarantee
+/// uniqueness even when called multiple times within the same millisecond
+/// (e.g. parallel steps in a workflow).
 pub fn generate_pod_name(prefix: &str) -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
     use std::time::SystemTime;
+
     let ts = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    format!("{prefix}-{ts:x}")
+    let random_suffix = RandomState::new().build_hasher().finish() & 0xFFFF_FFFF;
+    format!("{prefix}-{ts:x}-{random_suffix:08x}")
 }
 
 /// Image pull policy for the Kubernetes pod.
@@ -226,7 +234,6 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn generate_pod_name_has_prefix() {
@@ -236,11 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn generate_pod_name_unique() {
+    fn generate_pod_name_unique_same_millisecond() {
         let name1 = generate_pod_name("test");
-        std::thread::sleep(Duration::from_millis(2));
         let name2 = generate_pod_name("test");
-        assert_ne!(name1, name2);
+        assert_ne!(
+            name1, name2,
+            "two calls in the same millisecond must produce different names"
+        );
     }
 
     #[test]
