@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use russh::ChannelMsg;
 use russh::keys::PrivateKeyWithHashAlg;
 use tokio::time;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};

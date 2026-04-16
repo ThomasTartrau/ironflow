@@ -34,7 +34,7 @@ use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::StreamExt;
 use tokio::time;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};

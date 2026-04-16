@@ -38,7 +38,7 @@ use kube::api::{Api, AttachParams, DeleteParams, PostParams};
 use kube::runtime::wait::{await_condition, conditions};
 use tokio::time;
 
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
