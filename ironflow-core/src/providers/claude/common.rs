@@ -187,6 +187,9 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     push_opt(&mut args, "--max-turns", &config.max_turns);
     push_opt(&mut args, "--max-budget-usd", &config.max_budget_usd);
     push_opt(&mut args, "--mcp-config", &config.mcp_config);
+    if config.strict_mcp_config {
+        args.push("--strict-mcp-config".to_string());
+    }
 
     match config.permission_mode {
         PermissionMode::Default => {}
@@ -918,6 +921,44 @@ mod tests {
     }
 
     #[test]
+    fn build_args_strict_mcp_config_flag_absent_by_default() {
+        let config = AgentConfig::new("hello");
+        let args = build_args(&config).unwrap();
+        assert!(
+            !args.contains(&"--strict-mcp-config".to_string()),
+            "--strict-mcp-config must not appear unless opted-in, got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_strict_mcp_config_flag_pushed_when_enabled() {
+        let config = AgentConfig::new("hello").strict_mcp_config(true);
+        let args = build_args(&config).unwrap();
+        assert!(
+            args.contains(&"--strict-mcp-config".to_string()),
+            "--strict-mcp-config must be pushed when strict_mcp_config is true, got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_strict_mcp_config_with_mcp_config_includes_both() {
+        let config = AgentConfig::new("hello")
+            .mcp_config(r#"{"mcpServers":{}}"#)
+            .strict_mcp_config(true);
+        let args = build_args(&config).unwrap();
+
+        let mcp_pos = args
+            .iter()
+            .position(|a| a == "--mcp-config")
+            .expect("--mcp-config missing");
+        assert_eq!(args[mcp_pos + 1], r#"{"mcpServers":{}}"#);
+        assert!(
+            args.contains(&"--strict-mcp-config".to_string()),
+            "--strict-mcp-config missing when both flags requested"
+        );
+    }
+
+    #[test]
     fn parse_stream_response_extracts_messages_and_result() {
         let stream = [
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me read that file."},{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"/tmp/test.rs"}}],"stop_reason":"tool_use"}}"#,
@@ -1031,6 +1072,7 @@ mod tests {
             max_budget_usd: None,
             working_dir: None,
             mcp_config: None,
+            strict_mcp_config: false,
             resume_session_id: None,
             verbose: false,
             _marker: PhantomData,

@@ -122,6 +122,21 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// Path to an MCP server configuration file.
     pub mcp_config: Option<String>,
 
+    /// When `true`, pass `--strict-mcp-config` to the Claude CLI so it only
+    /// loads MCP servers from [`mcp_config`](Self::mcp_config) and ignores
+    /// any global/user MCP configuration (e.g. `~/.claude.json`).
+    ///
+    /// Useful to prevent global MCP servers from leaking tools into steps
+    /// that request `structured_output`, which triggers the Claude CLI bug
+    /// where `--json-schema` combined with any active tool returns
+    /// `structured_output: null`. See
+    /// <https://github.com/anthropics/claude-code/issues/18536>.
+    ///
+    /// Combine with `mcp_config` set to a file containing
+    /// `{"mcpServers":{}}` to disable every MCP server for the invocation.
+    #[serde(default)]
+    pub strict_mcp_config: bool,
+
     /// Permission mode controlling how the agent handles tool-use approvals.
     #[serde(default)]
     pub permission_mode: PermissionMode,
@@ -169,6 +184,7 @@ impl AgentConfig {
             max_budget_usd: None,
             working_dir: None,
             mcp_config: None,
+            strict_mcp_config: false,
             permission_mode: PermissionMode::Default,
             json_schema: None,
             resume_session_id: None,
@@ -229,6 +245,39 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Enable strict MCP config mode.
+    ///
+    /// When `true`, the Claude CLI is invoked with `--strict-mcp-config`,
+    /// which disables loading of any MCP server defined outside the
+    /// [`mcp_config`](Self::mcp_config) file (the global `~/.claude.json`
+    /// and user-level configs are ignored).
+    ///
+    /// This is the recommended way to prevent global MCP servers from
+    /// silently injecting tools into a structured-output step and
+    /// triggering the Claude CLI bug that returns `structured_output: null`
+    /// whenever any tool is active. See
+    /// <https://github.com/anthropics/claude-code/issues/18536>.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(serde::Deserialize, JsonSchema)]
+    /// struct Out { ok: bool }
+    ///
+    /// // Isolate the step from any global MCP server so structured output works.
+    /// let config = AgentConfig::new("classify this")
+    ///     .strict_mcp_config(true)
+    ///     .mcp_config(r#"{"mcpServers":{}}"#)
+    ///     .output::<Out>();
+    /// ```
+    pub fn strict_mcp_config(mut self, strict: bool) -> Self {
+        self.strict_mcp_config = strict;
+        self
+    }
+
     /// Set a session ID to resume a previous conversation.
     pub fn resume(mut self, session_id: &str) -> Self {
         self.resume_session_id = Some(session_id.to_string());
@@ -249,6 +298,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             max_budget_usd: self.max_budget_usd,
             working_dir: self.working_dir,
             mcp_config: self.mcp_config,
+            strict_mcp_config: self.strict_mcp_config,
             permission_mode: self.permission_mode,
             json_schema: self.json_schema,
             resume_session_id: self.resume_session_id,
@@ -576,6 +626,7 @@ mod tests {
             max_budget_usd: Some(2.5),
             working_dir: Some("/tmp".to_string()),
             mcp_config: Some("{}".to_string()),
+            strict_mcp_config: true,
             permission_mode: PermissionMode::Auto,
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
             resume_session_id: None,
@@ -611,6 +662,7 @@ mod tests {
             max_budget_usd: None,
             working_dir: None,
             mcp_config: None,
+            strict_mcp_config: false,
             permission_mode: PermissionMode::Default,
             json_schema: None,
             resume_session_id: None,
