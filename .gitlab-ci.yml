@@ -3,7 +3,7 @@ workflow:
     - if: $CI_COMMIT_TAG
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TITLE =~ /^chore: release/
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TITLE =~ /^chore: release/'
       variables:
         RELEASE_COMMIT: "true"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
