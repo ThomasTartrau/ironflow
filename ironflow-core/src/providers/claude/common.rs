@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use tracing::warn;
 
-use crate::error::AgentError;
+use crate::error::{AgentError, PartialUsage};
 use crate::operations::agent::PermissionMode;
 use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall};
 use crate::utils::estimate_tokens;
@@ -308,6 +308,7 @@ pub fn parse_response(
             expected: "ClaudeJsonOutput".to_string(),
             got: format!("parse error: {e}"),
             debug_messages: Vec::new(),
+            partial_usage: Box::default(),
         })?;
 
     let value = if config.json_schema.is_some() {
@@ -341,6 +342,12 @@ pub fn parse_response(
                 expected: "structured_output field".to_string(),
                 got: format!("null{hint}"),
                 debug_messages: Vec::new(),
+                partial_usage: Box::new(PartialUsage {
+                    cost_usd: parsed.total_cost_usd,
+                    duration_ms: parsed.duration_ms,
+                    input_tokens: parsed.usage.as_ref().map(|u| u.total_input_tokens()),
+                    output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
+                }),
             }
         })?
     } else {
@@ -460,6 +467,7 @@ pub fn parse_stream_response(
                 expected: "stream-json result line".to_string(),
                 got: "no result line found in stream output".to_string(),
                 debug_messages,
+                partial_usage: Box::default(),
             });
         }
     };
@@ -469,13 +477,17 @@ pub fn parse_stream_response(
             output.debug_messages = Some(debug_messages);
             Ok(output)
         }
-        Err(AgentError::SchemaValidation { expected, got, .. }) => {
-            Err(AgentError::SchemaValidation {
-                expected,
-                got,
-                debug_messages,
-            })
-        }
+        Err(AgentError::SchemaValidation {
+            expected,
+            got,
+            partial_usage,
+            ..
+        }) => Err(AgentError::SchemaValidation {
+            expected,
+            got,
+            debug_messages,
+            partial_usage,
+        }),
         Err(other) => Err(other),
     }
 }
@@ -499,6 +511,70 @@ pub fn parse_output(
     } else {
         parse_response(stdout, config, fallback_duration_ms)
     }
+}
+
+/// Check whether a [`SchemaValidation`](AgentError::SchemaValidation) error
+/// contains real usage data from the CLI (cost or duration present).
+fn has_usage_data(err: &AgentError) -> bool {
+    if let AgentError::SchemaValidation { partial_usage, .. } = err {
+        return partial_usage.cost_usd.is_some() || partial_usage.duration_ms.is_some();
+    }
+    false
+}
+
+/// Handle a non-zero exit code from the Claude CLI.
+///
+/// The CLI exits with code 1 for budget/turn limit errors but still writes
+/// valid JSON (with usage data) to stdout or stderr. This function tries to
+/// parse that output so cost, duration, and tokens are preserved in the error.
+///
+/// Returns `Ok` if the JSON is a valid successful response (rare but possible),
+/// `Err(SchemaValidation)` with partial usage when structured output was
+/// requested but missing, or `Err(ProcessFailed)` as a fallback.
+pub fn handle_nonzero_exit(
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+    config: &AgentConfig,
+    duration_ms: u64,
+    log_prefix: &str,
+) -> Result<AgentOutput, AgentError> {
+    let json_source = if stdout.is_empty() { stderr } else { stdout };
+
+    if !json_source.is_empty() {
+        match parse_output(json_source, config, duration_ms) {
+            ok @ Ok(_) => return ok,
+            Err(err @ AgentError::SchemaValidation { .. }) => {
+                if has_usage_data(&err) {
+                    return Err(err);
+                }
+                // No usage data means the JSON wasn't a real CLI response
+                // (e.g. a parse error). Fall through to ProcessFailed.
+            }
+            Err(_) => {} // not parseable, fall through
+        }
+    }
+
+    let error_detail = if stdout.is_empty() {
+        if stderr.is_empty() {
+            "(no output captured)".to_string()
+        } else {
+            stderr.to_string()
+        }
+    } else {
+        stdout.to_string()
+    };
+
+    tracing::error!(
+        exit_code,
+        error_detail_len = error_detail.len(),
+        "{log_prefix} claude process failed"
+    );
+
+    Err(AgentError::ProcessFailed {
+        exit_code,
+        stderr: error_detail,
+    })
 }
 
 #[cfg(test)]
@@ -1014,6 +1090,142 @@ mod tests {
                 assert!(debug_messages.is_empty());
             }
             other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_schema_validation_preserves_usage_data() {
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":50,"cache_read_input_tokens":30},"total_cost_usd":0.30,"duration_ms":4500}"#;
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let err = parse_response(stdout, &config, 0).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { partial_usage, .. } => {
+                assert_eq!(partial_usage.cost_usd, Some(0.30));
+                assert_eq!(partial_usage.duration_ms, Some(4500));
+                assert_eq!(partial_usage.input_tokens, Some(580)); // 500 + 50 + 30
+                assert_eq!(partial_usage.output_tokens, Some(200));
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_schema_validation_no_usage_when_parse_fails() {
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let err = parse_response("not json at all", &config, 0).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { partial_usage, .. } => {
+                assert!(partial_usage.cost_usd.is_none());
+                assert!(partial_usage.duration_ms.is_none());
+                assert!(partial_usage.input_tokens.is_none());
+                assert!(partial_usage.output_tokens.is_none());
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_response_schema_validation_preserves_usage_and_debug() {
+        let assistant_line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Working..."}],"stop_reason":"end_turn"}}"#;
+        let result_line = r#"{"type":"result","session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":300,"output_tokens":100},"total_cost_usd":0.15,"duration_ms":3000}"#;
+
+        let stdout = format!("{assistant_line}\n{result_line}");
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+        let config = config.verbose(true);
+
+        let err = parse_stream_response(&stdout, &config, 0).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation {
+                debug_messages,
+                partial_usage,
+                ..
+            } => {
+                assert_eq!(debug_messages.len(), 1);
+                assert_eq!(debug_messages[0].text.as_deref(), Some("Working..."));
+                assert_eq!(partial_usage.cost_usd, Some(0.15));
+                assert_eq!(partial_usage.duration_ms, Some(3000));
+                assert_eq!(partial_usage.input_tokens, Some(300));
+                assert_eq!(partial_usage.output_tokens, Some(100));
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_nonzero_exit_parses_budget_error_with_schema() {
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.10,"duration_ms":2000}"#;
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let result = handle_nonzero_exit(1, stdout, "", &config, 2000, "test");
+
+        match result {
+            Err(AgentError::SchemaValidation { partial_usage, .. }) => {
+                assert_eq!(partial_usage.cost_usd, Some(0.10));
+                assert_eq!(partial_usage.duration_ms, Some(2000));
+            }
+            other => panic!("expected Err(SchemaValidation), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_nonzero_exit_returns_ok_for_valid_text_response() {
+        let stdout = r#"{"result":"Hello!","usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.01,"duration_ms":100}"#;
+        let config = AgentConfig::new("test");
+
+        let result = handle_nonzero_exit(1, stdout, "", &config, 100, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_nonzero_exit_falls_back_to_process_failed() {
+        let config = AgentConfig::new("test");
+        let result = handle_nonzero_exit(1, "", "some random error", &config, 0, "test");
+
+        match result {
+            Err(AgentError::ProcessFailed { exit_code, stderr }) => {
+                assert_eq!(exit_code, 1);
+                assert_eq!(stderr, "some random error");
+            }
+            other => panic!("expected Err(ProcessFailed), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_nonzero_exit_prefers_stdout_over_stderr() {
+        let stdout =
+            r#"{"result":"ok","usage":{"input_tokens":10,"output_tokens":5},"duration_ms":100}"#;
+        let stderr = "some error text";
+        let config = AgentConfig::new("test");
+
+        let result = handle_nonzero_exit(1, stdout, stderr, &config, 100, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_nonzero_exit_empty_both_returns_no_output() {
+        let config = AgentConfig::new("test");
+        let result = handle_nonzero_exit(1, "", "", &config, 0, "test");
+
+        match result {
+            Err(AgentError::ProcessFailed { stderr, .. }) => {
+                assert_eq!(stderr, "(no output captured)");
+            }
+            other => panic!("expected Err(ProcessFailed), got {other:?}"),
         }
     }
 }

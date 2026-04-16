@@ -81,6 +81,23 @@ impl OperationError {
     }
 }
 
+/// Partial usage data from a failed agent invocation.
+///
+/// When an agent step fails (e.g. structured output extraction), the CLI
+/// may still report cost, duration, and token counts. This struct carries
+/// those values so callers can persist them even on error paths.
+#[derive(Debug, Default)]
+pub struct PartialUsage {
+    /// Total cost in USD reported by the CLI.
+    pub cost_usd: Option<f64>,
+    /// Wall-clock duration reported by the CLI, in milliseconds.
+    pub duration_ms: Option<u64>,
+    /// Input tokens consumed before the failure.
+    pub input_tokens: Option<u64>,
+    /// Output tokens generated before the failure.
+    pub output_tokens: Option<u64>,
+}
+
 /// Error specific to agent (AI provider) invocations.
 ///
 /// Returned by [`AgentProvider::invoke`](crate::provider::AgentProvider::invoke) and
@@ -108,6 +125,10 @@ pub enum AgentError {
         /// Populated when the agent ran in verbose (stream-json) mode so that
         /// callers can persist the debug trail even on error paths.
         debug_messages: Vec<DebugMessage>,
+        /// Partial usage data from the CLI response, available even though
+        /// structured output extraction failed. Boxed to keep `AgentError`
+        /// small on the stack.
+        partial_usage: Box<PartialUsage>,
     },
 
     /// The prompt exceeds the model's context window.
@@ -203,6 +224,7 @@ mod tests {
             expected: "object".to_string(),
             got: "string".to_string(),
             debug_messages: Vec::new(),
+            partial_usage: Box::default(),
         };
         assert_eq!(
             err.to_string(),
@@ -237,6 +259,7 @@ mod tests {
             expected: "a".to_string(),
             got: "b".to_string(),
             debug_messages: Vec::new(),
+            partial_usage: Box::default(),
         };
         let op_err: OperationError = agent_err.into();
         assert!(matches!(

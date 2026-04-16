@@ -321,15 +321,14 @@ impl AgentProvider for K8sEphemeralProvider {
             let exit_code = if pod_phase == "Succeeded" { 0 } else { 1 };
 
             if exit_code != 0 {
-                error!(pod = %pod_name, phase = %pod_phase, "ephemeral claude pod failed");
-                return Err(AgentError::ProcessFailed {
+                return claude_common::handle_nonzero_exit(
                     exit_code,
-                    stderr: if logs.is_empty() {
-                        "(no logs captured)".to_string()
-                    } else {
-                        logs
-                    },
-                });
+                    &logs,
+                    "",
+                    config,
+                    duration_ms,
+                    "ephemeral k8s",
+                );
             }
 
             debug!(stdout_len = logs.len(), "ephemeral claude pod completed");
