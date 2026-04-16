@@ -300,6 +300,16 @@ impl WorkflowContext {
                 Err(err) => {
                     let err_msg = err.to_string();
                     let debug_messages_json = extract_debug_messages_from_error(&err);
+                    let partial = extract_partial_usage_from_error(&err);
+
+                    if let Some(ref usage) = partial {
+                        if let Some(cost) = usage.cost_usd {
+                            self.total_cost_usd += cost;
+                        }
+                        if let Some(dur) = usage.duration_ms {
+                            self.total_duration_ms += dur;
+                        }
+                    }
 
                     if let Err(store_err) = self
                         .store
@@ -310,6 +320,10 @@ impl WorkflowContext {
                                 error: Some(err_msg.clone()),
                                 completed_at: Some(completed_at),
                                 debug_messages: debug_messages_json,
+                                duration_ms: partial.as_ref().and_then(|p| p.duration_ms),
+                                cost_usd: partial.as_ref().and_then(|p| p.cost_usd),
+                                input_tokens: partial.as_ref().and_then(|p| p.input_tokens),
+                                output_tokens: partial.as_ref().and_then(|p| p.output_tokens),
                                 ..StepUpdate::default()
                             },
                         )
@@ -983,6 +997,16 @@ impl WorkflowContext {
             Err(err) => {
                 let completed_at = Utc::now();
                 let debug_messages_json = extract_debug_messages_from_error(&err);
+                let partial = extract_partial_usage_from_error(&err);
+
+                if let Some(ref usage) = partial {
+                    if let Some(cost) = usage.cost_usd {
+                        self.total_cost_usd += cost;
+                    }
+                    if let Some(dur) = usage.duration_ms {
+                        self.total_duration_ms += dur;
+                    }
+                }
 
                 if let Err(store_err) = self
                     .store
@@ -993,6 +1017,10 @@ impl WorkflowContext {
                             error: Some(err.to_string()),
                             completed_at: Some(completed_at),
                             debug_messages: debug_messages_json,
+                            duration_ms: partial.as_ref().and_then(|p| p.duration_ms),
+                            cost_usd: partial.as_ref().and_then(|p| p.cost_usd),
+                            input_tokens: partial.as_ref().and_then(|p| p.input_tokens),
+                            output_tokens: partial.as_ref().and_then(|p| p.output_tokens),
                             ..StepUpdate::default()
                         },
                     )
@@ -1081,6 +1109,37 @@ fn extract_debug_messages_from_error(err: &EngineError) -> Option<Value> {
         && !debug_messages.is_empty()
     {
         return serde_json::to_value(debug_messages).ok();
+    }
+    None
+}
+
+/// Partial usage with `Decimal` cost, converted from the `f64` in [`PartialUsage`].
+///
+/// Exists only because `ironflow-store` uses [`Decimal`] for monetary values
+/// while `ironflow-core` uses `f64` (the CLI's native type). The conversion
+/// happens here, at the engine/store boundary.
+struct StepPartialUsage {
+    cost_usd: Option<Decimal>,
+    duration_ms: Option<u64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+fn extract_partial_usage_from_error(err: &EngineError) -> Option<StepPartialUsage> {
+    if let EngineError::Operation(OperationError::Agent(AgentError::SchemaValidation {
+        partial_usage,
+        ..
+    })) = err
+        && (partial_usage.cost_usd.is_some() || partial_usage.duration_ms.is_some())
+    {
+        return Some(StepPartialUsage {
+            cost_usd: partial_usage
+                .cost_usd
+                .and_then(|c| Decimal::try_from(c).ok()),
+            duration_ms: partial_usage.duration_ms,
+            input_tokens: partial_usage.input_tokens,
+            output_tokens: partial_usage.output_tokens,
+        });
     }
     None
 }

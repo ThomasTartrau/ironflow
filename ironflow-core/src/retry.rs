@@ -428,6 +428,7 @@ mod tests {
             expected: "object".to_string(),
             got: "string".to_string(),
             debug_messages: Vec::new(),
+            partial_usage: Box::default(),
         });
         assert!(!is_retryable(&err));
     }

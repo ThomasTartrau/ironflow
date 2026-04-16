@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use tokio::process::Command;
 use tokio::time;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
@@ -140,33 +140,21 @@ impl AgentProvider for ClaudeCodeProvider {
 
             let duration_ms = start.elapsed().as_millis() as u64;
 
+            let stdout = truncate_output(&output.stdout, "claude stdout");
+
             if !output.status.success() {
-                let stderr = truncate_output(&output.stderr, "claude stderr");
                 let exit_code = output.status.code().unwrap_or(-1);
-
-                let error_detail = if stderr.is_empty() {
-                    let stdout = truncate_output(&output.stdout, "claude stdout (error fallback)");
-                    if stdout.is_empty() {
-                        "(no output captured)".to_string()
-                    } else {
-                        stdout
-                    }
-                } else {
-                    stderr
-                };
-
-                error!(
+                let stderr = truncate_output(&output.stderr, "claude stderr");
+                return common::handle_nonzero_exit(
                     exit_code,
-                    error_detail_len = error_detail.len(),
-                    "claude process failed"
+                    &stdout,
+                    &stderr,
+                    config,
+                    duration_ms,
+                    "local",
                 );
-                return Err(AgentError::ProcessFailed {
-                    exit_code,
-                    stderr: error_detail,
-                });
             }
 
-            let stdout = truncate_output(&output.stdout, "claude stdout");
             debug!(stdout_len = stdout.len(), "claude process completed");
 
             common::parse_output(&stdout, config, duration_ms)

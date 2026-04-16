@@ -38,7 +38,7 @@ use kube::api::{Api, AttachParams, DeleteParams, PostParams};
 use kube::runtime::wait::{await_condition, conditions};
 use tokio::time;
 
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
@@ -373,14 +373,14 @@ impl AgentProvider for K8sPersistentProvider {
 
             // K8s exec doesn't provide exit code directly; infer from parsability
             if stdout.is_empty() && !stderr.is_empty() {
-                error!(
-                    stderr_len = stderr.len(),
-                    "persistent pod claude process produced only stderr"
+                return claude_common::handle_nonzero_exit(
+                    1,
+                    &stdout,
+                    &stderr,
+                    config,
+                    duration_ms,
+                    "persistent k8s",
                 );
-                return Err(AgentError::ProcessFailed {
-                    exit_code: 1,
-                    stderr,
-                });
             }
 
             debug!(

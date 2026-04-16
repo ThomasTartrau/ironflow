@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use russh::ChannelMsg;
 use russh::keys::PrivateKeyWithHashAlg;
 use tokio::time;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
@@ -411,25 +411,14 @@ impl AgentProvider for SshProvider {
             let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
 
             if code != 0 {
-                let error_detail = if stderr.is_empty() {
-                    if stdout.is_empty() {
-                        "(no output captured)".to_string()
-                    } else {
-                        stdout.clone()
-                    }
-                } else {
-                    stderr
-                };
-
-                error!(
-                    exit_code = code,
-                    error_detail_len = error_detail.len(),
-                    "remote claude process failed"
+                return common::handle_nonzero_exit(
+                    code,
+                    &stdout,
+                    &stderr,
+                    config,
+                    duration_ms,
+                    "ssh",
                 );
-                return Err(AgentError::ProcessFailed {
-                    exit_code: code,
-                    stderr: error_detail,
-                });
             }
 
             debug!(stdout_len = stdout.len(), "remote claude process completed");
