@@ -190,6 +190,9 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     if config.strict_mcp_config {
         args.push("--strict-mcp-config".to_string());
     }
+    if config.bare {
+        args.push("--bare".to_string());
+    }
 
     match config.permission_mode {
         PermissionMode::Default => {}
@@ -941,6 +944,26 @@ mod tests {
     }
 
     #[test]
+    fn build_args_bare_flag_absent_by_default() {
+        let config = AgentConfig::new("hello");
+        let args = build_args(&config).unwrap();
+        assert!(
+            !args.contains(&"--bare".to_string()),
+            "--bare must not appear unless opted-in, got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_bare_flag_pushed_when_enabled() {
+        let config = AgentConfig::new("hello").bare(true);
+        let args = build_args(&config).unwrap();
+        assert!(
+            args.contains(&"--bare".to_string()),
+            "--bare must be pushed when bare is true, got: {args:?}"
+        );
+    }
+
+    #[test]
     fn build_args_strict_mcp_config_with_mcp_config_includes_both() {
         let config = AgentConfig::new("hello")
             .mcp_config(r#"{"mcpServers":{}}"#)
@@ -1073,6 +1096,7 @@ mod tests {
             working_dir: None,
             mcp_config: None,
             strict_mcp_config: false,
+            bare: false,
             resume_session_id: None,
             verbose: false,
             _marker: PhantomData,

@@ -137,6 +137,16 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default)]
     pub strict_mcp_config: bool,
 
+    /// When `true`, pass `--bare` to Claude CLI. Bare mode disables:
+    /// - auto-memory (automatic creation of `~/.claude/.../memory/*.md` files)
+    /// - `CLAUDE.md` auto-discovery (no global/project `CLAUDE.md` loaded)
+    /// - hooks, LSP, plugin sync, attribution, background prefetches
+    ///
+    /// Recommended for orchestrator agents that should not have any implicit
+    /// side effects on the user's filesystem or inherit user-level context.
+    #[serde(default)]
+    pub bare: bool,
+
     /// Permission mode controlling how the agent handles tool-use approvals.
     #[serde(default)]
     pub permission_mode: PermissionMode,
@@ -185,6 +195,7 @@ impl AgentConfig {
             working_dir: None,
             mcp_config: None,
             strict_mcp_config: false,
+            bare: false,
             permission_mode: PermissionMode::Default,
             json_schema: None,
             resume_session_id: None,
@@ -278,6 +289,33 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Enable bare mode (minimal Claude Code environment, see `--bare`).
+    ///
+    /// When `true`, the Claude CLI is invoked with `--bare`, which disables:
+    /// - auto-memory (no automatic `~/.claude/.../memory/*.md` file creation)
+    /// - `CLAUDE.md` auto-discovery (neither global nor project-level)
+    /// - hooks, LSP, plugin sync, attribution, background prefetches,
+    ///   keychain reads
+    ///
+    /// Sets `CLAUDE_CODE_SIMPLE=1` in the child process.
+    ///
+    /// Recommended for orchestrator steps that should not have any implicit
+    /// side effects on the user's filesystem or inherit user-level context
+    /// (email, preferences, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("classify this")
+    ///     .bare(true);
+    /// ```
+    pub fn bare(mut self, enabled: bool) -> Self {
+        self.bare = enabled;
+        self
+    }
+
     /// Set a session ID to resume a previous conversation.
     pub fn resume(mut self, session_id: &str) -> Self {
         self.resume_session_id = Some(session_id.to_string());
@@ -299,6 +337,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             working_dir: self.working_dir,
             mcp_config: self.mcp_config,
             strict_mcp_config: self.strict_mcp_config,
+            bare: self.bare,
             permission_mode: self.permission_mode,
             json_schema: self.json_schema,
             resume_session_id: self.resume_session_id,
@@ -627,6 +666,7 @@ mod tests {
             working_dir: Some("/tmp".to_string()),
             mcp_config: Some("{}".to_string()),
             strict_mcp_config: true,
+            bare: true,
             permission_mode: PermissionMode::Auto,
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
             resume_session_id: None,
@@ -663,6 +703,7 @@ mod tests {
             working_dir: None,
             mcp_config: None,
             strict_mcp_config: false,
+            bare: false,
             permission_mode: PermissionMode::Default,
             json_schema: None,
             resume_session_id: None,
@@ -799,5 +840,44 @@ mod tests {
 
         let back: AgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.allowed_tools, vec!["Read"]);
+    }
+
+    #[test]
+    fn bare_defaults_to_false() {
+        let config = AgentConfig::new("hello");
+        assert!(!config.bare, "bare must default to false");
+    }
+
+    #[test]
+    fn bare_builder_sets_flag() {
+        let config = AgentConfig::new("hello").bare(true);
+        assert!(config.bare, "bare(true) must enable the flag");
+
+        let config = config.bare(false);
+        assert!(!config.bare, "bare(false) must disable the flag");
+    }
+
+    #[test]
+    fn bare_serde_default_when_missing() {
+        let raw = r#"{"prompt":"hello","model":"sonnet"}"#;
+        let config: AgentConfig = serde_json::from_str(raw).unwrap();
+        assert!(
+            !config.bare,
+            "bare must default to false when absent from serialized payload"
+        );
+    }
+
+    #[test]
+    fn bare_serde_roundtrip() {
+        let mut config = AgentConfig::new("hello");
+        config.bare = true;
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"bare\":true"),
+            "serialized form must contain bare:true, got: {json}"
+        );
+
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.bare, "bare must survive a serde roundtrip");
     }
 }
