@@ -184,6 +184,13 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
     }
+    if !config.disallowed_tools.is_empty() {
+        push_flag(
+            &mut args,
+            "--disallowedTools",
+            &config.disallowed_tools.join(","),
+        );
+    }
     push_opt(&mut args, "--max-turns", &config.max_turns);
     push_opt(&mut args, "--max-budget-usd", &config.max_budget_usd);
     push_opt(&mut args, "--mcp-config", &config.mcp_config);
@@ -944,6 +951,50 @@ mod tests {
     }
 
     #[test]
+    fn build_args_disallowed_tools_flag_absent_when_empty() {
+        let config = AgentConfig::new("hello");
+        let args = build_args(&config).unwrap();
+        assert!(
+            !args.contains(&"--disallowedTools".to_string()),
+            "--disallowedTools must not appear when list is empty, got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_args_disallowed_tools_flag_joined_with_commas() {
+        let config = AgentConfig::new("hello").disallowed_tools(["Write", "Edit", "Bash"]);
+        let args = build_args(&config).unwrap();
+
+        let pos = args
+            .iter()
+            .position(|a| a == "--disallowedTools")
+            .expect("--disallowedTools missing");
+        assert_eq!(args[pos + 1], "Write,Edit,Bash");
+    }
+
+    #[test]
+    fn build_args_disallowed_tools_combined_with_allowed_tools() {
+        let config: AgentConfig = AgentConfig::new("hello")
+            .allow_tool("Read")
+            .allow_tool("Grep")
+            .into();
+        let config = config.disallowed_tools(["Write", "Edit"]);
+        let args = build_args(&config).unwrap();
+
+        let allowed_pos = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("--allowedTools missing");
+        assert_eq!(args[allowed_pos + 1], "Read,Grep");
+
+        let disallowed_pos = args
+            .iter()
+            .position(|a| a == "--disallowedTools")
+            .expect("--disallowedTools missing");
+        assert_eq!(args[disallowed_pos + 1], "Write,Edit");
+    }
+
+    #[test]
     fn build_args_bare_flag_absent_by_default() {
         let config = AgentConfig::new("hello");
         let args = build_args(&config).unwrap();
@@ -1089,6 +1140,7 @@ mod tests {
                 r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string(),
             ),
             allowed_tools: vec!["WebSearch".to_string(), "WebFetch".to_string()],
+            disallowed_tools: vec![],
             max_turns: Some(5),
             permission_mode: PermissionMode::Default,
             system_prompt: None,

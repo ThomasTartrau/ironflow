@@ -110,6 +110,17 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default)]
     pub allowed_tools: Vec<String>,
 
+    /// Denylist of tool names the agent MUST NOT invoke.
+    ///
+    /// Maps to `--disallowedTools` on the Claude CLI. Unlike
+    /// [`allowed_tools`](Self::allowed_tools), this does **not** activate any
+    /// tools; it only filters out tools that would otherwise be loaded by
+    /// default. As such, it is safe to combine with structured output
+    /// ([`output`](Self::output)) without triggering the Claude CLI bug that
+    /// affects `--json-schema` + `--allowedTools`.
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
+
     /// Maximum number of agentic turns before the provider should stop.
     pub max_turns: Option<u32>,
 
@@ -197,6 +208,7 @@ impl AgentConfig {
             prompt: prompt.to_string(),
             model: Model::SONNET.to_string(),
             allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
             max_turns: None,
             max_budget_usd: None,
             working_dir: None,
@@ -331,6 +343,39 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Replace the entire disallowed-tools list.
+    ///
+    /// Maps to `--disallowedTools` on the Claude CLI. This method is available
+    /// on **every** typestate variant (including
+    /// [`AgentConfig<NoTools, WithSchema>`]) because, unlike
+    /// [`allow_tool`](AgentConfig::allow_tool), `disallowed_tools` does not
+    /// activate any tool -- it only filters out tools that would otherwise be
+    /// loaded by default.
+    ///
+    /// As such, it is safe to combine with structured output:
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(serde::Deserialize, JsonSchema)]
+    /// struct Out { ok: bool }
+    ///
+    /// let config = AgentConfig::new("classify this")
+    ///     .disallowed_tools(["Write", "Edit"])
+    ///     .output::<Out>();
+    /// ```
+    pub fn disallowed_tools<I, S>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.disallowed_tools = tools.into_iter().map(Into::into).collect();
+        self
+    }
+
     /// Set a session ID to resume a previous conversation.
     pub fn resume(mut self, session_id: &str) -> Self {
         self.resume_session_id = Some(session_id.to_string());
@@ -347,6 +392,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             prompt: self.prompt,
             model: self.model,
             allowed_tools: self.allowed_tools,
+            disallowed_tools: self.disallowed_tools,
             max_turns: self.max_turns,
             max_budget_usd: self.max_budget_usd,
             working_dir: self.working_dir,
@@ -676,6 +722,7 @@ mod tests {
             prompt: "do stuff".to_string(),
             model: Model::OPUS.to_string(),
             allowed_tools: vec!["Read".to_string(), "Write".to_string()],
+            disallowed_tools: vec!["Bash".to_string()],
             max_turns: Some(10),
             max_budget_usd: Some(2.5),
             working_dir: Some("/tmp".to_string()),
@@ -713,6 +760,7 @@ mod tests {
             prompt: "hello".to_string(),
             model: Model::HAIKU.to_string(),
             allowed_tools: vec![],
+            disallowed_tools: vec![],
             max_turns: None,
             max_budget_usd: None,
             working_dir: None,
@@ -894,5 +942,75 @@ mod tests {
 
         let back: AgentConfig = serde_json::from_str(&json).unwrap();
         assert!(back.bare, "bare must survive a serde roundtrip");
+    }
+
+    #[test]
+    fn disallowed_tools_defaults_to_empty() {
+        let config = AgentConfig::new("hello");
+        assert!(
+            config.disallowed_tools.is_empty(),
+            "disallowed_tools must default to empty"
+        );
+    }
+
+    #[test]
+    fn disallowed_tools_builder_replaces_list() {
+        let config = AgentConfig::new("hello").disallowed_tools(["Write", "Edit"]);
+        assert_eq!(config.disallowed_tools, vec!["Write", "Edit"]);
+
+        // Subsequent call fully replaces the list.
+        let config = config.disallowed_tools(["Bash"]);
+        assert_eq!(config.disallowed_tools, vec!["Bash"]);
+
+        // Empty input clears the list.
+        let config = config.disallowed_tools(std::iter::empty::<String>());
+        assert!(config.disallowed_tools.is_empty());
+    }
+
+    #[test]
+    fn disallowed_tools_compatible_with_output() {
+        #[derive(serde::Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct Out {
+            ok: bool,
+        }
+
+        // Typestate compile check: .disallowed_tools(...) must be callable
+        // before AND after .output::<T>() because it lives on
+        // impl<Tools, Schema>, not impl<Tools, NoSchema>.
+        let before: AgentConfig<NoTools, WithSchema> = AgentConfig::new("classify")
+            .disallowed_tools(["Write", "Edit"])
+            .output::<Out>();
+        assert_eq!(before.disallowed_tools, vec!["Write", "Edit"]);
+        assert!(before.json_schema.is_some());
+
+        let after: AgentConfig<NoTools, WithSchema> = AgentConfig::new("classify")
+            .output::<Out>()
+            .disallowed_tools(["Write"]);
+        assert_eq!(after.disallowed_tools, vec!["Write"]);
+        assert!(after.json_schema.is_some());
+    }
+
+    #[test]
+    fn disallowed_tools_serde_default_when_missing() {
+        let raw = r#"{"prompt":"hello","model":"sonnet"}"#;
+        let config: AgentConfig = serde_json::from_str(raw).unwrap();
+        assert!(
+            config.disallowed_tools.is_empty(),
+            "disallowed_tools must default to empty when absent from serialized payload"
+        );
+    }
+
+    #[test]
+    fn disallowed_tools_serde_roundtrip() {
+        let config = AgentConfig::new("hello").disallowed_tools(["Write", "Edit"]);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"disallowed_tools\":[\"Write\",\"Edit\"]"),
+            "serialized form must contain the disallowed_tools array, got: {json}"
+        );
+
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.disallowed_tools, vec!["Write", "Edit"]);
     }
 }
