@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.7.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.6.0...ironflow-core-v2.7.0) - 2026-04-17
+
+### Added
+
+- add disallowed_tools field compatible with structured output
+
+- add bare flag to isolate agents from auto-memory and CLAUDE.md
+
+
+### Documentation
+
+- note that --bare requires ANTHROPIC_API_KEY, not OAuth
+
 ## [2.6.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.5.1...ironflow-core-v2.6.0) - 2026-04-16
 
 ### Added
