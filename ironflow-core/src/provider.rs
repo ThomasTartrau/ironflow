@@ -144,6 +144,13 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     ///
     /// Recommended for orchestrator agents that should not have any implicit
     /// side effects on the user's filesystem or inherit user-level context.
+    ///
+    /// # Authentication requirement
+    ///
+    /// `--bare` is **only compatible with an Anthropic API key**
+    /// (`ANTHROPIC_API_KEY` environment variable). It does **not** work with
+    /// OAuth authentication (`claude /login` / keychain-stored credentials),
+    /// because bare mode disables keychain reads.
     #[serde(default)]
     pub bare: bool,
 
@@ -302,6 +309,14 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// Recommended for orchestrator steps that should not have any implicit
     /// side effects on the user's filesystem or inherit user-level context
     /// (email, preferences, etc.).
+    ///
+    /// # Authentication requirement
+    ///
+    /// `--bare` is **only compatible with an Anthropic API key**
+    /// (`ANTHROPIC_API_KEY` environment variable). It does **not** work with
+    /// OAuth authentication (`claude /login` / keychain-stored credentials),
+    /// because bare mode disables keychain reads. Invoking a bare agent on an
+    /// OAuth-only host will fail with an authentication error.
     ///
     /// # Examples
     ///
