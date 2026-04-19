@@ -44,7 +44,7 @@ variables:
 # skip validation to save CI time (dashboard-build still runs to satisfy MWPS).
 .only-mr:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TITLE =~ /^chore: release/
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TITLE =~ /^chore: release/'
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
