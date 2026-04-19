@@ -2178,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-api"
-version = "2.11.4"
+version = "2.11.5"
 dependencies = [
  "axum 0.8.8",
  "chrono",
