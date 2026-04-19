@@ -35,6 +35,8 @@ pub struct WorkflowDetailResponse {
     pub source_code: Option<String>,
     /// Sub-workflows invoked by this handler (recursive, depth-limited).
     pub sub_workflows: Vec<SubWorkflowDetail>,
+    /// Optional `/`-separated category path used to group workflows.
+    pub category: Option<String>,
 }
 
 /// Get details about a registered workflow.
@@ -83,6 +85,7 @@ pub async fn get_workflow(
         description: info.description,
         source_code: info.source_code,
         sub_workflows,
+        category: info.category,
     }))
 }
 
@@ -144,6 +147,19 @@ mod tests {
         }
     }
 
+    struct CategorizedWorkflow;
+    impl WorkflowHandler for CategorizedWorkflow {
+        fn name(&self) -> &str {
+            "cat-workflow"
+        }
+        fn category(&self) -> Option<&str> {
+            Some("data/etl")
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
@@ -152,6 +168,7 @@ mod tests {
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine.register(DescribedWorkflow).unwrap();
+        engine.register(CategorizedWorkflow).unwrap();
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
             secret: "test-secret".to_string(),
             access_token_ttl_secs: 900,
@@ -197,6 +214,47 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert_eq!(json_val["data"]["name"], "my-workflow");
+    }
+
+    #[tokio::test]
+    async fn get_workflow_returns_category_when_set() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{name}", get(get_workflow))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/cat-workflow")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["category"], "data/etl");
+    }
+
+    #[tokio::test]
+    async fn get_workflow_category_null_when_uncategorized() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{name}", get(get_workflow))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/my-workflow")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert!(json_val["data"]["category"].is_null());
     }
 
     #[tokio::test]

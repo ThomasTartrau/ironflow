@@ -9,7 +9,7 @@ use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse}
 use crate::routes::api_keys::list::ApiKeyResponse;
 use crate::routes::events::EventKind;
 use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
-use crate::routes::list_workflows::ListWorkflowsQuery;
+use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approve_run, auth, cancel_run, create_run, get_run, get_stats, get_workflow,
@@ -70,6 +70,7 @@ mod with_signup {
                 UserResponse,
                 UpdateRoleRequest,
                 ListWorkflowsQuery,
+                WorkflowSummary,
                 WorkflowDetailResponse,
                 SubWorkflowDetail,
                 ListRunsQuery,
@@ -144,6 +145,7 @@ mod without_signup {
                 UserResponse,
                 UpdateRoleRequest,
                 ListWorkflowsQuery,
+                WorkflowSummary,
                 WorkflowDetailResponse,
                 SubWorkflowDetail,
                 ListRunsQuery,

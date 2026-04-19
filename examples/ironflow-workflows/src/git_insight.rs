@@ -16,6 +16,7 @@ impl WorkflowHandler for GitInsight {
                 .to_string(),
             source_code: Some(include_str!("git_insight.rs").to_string()),
             sub_workflows: Vec::new(),
+            category: None,
         }
     }
 

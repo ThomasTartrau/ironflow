@@ -14,6 +14,10 @@ impl WorkflowHandler for Enrich {
         "pipeline-enrich"
     }
 
+    fn category(&self) -> Option<&str> {
+        Some("examples/pipeline")
+    }
+
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: "Calls pipeline-collect to gather raw metrics, then uses an AI agent \
@@ -21,6 +25,7 @@ impl WorkflowHandler for Enrich {
                 .to_string(),
             source_code: Some(include_str!("enrich.rs").to_string()),
             sub_workflows: vec!["pipeline-collect".to_string()],
+            category: Some("examples/pipeline".to_string()),
         }
     }
 

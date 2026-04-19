@@ -438,10 +438,13 @@ export interface paths {
 			cookie?: never;
 		};
 		/**
-		 * List registered workflow names, optionally filtered by name.
+		 * List registered workflows, optionally filtered by name and category.
 		 * @description # Query Parameters
 		 *
-		 *     - `name` — Filter by workflow name, case-insensitive partial match (optional)
+		 *     - `name` — Case-insensitive partial match on workflow name (optional)
+		 *     - `category` — Case-insensitive partial match on category path, or
+		 *       [`UNCATEGORIZED_FILTER`] to filter only uncategorized workflows
+		 *       (optional)
 		 */
 		get: operations["list_workflows"];
 		put?: never;
@@ -924,6 +927,14 @@ export interface components {
 		};
 		/** @description Query parameters for listing workflows. */
 		ListWorkflowsQuery: {
+			/**
+			 * @description Optional case-insensitive partial match on the category path
+			 *     (e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).
+			 *
+			 *     Pass `__uncategorized__` to list only workflows without any
+			 *     category.
+			 */
+			category?: string | null;
 			/** @description Optional case-insensitive partial match on workflow name. */
 			name?: string | null;
 		};
@@ -1324,6 +1335,8 @@ export interface components {
 		};
 		/** @description Workflow detail response. */
 		WorkflowDetailResponse: {
+			/** @description Optional `/`-separated category path used to group workflows. */
+			category?: string | null;
 			/** @description Human-readable description. */
 			description: string;
 			/** @description Workflow name. */
@@ -1332,6 +1345,13 @@ export interface components {
 			source_code?: string | null;
 			/** @description Sub-workflows invoked by this handler (recursive, depth-limited). */
 			sub_workflows: components["schemas"]["SubWorkflowDetail"][];
+		};
+		/** @description Summary entry returned by `GET /api/v1/workflows`. */
+		WorkflowSummary: {
+			/** @description Optional `/`-separated category path. */
+			category?: string | null;
+			/** @description Workflow name (unique identifier). */
+			name: string;
 		};
 	};
 	responses: never;
@@ -2208,6 +2228,14 @@ export interface operations {
 			query?: {
 				/** @description Optional case-insensitive partial match on workflow name. */
 				name?: string | null;
+				/**
+				 * @description Optional case-insensitive partial match on the category path
+				 *     (e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).
+				 *
+				 *     Pass `__uncategorized__` to list only workflows without any
+				 *     category.
+				 */
+				category?: string | null;
 			};
 			header?: never;
 			path?: never;
@@ -2215,12 +2243,14 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description List of workflow names */
+			/** @description List of workflow summaries */
 			200: {
 				headers: {
 					[name: string]: unknown;
 				};
-				content?: never;
+				content: {
+					"application/json": components["schemas"]["WorkflowSummary"][];
+				};
 			};
 			/** @description Unauthorized */
 			401: {

@@ -48,6 +48,7 @@ export type CreateApiKeyResponse =
 export type ScopeEntry = components["schemas"]["ScopeEntry"];
 
 // -- Workflows --
+export type WorkflowSummary = components["schemas"]["WorkflowSummary"];
 export type WorkflowDetailResponse =
 	components["schemas"]["WorkflowDetailResponse"];
 export type SubWorkflowDetail = components["schemas"]["SubWorkflowDetail"];

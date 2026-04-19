@@ -68,6 +68,12 @@ pub struct WorkflowInfo {
     /// Names of sub-workflows invoked by this handler.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_workflows: Vec<String>,
+    /// Optional `/`-separated category path used to group workflows in the UI tree.
+    ///
+    /// A value like `"data/etl"` places the workflow under `data` → `etl`.
+    /// `None` means the workflow is uncategorized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 /// A dynamic workflow handler with context-aware step chaining.
@@ -85,15 +91,29 @@ pub trait WorkflowHandler: Send + Sync {
     /// The workflow name used for registration and lookup.
     fn name(&self) -> &str;
 
+    /// Optional `/`-separated category path used to group workflows in the UI tree.
+    ///
+    /// Return a value like `"data/etl"` to place the workflow under `data` → `etl`.
+    /// The default is `None` (uncategorized).
+    ///
+    /// Validation (empty segments, leading or trailing `/`, `//`, whitespace
+    /// segments) is enforced at registration time by
+    /// [`Engine::register`](crate::engine::Engine::register).
+    fn category(&self) -> Option<&str> {
+        None
+    }
+
     /// Return metadata about this workflow (description, source code).
     ///
     /// Override this to provide a description and source code for the
-    /// dashboard UI. The default returns an empty description with no source.
+    /// dashboard UI. The default returns an empty description with no source
+    /// but propagates [`WorkflowHandler::category`].
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: String::new(),
             source_code: None,
             sub_workflows: Vec::new(),
+            category: self.category().map(str::to_string),
         }
     }
 

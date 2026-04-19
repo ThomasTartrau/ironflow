@@ -3,7 +3,7 @@
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 use crate::response::ok;
@@ -15,13 +15,36 @@ use crate::state::AppState;
 pub struct ListWorkflowsQuery {
     /// Optional case-insensitive partial match on workflow name.
     pub name: Option<String>,
+    /// Optional case-insensitive partial match on the category path
+    /// (e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).
+    ///
+    /// Pass `__uncategorized__` to list only workflows without any
+    /// category.
+    pub category: Option<String>,
 }
 
-/// List registered workflow names, optionally filtered by name.
+/// Summary entry returned by `GET /api/v1/workflows`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkflowSummary {
+    /// Workflow name (unique identifier).
+    pub name: String,
+    /// Optional `/`-separated category path.
+    pub category: Option<String>,
+}
+
+/// Sentinel value for the `category` query parameter that selects only
+/// uncategorized workflows.
+pub const UNCATEGORIZED_FILTER: &str = "__uncategorized__";
+
+/// List registered workflows, optionally filtered by name and category.
 ///
 /// # Query Parameters
 ///
-/// - `name` — Filter by workflow name, case-insensitive partial match (optional)
+/// - `name` — Case-insensitive partial match on workflow name (optional)
+/// - `category` — Case-insensitive partial match on category path, or
+///   [`UNCATEGORIZED_FILTER`] to filter only uncategorized workflows
+///   (optional)
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -30,7 +53,7 @@ pub struct ListWorkflowsQuery {
         tags = ["workflows"],
         params(ListWorkflowsQuery),
         responses(
-            (status = 200, description = "List of workflow names"),
+            (status = 200, description = "List of workflow summaries", body = [WorkflowSummary]),
             (status = 401, description = "Unauthorized")
         ),
         security(("Bearer" = []))
@@ -41,19 +64,49 @@ pub async fn list_workflows(
     State(state): State<AppState>,
     Query(params): Query<ListWorkflowsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut names: Vec<String> = state
+    let mut summaries: Vec<WorkflowSummary> = state
         .engine
         .handler_names()
         .into_iter()
-        .map(|s| s.to_string())
+        .map(|name| {
+            let category = state
+                .engine
+                .handler_info(name)
+                .and_then(|info| info.category);
+            WorkflowSummary {
+                name: name.to_string(),
+                category,
+            }
+        })
         .collect();
 
     if let Some(ref filter) = params.name {
         let lower = filter.to_lowercase();
-        names.retain(|n| n.to_lowercase().contains(&lower));
+        summaries.retain(|s| s.name.to_lowercase().contains(&lower));
     }
 
-    Ok(ok(names))
+    if let Some(ref cat_filter) = params.category {
+        if cat_filter == UNCATEGORIZED_FILTER {
+            summaries.retain(|s| s.category.is_none());
+        } else {
+            let needle = cat_filter.to_lowercase();
+            summaries.retain(|s| {
+                s.category
+                    .as_deref()
+                    .is_some_and(|c| c.to_lowercase().contains(&needle))
+            });
+        }
+    }
+
+    summaries.sort_by(|a, b| {
+        a.category
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.category.as_deref().unwrap_or(""))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(ok(summaries))
 }
 
 #[cfg(test)]
@@ -109,15 +162,39 @@ mod tests {
         }
     }
 
-    fn test_state() -> AppState {
+    struct EtlNightlyWorkflow;
+
+    impl WorkflowHandler for EtlNightlyWorkflow {
+        fn name(&self) -> &str {
+            "etl-nightly"
+        }
+        fn category(&self) -> Option<&str> {
+            Some("data/etl")
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    struct ReportsDailyWorkflow;
+
+    impl WorkflowHandler for ReportsDailyWorkflow {
+        fn name(&self) -> &str {
+            "reports-daily"
+        }
+        fn category(&self) -> Option<&str> {
+            Some("data/reports")
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    fn base_state(engine: Engine) -> AppState {
         let store = Arc::new(InMemoryStore::new());
         let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
             Arc::new(InMemoryStore::new());
         let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
-        let provider = Arc::new(ClaudeCodeProvider::new());
-        let mut engine = Engine::new(store.clone(), provider);
-        engine.register(TestWorkflow).unwrap();
-        engine.register(AnotherWorkflow).unwrap();
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
             secret: "test-secret".to_string(),
             access_token_ttl_secs: 900,
@@ -137,140 +214,146 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn list_workflows_empty() {
+    fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
-            Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
-        let engine = Arc::new(Engine::new(store.clone(), provider));
-        let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
-            secret: "test-secret".to_string(),
-            access_token_ttl_secs: 900,
-            refresh_token_ttl_secs: 604800,
-            cookie_domain: None,
-            cookie_secure: false,
-        });
-        let (event_sender, _) = broadcast::channel::<Event>(1);
-        let state = AppState::new(
-            store,
-            user_store,
-            api_key_store,
-            engine,
-            jwt_config,
-            "test-worker-token".to_string(),
-            event_sender,
-        );
-        let auth_header = make_auth_header(&state);
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.register(TestWorkflow).unwrap();
+        engine.register(AnotherWorkflow).unwrap();
+        base_state(engine)
+    }
 
+    fn test_state_with_categories() -> AppState {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.register(TestWorkflow).unwrap();
+        engine.register(EtlNightlyWorkflow).unwrap();
+        engine.register(ReportsDailyWorkflow).unwrap();
+        base_state(engine)
+    }
+
+    async fn run_request(state: AppState, uri: &str) -> (StatusCode, Vec<WorkflowSummary>) {
+        let auth_header = make_auth_header(&state);
         let app = Router::new()
             .route("/", get(list_workflows))
             .with_state(state);
 
         let req = Request::builder()
-            .uri("/")
+            .uri(uri)
             .header("authorization", auth_header)
             .body(Body::empty())
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
+        let status = resp.status();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = from_slice(&body).unwrap();
-        assert_eq!(json_val["data"].as_array().unwrap().len(), 0);
+        let summaries: Vec<WorkflowSummary> = from_value(json_val["data"].clone()).unwrap();
+        (status, summaries)
     }
 
     #[tokio::test]
-    async fn list_workflows_multiple() {
+    async fn list_workflows_empty() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let engine = Engine::new(store.clone(), provider);
+        let state = base_state(engine);
+
+        let (status, summaries) = run_request(state, "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(summaries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_workflows_multiple_returns_summaries() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
-        let app = Router::new()
-            .route("/", get(list_workflows))
-            .with_state(state);
-
-        let req = Request::builder()
-            .uri("/")
-            .header("authorization", auth_header)
-            .body(Body::empty())
-            .unwrap();
-
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json_val: JsonValue = from_slice(&body).unwrap();
-        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
-        assert_eq!(workflows.len(), 2);
-        assert!(workflows.contains(&"test-workflow".to_string()));
-        assert!(workflows.contains(&"another-workflow".to_string()));
+        let (status, summaries) = run_request(state, "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries.iter().any(|s| s.name == "test-workflow"));
+        assert!(summaries.iter().any(|s| s.name == "another-workflow"));
+        assert!(summaries.iter().all(|s| s.category.is_none()));
     }
 
     #[tokio::test]
     async fn list_workflows_filtered_by_name() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
-        let app = Router::new()
-            .route("/", get(list_workflows))
-            .with_state(state);
-
-        let req = Request::builder()
-            .uri("/?name=test")
-            .header("authorization", &auth_header)
-            .body(Body::empty())
-            .unwrap();
-
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json_val: JsonValue = from_slice(&body).unwrap();
-        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
-        assert_eq!(workflows.len(), 1);
-        assert_eq!(workflows[0], "test-workflow");
+        let (_, summaries) = run_request(state, "/?name=test").await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "test-workflow");
     }
 
     #[tokio::test]
-    async fn list_workflows_filter_case_insensitive() {
+    async fn list_workflows_filter_name_case_insensitive() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
-        let app = Router::new()
-            .route("/", get(list_workflows))
-            .with_state(state);
-
-        let req = Request::builder()
-            .uri("/?name=TEST")
-            .header("authorization", &auth_header)
-            .body(Body::empty())
-            .unwrap();
-
-        let resp = app.oneshot(req).await.unwrap();
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json_val: JsonValue = from_slice(&body).unwrap();
-        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
-        assert_eq!(workflows.len(), 1);
-        assert_eq!(workflows[0], "test-workflow");
+        let (_, summaries) = run_request(state, "/?name=TEST").await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "test-workflow");
     }
 
     #[tokio::test]
     async fn list_workflows_filter_no_match() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
-        let app = Router::new()
-            .route("/", get(list_workflows))
-            .with_state(state);
+        let (_, summaries) = run_request(state, "/?name=nonexistent").await;
+        assert!(summaries.is_empty());
+    }
 
-        let req = Request::builder()
-            .uri("/?name=nonexistent")
-            .header("authorization", &auth_header)
-            .body(Body::empty())
+    #[tokio::test]
+    async fn list_workflows_returns_category_when_present() {
+        let state = test_state_with_categories();
+        let (_, summaries) = run_request(state, "/").await;
+        let etl = summaries.iter().find(|s| s.name == "etl-nightly").unwrap();
+        assert_eq!(etl.category.as_deref(), Some("data/etl"));
+        let test = summaries
+            .iter()
+            .find(|s| s.name == "test-workflow")
             .unwrap();
+        assert!(test.category.is_none());
+    }
 
-        let resp = app.oneshot(req).await.unwrap();
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json_val: JsonValue = from_slice(&body).unwrap();
-        let workflows: Vec<String> = from_value(json_val["data"].clone()).unwrap();
-        assert!(workflows.is_empty());
+    #[tokio::test]
+    async fn list_workflows_filter_by_category_partial() {
+        let state = test_state_with_categories();
+        let (_, summaries) = run_request(state, "/?category=data").await;
+        assert_eq!(summaries.len(), 2);
+        assert!(
+            summaries
+                .iter()
+                .all(|s| { s.category.as_deref().is_some_and(|c| c.contains("data")) })
+        );
+    }
+
+    #[tokio::test]
+    async fn list_workflows_filter_by_category_nested_substring() {
+        let state = test_state_with_categories();
+        let (_, summaries) = run_request(state, "/?category=etl").await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "etl-nightly");
+    }
+
+    #[tokio::test]
+    async fn list_workflows_filter_by_category_case_insensitive() {
+        let state = test_state_with_categories();
+        let (_, summaries) = run_request(state, "/?category=DATA").await;
+        assert_eq!(summaries.len(), 2);
+        let (_, summaries) = run_request(test_state_with_categories(), "/?category=Etl").await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "etl-nightly");
+    }
+
+    #[tokio::test]
+    async fn list_workflows_filter_by_category_no_match_excludes_uncategorized() {
+        let state = test_state_with_categories();
+        let (_, summaries) = run_request(state, "/?category=nonexistent").await;
+        assert!(summaries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_workflows_filter_uncategorized_sentinel() {
+        let state = test_state_with_categories();
+        let (_, summaries) = run_request(state, "/?category=__uncategorized__").await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "test-workflow");
     }
 }
