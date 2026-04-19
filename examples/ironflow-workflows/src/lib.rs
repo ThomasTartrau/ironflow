@@ -3,6 +3,7 @@
 //! This crate provides reusable workflow handlers that can be registered
 //! in both the API server (for metadata/describe) and the worker (for execution).
 
+mod agent_showcase;
 mod ci_pipeline;
 mod deploy_approval;
 mod git_insight;
@@ -11,6 +12,7 @@ mod pipeline;
 mod system_audit;
 mod weather_report;
 
+pub use agent_showcase::AgentShowcase;
 pub use ci_pipeline::CiPipeline;
 pub use deploy_approval::DeployApproval;
 pub use git_insight::GitInsight;
@@ -38,5 +40,6 @@ pub fn register_all(engine: &mut Engine) -> Result<(), EngineError> {
     engine.register(CiPipeline)?;
     engine.register(DeployApproval)?;
     engine.register(NotifiedPipeline)?;
+    engine.register(AgentShowcase)?;
     Ok(())
 }
