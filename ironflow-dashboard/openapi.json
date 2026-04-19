@@ -260,38 +260,6 @@
         ]
       }
     },
-    "/api/v1/auth/sign-up": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Register a new user with email and password.",
-        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 400 if email/username/password is invalid\n- 409 if email or username is already taken",
-        "operationId": "sign_up",
-        "requestBody": {
-          "description": "Sign up credentials",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SignUpRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "User registered successfully, cookies set"
-          },
-          "400": {
-            "description": "Invalid email, username, or password"
-          },
-          "409": {
-            "description": "Email or username already taken"
-          }
-        }
-      }
-    },
     "/api/v1/health-check": {
       "get": {
         "tags": [
@@ -698,8 +666,79 @@
         "tags": [
           "stats"
         ],
-        "summary": "Get aggregate statistics across all runs.",
+        "summary": "Get aggregate statistics across runs matching the filter.",
+        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.",
         "operationId": "get_stats",
+        "parameters": [
+          {
+            "name": "workflow",
+            "in": "query",
+            "description": "Filter by workflow name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by run status.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "has_steps",
+            "in": "query",
+            "description": "When `true`, only return runs with at least one step.\nWhen `false`, only return runs with no steps.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-based).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Aggregate statistics",
@@ -1972,29 +2011,6 @@
           "password": {
             "type": "string",
             "description": "Plaintext password."
-          }
-        }
-      },
-      "SignUpRequest": {
-        "type": "object",
-        "description": "Sign-up request body.",
-        "required": [
-          "email",
-          "username",
-          "password"
-        ],
-        "properties": {
-          "email": {
-            "type": "string",
-            "description": "Email address."
-          },
-          "password": {
-            "type": "string",
-            "description": "Plaintext password (min 8 characters)."
-          },
-          "username": {
-            "type": "string",
-            "description": "Display username."
           }
         }
       },

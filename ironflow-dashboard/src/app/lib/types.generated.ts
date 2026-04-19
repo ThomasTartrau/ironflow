@@ -155,31 +155,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	"/api/v1/auth/sign-up": {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/**
-		 * Register a new user with email and password.
-		 * @description Returns access and refresh tokens on success, and sets HttpOnly cookies.
-		 *
-		 *     # Errors
-		 *
-		 *     - 400 if email/username/password is invalid
-		 *     - 409 if email or username is already taken
-		 */
-		post: operations["sign_up"];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	"/api/v1/health-check": {
 		parameters: {
 			query?: never;
@@ -338,7 +313,11 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** Get aggregate statistics across all runs. */
+		/**
+		 * Get aggregate statistics across runs matching the filter.
+		 * @description Accepts the same filtering query parameters as `GET /api/v1/runs`
+		 *     (`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.
+		 */
 		get: operations["get_stats"];
 		put?: never;
 		post?: never;
@@ -1059,15 +1038,6 @@ export interface components {
 			/** @description Plaintext password. */
 			password: string;
 		};
-		/** @description Sign-up request body. */
-		SignUpRequest: {
-			/** @description Email address. */
-			email: string;
-			/** @description Plaintext password (min 8 characters). */
-			password: string;
-			/** @description Display username. */
-			username: string;
-		};
 		/**
 		 * @description Aggregate statistics response.
 		 *
@@ -1580,43 +1550,6 @@ export interface operations {
 			};
 		};
 	};
-	sign_up: {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** @description Sign up credentials */
-		requestBody: {
-			content: {
-				"application/json": components["schemas"]["SignUpRequest"];
-			};
-		};
-		responses: {
-			/** @description User registered successfully, cookies set */
-			204: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Invalid email, username, or password */
-			400: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Email or username already taken */
-			409: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-		};
-	};
 	health_check: {
 		parameters: {
 			query?: never;
@@ -1963,7 +1896,21 @@ export interface operations {
 	};
 	get_stats: {
 		parameters: {
-			query?: never;
+			query?: {
+				/** @description Filter by workflow name. */
+				workflow?: string | null;
+				/** @description Filter by run status. */
+				status?: null | components["schemas"]["RunStatus"];
+				/**
+				 * @description When `true`, only return runs with at least one step.
+				 *     When `false`, only return runs with no steps.
+				 */
+				has_steps?: boolean | null;
+				/** @description Page number (1-based). */
+				page?: number | null;
+				/** @description Items per page. */
+				per_page?: number | null;
+			};
 			header?: never;
 			path?: never;
 			cookie?: never;

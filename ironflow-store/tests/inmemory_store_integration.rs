@@ -602,7 +602,7 @@ async fn update_step_nonexistent_step_errors() {
 #[tokio::test]
 async fn get_stats_empty_store() {
     let store = InMemoryStore::new();
-    let stats = store.get_stats().await.unwrap();
+    let stats = store.get_stats(RunFilter::default()).await.unwrap();
 
     assert_eq!(stats.total_runs, 0);
     assert_eq!(stats.completed_runs, 0);
@@ -650,7 +650,7 @@ async fn get_stats_aggregates_by_status() {
 
     // _r4: Pending (active)
 
-    let stats = store.get_stats().await.unwrap();
+    let stats = store.get_stats(RunFilter::default()).await.unwrap();
     assert_eq!(stats.total_runs, 4);
     assert_eq!(stats.completed_runs, 1);
     assert_eq!(stats.failed_runs, 1);
@@ -689,7 +689,7 @@ async fn get_stats_aggregates_cost_and_duration() {
         .await
         .unwrap();
 
-    let stats = store.get_stats().await.unwrap();
+    let stats = store.get_stats(RunFilter::default()).await.unwrap();
     assert_eq!(stats.total_runs, 2);
     assert_eq!(stats.total_cost_usd, Decimal::new(15000, 2));
     assert_eq!(stats.total_duration_ms, 5000);
@@ -731,7 +731,7 @@ async fn get_stats_total_duration_exceeds_i32_max() {
         .await
         .unwrap();
 
-    let stats = store.get_stats().await.unwrap();
+    let stats = store.get_stats(RunFilter::default()).await.unwrap();
     assert_eq!(stats.total_duration_ms, half * 2);
     assert!(stats.total_duration_ms > i32::MAX as u64);
 }
@@ -771,7 +771,7 @@ async fn get_stats_active_runs_counts_pending_running_retrying() {
         .await
         .unwrap();
 
-    let stats = store.get_stats().await.unwrap();
+    let stats = store.get_stats(RunFilter::default()).await.unwrap();
     assert_eq!(stats.active_runs, 3); // r1 (Running), r2 (Retrying), _r4 (Pending)
     assert_eq!(stats.completed_runs, 1); // r3
 }
@@ -927,7 +927,7 @@ async fn concurrent_creates_do_not_corrupt_store() {
     assert_eq!(created_ids.len(), 10);
 
     // Verify all can be retrieved
-    let stats = store.get_stats().await.unwrap();
+    let stats = store.get_stats(RunFilter::default()).await.unwrap();
     assert_eq!(stats.total_runs, 10);
 }
 

@@ -230,7 +230,7 @@ async fn get_stats_total_cost_with_decimal() {
         .unwrap();
 
     // Get stats (covers all runs in the database)
-    let stats = store.get_stats().await.unwrap();
+    let stats = store.get_stats(RunFilter::default()).await.unwrap();
 
     // Verify total cost includes at least the sum of our two runs
     let our_total = cost1 + cost2;

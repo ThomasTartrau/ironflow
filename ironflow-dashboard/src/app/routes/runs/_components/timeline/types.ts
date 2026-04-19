@@ -97,7 +97,8 @@ export function getKindMeta(kind: StepKind): KindMeta {
 }
 
 export const statusBarModifier: Partial<Record<StepStatus, string>> = {
-	running: "animate-pulse",
+	running:
+		"animate-pulse ring-1 ring-primary/60 shadow-[0_0_10px_rgba(59,130,246,0.35)]",
 	failed: "!bg-red-400/80 !border-red-500/30",
 	pending: "!bg-gray-300/60 !border-gray-400/30",
 	skipped: "!bg-gray-200/40 !border-gray-300/20",

@@ -44,6 +44,23 @@ function flattenSteps(
 	return Promise.all(promises).then((nested) => nested.flat());
 }
 
+function isStepActive(step: StepResponse): boolean {
+	return !step.completed_at && step.status === "running";
+}
+
+function applyLiveEndMs(
+	flatSteps: FlatStep[],
+	runStartMs: number,
+	nowMs: number,
+): FlatStep[] {
+	const liveCutoff = nowMs - runStartMs;
+	return flatSteps.map((fs) =>
+		isStepActive(fs.step) && liveCutoff > fs.endMs
+			? { ...fs, endMs: liveCutoff }
+			: fs,
+	);
+}
+
 function buildRows(flatSteps: FlatStep[], totalMs: number): TimelineRow[] {
 	if (totalMs <= 0 || flatSteps.length === 0) return [];
 
@@ -62,41 +79,48 @@ function buildRows(flatSteps: FlatStep[], totalMs: number): TimelineRow[] {
 	}));
 }
 
+interface UseTimelineRowsOptions {
+	/** Injected clock tick. When not provided, falls back to a static snapshot. */
+	nowMs?: number;
+	/** If true, extend totalMs up to `nowMs - runStartMs` for live progression. */
+	liveTotal?: boolean;
+}
+
 export function useTimelineRows(
 	steps: StepResponse[],
 	runStartedAt: string | null,
 	runId: string,
+	options: UseTimelineRowsOptions = {},
 ): { rows: TimelineRow[]; totalMs: number } {
-	const [rows, setRows] = useState<TimelineRow[]>([]);
-	const [totalMs, setTotalMs] = useState(0);
+	const [baseFlat, setBaseFlat] = useState<FlatStep[]>([]);
+	const [runStartMs, setRunStartMs] = useState(0);
 
 	useEffect(() => {
 		if (!runStartedAt || steps.length === 0) {
-			setRows([]);
-			setTotalMs(0);
+			setBaseFlat([]);
+			setRunStartMs(0);
 			return;
 		}
 
-		const runStartMs = new Date(runStartedAt).getTime();
-		if (Number.isNaN(runStartMs)) {
-			setRows([]);
-			setTotalMs(0);
+		const startMs = new Date(runStartedAt).getTime();
+		if (Number.isNaN(startMs)) {
+			setBaseFlat([]);
+			setRunStartMs(0);
 			return;
 		}
 
 		let cancelled = false;
 
-		flattenSteps(steps, runStartMs, runId, 0)
+		flattenSteps(steps, startMs, runId, 0)
 			.then((flatSteps) => {
-				if (cancelled || flatSteps.length === 0) return;
-				const total = Math.max(0, ...flatSteps.map((s) => s.endMs));
-				setTotalMs(total);
-				setRows(buildRows(flatSteps, total));
+				if (cancelled) return;
+				setRunStartMs(startMs);
+				setBaseFlat(flatSteps);
 			})
 			.catch(() => {
 				if (!cancelled) {
-					setRows([]);
-					setTotalMs(0);
+					setBaseFlat([]);
+					setRunStartMs(0);
 				}
 			});
 
@@ -105,5 +129,16 @@ export function useTimelineRows(
 		};
 	}, [steps, runStartedAt, runId]);
 
-	return { rows, totalMs };
+	if (baseFlat.length === 0 || runStartMs === 0) {
+		return { rows: [], totalMs: 0 };
+	}
+
+	const nowMs = options.nowMs ?? Date.now();
+	const liveFlat = applyLiveEndMs(baseFlat, runStartMs, nowMs);
+	const maxStepEnd = Math.max(0, ...liveFlat.map((s) => s.endMs));
+	const totalMs = options.liveTotal
+		? Math.max(maxStepEnd, nowMs - runStartMs)
+		: maxStepEnd;
+
+	return { rows: buildRows(liveFlat, totalMs), totalMs };
 }
