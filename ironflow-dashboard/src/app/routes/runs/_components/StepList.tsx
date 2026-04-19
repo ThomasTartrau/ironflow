@@ -14,10 +14,7 @@ declare global {
 import { api } from "@/app/lib/api";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
-import {
-	AgentDebugTimeline,
-	countVisibleTurns,
-} from "./AgentDebugTimeline";
+import { AgentDebugTimeline, countVisibleTurns } from "./AgentDebugTimeline";
 import { Badge } from "@/components/ui/badge";
 import {
 	Collapsible,

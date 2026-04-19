@@ -528,9 +528,7 @@ pub fn parse_stream_response(
 
                 let stop_is_terminal = stop_reason.is_some();
 
-                if assistant_turn_open
-                    && let Some(last) = debug_messages.last_mut()
-                {
+                if assistant_turn_open && let Some(last) = debug_messages.last_mut() {
                     // Merge into the turn still being built.
                     if let Some(t) = text {
                         last.text = Some(match last.text.take() {
@@ -1363,7 +1361,11 @@ mod tests {
         let output = parse_stream_response(&stream, &config, 0).unwrap();
         let messages = output.debug_messages.unwrap();
 
-        assert_eq!(messages.len(), 2, "expected 2 logical turns, got {messages:?}");
+        assert_eq!(
+            messages.len(),
+            2,
+            "expected 2 logical turns, got {messages:?}"
+        );
 
         // Turn 1: thinking + tool_use merged, tool_result attached.
         assert_eq!(
@@ -1431,8 +1433,11 @@ mod tests {
         assert!(args.contains(&"--allowedTools".to_string()));
         assert!(args.contains(&"WebSearch,WebFetch".to_string()));
         assert!(args.contains(&"--json-schema".to_string()));
-        assert!(args
-            .contains(&r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()));
+        assert!(
+            args.contains(
+                &r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()
+            )
+        );
         assert!(args.contains(&"--output-format".to_string()));
         assert!(args.contains(&"json".to_string()));
     }

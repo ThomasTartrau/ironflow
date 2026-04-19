@@ -339,14 +339,7 @@ export function AgentDebugTimeline({ debugMessages }: AgentDebugTimelineProps) {
 	return (
 		<div className="space-y-4 border-l-2 border-violet-200 pl-4">
 			{visibleMessages.map((message, i) => (
-				<Turn
-					key={`turn-${
-						// biome-ignore lint/suspicious/noArrayIndexKey: order is stable
-						i
-					}`}
-					index={i}
-					message={message}
-				/>
+				<Turn key={`turn-${i}`} index={i} message={message} />
 			))}
 		</div>
 	);
