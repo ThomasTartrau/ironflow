@@ -407,20 +407,52 @@ impl RunStore for InMemoryStore {
         })
     }
 
-    fn get_stats(&self) -> StoreFuture<'_, RunStats> {
+    fn get_stats(&self, filter: RunFilter) -> StoreFuture<'_, RunStats> {
         Box::pin(async move {
             let state = self.state.read().await;
 
             let mut total_cost_usd = Decimal::ZERO;
             let mut total_duration_ms = 0u64;
+            let mut total_runs = 0u64;
             let mut completed_runs = 0u64;
             let mut failed_runs = 0u64;
             let mut cancelled_runs = 0u64;
             let mut active_runs = 0u64;
 
             for run in state.runs.values() {
+                if let Some(ref wf) = filter.workflow_name
+                    && !run
+                        .workflow_name
+                        .to_lowercase()
+                        .contains(&wf.to_lowercase())
+                {
+                    continue;
+                }
+                if let Some(ref status) = filter.status
+                    && &run.status.state != status
+                {
+                    continue;
+                }
+                if let Some(after) = filter.created_after
+                    && run.created_at < after
+                {
+                    continue;
+                }
+                if let Some(before) = filter.created_before
+                    && run.created_at > before
+                {
+                    continue;
+                }
+                if let Some(has_steps) = filter.has_steps {
+                    let run_has_steps = state.steps.values().any(|s| s.run_id == run.id);
+                    if has_steps != run_has_steps {
+                        continue;
+                    }
+                }
+
                 total_cost_usd += run.cost_usd;
                 total_duration_ms += run.duration_ms;
+                total_runs += 1;
 
                 match run.status.state {
                     RunStatus::Completed => completed_runs += 1,
@@ -434,8 +466,6 @@ impl RunStore for InMemoryStore {
                     }
                 }
             }
-
-            let total_runs = state.runs.len() as u64;
 
             Ok(RunStats {
                 total_runs,
@@ -1168,7 +1198,7 @@ mod tests {
     #[tokio::test]
     async fn get_stats_empty_store() {
         let store = InMemoryStore::new();
-        let stats = store.get_stats().await.unwrap();
+        let stats = store.get_stats(RunFilter::default()).await.unwrap();
         assert_eq!(stats.total_runs, 0);
         assert_eq!(stats.completed_runs, 0);
         assert_eq!(stats.failed_runs, 0);
@@ -1241,7 +1271,7 @@ mod tests {
             .await
             .unwrap();
 
-        let stats = store.get_stats().await.unwrap();
+        let stats = store.get_stats(RunFilter::default()).await.unwrap();
         assert_eq!(stats.total_runs, 4);
         assert_eq!(stats.completed_runs, 1);
         assert_eq!(stats.failed_runs, 1);
@@ -1897,7 +1927,7 @@ mod tests {
             .await
             .unwrap();
 
-        let stats = store.get_stats().await.unwrap();
+        let stats = store.get_stats(RunFilter::default()).await.unwrap();
         assert_eq!(stats.active_runs, 3); // _r1 (Pending), r2 (Running), r3 (Retrying)
     }
 

@@ -254,7 +254,7 @@ impl RunStore for ApiRunStore {
         })
     }
 
-    fn get_stats(&self) -> StoreFuture<'_, RunStats> {
+    fn get_stats(&self, _filter: RunFilter) -> StoreFuture<'_, RunStats> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "get_stats not supported via worker API".to_string(),
@@ -334,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn get_stats_not_supported() {
         let store = ApiRunStore::new("http://localhost:3000", "token");
-        let result = store.get_stats().await;
+        let result = store.get_stats(RunFilter::default()).await;
         assert!(result.is_err());
         match result {
             Err(StoreError::Database(msg)) => {

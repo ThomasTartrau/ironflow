@@ -1,21 +1,26 @@
-//! `GET /api/v1/stats` — Aggregate statistics across all runs.
+//! `GET /api/v1/stats` — Aggregate statistics across runs.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::models::RunFilter;
 
-use crate::entities::StatsResponse;
+use crate::entities::{ListRunsQuery, StatsResponse};
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
 
-/// Get aggregate statistics across all runs.
+/// Get aggregate statistics across runs matching the filter.
+///
+/// Accepts the same filtering query parameters as `GET /api/v1/runs`
+/// (`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
         get,
         path = "/api/v1/stats",
         tags = ["stats"],
+        params(ListRunsQuery),
         responses(
             (status = 200, description = "Aggregate statistics", body = StatsResponse),
             (status = 401, description = "Unauthorized")
@@ -26,8 +31,16 @@ use crate::state::AppState;
 pub async fn get_stats(
     _auth: Authenticated,
     State(state): State<AppState>,
+    Query(params): Query<ListRunsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let stats = state.store.get_stats().await?;
+    let filter = RunFilter {
+        workflow_name: params.workflow,
+        status: params.status,
+        created_after: None,
+        created_before: None,
+        has_steps: params.has_steps,
+    };
+    let stats = state.store.get_stats(filter).await?;
 
     let success_rate_percent = if stats.completed_runs + stats.failed_runs > 0 {
         (stats.completed_runs as f64 / (stats.completed_runs + stats.failed_runs) as f64) * 100.0
@@ -60,7 +73,7 @@ mod tests {
     use ironflow_engine::notify::Event;
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
+    use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
@@ -194,5 +207,151 @@ mod tests {
 
         let rate = json_val["data"]["success_rate_percent"].as_f64().unwrap();
         assert!((rate - 50.0).abs() < 0.01);
+    }
+
+    async fn setup_runs_with_steps(store: &Arc<InMemoryStore>) {
+        // Run without steps
+        store
+            .create_run(NewRun {
+                workflow_name: "empty-wf".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+
+        // Run with steps
+        let r = store
+            .create_run(NewRun {
+                workflow_name: "busy-wf".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+        store
+            .create_step(NewStep {
+                run_id: r.id,
+                name: "build".to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stats_filters_has_steps_true() {
+        let store = Arc::new(InMemoryStore::new());
+        setup_runs_with_steps(&store).await;
+
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", get(get_stats)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/?has_steps=true")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["total_runs"], 1);
+    }
+
+    #[tokio::test]
+    async fn stats_filters_has_steps_false() {
+        let store = Arc::new(InMemoryStore::new());
+        setup_runs_with_steps(&store).await;
+
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", get(get_stats)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/?has_steps=false")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["total_runs"], 1);
+    }
+
+    #[tokio::test]
+    async fn stats_filters_by_workflow_name() {
+        let store = Arc::new(InMemoryStore::new());
+        setup_runs_with_steps(&store).await;
+
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", get(get_stats)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/?workflow=busy")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["total_runs"], 1);
+    }
+
+    #[tokio::test]
+    async fn stats_filters_by_status() {
+        let store = Arc::new(InMemoryStore::new());
+        // One pending, one completed
+        store
+            .create_run(NewRun {
+                workflow_name: "a".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+        let r = store
+            .create_run(NewRun {
+                workflow_name: "b".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+            })
+            .await
+            .unwrap();
+        store
+            .update_run_status(r.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(r.id, RunStatus::Completed)
+            .await
+            .unwrap();
+
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", get(get_stats)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/?status=completed")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["total_runs"], 1);
+        assert_eq!(json_val["data"]["completed_runs"], 1);
     }
 }

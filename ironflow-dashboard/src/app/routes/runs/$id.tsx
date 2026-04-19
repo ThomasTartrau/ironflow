@@ -10,6 +10,7 @@ import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { useRevalidateOnEvent } from "@/app/hooks/use-revalidate-on-event";
+import { useLiveClock } from "@/app/hooks/use-live-clock";
 import { StatCard } from "@/app/components/StatCard";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TriggerBadge } from "@/app/components/TriggerBadge";
@@ -36,18 +37,30 @@ function isRunActive(status: RunStatus): boolean {
 	);
 }
 
+function computeLiveDurationMs(run: RunResponse, nowMs: number): number {
+	if (run.completed_at) return run.duration_ms;
+	if (!run.started_at) return run.duration_ms;
+	const started = new Date(run.started_at).getTime();
+	if (Number.isNaN(started)) return run.duration_ms;
+	return Math.max(run.duration_ms, nowMs - started);
+}
+
 export function Component() {
 	const { run, steps } = useLoaderData() as {
 		run: RunResponse;
 		steps: StepResponse[];
 	};
+	const active = isRunActive(run.status);
+	const nowMs = useLiveClock({ enabled: active, intervalMs: 500 });
+	const liveDurationMs = computeLiveDurationMs(run, nowMs);
+
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
 		description: `Run ${run.id} of workflow ${run.workflow_name}.`,
 	});
 	useRevalidateOnEvent({
 		runId: run.id,
-		enabled: isRunActive(run.status),
+		enabled: active,
 	});
 
 	return (
@@ -78,7 +91,7 @@ export function Component() {
 					/>
 					<StatCard
 						label="Duration"
-						value={formatDuration(run.duration_ms)}
+						value={formatDuration(liveDurationMs)}
 						icon={Clock}
 					/>
 					<StatCard
@@ -115,6 +128,8 @@ export function Component() {
 							steps={steps}
 							runStartedAt={run.started_at ?? null}
 							runId={run.id}
+							nowMs={nowMs}
+							isRunActive={active}
 						/>
 					</CollapsibleSection>
 					<CollapsibleSection storageKey="steps-flow" title="Flow">

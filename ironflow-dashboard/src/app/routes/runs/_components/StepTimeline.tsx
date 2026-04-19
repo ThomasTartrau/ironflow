@@ -11,14 +11,21 @@ interface StepTimelineProps {
 	steps: StepResponse[];
 	runStartedAt: string | null;
 	runId: string;
+	nowMs?: number;
+	isRunActive?: boolean;
 }
 
 export function StepTimeline({
 	steps,
 	runStartedAt,
 	runId,
+	nowMs,
+	isRunActive = false,
 }: StepTimelineProps) {
-	const { rows, totalMs } = useTimelineRows(steps, runStartedAt, runId);
+	const { rows, totalMs } = useTimelineRows(steps, runStartedAt, runId, {
+		nowMs,
+		liveTotal: isRunActive,
+	});
 	const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
 
 	const markers = computeTimeMarkers(totalMs);

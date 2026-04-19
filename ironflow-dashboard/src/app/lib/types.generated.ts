@@ -338,7 +338,11 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** Get aggregate statistics across all runs. */
+		/**
+		 * Get aggregate statistics across runs matching the filter.
+		 * @description Accepts the same filtering query parameters as `GET /api/v1/runs`
+		 *     (`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.
+		 */
 		get: operations["get_stats"];
 		put?: never;
 		post?: never;
@@ -1963,7 +1967,21 @@ export interface operations {
 	};
 	get_stats: {
 		parameters: {
-			query?: never;
+			query?: {
+				/** @description Filter by workflow name. */
+				workflow?: string | null;
+				/** @description Filter by run status. */
+				status?: null | components["schemas"]["RunStatus"];
+				/**
+				 * @description When `true`, only return runs with at least one step.
+				 *     When `false`, only return runs with no steps.
+				 */
+				has_steps?: boolean | null;
+				/** @description Page number (1-based). */
+				page?: number | null;
+				/** @description Items per page. */
+				per_page?: number | null;
+			};
 			header?: never;
 			path?: never;
 			cookie?: never;

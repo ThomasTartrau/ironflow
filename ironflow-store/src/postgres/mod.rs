@@ -1059,9 +1059,47 @@ impl RunStore for PostgresStore {
         })
     }
 
-    fn get_stats(&self) -> StoreFuture<'_, RunStats> {
+    fn get_stats(&self, filter: RunFilter) -> StoreFuture<'_, RunStats> {
         Box::pin(async move {
-            let row = sqlx::query(
+            let mut conditions = Vec::new();
+            let mut bind_idx = 1u32;
+
+            if filter.workflow_name.is_some() {
+                conditions.push(format!("r.workflow_name ILIKE ${bind_idx}"));
+                bind_idx += 1;
+            }
+            if filter.status.is_some() {
+                conditions.push(format!("ast.name = ${bind_idx}"));
+                bind_idx += 1;
+            }
+            if filter.created_after.is_some() {
+                conditions.push(format!("r.created_at >= ${bind_idx}"));
+                bind_idx += 1;
+            }
+            if filter.created_before.is_some() {
+                conditions.push(format!("r.created_at <= ${bind_idx}"));
+                bind_idx += 1;
+            }
+            if let Some(has_steps) = filter.has_steps {
+                if has_steps {
+                    conditions.push(
+                        "EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)".to_string(),
+                    );
+                } else {
+                    conditions.push(
+                        "NOT EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
+                            .to_string(),
+                    );
+                }
+            }
+
+            let where_clause = if conditions.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE {}", conditions.join(" AND "))
+            };
+
+            let sql = format!(
                 r#"
                 SELECT
                     COUNT(*) as total,
@@ -1074,11 +1112,28 @@ impl RunStore for PostgresStore {
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                {where_clause}
                 "#
-            )
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            );
+
+            let mut query = sqlx::query(&sql);
+            if let Some(ref wf) = filter.workflow_name {
+                query = query.bind(format!("%{wf}%"));
+            }
+            if let Some(ref status) = filter.status {
+                query = query.bind(helpers::run_status_to_db_str(status));
+            }
+            if let Some(after) = filter.created_after {
+                query = query.bind(after);
+            }
+            if let Some(before) = filter.created_before {
+                query = query.bind(before);
+            }
+
+            let row = query
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(RunStats {
                 total_runs: row.get::<i64, _>("total") as u64,

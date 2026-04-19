@@ -101,12 +101,14 @@ pub trait RunStore: Send + Sync {
     /// List all steps for a run, ordered by position ascending.
     fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>>;
 
-    /// Get aggregated statistics across all runs.
+    /// Get aggregated statistics across runs matching the filter.
     ///
     /// Returns counts of runs by terminal state, counts of active runs,
     /// and totals for cost and duration. Computed efficiently by the store
     /// implementation (single SQL query in PostgreSQL).
-    fn get_stats(&self) -> StoreFuture<'_, RunStats>;
+    ///
+    /// Pass [`RunFilter::default()`] to get stats across all runs.
+    fn get_stats(&self, filter: RunFilter) -> StoreFuture<'_, RunStats>;
 
     /// Create step dependency edges in batch.
     ///
