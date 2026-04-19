@@ -39,6 +39,7 @@ impl WorkflowHandler for NotifiedPipeline {
                 .to_string(),
             source_code: Some(include_str!("notified_pipeline.rs").to_string()),
             sub_workflows: Vec::new(),
+            category: None,
         }
     }
 

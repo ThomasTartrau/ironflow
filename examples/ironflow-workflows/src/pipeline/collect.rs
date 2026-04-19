@@ -10,11 +10,16 @@ impl WorkflowHandler for Collect {
         "pipeline-collect"
     }
 
+    fn category(&self) -> Option<&str> {
+        Some("examples/pipeline")
+    }
+
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: "Collects raw system metrics: disk usage, memory, and uptime.".to_string(),
             source_code: Some(include_str!("collect.rs").to_string()),
             sub_workflows: Vec::new(),
+            category: Some("examples/pipeline".to_string()),
         }
     }
 

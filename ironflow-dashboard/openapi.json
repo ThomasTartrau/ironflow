@@ -1018,8 +1018,8 @@
         "tags": [
           "workflows"
         ],
-        "summary": "List registered workflow names, optionally filtered by name.",
-        "description": "# Query Parameters\n\n- `name` — Filter by workflow name, case-insensitive partial match (optional)",
+        "summary": "List registered workflows, optionally filtered by name and category.",
+        "description": "# Query Parameters\n\n- `name` — Case-insensitive partial match on workflow name (optional)\n- `category` — Case-insensitive partial match on category path, or\n  [`UNCATEGORIZED_FILTER`] to filter only uncategorized workflows\n  (optional)",
         "operationId": "list_workflows",
         "parameters": [
           {
@@ -1033,11 +1033,33 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "description": "Optional case-insensitive partial match on the category path\n(e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).\n\nPass `__uncategorized__` to list only workflows without any\ncategory.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "List of workflow names"
+            "description": "List of workflow summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowSummary"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -1842,6 +1864,13 @@
         "type": "object",
         "description": "Query parameters for listing workflows.",
         "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional case-insensitive partial match on the category path\n(e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).\n\nPass `__uncategorized__` to list only workflows without any\ncategory."
+          },
           "name": {
             "type": [
               "string",
@@ -2485,6 +2514,13 @@
           "sub_workflows"
         ],
         "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional `/`-separated category path used to group workflows."
+          },
           "description": {
             "type": "string",
             "description": "Human-readable description."
@@ -2506,6 +2542,26 @@
               "$ref": "#/components/schemas/SubWorkflowDetail"
             },
             "description": "Sub-workflows invoked by this handler (recursive, depth-limited)."
+          }
+        }
+      },
+      "WorkflowSummary": {
+        "type": "object",
+        "description": "Summary entry returned by `GET /api/v1/workflows`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional `/`-separated category path."
+          },
+          "name": {
+            "type": "string",
+            "description": "Workflow name (unique identifier)."
           }
         }
       }

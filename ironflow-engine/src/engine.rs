@@ -77,6 +77,42 @@ pub struct Engine {
     event_publisher: EventPublisher,
 }
 
+/// Validate a workflow category path.
+///
+/// A category is a `/`-separated list of non-empty segments. This function
+/// rejects empty paths, leading or trailing `/`, consecutive `/`, and
+/// segments containing only whitespace.
+///
+/// # Errors
+///
+/// Returns [`EngineError::InvalidWorkflow`] when the category is malformed.
+fn validate_category(handler_name: &str, category: &str) -> Result<(), EngineError> {
+    let reject = |reason: &str| {
+        Err(EngineError::InvalidWorkflow(format!(
+            "handler '{handler_name}' has invalid category '{category}': {reason}"
+        )))
+    };
+
+    if category.is_empty() {
+        return reject("empty category");
+    }
+    if category.starts_with('/') {
+        return reject("leading '/'");
+    }
+    if category.ends_with('/') {
+        return reject("trailing '/'");
+    }
+    for segment in category.split('/') {
+        if segment.is_empty() {
+            return reject("empty segment (double '/')");
+        }
+        if segment.trim().is_empty() {
+            return reject("whitespace-only segment");
+        }
+    }
+    Ok(())
+}
+
 impl Engine {
     /// Create a new engine with the given store and agent provider.
     ///
@@ -176,6 +212,9 @@ impl Engine {
                 name
             )));
         }
+        if let Some(category) = handler.category() {
+            validate_category(&name, category)?;
+        }
         self.handlers.insert(name, Arc::new(handler));
         Ok(())
     }
@@ -185,7 +224,7 @@ impl Engine {
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if a handler with the same
-    /// name is already registered.
+    /// name is already registered or if its category is invalid.
     pub fn register_boxed(&mut self, handler: Box<dyn WorkflowHandler>) -> Result<(), EngineError> {
         let name = handler.name().to_string();
         if self.handlers.contains_key(&name) {
@@ -193,6 +232,9 @@ impl Engine {
                 "handler '{}' already registered",
                 name
             )));
+        }
+        if let Some(category) = handler.category() {
+            validate_category(&name, category)?;
         }
         self.handlers.insert(name, Arc::from(handler));
         Ok(())
@@ -673,6 +715,7 @@ mod tests {
                 description: "A simple workflow that echoes hello".to_string(),
                 source_code: None,
                 sub_workflows: Vec::new(),
+                category: None,
             }
         }
 
@@ -767,6 +810,120 @@ mod tests {
         assert!(info.is_some());
         let info = info.unwrap();
         assert_eq!(info.description, "A simple workflow that echoes hello");
+    }
+
+    struct CategorizedWorkflow;
+
+    impl WorkflowHandler for CategorizedWorkflow {
+        fn name(&self) -> &str {
+            "categorized"
+        }
+        fn category(&self) -> Option<&str> {
+            Some("data/etl")
+        }
+        fn execute<'a>(
+            &'a self,
+            _ctx: &'a mut WorkflowContext,
+        ) -> crate::handler::HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn engine_default_describe_propagates_category() {
+        let mut engine = create_test_engine();
+        engine.register(CategorizedWorkflow).unwrap();
+        let info = engine.handler_info("categorized").unwrap();
+        assert_eq!(info.category.as_deref(), Some("data/etl"));
+    }
+
+    #[test]
+    fn engine_default_describe_without_category() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        let info = engine.handler_info("echo-workflow").unwrap();
+        assert!(info.category.is_none());
+    }
+
+    struct BadCategoryWorkflow(&'static str);
+
+    impl WorkflowHandler for BadCategoryWorkflow {
+        fn name(&self) -> &str {
+            "bad-category"
+        }
+        fn category(&self) -> Option<&str> {
+            Some(self.0)
+        }
+        fn execute<'a>(
+            &'a self,
+            _ctx: &'a mut WorkflowContext,
+        ) -> crate::handler::HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn engine_register_rejects_empty_category() {
+        let mut engine = create_test_engine();
+        let err = engine.register(BadCategoryWorkflow("")).unwrap_err();
+        match err {
+            EngineError::InvalidWorkflow(msg) => assert!(msg.contains("empty category")),
+            other => panic!("expected InvalidWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_register_rejects_leading_slash_category() {
+        let mut engine = create_test_engine();
+        let err = engine
+            .register(BadCategoryWorkflow("/data/etl"))
+            .unwrap_err();
+        match err {
+            EngineError::InvalidWorkflow(msg) => assert!(msg.contains("leading '/'")),
+            other => panic!("expected InvalidWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_register_rejects_trailing_slash_category() {
+        let mut engine = create_test_engine();
+        let err = engine
+            .register(BadCategoryWorkflow("data/etl/"))
+            .unwrap_err();
+        match err {
+            EngineError::InvalidWorkflow(msg) => assert!(msg.contains("trailing '/'")),
+            other => panic!("expected InvalidWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_register_rejects_double_slash_category() {
+        let mut engine = create_test_engine();
+        let err = engine
+            .register(BadCategoryWorkflow("data//etl"))
+            .unwrap_err();
+        match err {
+            EngineError::InvalidWorkflow(msg) => assert!(msg.contains("empty segment")),
+            other => panic!("expected InvalidWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_register_rejects_whitespace_only_segment_category() {
+        let mut engine = create_test_engine();
+        let err = engine
+            .register(BadCategoryWorkflow("data/ /etl"))
+            .unwrap_err();
+        match err {
+            EngineError::InvalidWorkflow(msg) => assert!(msg.contains("whitespace-only segment")),
+            other => panic!("expected InvalidWorkflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_register_accepts_valid_nested_category() {
+        let mut engine = create_test_engine();
+        assert!(engine.register(CategorizedWorkflow).is_ok());
     }
 
     #[tokio::test]

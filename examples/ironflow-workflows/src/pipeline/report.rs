@@ -16,6 +16,10 @@ impl WorkflowHandler for Report {
         "pipeline-report"
     }
 
+    fn category(&self) -> Option<&str> {
+        Some("examples/pipeline")
+    }
+
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: "Full system report pipeline: collect → enrich → report. \
@@ -24,6 +28,7 @@ impl WorkflowHandler for Report {
                 .to_string(),
             source_code: Some(include_str!("report.rs").to_string()),
             sub_workflows: vec!["pipeline-enrich".to_string()],
+            category: Some("examples/pipeline".to_string()),
         }
     }
 

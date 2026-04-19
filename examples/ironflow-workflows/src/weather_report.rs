@@ -16,6 +16,7 @@ impl WorkflowHandler for WeatherReport {
                 .to_string(),
             source_code: Some(include_str!("weather_report.rs").to_string()),
             sub_workflows: Vec::new(),
+            category: None,
         }
     }
 

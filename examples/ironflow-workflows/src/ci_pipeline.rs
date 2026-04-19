@@ -23,6 +23,7 @@ impl WorkflowHandler for CiPipeline {
                 .to_string(),
             source_code: Some(include_str!("ci_pipeline.rs").to_string()),
             sub_workflows: Vec::new(),
+            category: None,
         }
     }
 
