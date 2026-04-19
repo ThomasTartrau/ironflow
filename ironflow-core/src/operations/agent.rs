@@ -100,6 +100,13 @@ impl Model {
     pub const SONNET_46_1M: &str = "claude-sonnet-4-6[1m]";
     /// Claude Opus 4.6 with 1M token context window.
     pub const OPUS_46_1M: &str = "claude-opus-4-6[1m]";
+
+    // ── Claude 4.7 - 1M context native ─────────────────────────────
+
+    /// Claude Opus 4.7 - latest flagship, 1M token context native.
+    pub const OPUS_47: &str = "claude-opus-4-7";
+    /// Claude Opus 4.7 with 1M token context window explicit.
+    pub const OPUS_47_1M: &str = "claude-opus-4-7[1m]";
 }
 
 /// Controls how the agent handles tool-use permission prompts.
@@ -825,6 +832,8 @@ mod tests {
         assert_eq!(Model::OPUS_46, "claude-opus-4-6");
         assert_eq!(Model::SONNET_46_1M, "claude-sonnet-4-6[1m]");
         assert_eq!(Model::OPUS_46_1M, "claude-opus-4-6[1m]");
+        assert_eq!(Model::OPUS_47, "claude-opus-4-7");
+        assert_eq!(Model::OPUS_47_1M, "claude-opus-4-7[1m]");
     }
 
     // --- Agent::new() defaults via ConfigCapture ---
