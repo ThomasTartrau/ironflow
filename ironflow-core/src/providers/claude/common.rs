@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::error::{AgentError, PartialUsage};
 use crate::operations::agent::PermissionMode;
-use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall};
+use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall, DebugToolResult};
 use crate::utils::estimate_tokens;
 
 /// Default timeout for a single Claude CLI invocation (5 minutes).
@@ -406,6 +406,11 @@ pub fn parse_stream_response(
 ) -> Result<AgentOutput, AgentError> {
     let mut debug_messages: Vec<DebugMessage> = Vec::new();
     let mut result_line: Option<&str> = None;
+    // True when the next `assistant` line should merge into the last pushed
+    // `DebugMessage`. A Claude CLI turn can span several `assistant` lines
+    // (one per content_block: thinking, tool_use, text). We aggregate them
+    // until a `user` (tool_result) line or a terminal `stop_reason` arrives.
+    let mut assistant_turn_open = false;
 
     for line in stdout.lines() {
         let trimmed = line.trim();
@@ -418,6 +423,29 @@ pub fn parse_stream_response(
             Err(_) => continue,
         };
 
+        let line_type = parsed
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("<missing>");
+        let content_kinds: Vec<&str> = parsed
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|b| b.get("type").and_then(|t| t.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        trace!(
+            target: "ironflow_core::stream",
+            line_type,
+            content_kinds = ?content_kinds,
+            raw_len = trimmed.len(),
+            "stream-json line"
+        );
+
         match parsed.get("type").and_then(|t| t.as_str()) {
             Some("assistant") => {
                 let message = parsed.get("message");
@@ -429,8 +457,18 @@ pub fn parse_stream_response(
                     .and_then(|s| s.as_str())
                     .map(|s| s.to_string());
 
+                let usage = message.and_then(|m| m.get("usage"));
+                let input_tokens = usage
+                    .and_then(|u| u.get("input_tokens"))
+                    .and_then(|v| v.as_u64());
+                let output_tokens = usage
+                    .and_then(|u| u.get("output_tokens"))
+                    .and_then(|v| v.as_u64());
+
                 let mut text_parts: Vec<String> = Vec::new();
+                let mut thinking_parts: Vec<String> = Vec::new();
                 let mut tool_calls: Vec<DebugToolCall> = Vec::new();
+                let mut thinking_redacted = false;
 
                 if let Some(blocks) = content {
                     for block in blocks {
@@ -440,14 +478,37 @@ pub fn parse_stream_response(
                                     text_parts.push(t.to_string());
                                 }
                             }
+                            Some("thinking") => {
+                                // Try the canonical field first, fall back to
+                                // `text` which some Claude CLI versions use.
+                                let text_value = block
+                                    .get("thinking")
+                                    .and_then(|t| t.as_str())
+                                    .or_else(|| block.get("text").and_then(|t| t.as_str()));
+                                if let Some(t) = text_value
+                                    && !t.is_empty()
+                                {
+                                    thinking_parts.push(t.to_string());
+                                } else {
+                                    // Opus 4.7 adaptive thinking and
+                                    // `display: "omitted"` yield signature-only
+                                    // thinking blocks. Flag them so the UI can
+                                    // still surface that reasoning happened.
+                                    thinking_redacted = true;
+                                }
+                            }
                             Some("tool_use") => {
+                                let id = block
+                                    .get("id")
+                                    .and_then(|n| n.as_str())
+                                    .map(|s| s.to_string());
                                 let name = block
                                     .get("name")
                                     .and_then(|n| n.as_str())
                                     .unwrap_or("unknown")
                                     .to_string();
                                 let input = block.get("input").cloned().unwrap_or(Value::Null);
-                                tool_calls.push(DebugToolCall { name, input });
+                                tool_calls.push(DebugToolCall { id, name, input });
                             }
                             _ => {}
                         }
@@ -459,12 +520,104 @@ pub fn parse_stream_response(
                 } else {
                     Some(text_parts.join("\n"))
                 };
+                let thinking = if thinking_parts.is_empty() {
+                    None
+                } else {
+                    Some(thinking_parts.join("\n"))
+                };
 
-                debug_messages.push(DebugMessage {
-                    text,
-                    tool_calls,
-                    stop_reason,
-                });
+                let stop_is_terminal = stop_reason.is_some();
+
+                if assistant_turn_open
+                    && let Some(last) = debug_messages.last_mut()
+                {
+                    // Merge into the turn still being built.
+                    if let Some(t) = text {
+                        last.text = Some(match last.text.take() {
+                            Some(existing) if !existing.is_empty() => format!("{existing}\n{t}"),
+                            _ => t,
+                        });
+                    }
+                    if let Some(t) = thinking {
+                        last.thinking = Some(match last.thinking.take() {
+                            Some(existing) if !existing.is_empty() => format!("{existing}\n{t}"),
+                            _ => t,
+                        });
+                    }
+                    last.thinking_redacted = last.thinking_redacted || thinking_redacted;
+                    last.tool_calls.extend(tool_calls);
+                    if stop_is_terminal {
+                        last.stop_reason = stop_reason;
+                    }
+                    if let Some(v) = input_tokens {
+                        last.input_tokens = Some(last.input_tokens.unwrap_or(0) + v);
+                    }
+                    if let Some(v) = output_tokens {
+                        last.output_tokens = Some(last.output_tokens.unwrap_or(0) + v);
+                    }
+                } else {
+                    debug_messages.push(DebugMessage {
+                        text,
+                        thinking,
+                        thinking_redacted,
+                        tool_calls,
+                        tool_results: Vec::new(),
+                        stop_reason,
+                        input_tokens,
+                        output_tokens,
+                    });
+                }
+
+                // Keep aggregating unless the CLI signalled the end of the turn.
+                assistant_turn_open = !stop_is_terminal;
+            }
+            Some("user") => {
+                // A tool_result always closes the current assistant turn.
+                assistant_turn_open = false;
+                // Tool results come as user messages whose content is an array
+                // of `tool_result` blocks. Attach them to the most recent
+                // assistant turn that emitted matching tool_use entries so
+                // the timeline stays compact.
+                let content = parsed
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array());
+
+                if let Some(blocks) = content {
+                    for block in blocks {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
+                            let tool_use_id = block
+                                .get("tool_use_id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let content_value =
+                                block.get("content").cloned().unwrap_or(Value::Null);
+                            let is_error = block
+                                .get("is_error")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+
+                            let result = DebugToolResult {
+                                tool_use_id: tool_use_id.clone(),
+                                content: content_value,
+                                is_error,
+                            };
+
+                            // Attach to the turn whose tool_calls include this id.
+                            let target = tool_use_id.as_deref().and_then(|id| {
+                                debug_messages.iter_mut().rev().find(|m| {
+                                    m.tool_calls.iter().any(|tc| tc.id.as_deref() == Some(id))
+                                })
+                            });
+
+                            if let Some(msg) = target {
+                                msg.tool_results.push(result);
+                            } else if let Some(last) = debug_messages.last_mut() {
+                                last.tool_results.push(result);
+                            }
+                        }
+                    }
+                }
             }
             Some("result") => {
                 result_line = Some(trimmed);
@@ -1114,15 +1267,134 @@ mod tests {
     fn debug_message_display_format() {
         let msg = DebugMessage {
             text: Some("Analyzing...".to_string()),
+            thinking: None,
+            thinking_redacted: false,
             tool_calls: vec![DebugToolCall {
+                id: Some("tu_1".to_string()),
                 name: "Read".to_string(),
                 input: json!({"file_path": "/tmp/test.rs"}),
             }],
+            tool_results: Vec::new(),
             stop_reason: Some("tool_use".to_string()),
+            input_tokens: None,
+            output_tokens: None,
         };
         let display = format!("{msg}");
         assert!(display.contains("[assistant] Analyzing..."));
         assert!(display.contains("[tool_use] Read"));
+    }
+
+    #[test]
+    fn parse_stream_response_flags_redacted_thinking() {
+        let stream = [
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"sig_abc"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"}}"#,
+            r#"{"type":"result","result":"","duration_ms":100}"#,
+        ]
+        .join("\n");
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 0).unwrap();
+        let messages = output.debug_messages.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].thinking_redacted);
+        assert!(messages[0].thinking.is_none());
+        assert_eq!(messages[0].tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn parse_stream_response_extracts_thinking_block() {
+        let stream = [
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me reason about this step by step."},{"type":"text","text":"Answer: 42"}],"stop_reason":"end_turn","usage":{"input_tokens":120,"output_tokens":30}}}"#,
+            r#"{"type":"result","result":"Answer: 42","duration_ms":250}"#,
+        ]
+        .join("\n");
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 0).unwrap();
+        let messages = output.debug_messages.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].thinking.as_deref(),
+            Some("Let me reason about this step by step.")
+        );
+        assert_eq!(messages[0].text.as_deref(), Some("Answer: 42"));
+        assert_eq!(messages[0].input_tokens, Some(120));
+        assert_eq!(messages[0].output_tokens, Some(30));
+    }
+
+    #[test]
+    fn parse_stream_response_attaches_tool_results_to_matching_turn() {
+        let stream = [
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"/tmp/a"}}],"stop_reason":"tool_use"}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"file contents here","is_error":false}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"}}"#,
+            r#"{"type":"result","result":"Done.","duration_ms":400}"#,
+        ]
+        .join("\n");
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 0).unwrap();
+        let messages = output.debug_messages.unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].tool_calls.len(), 1);
+        assert_eq!(messages[0].tool_calls[0].id.as_deref(), Some("tu_1"));
+        assert_eq!(messages[0].tool_results.len(), 1);
+        assert_eq!(
+            messages[0].tool_results[0].tool_use_id.as_deref(),
+            Some("tu_1")
+        );
+        assert!(!messages[0].tool_results[0].is_error);
+        assert!(messages[1].tool_results.is_empty());
+    }
+
+    #[test]
+    fn parse_stream_response_merges_consecutive_assistant_content_blocks() {
+        // The Claude CLI emits one `assistant` line per content block:
+        // thinking first (no stop_reason), then tool_use (stop_reason=tool_use).
+        // Both belong to the same logical turn and must be collapsed into one
+        // DebugMessage.
+        let stream = [
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"I should list files first."}],"usage":{"input_tokens":6,"output_tokens":0}}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":65}}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"README.md","is_error":false}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}}"#,
+            r#"{"type":"result","result":"Done.","duration_ms":500}"#,
+        ]
+        .join("\n");
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 0).unwrap();
+        let messages = output.debug_messages.unwrap();
+
+        assert_eq!(messages.len(), 2, "expected 2 logical turns, got {messages:?}");
+
+        // Turn 1: thinking + tool_use merged, tool_result attached.
+        assert_eq!(
+            messages[0].thinking.as_deref(),
+            Some("I should list files first.")
+        );
+        assert_eq!(messages[0].tool_calls.len(), 1);
+        assert_eq!(messages[0].tool_calls[0].id.as_deref(), Some("tu_1"));
+        assert_eq!(messages[0].tool_results.len(), 1);
+        assert_eq!(messages[0].stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(messages[0].input_tokens, Some(7));
+        assert_eq!(messages[0].output_tokens, Some(65));
+
+        // Turn 2: the final assistant text.
+        assert_eq!(messages[1].text.as_deref(), Some("Done."));
+        assert_eq!(messages[1].stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
+    fn parse_stream_response_marks_tool_result_error() {
+        let stream = [
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_x","name":"Bash","input":{"command":"boom"}}],"stop_reason":"tool_use"}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_x","content":"command failed","is_error":true}]}}"#,
+            r#"{"type":"result","result":"error","duration_ms":100}"#,
+        ]
+        .join("\n");
+        let config = AgentConfig::new("test");
+        let output = parse_stream_response(&stream, &config, 0).unwrap();
+        let messages = output.debug_messages.unwrap();
+        assert_eq!(messages[0].tool_results.len(), 1);
+        assert!(messages[0].tool_results[0].is_error);
     }
 
     #[test]
@@ -1159,11 +1431,8 @@ mod tests {
         assert!(args.contains(&"--allowedTools".to_string()));
         assert!(args.contains(&"WebSearch,WebFetch".to_string()));
         assert!(args.contains(&"--json-schema".to_string()));
-        assert!(
-            args.contains(
-                &r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()
-            )
-        );
+        assert!(args
+            .contains(&r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()));
         assert!(args.contains(&"--output-format".to_string()));
         assert!(args.contains(&"json".to_string()));
     }

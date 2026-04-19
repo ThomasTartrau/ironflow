@@ -14,6 +14,10 @@ declare global {
 import { api } from "@/app/lib/api";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
+import {
+	AgentDebugTimeline,
+	countVisibleTurns,
+} from "./AgentDebugTimeline";
 import { Badge } from "@/components/ui/badge";
 import {
 	Collapsible,
@@ -168,7 +172,30 @@ function NestedStep({ step }: { step: StepResponse }) {
 							</div>
 						</div>
 					)}
-					{step.output && <StepOutput step={step} />}
+					{step.output &&
+						(step.kind === "agent" ? (
+							<CollapsibleBlock label="Agent response">
+								<StepOutput step={step} />
+							</CollapsibleBlock>
+						) : (
+							<StepOutput step={step} />
+						))}
+					{step.kind === "agent" && step.debug_messages != null && (
+						<CollapsibleBlock
+							label="Conversation trace"
+							labelExtra={
+								<Badge
+									variant="outline"
+									className="text-[10px] bg-violet-50 text-violet-700 border-violet-200"
+								>
+									{countVisibleTurns(step.debug_messages)} turn
+									{countVisibleTurns(step.debug_messages) > 1 ? "s" : ""}
+								</Badge>
+							}
+						>
+							<AgentDebugTimeline debugMessages={step.debug_messages} />
+						</CollapsibleBlock>
+					)}
 					{step.input && <StepInput step={step} />}
 				</div>
 			)}
@@ -330,18 +357,21 @@ function StepOutput({ step }: { step: StepResponse }) {
 
 function CollapsibleBlock({
 	label,
+	labelExtra,
 	children,
 	defaultOpen = false,
 }: {
 	label: string;
+	labelExtra?: React.ReactNode;
 	children: React.ReactNode;
 	defaultOpen?: boolean;
 }) {
 	return (
 		<Collapsible defaultOpen={defaultOpen}>
-			<CollapsibleTrigger className="flex items-center gap-1 text-xs font-semibold text-muted-foreground mb-1.5 hover:text-foreground transition-colors cursor-pointer">
+			<CollapsibleTrigger className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-1.5 hover:text-foreground transition-colors cursor-pointer">
 				<ChevronDown className="w-3 h-3 transition-transform [[data-panel-open]_&]:rotate-180" />
-				{label}
+				<span>{label}</span>
+				{labelExtra}
 			</CollapsibleTrigger>
 			<CollapsibleContent>{children}</CollapsibleContent>
 		</Collapsible>
@@ -553,7 +583,32 @@ function StepRow({ step }: { step: StepResponse }) {
 								</div>
 							)}
 
-							{step.output && <StepOutput step={step} />}
+							{step.output &&
+								(step.kind === "agent" ? (
+									<CollapsibleBlock label="Agent response" defaultOpen>
+										<StepOutput step={step} />
+									</CollapsibleBlock>
+								) : (
+									<StepOutput step={step} />
+								))}
+
+							{step.kind === "agent" && step.debug_messages != null && (
+								<CollapsibleBlock
+									label="Conversation trace"
+									defaultOpen
+									labelExtra={
+										<Badge
+											variant="outline"
+											className="text-[10px] bg-violet-50 text-violet-700 border-violet-200"
+										>
+											{countVisibleTurns(step.debug_messages)} turn
+											{countVisibleTurns(step.debug_messages) > 1 ? "s" : ""}
+										</Badge>
+									}
+								>
+									<AgentDebugTimeline debugMessages={step.debug_messages} />
+								</CollapsibleBlock>
+							)}
 
 							{step.input && <StepInput step={step} />}
 						</div>

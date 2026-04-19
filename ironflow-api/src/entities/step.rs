@@ -58,6 +58,11 @@ pub struct StepResponse {
     pub completed_at: Option<DateTime<Utc>>,
     /// IDs of steps this step depends on (direct dependencies).
     pub dependencies: Vec<Uuid>,
+    /// Verbose conversation trace for agent steps (thinking blocks, tool
+    /// calls, tool results, per-turn usage). `None` when verbose mode was
+    /// off or the step is not an agent step.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<serde_json::Value>))]
+    pub debug_messages: Option<Value>,
 }
 
 impl StepResponse {
@@ -82,6 +87,7 @@ impl StepResponse {
             started_at: step.started_at,
             completed_at: step.completed_at,
             dependencies,
+            debug_messages: step.debug_messages,
         }
     }
 }

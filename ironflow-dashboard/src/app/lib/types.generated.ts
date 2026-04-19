@@ -1147,6 +1147,12 @@ export interface components {
 			 * @description When created.
 			 */
 			created_at: string;
+			/**
+			 * @description Verbose conversation trace for agent steps (thinking blocks, tool
+			 *     calls, tool results, per-turn usage). `None` when verbose mode was
+			 *     off or the step is not an agent step.
+			 */
+			debug_messages?: unknown;
 			/** @description IDs of steps this step depends on (direct dependencies). */
 			dependencies: string[];
 			/**

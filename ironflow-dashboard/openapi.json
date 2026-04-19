@@ -2095,6 +2095,9 @@
             "format": "date-time",
             "description": "When created."
           },
+          "debug_messages": {
+            "description": "Verbose conversation trace for agent steps (thinking blocks, tool\ncalls, tool results, per-turn usage). `None` when verbose mode was\noff or the step is not an agent step."
+          },
           "dependencies": {
             "type": "array",
             "items": {
