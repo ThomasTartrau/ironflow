@@ -40,8 +40,12 @@ variables:
 
 # Validation jobs run only on MR pipelines.
 # Code is already validated before reaching main -- no need to re-check.
+# Release MRs from release-plz only bump Cargo.toml + CHANGELOG, no code changes --
+# skip validation to save CI time (dashboard-build still runs to satisfy MWPS).
 .only-mr:
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TITLE =~ /^chore: release/'
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
 cargo-fmt:
@@ -192,7 +196,7 @@ release-plz-update:
     - release-plz release-pr --forge gitlab --git-token "$GITLAB_TOKEN"
     - |
       MR_IID=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/merge_requests?state=opened&source_branch=release-plz-*&per_page=1" \
+        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/merge_requests?state=opened&search=release-plz&in=source_branch&per_page=1" \
         | python3 -c "import sys,json; mrs=json.load(sys.stdin); print(mrs[0]['iid'] if mrs else '')")
       if [ -n "$MR_IID" ]; then
         curl -s --request PUT --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
