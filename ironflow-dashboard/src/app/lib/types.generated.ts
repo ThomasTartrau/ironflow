@@ -155,31 +155,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	"/api/v1/auth/sign-up": {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/**
-		 * Register a new user with email and password.
-		 * @description Returns access and refresh tokens on success, and sets HttpOnly cookies.
-		 *
-		 *     # Errors
-		 *
-		 *     - 400 if email/username/password is invalid
-		 *     - 409 if email or username is already taken
-		 */
-		post: operations["sign_up"];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	"/api/v1/health-check": {
 		parameters: {
 			query?: never;
@@ -878,6 +853,31 @@ export interface components {
 			| {
 					/**
 					 * Format: date-time
+					 * @description When the line was emitted.
+					 */
+					at: string;
+					/** @description The log line content. */
+					line: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/**
+					 * Format: uuid
+					 * @description Step identifier.
+					 */
+					step_id: string;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/** @description Output stream. */
+					stream: components["schemas"]["LogStream"];
+					/** @enum {string} */
+					type: "log_line";
+			  }
+			| {
+					/**
+					 * Format: date-time
 					 * @description When the sign-in occurred.
 					 */
 					at: string;
@@ -947,6 +947,7 @@ export interface components {
 			| "approval_requested"
 			| "approval_granted"
 			| "approval_rejected"
+			| "log_line"
 			| "user_signed_in"
 			| "user_signed_up"
 			| "user_signed_out";
@@ -997,6 +998,20 @@ export interface components {
 			/** @description Optional case-insensitive partial match on workflow name. */
 			name?: string | null;
 		};
+		/**
+		 * @description Output stream for a [`LogLine`](Event::LogLine) event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::LogStream;
+		 *
+		 *     let stream: LogStream = "stdout".parse().unwrap();
+		 *     assert_eq!(stream.as_str(), "stdout");
+		 *     ```
+		 * @enum {string}
+		 */
+		LogStream: "stdout" | "stderr" | "system";
 		/** @description Current user profile response. */
 		MeResponse: {
 			/** @description Email address. */
@@ -1159,15 +1174,6 @@ export interface components {
 			email: string;
 			/** @description Plaintext password. */
 			password: string;
-		};
-		/** @description Sign-up request body. */
-		SignUpRequest: {
-			/** @description Email address. */
-			email: string;
-			/** @description Plaintext password (min 8 characters). */
-			password: string;
-			/** @description Display username. */
-			username: string;
 		};
 		/**
 		 * @description Aggregate statistics response.
@@ -1688,43 +1694,6 @@ export interface operations {
 			};
 			/** @description Unauthorized */
 			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-		};
-	};
-	sign_up: {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** @description Sign up credentials */
-		requestBody: {
-			content: {
-				"application/json": components["schemas"]["SignUpRequest"];
-			};
-		};
-		responses: {
-			/** @description User registered successfully, cookies set */
-			204: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Invalid email, username, or password */
-			400: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Email or username already taken */
-			409: {
 				headers: {
 					[name: string]: unknown;
 				};

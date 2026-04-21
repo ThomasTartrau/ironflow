@@ -130,6 +130,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             "/runs/{id}/status",
             put(internal::update_run_status::update_run_status),
         )
+        .route("/runs/{id}/logs", post(internal::push_logs::push_logs))
         .route("/steps", post(internal::create_step::create_step))
         .route("/steps/{id}", put(internal::update_step::update_step))
         .route(

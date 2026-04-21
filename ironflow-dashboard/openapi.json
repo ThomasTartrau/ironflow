@@ -260,38 +260,6 @@
         ]
       }
     },
-    "/api/v1/auth/sign-up": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Register a new user with email and password.",
-        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 400 if email/username/password is invalid\n- 409 if email or username is already taken",
-        "operationId": "sign_up",
-        "requestBody": {
-          "description": "Sign up credentials",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SignUpRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "User registered successfully, cookies set"
-          },
-          "400": {
-            "description": "Invalid email, username, or password"
-          },
-          "409": {
-            "description": "Email or username already taken"
-          }
-        }
-      }
-    },
     "/api/v1/health-check": {
       "get": {
         "tags": [
@@ -1900,6 +1868,54 @@
           },
           {
             "type": "object",
+            "description": "A log line emitted during step execution.\n\nPushed by the worker in real time so that SSE clients can stream\nstep output as it happens, without waiting for step completion.",
+            "required": [
+              "run_id",
+              "step_id",
+              "step_name",
+              "stream",
+              "line",
+              "at",
+              "type"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the line was emitted."
+              },
+              "line": {
+                "type": "string",
+                "description": "The log line content."
+              },
+              "run_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Run identifier."
+              },
+              "step_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Step identifier."
+              },
+              "step_name": {
+                "type": "string",
+                "description": "Human-readable step name."
+              },
+              "stream": {
+                "$ref": "#/components/schemas/LogStream",
+                "description": "Output stream."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "log_line"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "A user signed in.",
             "required": [
               "user_id",
@@ -2004,6 +2020,7 @@
           "approval_requested",
           "approval_granted",
           "approval_rejected",
+          "log_line",
           "user_signed_in",
           "user_signed_up",
           "user_signed_out"
@@ -2101,6 +2118,15 @@
             "description": "Optional case-insensitive partial match on workflow name."
           }
         }
+      },
+      "LogStream": {
+        "type": "string",
+        "description": "Output stream for a [`LogLine`](Event::LogLine) event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::LogStream;\n\nlet stream: LogStream = \"stdout\".parse().unwrap();\nassert_eq!(stream.as_str(), \"stdout\");\n```",
+        "enum": [
+          "stdout",
+          "stderr",
+          "system"
+        ]
       },
       "MeResponse": {
         "type": "object",
@@ -2343,29 +2369,6 @@
           "password": {
             "type": "string",
             "description": "Plaintext password."
-          }
-        }
-      },
-      "SignUpRequest": {
-        "type": "object",
-        "description": "Sign-up request body.",
-        "required": [
-          "email",
-          "username",
-          "password"
-        ],
-        "properties": {
-          "email": {
-            "type": "string",
-            "description": "Email address."
-          },
-          "password": {
-            "type": "string",
-            "description": "Plaintext password (min 8 characters)."
-          },
-          "username": {
-            "type": "string",
-            "description": "Display username."
           }
         }
       },

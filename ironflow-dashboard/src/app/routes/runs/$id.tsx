@@ -20,6 +20,7 @@ import { RunActions } from "./_components/RunActions";
 import { StepList } from "./_components/StepList";
 import { StepFlow } from "./_components/StepFlow";
 import { StepTimeline } from "./_components/StepTimeline";
+import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
 import { Clock, DollarSign, RotateCcw, Calendar } from "lucide-react";
@@ -141,6 +142,14 @@ export function Component() {
 					</CollapsibleSection>
 					<StepList steps={steps} />
 				</div>
+
+				<CollapsibleSection
+					storageKey="live-logs"
+					title="Live Logs"
+					defaultOpen={active}
+				>
+					<LogStreamPanel runId={run.id} enabled={active} />
+				</CollapsibleSection>
 			</div>
 		</HeaderApp>
 	);

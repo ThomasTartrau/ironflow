@@ -52,6 +52,8 @@ pub enum EventKind {
     ApprovalGranted,
     /// [`Event::ApprovalRejected`]
     ApprovalRejected,
+    /// [`Event::LogLine`]
+    LogLine,
     /// [`Event::UserSignedIn`]
     UserSignedIn,
     /// [`Event::UserSignedUp`]
@@ -72,6 +74,7 @@ impl EventKind {
             Self::ApprovalRequested => Event::APPROVAL_REQUESTED,
             Self::ApprovalGranted => Event::APPROVAL_GRANTED,
             Self::ApprovalRejected => Event::APPROVAL_REJECTED,
+            Self::LogLine => Event::LOG_LINE,
             Self::UserSignedIn => Event::USER_SIGNED_IN,
             Self::UserSignedUp => Event::USER_SIGNED_UP,
             Self::UserSignedOut => Event::USER_SIGNED_OUT,
@@ -98,6 +101,7 @@ impl FromStr for EventKind {
             "approval_requested" => Ok(Self::ApprovalRequested),
             "approval_granted" => Ok(Self::ApprovalGranted),
             "approval_rejected" => Ok(Self::ApprovalRejected),
+            "log_line" => Ok(Self::LogLine),
             "user_signed_in" => Ok(Self::UserSignedIn),
             "user_signed_up" => Ok(Self::UserSignedUp),
             "user_signed_out" => Ok(Self::UserSignedOut),
@@ -173,7 +177,8 @@ fn event_run_id(event: &Event) -> Option<Uuid> {
         | Event::StepFailed { run_id, .. }
         | Event::ApprovalRequested { run_id, .. }
         | Event::ApprovalGranted { run_id, .. }
-        | Event::ApprovalRejected { run_id, .. } => Some(*run_id),
+        | Event::ApprovalRejected { run_id, .. }
+        | Event::LogLine { run_id, .. } => Some(*run_id),
         Event::UserSignedIn { .. } | Event::UserSignedUp { .. } | Event::UserSignedOut { .. } => {
             None
         }

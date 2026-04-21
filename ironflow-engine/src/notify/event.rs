@@ -7,6 +7,58 @@ use uuid::Uuid;
 
 use ironflow_store::models::{RunStatus, StepKind};
 
+/// Output stream for a [`LogLine`](Event::LogLine) event.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::notify::LogStream;
+///
+/// let stream: LogStream = "stdout".parse().unwrap();
+/// assert_eq!(stream.as_str(), "stdout");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum LogStream {
+    /// Standard output.
+    Stdout,
+    /// Standard error.
+    Stderr,
+    /// System-level messages (e.g. step start/stop notifications).
+    System,
+}
+
+impl LogStream {
+    /// Returns the wire-format string for this stream.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+            Self::System => "system",
+        }
+    }
+}
+
+impl std::fmt::Display for LogStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for LogStream {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "stdout" => Ok(Self::Stdout),
+            "stderr" => Ok(Self::Stderr),
+            "system" => Ok(Self::System),
+            _ => Err(format!("unknown log stream: {s}")),
+        }
+    }
+}
+
 /// A domain event emitted by the ironflow system.
 ///
 /// Covers the full lifecycle: runs, steps, approvals, and authentication.
@@ -156,6 +208,26 @@ pub enum Event {
         at: DateTime<Utc>,
     },
 
+    // -- Log streaming --
+    /// A log line emitted during step execution.
+    ///
+    /// Pushed by the worker in real time so that SSE clients can stream
+    /// step output as it happens, without waiting for step completion.
+    LogLine {
+        /// Run identifier.
+        run_id: Uuid,
+        /// Step identifier.
+        step_id: Uuid,
+        /// Human-readable step name.
+        step_name: String,
+        /// Output stream.
+        stream: LogStream,
+        /// The log line content.
+        line: String,
+        /// When the line was emitted.
+        at: DateTime<Utc>,
+    },
+
     // -- Authentication --
     /// A user signed in.
     UserSignedIn {
@@ -203,6 +275,8 @@ impl Event {
     pub const APPROVAL_GRANTED: &'static str = "approval_granted";
     /// Event type constant for [`ApprovalRejected`](Event::ApprovalRejected).
     pub const APPROVAL_REJECTED: &'static str = "approval_rejected";
+    /// Event type constant for [`LogLine`](Event::LogLine).
+    pub const LOG_LINE: &'static str = "log_line";
     /// Event type constant for [`UserSignedIn`](Event::UserSignedIn).
     pub const USER_SIGNED_IN: &'static str = "user_signed_in";
     /// Event type constant for [`UserSignedUp`](Event::UserSignedUp).
@@ -234,6 +308,7 @@ impl Event {
         Self::APPROVAL_REQUESTED,
         Self::APPROVAL_GRANTED,
         Self::APPROVAL_REJECTED,
+        Self::LOG_LINE,
         Self::USER_SIGNED_IN,
         Self::USER_SIGNED_UP,
         Self::USER_SIGNED_OUT,
@@ -267,6 +342,7 @@ impl Event {
             Event::ApprovalRequested { .. } => Self::APPROVAL_REQUESTED,
             Event::ApprovalGranted { .. } => Self::APPROVAL_GRANTED,
             Event::ApprovalRejected { .. } => Self::APPROVAL_REJECTED,
+            Event::LogLine { .. } => Self::LOG_LINE,
             Event::UserSignedIn { .. } => Self::USER_SIGNED_IN,
             Event::UserSignedUp { .. } => Self::USER_SIGNED_UP,
             Event::UserSignedOut { .. } => Self::USER_SIGNED_OUT,
@@ -363,6 +439,25 @@ mod tests {
     }
 
     #[test]
+    fn log_line_serde_roundtrip() {
+        let event = Event::LogLine {
+            run_id: Uuid::now_v7(),
+            step_id: Uuid::now_v7(),
+            step_name: "build".to_string(),
+            stream: LogStream::Stdout,
+            line: "Compiling ironflow v0.1.0".to_string(),
+            at: Utc::now(),
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.event_type(), "log_line");
+        assert!(json.contains("\"type\":\"log_line\""));
+        assert!(json.contains("Compiling ironflow"));
+    }
+
+    #[test]
     fn event_type_all_variants() {
         let id = Uuid::now_v7();
         let now = Utc::now();
@@ -447,6 +542,17 @@ mod tests {
                     at: now,
                 },
                 "approval_rejected",
+            ),
+            (
+                Event::LogLine {
+                    run_id: id,
+                    step_id: id,
+                    step_name: "build".to_string(),
+                    stream: LogStream::Stdout,
+                    line: "Compiling ironflow v0.1.0".to_string(),
+                    at: now,
+                },
+                "log_line",
             ),
             (
                 Event::UserSignedIn {
