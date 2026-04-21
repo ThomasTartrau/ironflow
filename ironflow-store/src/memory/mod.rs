@@ -51,7 +51,9 @@ pub(super) struct State {
 pub(super) struct EncryptedSecret {
     pub(super) id: Uuid,
     pub(super) key: String,
+    #[cfg(feature = "secret-store")]
     pub(super) encrypted_value: Vec<u8>,
+    #[cfg(feature = "secret-store")]
     pub(super) nonce: Vec<u8>,
     pub(super) created_at: chrono::DateTime<chrono::Utc>,
     pub(super) updated_at: chrono::DateTime<chrono::Utc>,

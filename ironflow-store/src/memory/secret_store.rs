@@ -5,6 +5,7 @@ use std::collections::hash_map::Entry;
 
 #[cfg(feature = "secret-store")]
 use chrono::Utc;
+#[cfg(feature = "secret-store")]
 use uuid::Uuid;
 
 #[cfg(feature = "secret-store")]
