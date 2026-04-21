@@ -31,6 +31,8 @@ pub struct WorkflowSummary {
     pub name: String,
     /// Optional `/`-separated category path.
     pub category: Option<String>,
+    /// Current handler version.
+    pub version: String,
 }
 
 /// Sentinel value for the `category` query parameter that selects only
@@ -69,13 +71,16 @@ pub async fn list_workflows(
         .handler_names()
         .into_iter()
         .map(|name| {
-            let category = state
-                .engine
-                .handler_info(name)
-                .and_then(|info| info.category);
+            let info = state.engine.handler_info(name);
+            let category = info.as_ref().and_then(|i| i.category.clone());
+            let version = info
+                .as_ref()
+                .map(|i| i.version.clone())
+                .unwrap_or_else(|| "unversioned".to_string());
             WorkflowSummary {
                 name: name.to_string(),
                 category,
+                version,
             }
         })
         .collect();

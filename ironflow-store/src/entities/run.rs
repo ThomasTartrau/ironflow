@@ -52,6 +52,8 @@ pub struct Run {
     pub started_at: Option<DateTime<Utc>>,
     /// When execution finished (transitioned to a terminal state).
     pub completed_at: Option<DateTime<Utc>>,
+    /// Version of the handler that created this run.
+    pub handler_version: Option<String>,
 }
 
 /// Request to create a new run.
@@ -67,6 +69,7 @@ pub struct Run {
 ///     trigger: TriggerKind::Manual,
 ///     payload: json!({}),
 ///     max_retries: 3,
+///     handler_version: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +82,8 @@ pub struct NewRun {
     pub payload: Value,
     /// Maximum retry attempts.
     pub max_retries: u32,
+    /// Version of the handler at the time of run creation.
+    pub handler_version: Option<String>,
 }
 
 /// Filters for listing runs.
@@ -154,6 +159,7 @@ mod tests {
             trigger: TriggerKind::Manual,
             payload: json!({"key": "value"}),
             max_retries: 3,
+            handler_version: Some("1.2.0".to_string()),
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");
@@ -162,6 +168,7 @@ mod tests {
         assert_eq!(back.trigger, new_run.trigger);
         assert_eq!(back.payload, new_run.payload);
         assert_eq!(back.max_retries, new_run.max_retries);
+        assert_eq!(back.handler_version, new_run.handler_version);
     }
 
     #[test]
@@ -188,6 +195,7 @@ mod tests {
             updated_at: now,
             started_at: Some(now),
             completed_at: Some(now),
+            handler_version: Some("2.0.0".to_string()),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -205,6 +213,7 @@ mod tests {
         assert_eq!(back.duration_ms, run.duration_ms);
         assert_eq!(back.started_at, run.started_at);
         assert_eq!(back.completed_at, run.completed_at);
+        assert_eq!(back.handler_version, run.handler_version);
     }
 
     #[test]

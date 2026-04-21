@@ -155,31 +155,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	"/api/v1/auth/sign-up": {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/**
-		 * Register a new user with email and password.
-		 * @description Returns access and refresh tokens on success, and sets HttpOnly cookies.
-		 *
-		 *     # Errors
-		 *
-		 *     - 400 if email/username/password is invalid
-		 *     - 409 if email or username is already taken
-		 */
-		post: operations["sign_up"];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	"/api/v1/health-check": {
 		parameters: {
 			query?: never;
@@ -1053,6 +1028,8 @@ export interface components {
 			duration_ms: number;
 			/** @description Optional error message. */
 			error?: string | null;
+			/** @description Version of the handler that created this run. */
+			handler_version?: string | null;
 			/**
 			 * Format: uuid
 			 * @description Unique run identifier.
@@ -1159,15 +1136,6 @@ export interface components {
 			email: string;
 			/** @description Plaintext password. */
 			password: string;
-		};
-		/** @description Sign-up request body. */
-		SignUpRequest: {
-			/** @description Email address. */
-			email: string;
-			/** @description Plaintext password (min 8 characters). */
-			password: string;
-			/** @description Display username. */
-			username: string;
 		};
 		/**
 		 * @description Aggregate statistics response.
@@ -1436,6 +1404,8 @@ export interface components {
 			source_code?: string | null;
 			/** @description Sub-workflows invoked by this handler (recursive, depth-limited). */
 			sub_workflows: components["schemas"]["SubWorkflowDetail"][];
+			/** @description Current handler version. */
+			version: string;
 		};
 		/** @description Summary entry returned by `GET /api/v1/workflows`. */
 		WorkflowSummary: {
@@ -1443,6 +1413,8 @@ export interface components {
 			category?: string | null;
 			/** @description Workflow name (unique identifier). */
 			name: string;
+			/** @description Current handler version. */
+			version: string;
 		};
 	};
 	responses: never;
@@ -1688,43 +1660,6 @@ export interface operations {
 			};
 			/** @description Unauthorized */
 			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-		};
-	};
-	sign_up: {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** @description Sign up credentials */
-		requestBody: {
-			content: {
-				"application/json": components["schemas"]["SignUpRequest"];
-			};
-		};
-		responses: {
-			/** @description User registered successfully, cookies set */
-			204: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Invalid email, username, or password */
-			400: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Email or username already taken */
-			409: {
 				headers: {
 					[name: string]: unknown;
 				};

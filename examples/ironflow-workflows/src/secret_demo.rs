@@ -19,6 +19,7 @@ impl WorkflowHandler for SecretDemo {
             source_code: Some(include_str!("secret_demo.rs").to_string()),
             sub_workflows: Vec::new(),
             category: Some("examples".to_string()),
+            version: self.version().to_string(),
         }
     }
 

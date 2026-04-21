@@ -260,38 +260,6 @@
         ]
       }
     },
-    "/api/v1/auth/sign-up": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Register a new user with email and password.",
-        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 400 if email/username/password is invalid\n- 409 if email or username is already taken",
-        "operationId": "sign_up",
-        "requestBody": {
-          "description": "Sign up credentials",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SignUpRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "User registered successfully, cookies set"
-          },
-          "400": {
-            "description": "Invalid email, username, or password"
-          },
-          "409": {
-            "description": "Email or username already taken"
-          }
-        }
-      }
-    },
     "/api/v1/health-check": {
       "get": {
         "tags": [
@@ -2199,6 +2167,13 @@
             ],
             "description": "Optional error message."
           },
+          "handler_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version of the handler that created this run."
+          },
           "id": {
             "type": "string",
             "format": "uuid",
@@ -2343,29 +2318,6 @@
           "password": {
             "type": "string",
             "description": "Plaintext password."
-          }
-        }
-      },
-      "SignUpRequest": {
-        "type": "object",
-        "description": "Sign-up request body.",
-        "required": [
-          "email",
-          "username",
-          "password"
-        ],
-        "properties": {
-          "email": {
-            "type": "string",
-            "description": "Email address."
-          },
-          "password": {
-            "type": "string",
-            "description": "Plaintext password (min 8 characters)."
-          },
-          "username": {
-            "type": "string",
-            "description": "Display username."
           }
         }
       },
@@ -2795,7 +2747,8 @@
         "required": [
           "name",
           "description",
-          "sub_workflows"
+          "sub_workflows",
+          "version"
         ],
         "properties": {
           "category": {
@@ -2826,6 +2779,10 @@
               "$ref": "#/components/schemas/SubWorkflowDetail"
             },
             "description": "Sub-workflows invoked by this handler (recursive, depth-limited)."
+          },
+          "version": {
+            "type": "string",
+            "description": "Current handler version."
           }
         }
       },
@@ -2833,7 +2790,8 @@
         "type": "object",
         "description": "Summary entry returned by `GET /api/v1/workflows`.",
         "required": [
-          "name"
+          "name",
+          "version"
         ],
         "properties": {
           "category": {
@@ -2846,6 +2804,10 @@
           "name": {
             "type": "string",
             "description": "Workflow name (unique identifier)."
+          },
+          "version": {
+            "type": "string",
+            "description": "Current handler version."
           }
         }
       }

@@ -17,6 +17,7 @@ impl WorkflowHandler for SystemAudit {
             source_code: Some(include_str!("system_audit.rs").to_string()),
             sub_workflows: Vec::new(),
             category: None,
+            version: self.version().to_string(),
         }
     }
 

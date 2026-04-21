@@ -74,6 +74,8 @@ pub struct WorkflowInfo {
     /// `None` means the workflow is uncategorized.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Handler version string, used to trace which code produced a given run.
+    pub version: String,
 }
 
 /// A dynamic workflow handler with context-aware step chaining.
@@ -91,6 +93,14 @@ pub trait WorkflowHandler: Send + Sync {
     /// The workflow name used for registration and lookup.
     fn name(&self) -> &str;
 
+    /// Handler version string, used to trace which code version produced a run.
+    ///
+    /// Override this to return a meaningful version (semver, git SHA, build
+    /// hash, etc.). The default is `"unversioned"`.
+    fn version(&self) -> &str {
+        "unversioned"
+    }
+
     /// Optional `/`-separated category path used to group workflows in the UI tree.
     ///
     /// Return a value like `"data/etl"` to place the workflow under `data` → `etl`.
@@ -107,13 +117,15 @@ pub trait WorkflowHandler: Send + Sync {
     ///
     /// Override this to provide a description and source code for the
     /// dashboard UI. The default returns an empty description with no source
-    /// but propagates [`WorkflowHandler::category`].
+    /// but propagates [`WorkflowHandler::category`] and
+    /// [`WorkflowHandler::version`].
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: String::new(),
             source_code: None,
             sub_workflows: Vec::new(),
             category: self.category().map(str::to_string),
+            version: self.version().to_string(),
         }
     }
 
