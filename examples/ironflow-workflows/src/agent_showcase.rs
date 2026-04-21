@@ -24,6 +24,7 @@ impl WorkflowHandler for AgentShowcase {
             source_code: Some(include_str!("agent_showcase.rs").to_string()),
             sub_workflows: Vec::new(),
             category: None,
+            version: self.version().map(str::to_string),
         }
     }
 

@@ -128,6 +128,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 3,
+                handler_version: None,
             })
             .await
             .unwrap();

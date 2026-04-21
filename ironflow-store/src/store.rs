@@ -43,6 +43,7 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 ///     trigger: TriggerKind::Manual,
 ///     payload: json!({}),
 ///     max_retries: 3,
+///     handler_version: None,
 /// }).await?;
 ///
 /// let fetched = store.get_run(run.id).await?;
@@ -174,6 +175,7 @@ pub trait RunStore: Send + Sync {
 ///     trigger: TriggerKind::Manual,
 ///     payload: serde_json::json!({}),
 ///     max_retries: 3,
+///     handler_version: None,
 /// }).await?;
 /// let _users = store.count_users().await?;
 /// # Ok(())

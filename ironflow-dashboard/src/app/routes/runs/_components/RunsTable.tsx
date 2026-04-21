@@ -32,6 +32,8 @@ export function RunsTable({ runs }: RunsTableProps) {
 		);
 	}
 
+	const hasVersions = runs.some((r) => r.handler_version);
+
 	return (
 		<div className="rounded-lg border">
 			<Table>
@@ -39,6 +41,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 					<TableRow>
 						<TableHead>Status</TableHead>
 						<TableHead>Workflow</TableHead>
+						{hasVersions && <TableHead>Version</TableHead>}
 						<TableHead>Trigger</TableHead>
 						<TableHead>Duration</TableHead>
 						<TableHead>Cost</TableHead>
@@ -56,6 +59,11 @@ export function RunsTable({ runs }: RunsTableProps) {
 								<StatusBadge status={run.status} />
 							</TableCell>
 							<TableCell className="font-medium">{run.workflow_name}</TableCell>
+							{hasVersions && (
+								<TableCell className="font-mono text-xs text-muted-foreground">
+									{run.handler_version || "-"}
+								</TableCell>
+							)}
 							<TableCell>
 								<TriggerBadge trigger={run.trigger} />
 							</TableCell>

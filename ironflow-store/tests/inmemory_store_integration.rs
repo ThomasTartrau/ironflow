@@ -11,6 +11,7 @@ fn new_run(name: &str) -> NewRun {
         trigger: TriggerKind::Manual,
         payload: json!({}),
         max_retries: 3,
+        handler_version: None,
     }
 }
 
@@ -948,6 +949,7 @@ async fn large_payload_preserved_in_roundtrip() {
         trigger: TriggerKind::Manual,
         payload: large_payload.clone(),
         max_retries: 1,
+        handler_version: None,
     };
 
     let run = store.create_run(req).await.unwrap();

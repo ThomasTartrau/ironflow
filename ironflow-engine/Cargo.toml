@@ -24,6 +24,9 @@ strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 schemars = "1"
 metrics = { version = "0.24", optional = true }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], optional = true }

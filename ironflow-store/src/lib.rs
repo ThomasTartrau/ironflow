@@ -25,6 +25,7 @@
 //!     trigger: TriggerKind::Manual,
 //!     payload: json!({}),
 //!     max_retries: 3,
+//!     handler_version: None,
 //! }).await?;
 //!
 //! println!("Run {} is {:?}", run.id, run.status);
