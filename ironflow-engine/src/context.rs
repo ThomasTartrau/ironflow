@@ -890,6 +890,7 @@ impl WorkflowContext {
                 trigger: TriggerKind::Workflow,
                 payload: config.payload.clone(),
                 max_retries: 0,
+                handler_version: None,
             })
             .await?;
 

@@ -22,7 +22,7 @@ import { StepFlow } from "./_components/StepFlow";
 import { StepTimeline } from "./_components/StepTimeline";
 import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
-import { Clock, DollarSign, RotateCcw, Calendar } from "lucide-react";
+import { Clock, DollarSign, RotateCcw, Calendar, Tag } from "lucide-react";
 
 export async function loader({ params }: LoaderFunctionArgs) {
 	const res = await api.get<RunDetailResponse>(`/runs/${params.id}`);
@@ -104,6 +104,9 @@ export function Component() {
 						value={`${run.retry_count} / ${run.max_retries}`}
 						icon={RotateCcw}
 					/>
+					{run.handler_version && (
+						<StatCard label="Version" value={run.handler_version} icon={Tag} />
+					)}
 				</div>
 
 				{run.error && (

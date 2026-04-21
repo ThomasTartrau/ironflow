@@ -63,6 +63,7 @@ pub async fn retry_run(
             trigger: TriggerKind::Retry { parent_run_id: id },
             payload: original.payload,
             max_retries: original.max_retries,
+            handler_version: original.handler_version,
         })
         .await?;
 
@@ -133,6 +134,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({"key": "value"}),
                 max_retries: 3,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -181,6 +183,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 0,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -212,6 +215,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 0,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -252,6 +256,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 0,
+                handler_version: None,
             })
             .await
             .unwrap();

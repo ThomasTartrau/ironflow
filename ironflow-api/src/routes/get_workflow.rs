@@ -37,6 +37,8 @@ pub struct WorkflowDetailResponse {
     pub sub_workflows: Vec<SubWorkflowDetail>,
     /// Optional `/`-separated category path used to group workflows.
     pub category: Option<String>,
+    /// Current handler version.
+    pub version: Option<String>,
 }
 
 /// Get details about a registered workflow.
@@ -86,6 +88,7 @@ pub async fn get_workflow(
         source_code: info.source_code,
         sub_workflows,
         category: info.category,
+        version: info.version,
     }))
 }
 

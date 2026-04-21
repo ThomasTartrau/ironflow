@@ -1053,6 +1053,8 @@ export interface components {
 			duration_ms: number;
 			/** @description Optional error message. */
 			error?: string | null;
+			/** @description Version of the handler that created this run. */
+			handler_version?: string | null;
 			/**
 			 * Format: uuid
 			 * @description Unique run identifier.
@@ -1436,6 +1438,8 @@ export interface components {
 			source_code?: string | null;
 			/** @description Sub-workflows invoked by this handler (recursive, depth-limited). */
 			sub_workflows: components["schemas"]["SubWorkflowDetail"][];
+			/** @description Current handler version. */
+			version?: string | null;
 		};
 		/** @description Summary entry returned by `GET /api/v1/workflows`. */
 		WorkflowSummary: {
@@ -1443,6 +1447,8 @@ export interface components {
 			category?: string | null;
 			/** @description Workflow name (unique identifier). */
 			name: string;
+			/** @description Current handler version. */
+			version?: string | null;
 		};
 	};
 	responses: never;

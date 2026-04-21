@@ -20,6 +20,7 @@ impl WorkflowHandler for Collect {
             source_code: Some(include_str!("collect.rs").to_string()),
             sub_workflows: Vec::new(),
             category: Some("examples/pipeline".to_string()),
+            version: self.version().map(str::to_string),
         }
     }
 

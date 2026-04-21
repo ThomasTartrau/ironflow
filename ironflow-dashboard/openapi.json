@@ -2199,6 +2199,13 @@
             ],
             "description": "Optional error message."
           },
+          "handler_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version of the handler that created this run."
+          },
           "id": {
             "type": "string",
             "format": "uuid",
@@ -2826,6 +2833,13 @@
               "$ref": "#/components/schemas/SubWorkflowDetail"
             },
             "description": "Sub-workflows invoked by this handler (recursive, depth-limited)."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Current handler version."
           }
         }
       },
@@ -2846,6 +2860,13 @@
           "name": {
             "type": "string",
             "description": "Workflow name (unique identifier)."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Current handler version."
           }
         }
       }

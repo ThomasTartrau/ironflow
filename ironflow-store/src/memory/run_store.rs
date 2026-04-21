@@ -30,6 +30,7 @@ impl RunStore for InMemoryStore {
                 updated_at: now,
                 started_at: None,
                 completed_at: None,
+                handler_version: req.handler_version,
             };
 
             let mut state = self.state.write().await;
@@ -1377,6 +1378,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 1,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -1389,6 +1391,7 @@ mod tests {
                 },
                 payload: json!({}),
                 max_retries: 1,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -1401,6 +1404,7 @@ mod tests {
                 },
                 payload: json!({}),
                 max_retries: 1,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -1411,6 +1415,7 @@ mod tests {
                 trigger: TriggerKind::Api,
                 payload: json!({}),
                 max_retries: 1,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -1423,6 +1428,7 @@ mod tests {
                 },
                 payload: json!({}),
                 max_retries: 1,
+                handler_version: None,
             })
             .await
             .unwrap();

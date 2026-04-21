@@ -479,6 +479,7 @@ mod tests {
             trigger: TriggerKind::Manual,
             payload: json!({}),
             max_retries: 0,
+            handler_version: None,
         };
         let result = store.create_run(req).await;
         assert!(result.is_err());
