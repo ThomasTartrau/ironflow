@@ -11,6 +11,7 @@ use std::pin::Pin;
 use uuid::Uuid;
 
 use crate::api_key_store::ApiKeyStore;
+use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
     NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
     StepDependency, StepUpdate,
@@ -42,6 +43,7 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 ///     trigger: TriggerKind::Manual,
 ///     payload: json!({}),
 ///     max_retries: 3,
+///     handler_version: None,
 /// }).await?;
 ///
 /// let fetched = store.get_run(run.id).await?;
@@ -173,11 +175,12 @@ pub trait RunStore: Send + Sync {
 ///     trigger: TriggerKind::Manual,
 ///     payload: serde_json::json!({}),
 ///     max_retries: 3,
+///     handler_version: None,
 /// }).await?;
 /// let _users = store.count_users().await?;
 /// # Ok(())
 /// # }
 /// ```
-pub trait Store: RunStore + UserStore + ApiKeyStore + SecretStore {}
+pub trait Store: RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore {}
 
-impl<T: RunStore + UserStore + ApiKeyStore + SecretStore> Store for T {}
+impl<T: RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore> Store for T {}

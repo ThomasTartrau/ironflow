@@ -2,6 +2,7 @@
 
 pub mod api_keys;
 pub mod approve_run;
+pub mod audit_logs;
 pub mod auth;
 pub mod cancel_run;
 pub mod create_run;
@@ -189,6 +190,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
         .route("/stats", get(get_stats::get_stats))
+        .route("/audit-logs", get(audit_logs::list_audit_logs))
         .route("/events", get(events::events))
         .route(
             "/api-keys",

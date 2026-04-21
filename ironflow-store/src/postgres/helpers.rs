@@ -113,6 +113,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         updated_at: row.get("updated_at"),
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
+        handler_version: row.get("handler_version"),
     })
 }
 

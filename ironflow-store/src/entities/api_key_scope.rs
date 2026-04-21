@@ -1,17 +1,16 @@
 //! Scopes for API key permissions.
 
-use std::fmt;
-use std::str::FromStr;
-
 use serde::{Deserialize, Serialize};
+use strum::{Display, EnumString};
 
 /// Permission scope for an API key.
 ///
 /// Each scope grants access to a specific set of actions.
 /// A key with no scopes has no permissions.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum ApiKeyScope {
     /// Read workflow definitions.
     WorkflowsRead,
@@ -68,48 +67,6 @@ impl ApiKeyScope {
     pub fn all_allowed_for_member(scopes: &[ApiKeyScope]) -> bool {
         let allowed = Self::member_allowed();
         scopes.iter().all(|s| allowed.contains(s))
-    }
-}
-
-impl fmt::Display for ApiKeyScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            ApiKeyScope::WorkflowsRead => "workflows_read",
-            ApiKeyScope::RunsRead => "runs_read",
-            ApiKeyScope::RunsWrite => "runs_write",
-            ApiKeyScope::RunsManage => "runs_manage",
-            ApiKeyScope::StatsRead => "stats_read",
-            ApiKeyScope::Admin => "admin",
-        };
-        f.write_str(s)
-    }
-}
-
-/// Error when parsing an invalid scope string.
-#[derive(Debug, Clone)]
-pub struct InvalidScope(pub String);
-
-impl fmt::Display for InvalidScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid API key scope: {}", self.0)
-    }
-}
-
-impl std::error::Error for InvalidScope {}
-
-impl FromStr for ApiKeyScope {
-    type Err = InvalidScope;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "workflows_read" => Ok(ApiKeyScope::WorkflowsRead),
-            "runs_read" => Ok(ApiKeyScope::RunsRead),
-            "runs_write" => Ok(ApiKeyScope::RunsWrite),
-            "runs_manage" => Ok(ApiKeyScope::RunsManage),
-            "stats_read" => Ok(ApiKeyScope::StatsRead),
-            "admin" => Ok(ApiKeyScope::Admin),
-            _ => Err(InvalidScope(s.to_string())),
-        }
     }
 }
 

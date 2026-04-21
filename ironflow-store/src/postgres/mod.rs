@@ -18,6 +18,7 @@
 //! ```
 
 mod api_key_store;
+mod audit_log_store;
 mod helpers;
 mod run_store;
 mod secret_store;

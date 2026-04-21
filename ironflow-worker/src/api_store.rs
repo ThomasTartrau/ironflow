@@ -11,10 +11,11 @@ use reqwest::Client;
 use uuid::Uuid;
 
 use ironflow_store::api_key_store::ApiKeyStore;
+use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
-    ApiKey, ApiKeyUpdate, NewApiKey, NewRun, NewStep, NewStepDependency, NewUser, Page, Run,
-    RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency,
-    StepUpdate, User,
+    ApiKey, ApiKeyUpdate, AuditLogEntry, AuditLogFilter, NewApiKey, NewAuditLogEntry, NewRun,
+    NewStep, NewStepDependency, NewUser, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate,
+    Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::secret_store::SecretStore;
@@ -399,6 +400,29 @@ impl ApiKeyStore for ApiRunStore {
     }
 }
 
+impl AuditLogStore for ApiRunStore {
+    fn append_audit_log(&self, _entry: NewAuditLogEntry) -> StoreFuture<'_, AuditLogEntry> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "AuditLogStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn list_audit_logs(
+        &self,
+        _filter: AuditLogFilter,
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<AuditLogEntry>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "AuditLogStore not available in worker".to_string(),
+            ))
+        })
+    }
+}
+
 impl SecretStore for ApiRunStore {
     fn get_secret(&self, key: &str) -> StoreFuture<'_, Option<Secret>> {
         let key = key.to_string();
@@ -479,6 +503,7 @@ mod tests {
             trigger: TriggerKind::Manual,
             payload: json!({}),
             max_retries: 0,
+            handler_version: None,
         };
         let result = store.create_run(req).await;
         assert!(result.is_err());

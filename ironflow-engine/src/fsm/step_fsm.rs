@@ -1,10 +1,9 @@
 //! [`StepFsm`] — Finite state machine for the step lifecycle.
 
-use std::fmt;
-
 use chrono::Utc;
 use ironflow_store::entities::StepStatus;
 use serde::{Deserialize, Serialize};
+use strum::Display;
 
 use super::{Transition, TransitionError};
 
@@ -18,8 +17,9 @@ use super::{Transition, TransitionError};
 /// let event = StepEvent::Started;
 /// assert_eq!(event.to_string(), "started");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum StepEvent {
     /// Execution started.
     Started,
@@ -35,20 +35,6 @@ pub enum StepEvent {
     Resumed,
     /// Human rejected the approval.
     Rejected,
-}
-
-impl fmt::Display for StepEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            StepEvent::Started => f.write_str("started"),
-            StepEvent::Succeeded => f.write_str("succeeded"),
-            StepEvent::Failed => f.write_str("failed"),
-            StepEvent::Skipped => f.write_str("skipped"),
-            StepEvent::Suspended => f.write_str("suspended"),
-            StepEvent::Resumed => f.write_str("resumed"),
-            StepEvent::Rejected => f.write_str("rejected"),
-        }
-    }
 }
 
 /// Finite state machine for a workflow step.

@@ -10,6 +10,7 @@ import {
 	Bot,
 	GitBranch,
 	ShieldCheck,
+	SkipForward,
 	ZoomIn,
 	ZoomOut,
 	type LucideIcon,
@@ -45,6 +46,8 @@ function getKindMeta(kind: string): {
 			return { icon: GitBranch, color: "indigo", label: "workflow" };
 		case "approval":
 			return { icon: ShieldCheck, color: "rose", label: "approval" };
+		case "skip":
+			return { icon: SkipForward, color: "slate", label: "skipped" };
 		default:
 			return { icon: Terminal, color: "emerald", label: kind };
 	}
@@ -57,6 +60,7 @@ const nodeColors: Record<string, string> = {
 	indigo: "border-indigo-400/40 bg-indigo-400/10 text-indigo-500",
 	emerald: "border-emerald-400/40 bg-emerald-400/10 text-emerald-500",
 	rose: "border-rose-400/40 bg-rose-400/10 text-rose-500",
+	slate: "border-slate-400/40 bg-slate-400/10 text-slate-500",
 };
 
 const groupColors = [
@@ -84,6 +88,7 @@ const statusDot: Record<string, string> = {
 	running: "bg-blue-500 animate-pulse",
 	pending: "bg-amber-500",
 	cancelled: "bg-gray-400",
+	skipped: "bg-slate-400",
 	awaiting_approval: "bg-purple-500 animate-pulse",
 	rejected: "bg-rose-500",
 };

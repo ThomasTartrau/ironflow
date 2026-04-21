@@ -55,6 +55,8 @@ function getKindColor(kind: string): string {
 			return "bg-indigo-100 text-indigo-700 border-indigo-200";
 		case "approval":
 			return "bg-rose-100 text-rose-700 border-rose-200";
+		case "skip":
+			return "bg-slate-100 text-slate-600 border-slate-200";
 		default:
 			return "bg-gray-100 text-gray-700 border-gray-200";
 	}
@@ -162,6 +164,18 @@ function NestedStep({ step }: { step: StepResponse }) {
 			</button>
 			{isExpanded && (
 				<div className="pl-5 space-y-3 min-w-0 overflow-hidden">
+					{step.status === "skipped" &&
+						step.output &&
+						typeof step.output.reason === "string" && (
+							<div className="p-2 rounded-md bg-slate-50 border border-slate-200">
+								<div className="text-xs font-semibold text-slate-600 mb-0.5">
+									Skip reason
+								</div>
+								<div className="text-xs text-slate-700 whitespace-pre-wrap break-words">
+									{step.output.reason}
+								</div>
+							</div>
+						)}
 					{step.error && (
 						<div className="p-2 rounded-md bg-red-50 border border-red-200">
 							<div className="text-xs text-red-700 font-mono whitespace-pre-wrap break-words">
@@ -170,6 +184,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 						</div>
 					)}
 					{step.output &&
+						step.status !== "skipped" &&
 						(step.kind === "agent" ? (
 							<CollapsibleBlock label="Agent response">
 								<StepOutput step={step} />
@@ -569,6 +584,19 @@ function StepRow({ step }: { step: StepResponse }) {
 								)}
 							</div>
 
+							{step.status === "skipped" &&
+								step.output &&
+								typeof step.output.reason === "string" && (
+									<div className="p-3 rounded-md bg-slate-50 border border-slate-200">
+										<div className="text-xs font-semibold text-slate-600 mb-1">
+											Skip reason
+										</div>
+										<div className="text-sm text-slate-700 whitespace-pre-wrap break-words">
+											{step.output.reason}
+										</div>
+									</div>
+								)}
+
 							{step.error && (
 								<div className="p-3 rounded-md bg-red-50 border border-red-200">
 									<div className="text-xs font-semibold text-red-600 mb-1">
@@ -581,6 +609,7 @@ function StepRow({ step }: { step: StepResponse }) {
 							)}
 
 							{step.output &&
+								step.status !== "skipped" &&
 								(step.kind === "agent" ? (
 									<CollapsibleBlock label="Agent response" defaultOpen>
 										<StepOutput step={step} />

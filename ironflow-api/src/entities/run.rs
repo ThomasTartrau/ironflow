@@ -48,6 +48,8 @@ pub struct RunResponse {
     pub started_at: Option<DateTime<Utc>>,
     /// When execution completed.
     pub completed_at: Option<DateTime<Utc>>,
+    /// Version of the handler that created this run.
+    pub handler_version: Option<String>,
 }
 
 impl From<Run> for RunResponse {
@@ -66,6 +68,7 @@ impl From<Run> for RunResponse {
             updated_at: run.updated_at,
             started_at: run.started_at,
             completed_at: run.completed_at,
+            handler_version: run.handler_version,
         }
     }
 }
