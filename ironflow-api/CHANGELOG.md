@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.15.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.14.0...ironflow-api-v2.15.0) - 2026-04-21
+
+### Added
+
+- add workflow handler versioning
+
+
+### Fixed
+
+- use Option<String> for handler version instead of default string
+
+- add missing handler_version field to NewRun struct literals
+
 ## [2.14.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.13.0...ironflow-api-v2.14.0) - 2026-04-21
 
 ### Added
