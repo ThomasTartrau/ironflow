@@ -31,6 +31,7 @@
 //! );
 //! ```
 
+mod audit_log;
 mod betterstack;
 mod event;
 mod formatter;
@@ -39,6 +40,7 @@ mod retry;
 mod subscriber;
 mod webhook;
 
+pub use audit_log::AuditLogSubscriber;
 pub use betterstack::BetterStackSubscriber;
 pub use event::Event;
 pub use formatter::{FormattedMessage, MessageFormatter};

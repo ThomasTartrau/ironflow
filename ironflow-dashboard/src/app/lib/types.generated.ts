@@ -69,6 +69,27 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/audit-logs": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List audit log entries with optional filtering and pagination.
+		 * @description Admin-only. Returns a paginated list of persisted domain events
+		 *     for compliance review and post-mortem debugging.
+		 */
+		get: operations["list_audit_logs"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/auth/me": {
 		parameters: {
 			query?: never;
@@ -585,6 +606,63 @@ export interface components {
 			| "runs_manage"
 			| "stats_read"
 			| "admin";
+		/**
+		 * @description A persisted audit log entry capturing a domain event.
+		 *
+		 *     Each entry records the full event payload as JSON alongside
+		 *     denormalized contextual IDs for efficient filtering.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::{AuditLogEntry, EventKind};
+		 *     use uuid::Uuid;
+		 *     use chrono::Utc;
+		 *     use serde_json::json;
+		 *
+		 *     let entry = AuditLogEntry {
+		 *         id: Uuid::now_v7(),
+		 *         event_type: EventKind::RunStatusChanged,
+		 *         payload: json!({"run_id": "..."}),
+		 *         run_id: Some(Uuid::now_v7()),
+		 *         step_id: None,
+		 *         user_id: None,
+		 *         created_at: Utc::now(),
+		 *     };
+		 *     assert_eq!(entry.event_type, EventKind::RunStatusChanged);
+		 *     ```
+		 */
+		AuditLogEntry: {
+			/**
+			 * Format: date-time
+			 * @description When the event was recorded.
+			 */
+			created_at: string;
+			/** @description Event type. */
+			event_type: components["schemas"]["EventKind"];
+			/**
+			 * Format: uuid
+			 * @description Unique entry ID (UUID v7).
+			 */
+			id: string;
+			/** @description Full serialized event payload. */
+			payload: unknown;
+			/**
+			 * Format: uuid
+			 * @description Associated run ID, if the event is run-scoped.
+			 */
+			run_id?: string | null;
+			/**
+			 * Format: uuid
+			 * @description Associated step ID, if the event is step-scoped.
+			 */
+			step_id?: string | null;
+			/**
+			 * Format: uuid
+			 * @description Associated user ID, if the event is user-scoped.
+			 */
+			user_id?: string | null;
+		};
 		/** @description Request body for creating an API key. */
 		CreateApiKeyRequest: {
 			/**
@@ -922,15 +1000,14 @@ export interface components {
 					user_id: string;
 			  };
 		/**
-		 * @description Strongly-typed event kind matching [`Event`] variants.
+		 * @description Strongly-typed event kind matching domain event variants.
 		 *
-		 *     Serializes to/from the same `snake_case` strings as
-		 *     [`Event::event_type()`].
+		 *     Serializes to/from `snake_case` strings (e.g. `"run_status_changed"`).
 		 *
 		 *     # Examples
 		 *
 		 *     ```
-		 *     use ironflow_api::routes::events::EventKind;
+		 *     use ironflow_store::entities::EventKind;
 		 *
 		 *     let kind: EventKind = "run_status_changed".parse().unwrap();
 		 *     assert_eq!(kind, EventKind::RunStatusChanged);
@@ -950,6 +1027,35 @@ export interface components {
 			| "user_signed_in"
 			| "user_signed_up"
 			| "user_signed_out";
+		/** @description Query parameters for listing audit log entries. */
+		ListAuditLogsQuery: {
+			event_type?: null | components["schemas"]["EventKind"];
+			/**
+			 * Format: date-time
+			 * @description Filter entries created at or after this timestamp.
+			 */
+			from?: string | null;
+			/**
+			 * Format: int32
+			 * @description Page number (1-based, default: 1).
+			 */
+			page?: number | null;
+			/**
+			 * Format: int32
+			 * @description Items per page (default: 50, max: 100).
+			 */
+			per_page?: number | null;
+			/**
+			 * Format: uuid
+			 * @description Filter by run ID.
+			 */
+			run_id?: string | null;
+			/**
+			 * Format: date-time
+			 * @description Filter entries created at or before this timestamp.
+			 */
+			to?: string | null;
+		};
 		/** @description Query parameters for listing runs. */
 		ListRunsQuery: {
 			/**
@@ -1581,6 +1687,51 @@ export interface operations {
 			};
 			/** @description API key not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_audit_logs: {
+		parameters: {
+			query?: {
+				/** @description Filter by event type (e.g. `run_status_changed`). */
+				event_type?: null | components["schemas"]["EventKind"];
+				/** @description Filter by run ID. */
+				run_id?: string | null;
+				/** @description Filter entries created at or after this timestamp. */
+				from?: string | null;
+				/** @description Filter entries created at or before this timestamp. */
+				to?: string | null;
+				/** @description Page number (1-based, default: 1). */
+				page?: number | null;
+				/** @description Items per page (default: 50, max: 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description List of audit log entries with pagination */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden - admin only */
+			403: {
 				headers: {
 					[name: string]: unknown;
 				};
