@@ -9,6 +9,7 @@ mod deploy_approval;
 mod git_insight;
 mod notified_pipeline;
 mod pipeline;
+mod secret_demo;
 mod system_audit;
 mod weather_report;
 
@@ -18,6 +19,7 @@ pub use deploy_approval::DeployApproval;
 pub use git_insight::GitInsight;
 pub use notified_pipeline::NotifiedPipeline;
 pub use pipeline::{Collect, Enrich, Report};
+pub use secret_demo::SecretDemo;
 pub use system_audit::SystemAudit;
 pub use weather_report::WeatherReport;
 
@@ -41,5 +43,6 @@ pub fn register_all(engine: &mut Engine) -> Result<(), EngineError> {
     engine.register(DeployApproval)?;
     engine.register(NotifiedPipeline)?;
     engine.register(AgentShowcase)?;
+    engine.register(SecretDemo)?;
     Ok(())
 }
