@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 ironflow-core = { path = "../../ironflow-core" }
-ironflow-store = { path = "../../ironflow-store", features = ["store-memory"] }
+ironflow-store = { path = "../../ironflow-store", features = ["store-memory", "secret-store"] }
 ironflow-engine = { path = "../../ironflow-engine" }
 ironflow-api = { path = "../../ironflow-api", features = ["dashboard", "sign-up", "openapi"] }
 ironflow-auth = { path = "../../ironflow-auth" }

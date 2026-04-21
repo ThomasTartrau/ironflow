@@ -21,6 +21,10 @@ thiserror = "2"
 tracing = "0.1"
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], optional = true }
 
+# Encryption (SecretStore)
+aes-gcm = { version = "0.10", optional = true }
+rand = { version = "0.8", optional = true }
+
 # PostgreSQL (Phase 2)
 sqlx = { version = "0.8", features = [
     "postgres",
@@ -36,6 +40,7 @@ sqlx = { version = "0.8", features = [
 default = ["store-memory"]
 store-memory = []
 store-postgres = ["sqlx"]
+secret-store = ["aes-gcm", "rand"]
 openapi = ["utoipa"]
 
 [dev-dependencies]

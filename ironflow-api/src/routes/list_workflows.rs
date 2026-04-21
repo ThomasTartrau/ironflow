@@ -122,7 +122,6 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::{Value as JsonValue, from_slice, from_value};
     use std::sync::Arc;
@@ -192,9 +191,7 @@ mod tests {
 
     fn base_state(engine: Engine) -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
-            Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+        Arc::new(InMemoryStore::new());
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
             secret: "test-secret".to_string(),
             access_token_ttl_secs: 900,
@@ -205,8 +202,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),

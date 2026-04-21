@@ -53,6 +53,29 @@ export type WorkflowDetailResponse =
 	components["schemas"]["WorkflowDetailResponse"];
 export type SubWorkflowDetail = components["schemas"]["SubWorkflowDetail"];
 
+// -- Secrets --
+export type SecretResponse = {
+	id: string;
+	key: string;
+	created_at: string;
+	updated_at: string;
+};
+
+export type SetSecretRequest = {
+	key: string;
+	value: string;
+};
+
+export type UpdateSecretRequest = {
+	value: string;
+};
+
+export type ListSecretsQuery = {
+	prefix?: string;
+	page?: number;
+	per_page?: number;
+};
+
 // -- Response envelope (kept manually - generic wrapper not in OpenAPI) --
 export interface ApiResponse<T> {
 	data: T;

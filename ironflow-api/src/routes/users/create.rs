@@ -56,7 +56,7 @@ pub async fn create_user(
         password::hash(&req.password).map_err(|_| ApiError::Internal("hashing failed".into()))?;
 
     let user = state
-        .user_store
+        .store
         .create_user(NewUser {
             email: req.email,
             username: req.username,
@@ -85,9 +85,8 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::user_store::UserStore;
+    use ironflow_store::store::Store;
     use serde_json::{json, to_string};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -119,9 +118,7 @@ mod tests {
     }
 
     fn test_state() -> AppState {
-        let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine
@@ -130,8 +127,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),

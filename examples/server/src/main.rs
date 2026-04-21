@@ -34,10 +34,9 @@ use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::{Event, WebhookSubscriber};
-use ironflow_store::api_key_store::ApiKeyStore;
+use ironflow_store::crypto::MasterKey;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::store::RunStore;
-use ironflow_store::user_store::UserStore;
+use ironflow_store::store::Store;
 
 #[tokio::main]
 async fn main() {
@@ -53,9 +52,23 @@ async fn main() {
         process::exit(1);
     });
 
-    let store: Arc<dyn RunStore> = Arc::new(InMemoryStore::new());
-    let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-    let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+    let mut store = InMemoryStore::new();
+
+    match std::env::var("IRONFLOW_SECRET_KEY") {
+        Ok(hex) => {
+            let master_key = MasterKey::from_hex(&hex).unwrap_or_else(|e| {
+                eprintln!("invalid IRONFLOW_SECRET_KEY: {e}");
+                process::exit(1);
+            });
+            store.set_master_key(master_key);
+            info!("secret store enabled");
+        }
+        Err(_) => {
+            info!("IRONFLOW_SECRET_KEY not set, secret store disabled");
+        }
+    }
+
+    let store: Arc<dyn Store> = Arc::new(store);
     let provider = Arc::new(ClaudeCodeProvider::new());
 
     let jwt_config = Arc::new(JwtConfig {
@@ -87,8 +100,6 @@ async fn main() {
 
     let state = AppState::new(
         store,
-        user_store,
-        api_key_store,
         engine,
         jwt_config,
         config.worker_token.clone(),

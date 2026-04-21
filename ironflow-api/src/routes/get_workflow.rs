@@ -127,7 +127,6 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::Value as JsonValue;
     use std::sync::Arc;
@@ -162,9 +161,7 @@ mod tests {
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn ironflow_store::user_store::UserStore> =
-            Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+        Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine.register(DescribedWorkflow).unwrap();
@@ -179,8 +176,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             Arc::new(engine),
             jwt_config,
             "test-worker-token".to_string(),

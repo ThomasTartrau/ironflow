@@ -96,7 +96,7 @@ pub async fn create_api_key(
         password::hash(&raw_key).map_err(|e| ApiError::Internal(format!("hashing: {e}")))?;
 
     let api_key = state
-        .api_key_store
+        .store
         .create_api_key(NewApiKey {
             user_id: user.user_id,
             name: req.name,

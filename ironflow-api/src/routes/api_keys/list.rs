@@ -53,7 +53,7 @@ pub async fn list_api_keys(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
     let keys = state
-        .api_key_store
+        .store
         .list_api_keys_by_user(user.user_id)
         .await
         .map_err(ApiError::from)?;

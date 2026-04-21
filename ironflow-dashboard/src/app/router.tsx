@@ -7,6 +7,7 @@ import { RunDetailSkeleton } from "./components/skeletons/RunDetailSkeleton";
 import { WorkflowsListSkeleton } from "./components/skeletons/WorkflowsSkeleton";
 import { WorkflowDetailSkeleton } from "./components/skeletons/WorkflowDetailSkeleton";
 import { ApiKeysListSkeleton } from "./components/skeletons/ApiKeysSkeleton";
+import { SecretsListSkeleton } from "./components/skeletons/SecretsSkeleton";
 
 export const router = createBrowserRouter([
 	{
@@ -64,6 +65,17 @@ export const router = createBrowserRouter([
 			{
 				path: "/api-keys/new",
 				lazy: () => import("./routes/api-keys/new"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
+				path: "/secrets",
+				lazy: () => import("./routes/secrets"),
+				errorElement: <ErrorBoundary />,
+				HydrateFallback: SecretsListSkeleton,
+			},
+			{
+				path: "/secrets/new",
+				lazy: () => import("./routes/secrets/new"),
 				errorElement: <ErrorBoundary />,
 			},
 			{

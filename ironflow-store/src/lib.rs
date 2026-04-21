@@ -35,10 +35,14 @@
 pub mod api_key_store;
 pub mod entities;
 pub mod error;
+pub mod secret_store;
 pub mod store;
 pub mod user_store;
 
-/// Backward-compatible alias — prefer `entities` for new code.
+#[cfg(feature = "secret-store")]
+pub mod crypto;
+
+/// Backward-compatible alias -- prefer `entities` for new code.
 pub use entities as models;
 
 #[cfg(feature = "store-memory")]
@@ -52,7 +56,8 @@ pub mod prelude {
     pub use crate::api_key_store::ApiKeyStore;
     pub use crate::entities::*;
     pub use crate::error::StoreError;
-    pub use crate::store::RunStore;
+    pub use crate::secret_store::SecretStore;
+    pub use crate::store::{RunStore, Store};
     pub use crate::user_store::UserStore;
 
     #[cfg(feature = "store-memory")]

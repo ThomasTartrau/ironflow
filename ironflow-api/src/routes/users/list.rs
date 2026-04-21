@@ -53,7 +53,7 @@ pub async fn list_users(
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
-    let result = state.user_store.list_users(page, per_page).await?;
+    let result = state.store.list_users(page, per_page).await?;
 
     let items: Vec<UserResponse> = result.items.into_iter().map(UserResponse::from).collect();
 
@@ -73,10 +73,9 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::user_store::UserStore;
+    use ironflow_store::store::Store;
     use serde_json::Value as JsonValue;
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -108,9 +107,7 @@ mod tests {
     }
 
     fn test_state() -> AppState {
-        let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine
@@ -119,8 +116,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
@@ -138,7 +133,7 @@ mod tests {
     async fn list_users_as_admin() {
         let state = test_state();
         let admin = state
-            .user_store
+            .store
             .create_user(NewUser {
                 email: "admin@example.com".to_string(),
                 username: "admin".to_string(),
@@ -170,7 +165,7 @@ mod tests {
     async fn list_users_as_member_forbidden() {
         let state = test_state();
         let member = state
-            .user_store
+            .store
             .create_user(NewUser {
                 email: "member@example.com".to_string(),
                 username: "member".to_string(),

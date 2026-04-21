@@ -15,9 +15,8 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::cookie::CookieJar;
 use chrono::Utc;
-use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::entities::ApiKeyScope;
-use ironflow_store::user_store::UserStore;
+use ironflow_store::store::Store;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -178,14 +177,12 @@ impl IntoResponse for ApiKeyRejection {
 impl<S> FromRequestParts<S> for ApiKeyAuth
 where
     S: Send + Sync,
-    Arc<dyn ApiKeyStore>: FromRef<S>,
-    Arc<dyn UserStore>: FromRef<S>,
+    Arc<dyn Store>: FromRef<S>,
 {
     type Rejection = ApiKeyRejection;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let api_key_store = Arc::<dyn ApiKeyStore>::from_ref(state);
-        let user_store = Arc::<dyn UserStore>::from_ref(state);
+        let store = Arc::<dyn Store>::from_ref(state);
 
         let token = parts
             .headers
@@ -209,7 +206,7 @@ where
         let suffix_len = (token.len() - API_KEY_PREFIX.len()).min(8);
         let prefix = &token[..API_KEY_PREFIX.len() + suffix_len];
 
-        let api_key = api_key_store
+        let api_key = store
             .find_api_key_by_prefix(prefix)
             .await
             .map_err(|_| ApiKeyRejection {
@@ -255,9 +252,9 @@ where
             });
         }
 
-        let _ = api_key_store.touch_api_key(api_key.id).await;
+        let _ = store.touch_api_key(api_key.id).await;
 
-        let owner = user_store
+        let owner = store
             .find_user_by_id(api_key.user_id)
             .await
             .map_err(|_| ApiKeyRejection {
@@ -344,8 +341,7 @@ impl<S> FromRequestParts<S> for Authenticated
 where
     S: Send + Sync,
     Arc<JwtConfig>: FromRef<S>,
-    Arc<dyn ApiKeyStore>: FromRef<S>,
-    Arc<dyn UserStore>: FromRef<S>,
+    Arc<dyn Store>: FromRef<S>,
 {
     type Rejection = AuthRejection;
 

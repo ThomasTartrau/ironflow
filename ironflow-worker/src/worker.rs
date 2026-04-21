@@ -16,7 +16,7 @@ use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_store::entities::RunStatus;
-use ironflow_store::store::RunStore;
+use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge};
 #[cfg(feature = "heartbeat")]
@@ -238,8 +238,7 @@ impl WorkerBuilder {
             .provider
             .ok_or_else(|| WorkerError::Internal("WorkerBuilder: provider is required".into()))?;
 
-        let store: Arc<dyn RunStore> =
-            Arc::new(ApiRunStore::new(&self.api_url, &self.worker_token));
+        let store: Arc<dyn Store> = Arc::new(ApiRunStore::new(&self.api_url, &self.worker_token));
 
         let mut engine = Engine::new(store, provider);
         for handler in self.handlers {
@@ -475,6 +474,13 @@ impl Worker {
                             }
                             Ok(Err(e)) => {
                                 error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
+                                if let Err(store_err) = engine
+                                    .store()
+                                    .update_run_status(run_id, RunStatus::Failed)
+                                    .await
+                                {
+                                    error!(run_id = %run_id, error = %store_err, "failed to mark run as failed");
+                                }
                                 RunOutcome::Failed(workflow)
                             }
                             Err(_) => {

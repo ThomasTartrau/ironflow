@@ -331,6 +331,65 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/secrets": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List secret metadata. Admin only.
+		 * @description Returns key, id, and timestamps. Never returns encrypted or decrypted values.
+		 */
+		get: operations["list_secrets"];
+		put?: never;
+		/**
+		 * Create or update a secret. Admin only.
+		 * @description If the key already exists, the value is replaced. The response
+		 *     never includes the secret value.
+		 */
+		post: operations["create_secret"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/secrets/{key}": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		/**
+		 * Update a secret's value. Admin only.
+		 * @description The key is taken from the URL path. The response never includes
+		 *     the secret value.
+		 *
+		 *     # Errors
+		 *
+		 *     - 403 if the caller is not an admin
+		 *     - 404 if the secret key does not exist
+		 *     - 400 if the value is invalid
+		 */
+		put: operations["update_secret"];
+		post?: never;
+		/**
+		 * Delete a secret by key. Admin only.
+		 * @description # Errors
+		 *
+		 *     - 403 if the caller is not an admin
+		 *     - 404 if the secret key does not exist
+		 */
+		delete: operations["delete_secret"];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/stats": {
 		parameters: {
 			query?: never;
@@ -1067,6 +1126,33 @@ export interface components {
 			/** @description Machine-readable scope value (e.g. "runs_read"). */
 			value: string;
 		};
+		/** @description Response DTO for a secret (never exposes the value). */
+		SecretResponse: {
+			/**
+			 * Format: date-time
+			 * @description Creation timestamp.
+			 */
+			created_at: string;
+			/**
+			 * Format: uuid
+			 * @description Secret ID.
+			 */
+			id: string;
+			/** @description Secret key. */
+			key: string;
+			/**
+			 * Format: date-time
+			 * @description Last update timestamp.
+			 */
+			updated_at: string;
+		};
+		/** @description Request body for creating or updating a secret. */
+		SetSecretRequest: {
+			/** @description Secret key (namespaced, e.g. `workflows/inbox/gmail_token`). */
+			key: string;
+			/** @description Secret value (plaintext, will be encrypted at rest). */
+			value: string;
+		};
 		/** @description Sign-in request body. */
 		SignInRequest: {
 			/** @description Email address. */
@@ -1308,6 +1394,11 @@ export interface components {
 		UpdateRoleRequest: {
 			/** @description New admin status. */
 			is_admin: boolean;
+		};
+		/** @description Request body for updating a secret value. */
+		UpdateSecretRequest: {
+			/** @description New secret value (plaintext, will be encrypted at rest). */
+			value: string;
 		};
 		/** @description Response DTO for a user (never exposes password hash). */
 		UserResponse: {
@@ -1977,6 +2068,191 @@ export interface operations {
 				content?: never;
 			};
 			/** @description Run not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_secrets: {
+		parameters: {
+			query?: {
+				/** @description Filter by key prefix (e.g. `workflows/inbox/`). */
+				prefix?: string | null;
+				/** @description Page number (1-based, default 1). */
+				page?: number | null;
+				/** @description Items per page (default 50, max 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Secrets listed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["SecretResponse"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	create_secret: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Secret key and value */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["SetSecretRequest"];
+			};
+		};
+		responses: {
+			/** @description Secret created or updated */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["SecretResponse"];
+				};
+			};
+			/** @description Invalid input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	update_secret: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Secret key */
+				key: string;
+			};
+			cookie?: never;
+		};
+		/** @description New secret value */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["UpdateSecretRequest"];
+			};
+		};
+		responses: {
+			/** @description Secret updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["SecretResponse"];
+				};
+			};
+			/** @description Invalid input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Secret not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	delete_secret: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Secret key */
+				key: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Secret deleted */
+			204: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Secret not found */
 			404: {
 				headers: {
 					[name: string]: unknown;

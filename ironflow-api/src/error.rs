@@ -85,6 +85,10 @@ pub enum ApiError {
     #[error("insufficient permissions")]
     Forbidden,
 
+    /// Secret not found (404).
+    #[error("secret not found")]
+    SecretNotFound(String),
+
     /// Insufficient scope (403).
     #[error("insufficient scope")]
     InsufficientScope,
@@ -112,8 +116,10 @@ impl ApiError {
             ApiError::DuplicateUsername => "DUPLICATE_USERNAME",
             ApiError::ApiKeyNotFound(_) => "API_KEY_NOT_FOUND",
             ApiError::UserNotFound(_) => "USER_NOT_FOUND",
+            ApiError::SecretNotFound(_) => "SECRET_NOT_FOUND",
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
+            ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
         }
@@ -125,6 +131,7 @@ impl ApiError {
             ApiError::RunNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::StepNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::WorkflowNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::SecretNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::InvalidCredentials => StatusCode::UNAUTHORIZED,
@@ -134,6 +141,7 @@ impl ApiError {
             ApiError::UserNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::InsufficientScope => StatusCode::FORBIDDEN,
+            ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -144,9 +152,14 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let code = self.code().to_string();
-        let message = self.to_string();
 
-        // Log internal details server-side before returning opaque message to client
+        let message = match &self {
+            ApiError::Store(StoreError::Crypto(_)) => {
+                "secret store not configured (set IRONFLOW_SECRET_KEY)".to_string()
+            }
+            _ => self.to_string(),
+        };
+
         match &self {
             ApiError::Store(e) => error!(error = %e, code = %code, "store error"),
             ApiError::Internal(detail) => {
@@ -252,5 +265,12 @@ mod tests {
         let err = ApiError::Forbidden;
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
         assert_eq!(err.code(), "FORBIDDEN");
+    }
+
+    #[test]
+    fn secret_not_found_status() {
+        let err = ApiError::SecretNotFound("demo/api-key".to_string());
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(err.code(), "SECRET_NOT_FOUND");
     }
 }

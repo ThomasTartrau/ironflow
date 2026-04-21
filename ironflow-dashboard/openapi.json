@@ -693,6 +693,228 @@
         ]
       }
     },
+    "/api/v1/secrets": {
+      "get": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "List secret metadata. Admin only.",
+        "description": "Returns key, id, and timestamps. Never returns encrypted or decrypted values.",
+        "operationId": "list_secrets",
+        "parameters": [
+          {
+            "name": "prefix",
+            "in": "query",
+            "description": "Filter by key prefix (e.g. `workflows/inbox/`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-based, default 1).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page (default 50, max 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secrets listed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Create or update a secret. Admin only.",
+        "description": "If the key already exists, the value is replaced. The response\nnever includes the secret value.",
+        "operationId": "create_secret",
+        "requestBody": {
+          "description": "Secret key and value",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Secret created or updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/secrets/{key}": {
+      "put": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Update a secret's value. Admin only.",
+        "description": "The key is taken from the URL path. The response never includes\nthe secret value.\n\n# Errors\n\n- 403 if the caller is not an admin\n- 404 if the secret key does not exist\n- 400 if the value is invalid",
+        "operationId": "update_secret",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "New secret value",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Secret updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Secret not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Delete a secret by key. Admin only.",
+        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 404 if the secret key does not exist",
+        "operationId": "delete_secret",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Secret deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Secret not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/stats": {
       "get": {
         "tags": [
@@ -2057,6 +2279,55 @@
           }
         }
       },
+      "SecretResponse": {
+        "type": "object",
+        "description": "Response DTO for a secret (never exposes the value).",
+        "required": [
+          "id",
+          "key",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation timestamp."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Secret ID."
+          },
+          "key": {
+            "type": "string",
+            "description": "Secret key."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last update timestamp."
+          }
+        }
+      },
+      "SetSecretRequest": {
+        "type": "object",
+        "description": "Request body for creating or updating a secret.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Secret key (namespaced, e.g. `workflows/inbox/gmail_token`)."
+          },
+          "value": {
+            "type": "string",
+            "description": "Secret value (plaintext, will be encrypted at rest)."
+          }
+        }
+      },
       "SignInRequest": {
         "type": "object",
         "description": "Sign-in request body.",
@@ -2464,6 +2735,19 @@
           }
         }
       },
+      "UpdateSecretRequest": {
+        "type": "object",
+        "description": "Request body for updating a secret value.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "New secret value (plaintext, will be encrypted at rest)."
+          }
+        }
+      },
       "UserResponse": {
         "type": "object",
         "description": "Response DTO for a user (never exposes password hash).",
@@ -2595,6 +2879,10 @@
     {
       "name": "users",
       "description": "User management (admin only)"
+    },
+    {
+      "name": "secrets",
+      "description": "Encrypted secret management (admin only)"
     }
   ]
 }
