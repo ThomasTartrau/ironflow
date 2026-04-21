@@ -215,7 +215,8 @@ impl WorkflowHandler for SkipThenContinueWorkflow {
         Box::pin(async move {
             ctx.shell("build", ShellConfig::new("echo build")).await?;
             ctx.skip("deploy", "staging only").await?;
-            ctx.shell("cleanup", ShellConfig::new("echo cleanup")).await?;
+            ctx.shell("cleanup", ShellConfig::new("echo cleanup"))
+                .await?;
             Ok(())
         })
     }
