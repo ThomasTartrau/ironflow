@@ -1,7 +1,6 @@
 //! SSE endpoint for real-time event streaming.
 
 use std::convert::Infallible;
-use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -13,110 +12,11 @@ use serde::de::{self, Deserializer};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use crate::state::AppState;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::notify::Event;
 
-use crate::state::AppState;
-
-/// Strongly-typed event kind matching [`Event`] variants.
-///
-/// Serializes to/from the same `snake_case` strings as
-/// [`Event::event_type()`].
-///
-/// # Examples
-///
-/// ```
-/// use ironflow_api::routes::events::EventKind;
-///
-/// let kind: EventKind = "run_status_changed".parse().unwrap();
-/// assert_eq!(kind, EventKind::RunStatusChanged);
-/// assert_eq!(kind.as_str(), "run_status_changed");
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(serde::Serialize, utoipa::ToSchema))]
-#[cfg_attr(feature = "openapi", serde(rename_all = "snake_case"))]
-pub enum EventKind {
-    /// [`Event::RunCreated`]
-    RunCreated,
-    /// [`Event::RunStatusChanged`]
-    RunStatusChanged,
-    /// [`Event::RunFailed`]
-    RunFailed,
-    /// [`Event::StepCompleted`]
-    StepCompleted,
-    /// [`Event::StepFailed`]
-    StepFailed,
-    /// [`Event::ApprovalRequested`]
-    ApprovalRequested,
-    /// [`Event::ApprovalGranted`]
-    ApprovalGranted,
-    /// [`Event::ApprovalRejected`]
-    ApprovalRejected,
-    /// [`Event::UserSignedIn`]
-    UserSignedIn,
-    /// [`Event::UserSignedUp`]
-    UserSignedUp,
-    /// [`Event::UserSignedOut`]
-    UserSignedOut,
-}
-
-impl EventKind {
-    /// Returns the wire-format string for this kind.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::RunCreated => Event::RUN_CREATED,
-            Self::RunStatusChanged => Event::RUN_STATUS_CHANGED,
-            Self::RunFailed => Event::RUN_FAILED,
-            Self::StepCompleted => Event::STEP_COMPLETED,
-            Self::StepFailed => Event::STEP_FAILED,
-            Self::ApprovalRequested => Event::APPROVAL_REQUESTED,
-            Self::ApprovalGranted => Event::APPROVAL_GRANTED,
-            Self::ApprovalRejected => Event::APPROVAL_REJECTED,
-            Self::UserSignedIn => Event::USER_SIGNED_IN,
-            Self::UserSignedUp => Event::USER_SIGNED_UP,
-            Self::UserSignedOut => Event::USER_SIGNED_OUT,
-        }
-    }
-}
-
-impl fmt::Display for EventKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for EventKind {
-    type Err = InvalidEventKind;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "run_created" => Ok(Self::RunCreated),
-            "run_status_changed" => Ok(Self::RunStatusChanged),
-            "run_failed" => Ok(Self::RunFailed),
-            "step_completed" => Ok(Self::StepCompleted),
-            "step_failed" => Ok(Self::StepFailed),
-            "approval_requested" => Ok(Self::ApprovalRequested),
-            "approval_granted" => Ok(Self::ApprovalGranted),
-            "approval_rejected" => Ok(Self::ApprovalRejected),
-            "user_signed_in" => Ok(Self::UserSignedIn),
-            "user_signed_up" => Ok(Self::UserSignedUp),
-            "user_signed_out" => Ok(Self::UserSignedOut),
-            _ => Err(InvalidEventKind(s.to_string())),
-        }
-    }
-}
-
-/// Error returned when parsing an unknown event kind string.
-#[derive(Debug, Clone)]
-pub struct InvalidEventKind(pub String);
-
-impl fmt::Display for InvalidEventKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown event kind: {}", self.0)
-    }
-}
-
-impl std::error::Error for InvalidEventKind {}
+pub use ironflow_store::entities::EventKind;
 
 /// Deserialize a comma-separated string into `Option<Vec<EventKind>>`.
 fn deserialize_comma_event_kinds<'de, D>(

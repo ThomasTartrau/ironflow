@@ -8,16 +8,18 @@ use crate::entities::{
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
 use crate::routes::api_keys::list::ApiKeyResponse;
+use crate::routes::audit_logs::ListAuditLogsQuery;
 use crate::routes::events::EventKind;
 use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
 use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
 use crate::routes::secrets::update::UpdateSecretRequest;
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
-    api_keys, approve_run, auth, cancel_run, create_run, get_run, get_stats, get_workflow,
-    health_check, list_runs, list_workflows, retry_run, secrets, users,
+    api_keys, approve_run, audit_logs, auth, cancel_run, create_run, get_run, get_stats,
+    get_workflow, health_check, list_runs, list_workflows, retry_run, secrets, users,
 };
 use ironflow_engine::notify::Event;
+use ironflow_store::entities::AuditLogEntry;
 use utoipa::OpenApi;
 
 #[cfg(feature = "sign-up")]
@@ -62,6 +64,7 @@ mod with_signup {
             secrets::list::list_secrets,
             secrets::update::update_secret,
             secrets::delete::delete_secret,
+            audit_logs::list_audit_logs,
         ),
         components(
             schemas(
@@ -90,6 +93,8 @@ mod with_signup {
                 UpdateSecretRequest,
                 EventKind,
                 Event,
+                AuditLogEntry,
+                ListAuditLogsQuery,
             )
         ),
         tags(
@@ -101,6 +106,7 @@ mod with_signup {
             (name = "api-keys", description = "API key management"),
             (name = "users", description = "User management (admin only)"),
             (name = "secrets", description = "Encrypted secret management (admin only)"),
+            (name = "audit", description = "Audit log (admin only)"),
         )
     )]
     pub struct ApiDoc;
@@ -146,6 +152,7 @@ mod without_signup {
             secrets::list::list_secrets,
             secrets::update::update_secret,
             secrets::delete::delete_secret,
+            audit_logs::list_audit_logs,
         ),
         components(
             schemas(
@@ -173,6 +180,8 @@ mod without_signup {
                 UpdateSecretRequest,
                 EventKind,
                 Event,
+                AuditLogEntry,
+                ListAuditLogsQuery,
             )
         ),
         tags(
@@ -184,6 +193,7 @@ mod without_signup {
             (name = "api-keys", description = "API key management"),
             (name = "users", description = "User management (admin only)"),
             (name = "secrets", description = "Encrypted secret management (admin only)"),
+            (name = "audit", description = "Audit log (admin only)"),
         )
     )]
     pub struct ApiDoc;

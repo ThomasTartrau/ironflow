@@ -11,10 +11,11 @@ use reqwest::Client;
 use uuid::Uuid;
 
 use ironflow_store::api_key_store::ApiKeyStore;
+use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
-    ApiKey, ApiKeyUpdate, NewApiKey, NewRun, NewStep, NewStepDependency, NewUser, Page, Run,
-    RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency,
-    StepUpdate, User,
+    ApiKey, ApiKeyUpdate, AuditLogEntry, AuditLogFilter, NewApiKey, NewAuditLogEntry, NewRun,
+    NewStep, NewStepDependency, NewUser, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate,
+    Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::secret_store::SecretStore;
@@ -394,6 +395,29 @@ impl ApiKeyStore for ApiRunStore {
         Box::pin(async move {
             Err(StoreError::Database(
                 "ApiKeyStore not available in worker".to_string(),
+            ))
+        })
+    }
+}
+
+impl AuditLogStore for ApiRunStore {
+    fn append_audit_log(&self, _entry: NewAuditLogEntry) -> StoreFuture<'_, AuditLogEntry> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "AuditLogStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn list_audit_logs(
+        &self,
+        _filter: AuditLogFilter,
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<AuditLogEntry>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "AuditLogStore not available in worker".to_string(),
             ))
         })
     }

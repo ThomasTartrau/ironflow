@@ -5,6 +5,8 @@
 
 pub mod api_key;
 pub mod api_key_scope;
+mod audit_log;
+mod event_kind;
 mod fsm_state;
 mod page;
 mod run;
@@ -20,6 +22,8 @@ mod user;
 
 pub use api_key::{ApiKey, ApiKeyUpdate, NewApiKey};
 pub use api_key_scope::ApiKeyScope;
+pub use audit_log::{AuditLogEntry, AuditLogFilter, NewAuditLogEntry};
+pub use event_kind::EventKind;
 pub use fsm_state::FsmState;
 pub use page::Page;
 pub use run::{NewRun, Run, RunFilter, RunUpdate};

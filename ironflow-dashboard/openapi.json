@@ -161,6 +161,117 @@
         ]
       }
     },
+    "/api/v1/audit-logs": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "List audit log entries with optional filtering and pagination.",
+        "description": "Admin-only. Returns a paginated list of persisted domain events\nfor compliance review and post-mortem debugging.",
+        "operationId": "list_audit_logs",
+        "parameters": [
+          {
+            "name": "event_type",
+            "in": "query",
+            "description": "Filter by event type (e.g. `run_status_changed`).",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/EventKind"
+                }
+              ]
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "description": "Filter by run ID.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Filter entries created at or after this timestamp.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Filter entries created at or before this timestamp.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-based, default: 1).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page (default: 50, max: 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of audit log entries with pagination"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden - admin only"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/me": {
       "get": {
         "tags": [
@@ -1412,6 +1523,59 @@
           "admin"
         ]
       },
+      "AuditLogEntry": {
+        "type": "object",
+        "description": "A persisted audit log entry capturing a domain event.\n\nEach entry records the full event payload as JSON alongside\ndenormalized contextual IDs for efficient filtering.\n\n# Examples\n\n```\nuse ironflow_store::entities::{AuditLogEntry, EventKind};\nuse uuid::Uuid;\nuse chrono::Utc;\nuse serde_json::json;\n\nlet entry = AuditLogEntry {\n    id: Uuid::now_v7(),\n    event_type: EventKind::RunStatusChanged,\n    payload: json!({\"run_id\": \"...\"}),\n    run_id: Some(Uuid::now_v7()),\n    step_id: None,\n    user_id: None,\n    created_at: Utc::now(),\n};\nassert_eq!(entry.event_type, EventKind::RunStatusChanged);\n```",
+        "required": [
+          "id",
+          "event_type",
+          "payload",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the event was recorded."
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventKind",
+            "description": "Event type."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique entry ID (UUID v7)."
+          },
+          "payload": {
+            "description": "Full serialized event payload."
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Associated run ID, if the event is run-scoped."
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Associated step ID, if the event is step-scoped."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Associated user ID, if the event is user-scoped."
+          }
+        }
+      },
       "CreateApiKeyRequest": {
         "type": "object",
         "description": "Request body for creating an API key.",
@@ -1994,7 +2158,7 @@
       },
       "EventKind": {
         "type": "string",
-        "description": "Strongly-typed event kind matching [`Event`] variants.\n\nSerializes to/from the same `snake_case` strings as\n[`Event::event_type()`].\n\n# Examples\n\n```\nuse ironflow_api::routes::events::EventKind;\n\nlet kind: EventKind = \"run_status_changed\".parse().unwrap();\nassert_eq!(kind, EventKind::RunStatusChanged);\nassert_eq!(kind.as_str(), \"run_status_changed\");\n```",
+        "description": "Strongly-typed event kind matching domain event variants.\n\nSerializes to/from `snake_case` strings (e.g. `\"run_status_changed\"`).\n\n# Examples\n\n```\nuse ironflow_store::entities::EventKind;\n\nlet kind: EventKind = \"run_status_changed\".parse().unwrap();\nassert_eq!(kind, EventKind::RunStatusChanged);\nassert_eq!(kind.as_str(), \"run_status_changed\");\n```",
         "enum": [
           "run_created",
           "run_status_changed",
@@ -2008,6 +2172,65 @@
           "user_signed_up",
           "user_signed_out"
         ]
+      },
+      "ListAuditLogsQuery": {
+        "type": "object",
+        "description": "Query parameters for listing audit log entries.",
+        "properties": {
+          "event_type": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EventKind",
+                "description": "Filter by event type (e.g. `run_status_changed`)."
+              }
+            ]
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Filter entries created at or after this timestamp."
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Page number (1-based, default: 1).",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Items per page (default: 50, max: 100).",
+            "minimum": 0
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Filter by run ID."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Filter entries created at or before this timestamp."
+          }
+        }
       },
       "ListRunsQuery": {
         "type": "object",
@@ -2904,6 +3127,10 @@
     {
       "name": "secrets",
       "description": "Encrypted secret management (admin only)"
+    },
+    {
+      "name": "audit",
+      "description": "Audit log (admin only)"
     }
   ]
 }

@@ -3,11 +3,10 @@
 //! Events drive transitions; the FSM rejects invalid ones and keeps
 //! a full history of state changes.
 
-use std::fmt;
-
 use chrono::Utc;
 use ironflow_store::entities::RunStatus;
 use serde::{Deserialize, Serialize};
+use strum::Display;
 
 use super::{Transition, TransitionError};
 
@@ -23,8 +22,9 @@ use super::{Transition, TransitionError};
 /// let event = RunEvent::PickedUp;
 /// assert_eq!(event.to_string(), "picked_up");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum RunEvent {
     /// Worker or inline executor picked up the run.
     PickedUp,
@@ -46,23 +46,6 @@ pub enum RunEvent {
     Approved,
     /// Human rejected the run.
     Rejected,
-}
-
-impl fmt::Display for RunEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RunEvent::PickedUp => f.write_str("picked_up"),
-            RunEvent::AllStepsCompleted => f.write_str("all_steps_completed"),
-            RunEvent::StepFailed => f.write_str("step_failed"),
-            RunEvent::StepFailedRetryable => f.write_str("step_failed_retryable"),
-            RunEvent::RetryStarted => f.write_str("retry_started"),
-            RunEvent::MaxRetriesExceeded => f.write_str("max_retries_exceeded"),
-            RunEvent::CancelRequested => f.write_str("cancel_requested"),
-            RunEvent::ApprovalRequested => f.write_str("approval_requested"),
-            RunEvent::Approved => f.write_str("approved"),
-            RunEvent::Rejected => f.write_str("rejected"),
-        }
-    }
 }
 
 /// Finite state machine for a workflow run.
