@@ -24,7 +24,8 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { formatDuration, formatCost } from "@/app/lib/format";
-import { Play } from "lucide-react";
+import { Play, Tag } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useAppSelector } from "@/app/store";
 
 interface LoaderData {
@@ -86,7 +87,15 @@ export function Component() {
 			}
 		>
 			<div className="space-y-8">
-				<BackLink to="/workflows" label="Back to Workflows" />
+				<div className="flex items-center justify-between">
+					<BackLink to="/workflows" label="Back to Workflows" />
+					{workflow.version !== "unversioned" && (
+						<Badge variant="outline" className="gap-1 font-mono text-xs">
+							<Tag className="size-3" />
+							{workflow.version}
+						</Badge>
+					)}
+				</div>
 
 				{workflow.source_code && (
 					<div className="space-y-3">

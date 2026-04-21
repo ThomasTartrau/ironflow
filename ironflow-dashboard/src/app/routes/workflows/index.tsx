@@ -170,6 +170,11 @@ function TreeNodeRow({ node, depth, openFolders, onToggle }: TreeNodeRowProps) {
 							<span className="size-4 shrink-0" aria-hidden />
 							<Workflow className="size-4 text-muted-foreground" />
 							<span className="font-mono">{wf.name}</span>
+							{wf.version !== "unversioned" && (
+								<span className="ml-auto text-xs font-mono text-muted-foreground">
+									{wf.version}
+								</span>
+							)}
 						</button>
 					))}
 				</div>

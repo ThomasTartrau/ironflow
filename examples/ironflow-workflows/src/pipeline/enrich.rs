@@ -26,7 +26,7 @@ impl WorkflowHandler for Enrich {
             source_code: Some(include_str!("enrich.rs").to_string()),
             sub_workflows: vec!["pipeline-collect".to_string()],
             category: Some("examples/pipeline".to_string()),
-            version: self.version().to_string(),
+            version: self.version().map(str::to_string),
         }
     }
 

@@ -38,7 +38,7 @@ pub struct WorkflowDetailResponse {
     /// Optional `/`-separated category path used to group workflows.
     pub category: Option<String>,
     /// Current handler version.
-    pub version: String,
+    pub version: Option<String>,
 }
 
 /// Get details about a registered workflow.

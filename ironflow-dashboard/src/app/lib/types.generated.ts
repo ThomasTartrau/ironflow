@@ -1439,7 +1439,7 @@ export interface components {
 			/** @description Sub-workflows invoked by this handler (recursive, depth-limited). */
 			sub_workflows: components["schemas"]["SubWorkflowDetail"][];
 			/** @description Current handler version. */
-			version: string;
+			version?: string | null;
 		};
 		/** @description Summary entry returned by `GET /api/v1/workflows`. */
 		WorkflowSummary: {
@@ -1448,7 +1448,7 @@ export interface components {
 			/** @description Workflow name (unique identifier). */
 			name: string;
 			/** @description Current handler version. */
-			version: string;
+			version?: string | null;
 		};
 	};
 	responses: never;

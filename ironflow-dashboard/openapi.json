@@ -2802,8 +2802,7 @@
         "required": [
           "name",
           "description",
-          "sub_workflows",
-          "version"
+          "sub_workflows"
         ],
         "properties": {
           "category": {
@@ -2836,7 +2835,10 @@
             "description": "Sub-workflows invoked by this handler (recursive, depth-limited)."
           },
           "version": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Current handler version."
           }
         }
@@ -2845,8 +2847,7 @@
         "type": "object",
         "description": "Summary entry returned by `GET /api/v1/workflows`.",
         "required": [
-          "name",
-          "version"
+          "name"
         ],
         "properties": {
           "category": {
@@ -2861,7 +2862,10 @@
             "description": "Workflow name (unique identifier)."
           },
           "version": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Current handler version."
           }
         }

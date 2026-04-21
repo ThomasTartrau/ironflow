@@ -32,7 +32,7 @@ pub struct WorkflowSummary {
     /// Optional `/`-separated category path.
     pub category: Option<String>,
     /// Current handler version.
-    pub version: String,
+    pub version: Option<String>,
 }
 
 /// Sentinel value for the `category` query parameter that selects only
@@ -73,9 +73,7 @@ pub async fn list_workflows(
         .map(|name| {
             let info = state.engine.handler_info(name);
             let category = info.as_ref().and_then(|i| i.category.clone());
-            let version = info
-                .as_ref()
-                .map_or_else(|| "unversioned".to_string(), |i| i.version.clone());
+            let version = info.and_then(|i| i.version);
             WorkflowSummary {
                 name: name.to_string(),
                 category,

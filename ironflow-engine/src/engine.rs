@@ -339,7 +339,7 @@ impl Engine {
             })?
             .clone();
 
-        let handler_version = handler.version().to_string();
+        let handler_version = handler.version().map(str::to_string);
         let run = self
             .store
             .create_run(NewRun {
@@ -347,7 +347,7 @@ impl Engine {
                 trigger,
                 payload,
                 max_retries: 0,
-                handler_version: Some(handler_version),
+                handler_version,
             })
             .await?;
 
@@ -389,7 +389,7 @@ impl Engine {
             EngineError::InvalidWorkflow(format!("no handler registered: {handler_name}"))
         })?;
 
-        let handler_version = handler.version().to_string();
+        let handler_version = handler.version().map(str::to_string);
         let run = self
             .store
             .create_run(NewRun {
@@ -397,7 +397,7 @@ impl Engine {
                 trigger,
                 payload,
                 max_retries,
-                handler_version: Some(handler_version),
+                handler_version,
             })
             .await?;
 
@@ -718,7 +718,7 @@ mod tests {
                 source_code: None,
                 sub_workflows: Vec::new(),
                 category: None,
-                version: self.version().to_string(),
+                version: self.version().map(str::to_string),
             }
         }
 

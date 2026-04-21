@@ -34,7 +34,7 @@ impl WorkflowHandler for DeployApproval {
             source_code: Some(include_str!("deploy_approval.rs").to_string()),
             sub_workflows: Vec::new(),
             category: None,
-            version: self.version().to_string(),
+            version: self.version().map(str::to_string),
         }
     }
 

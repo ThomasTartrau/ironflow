@@ -29,7 +29,7 @@ impl WorkflowHandler for Report {
             source_code: Some(include_str!("report.rs").to_string()),
             sub_workflows: vec!["pipeline-enrich".to_string()],
             category: Some("examples/pipeline".to_string()),
-            version: self.version().to_string(),
+            version: self.version().map(str::to_string),
         }
     }
 
