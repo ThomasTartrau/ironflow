@@ -75,8 +75,7 @@ pub async fn list_workflows(
             let category = info.as_ref().and_then(|i| i.category.clone());
             let version = info
                 .as_ref()
-                .map(|i| i.version.clone())
-                .unwrap_or_else(|| "unversioned".to_string());
+                .map_or_else(|| "unversioned".to_string(), |i| i.version.clone());
             WorkflowSummary {
                 name: name.to_string(),
                 category,

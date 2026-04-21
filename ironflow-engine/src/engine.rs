@@ -347,12 +347,12 @@ impl Engine {
                 trigger,
                 payload,
                 max_retries: 0,
-                handler_version: Some(handler_version.clone()),
+                handler_version: Some(handler_version),
             })
             .await?;
 
         let run_id = run.id;
-        info!(run_id = %run_id, handler_version = %handler_version, "run created");
+        info!(run_id = %run_id, handler_version = run.handler_version.as_deref().unwrap_or(""), "run created");
 
         self.store
             .update_run_status(run_id, RunStatus::Running)
