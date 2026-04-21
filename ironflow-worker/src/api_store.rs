@@ -10,12 +10,16 @@ use std::time::Duration;
 use reqwest::Client;
 use uuid::Uuid;
 
+use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::entities::{
-    NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
-    StepDependency, StepUpdate,
+    ApiKey, ApiKeyUpdate, NewApiKey, NewRun, NewStep, NewStepDependency, NewUser, Page, Run,
+    RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency,
+    StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
+use ironflow_store::secret_store::SecretStore;
 use ironflow_store::store::RunStore;
+use ironflow_store::user_store::UserStore;
 
 type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
 
@@ -290,6 +294,170 @@ impl RunStore for ApiRunStore {
         Box::pin(async move {
             Err(StoreError::Database(
                 "list_step_dependencies not supported via worker API".to_string(),
+            ))
+        })
+    }
+}
+
+impl UserStore for ApiRunStore {
+    fn create_user(&self, _req: NewUser) -> StoreFuture<'_, User> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn find_user_by_email(&self, _email: &str) -> StoreFuture<'_, Option<User>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn find_user_by_id(&self, _id: Uuid) -> StoreFuture<'_, Option<User>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn count_users(&self) -> StoreFuture<'_, u64> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn list_users(&self, _page: u32, _per_page: u32) -> StoreFuture<'_, Page<User>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn delete_user(&self, _id: Uuid) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn update_user_role(&self, _id: Uuid, _is_admin: bool) -> StoreFuture<'_, User> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+}
+
+impl ApiKeyStore for ApiRunStore {
+    fn create_api_key(&self, _req: NewApiKey) -> StoreFuture<'_, ApiKey> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApiKeyStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn find_api_key_by_prefix(&self, _prefix: &str) -> StoreFuture<'_, Option<ApiKey>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn find_api_key_by_id(&self, _id: Uuid) -> StoreFuture<'_, Option<ApiKey>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn list_api_keys_by_user(&self, _user_id: Uuid) -> StoreFuture<'_, Vec<ApiKey>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApiKeyStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn update_api_key(&self, _id: Uuid, _update: ApiKeyUpdate) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApiKeyStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn touch_api_key(&self, _id: Uuid) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApiKeyStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn delete_api_key(&self, _id: Uuid) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApiKeyStore not available in worker".to_string(),
+            ))
+        })
+    }
+}
+
+impl SecretStore for ApiRunStore {
+    fn get_secret(&self, key: &str) -> StoreFuture<'_, Option<Secret>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let resp = self
+                .client
+                .get(self.internal(&format!("/secrets/{key}")))
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<Secret> = resp.json().await.map_err(Self::err)?;
+            Ok(Some(api_resp.data))
+        })
+    }
+
+    fn set_secret(&self, _key: &str, _value: &str) -> StoreFuture<'_, Secret> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "SecretStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn delete_secret(&self, _key: &str) -> StoreFuture<'_, bool> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "SecretStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn list_secret_keys(&self, _prefix: &str) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "SecretStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn list_secrets(
+        &self,
+        _prefix: &str,
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<SecretMetadata>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "SecretStore not available in worker".to_string(),
             ))
         })
     }

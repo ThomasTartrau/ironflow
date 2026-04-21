@@ -10,11 +10,14 @@ use std::pin::Pin;
 
 use uuid::Uuid;
 
+use crate::api_key_store::ApiKeyStore;
 use crate::entities::{
     NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
     StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
+use crate::secret_store::SecretStore;
+use crate::user_store::UserStore;
 
 /// Boxed future for [`RunStore`] methods — ensures object safety for `dyn RunStore`.
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
@@ -145,3 +148,36 @@ pub trait RunStore: Send + Sync {
         })
     }
 }
+
+/// Unified storage abstraction combining all store capabilities.
+///
+/// Implementors provide runs, steps, users, API keys, and secrets
+/// through a single type. Pick one backend (in-memory or PostgreSQL)
+/// and it handles everything.
+///
+/// Both [`InMemoryStore`](crate::memory::InMemoryStore) and
+/// [`PostgresStore`](crate::postgres::PostgresStore) implement this trait.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use ironflow_store::prelude::*;
+///
+/// # async fn example() -> Result<(), ironflow_store::error::StoreError> {
+/// let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+///
+/// // All capabilities through one reference
+/// let _run = store.create_run(NewRun {
+///     workflow_name: "deploy".to_string(),
+///     trigger: TriggerKind::Manual,
+///     payload: serde_json::json!({}),
+///     max_retries: 3,
+/// }).await?;
+/// let _users = store.count_users().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub trait Store: RunStore + UserStore + ApiKeyStore + SecretStore {}
+
+impl<T: RunStore + UserStore + ApiKeyStore + SecretStore> Store for T {}

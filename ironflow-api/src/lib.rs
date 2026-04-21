@@ -38,16 +38,13 @@
 //! use ironflow_api::prelude::*;
 //! use ironflow_api::routes::{RouterConfig, create_router};
 //! use ironflow_store::prelude::*;
-//! use ironflow_store::api_key_store::ApiKeyStore;
 //! use ironflow_engine::engine::Engine;
 //! use ironflow_core::providers::claude::ClaudeCodeProvider;
 //! use ironflow_auth::jwt::JwtConfig;
 //! use std::sync::Arc;
 //!
 //! # async fn example() {
-//! let store = Arc::new(InMemoryStore::new());
-//! let user_store: Arc<dyn ironflow_store::user_store::UserStore> = Arc::new(InMemoryStore::new());
-//! let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+//! let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
 //! let provider = Arc::new(ClaudeCodeProvider::new());
 //! let engine = Arc::new(Engine::new(store.clone(), provider));
 //! let jwt_config = Arc::new(JwtConfig {
@@ -58,7 +55,7 @@
 //!     cookie_secure: false,
 //! });
 //! let broadcaster = ironflow_api::sse::SseBroadcaster::new();
-//! let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string(), broadcaster.sender());
+//! let state = AppState::new(store, engine, jwt_config, "token".to_string(), broadcaster.sender());
 //! let app = create_router(state, RouterConfig::default());
 //!
 //! let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
@@ -88,6 +85,7 @@ pub mod prelude {
     pub use crate::response::{ApiMeta, ApiResponse, ok, ok_paged};
     pub use crate::routes::{RouterConfig, create_router};
     pub use crate::state::AppState;
+    pub use ironflow_store::store::Store;
 }
 
 pub use routes::{RouterConfig, create_router};

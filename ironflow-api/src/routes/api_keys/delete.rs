@@ -37,7 +37,7 @@ pub async fn delete_api_key(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let key = state
-        .api_key_store
+        .store
         .find_api_key_by_id(id)
         .await
         .map_err(ApiError::from)?
@@ -48,7 +48,7 @@ pub async fn delete_api_key(
     }
 
     state
-        .api_key_store
+        .store
         .delete_api_key(id)
         .await
         .map_err(ApiError::from)?;

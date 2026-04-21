@@ -21,7 +21,7 @@ use ironflow_core::metric_names::{RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIV
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{NewRun, Run, RunStatus, RunUpdate, TriggerKind};
-use ironflow_store::store::RunStore;
+use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge, histogram};
 
@@ -71,7 +71,7 @@ use crate::notify::{Event, EventPublisher, EventSubscriber};
 /// # }
 /// ```
 pub struct Engine {
-    store: Arc<dyn RunStore>,
+    store: Arc<dyn Store>,
     provider: Arc<dyn AgentProvider>,
     handlers: HashMap<String, Arc<dyn WorkflowHandler>>,
     event_publisher: EventPublisher,
@@ -129,7 +129,7 @@ impl Engine {
     ///     Arc::new(ClaudeCodeProvider::new()),
     /// );
     /// ```
-    pub fn new(store: Arc<dyn RunStore>, provider: Arc<dyn AgentProvider>) -> Self {
+    pub fn new(store: Arc<dyn Store>, provider: Arc<dyn AgentProvider>) -> Self {
         Self {
             store,
             provider,
@@ -139,7 +139,7 @@ impl Engine {
     }
 
     /// Returns a reference to the backing store.
-    pub fn store(&self) -> &Arc<dyn RunStore> {
+    pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
     }
 

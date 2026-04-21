@@ -57,6 +57,10 @@ pub enum StoreError {
     /// JSON serialization or deserialization failed.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    /// A cryptographic operation failed (encryption or decryption).
+    #[error("crypto error: {0}")]
+    Crypto(String),
 }
 
 #[cfg(test)]

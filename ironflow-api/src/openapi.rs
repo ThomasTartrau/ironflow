@@ -2,7 +2,8 @@
 
 use crate::entities::{
     CreateRunRequest, CreateUserRequest, ListRunsQuery, MeResponse, RunDetailResponse, RunResponse,
-    SignInRequest, StatsResponse, UpdateRoleRequest, UserResponse,
+    SecretResponse, SetSecretRequest, SignInRequest, StatsResponse, UpdateRoleRequest,
+    UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -10,10 +11,11 @@ use crate::routes::api_keys::list::ApiKeyResponse;
 use crate::routes::events::EventKind;
 use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
 use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
+use crate::routes::secrets::update::UpdateSecretRequest;
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approve_run, auth, cancel_run, create_run, get_run, get_stats, get_workflow,
-    health_check, list_runs, list_workflows, retry_run, users,
+    health_check, list_runs, list_workflows, retry_run, secrets, users,
 };
 use ironflow_engine::notify::Event;
 use utoipa::OpenApi;
@@ -56,6 +58,10 @@ mod with_signup {
             users::create::create_user,
             users::delete::delete_user,
             users::update_role::update_role,
+            secrets::create::create_secret,
+            secrets::list::list_secrets,
+            secrets::update::update_secret,
+            secrets::delete::delete_secret,
         ),
         components(
             schemas(
@@ -79,6 +85,9 @@ mod with_signup {
                 CreateApiKeyResponse,
                 ScopeEntry,
                 ListUsersQuery,
+                SecretResponse,
+                SetSecretRequest,
+                UpdateSecretRequest,
                 EventKind,
                 Event,
             )
@@ -91,6 +100,7 @@ mod with_signup {
             (name = "auth", description = "Authentication and authorization"),
             (name = "api-keys", description = "API key management"),
             (name = "users", description = "User management (admin only)"),
+            (name = "secrets", description = "Encrypted secret management (admin only)"),
         )
     )]
     pub struct ApiDoc;
@@ -132,6 +142,10 @@ mod without_signup {
             users::create::create_user,
             users::delete::delete_user,
             users::update_role::update_role,
+            secrets::create::create_secret,
+            secrets::list::list_secrets,
+            secrets::update::update_secret,
+            secrets::delete::delete_secret,
         ),
         components(
             schemas(
@@ -154,6 +168,9 @@ mod without_signup {
                 CreateApiKeyResponse,
                 ScopeEntry,
                 ListUsersQuery,
+                SecretResponse,
+                SetSecretRequest,
+                UpdateSecretRequest,
                 EventKind,
                 Event,
             )
@@ -166,6 +183,7 @@ mod without_signup {
             (name = "auth", description = "Authentication and authorization"),
             (name = "api-keys", description = "API key management"),
             (name = "users", description = "User management (admin only)"),
+            (name = "secrets", description = "Encrypted secret management (admin only)"),
         )
     )]
     pub struct ApiDoc;

@@ -116,4 +116,9 @@ export const api = {
 			method: "PATCH",
 			body: body != null ? JSON.stringify(body) : undefined,
 		}),
+	put: <T>(path: string, body?: unknown) =>
+		request<T>(path, {
+			method: "PUT",
+			body: body != null ? JSON.stringify(body) : undefined,
+		}),
 };

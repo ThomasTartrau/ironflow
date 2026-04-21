@@ -57,7 +57,7 @@ pub async fn update_role(
     }
 
     let user = state
-        .user_store
+        .store
         .update_user_role(id, req.is_admin)
         .await
         .map_err(|e| match e {
@@ -81,10 +81,9 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::user_store::UserStore;
+    use ironflow_store::store::Store;
     use serde_json::{Value as JsonValue, json, to_string};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -116,9 +115,7 @@ mod tests {
     }
 
     fn test_state() -> AppState {
-        let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine
@@ -127,8 +124,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             Arc::new(engine),
             test_jwt_config(),
             "test-worker-token".to_string(),
@@ -146,7 +141,7 @@ mod tests {
     async fn update_role_promote_member() {
         let state = test_state();
         let admin = state
-            .user_store
+            .store
             .create_user(NewUser {
                 email: "admin@example.com".to_string(),
                 username: "admin".to_string(),
@@ -157,7 +152,7 @@ mod tests {
             .unwrap();
 
         let member = state
-            .user_store
+            .store
             .create_user(NewUser {
                 email: "member@example.com".to_string(),
                 username: "member".to_string(),
@@ -193,7 +188,7 @@ mod tests {
     async fn update_role_self_forbidden() {
         let state = test_state();
         let admin = state
-            .user_store
+            .store
             .create_user(NewUser {
                 email: "admin@example.com".to_string(),
                 username: "admin".to_string(),

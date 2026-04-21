@@ -1,6 +1,6 @@
 //! Application state and dependency injection.
 //!
-//! [`AppState`] holds the shared [`RunStore`] and [`Engine`] used by all handlers.
+//! [`AppState`] holds the shared [`Store`] and [`Engine`] used by all handlers.
 
 use std::sync::Arc;
 #[cfg(feature = "prometheus")]
@@ -15,17 +15,15 @@ use uuid::Uuid;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::Event;
-use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::entities::Run;
-use ironflow_store::store::RunStore;
-use ironflow_store::user_store::UserStore;
+use ironflow_store::store::Store;
 
 use crate::error::ApiError;
 
 /// Global application state.
 ///
-/// Holds the shared run store and engine, extracted by handlers using Axum's
-/// state extraction mechanism.
+/// Holds the shared store (runs, users, API keys, secrets) and engine,
+/// extracted by handlers using Axum's state extraction mechanism.
 ///
 /// # Examples
 ///
@@ -33,15 +31,13 @@ use crate::error::ApiError;
 /// use ironflow_api::state::AppState;
 /// use ironflow_auth::jwt::JwtConfig;
 /// use ironflow_store::prelude::*;
-/// use ironflow_store::api_key_store::ApiKeyStore;
+/// use ironflow_store::store::Store;
 /// use ironflow_engine::engine::Engine;
 /// use ironflow_core::providers::claude::ClaudeCodeProvider;
 /// use std::sync::Arc;
 ///
 /// # async fn example() {
-/// let store = Arc::new(InMemoryStore::new());
-/// let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-/// let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+/// let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
 /// let provider = Arc::new(ClaudeCodeProvider::new());
 /// let engine = Arc::new(Engine::new(store.clone(), provider));
 /// let jwt_config = Arc::new(JwtConfig {
@@ -52,17 +48,13 @@ use crate::error::ApiError;
 ///     cookie_secure: false,
 /// });
 /// let broadcaster = ironflow_api::sse::SseBroadcaster::new();
-/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string(), broadcaster.sender());
+/// let state = AppState::new(store, engine, jwt_config, "token".to_string(), broadcaster.sender());
 /// # }
 /// ```
 #[derive(Clone)]
 pub struct AppState {
-    /// The backing store for runs and steps.
-    pub store: Arc<dyn RunStore>,
-    /// The backing store for users.
-    pub user_store: Arc<dyn UserStore>,
-    /// The backing store for API keys.
-    pub api_key_store: Arc<dyn ApiKeyStore>,
+    /// The unified backing store for runs, steps, users, API keys, and secrets.
+    pub store: Arc<dyn Store>,
     /// The workflow orchestration engine.
     pub engine: Arc<Engine>,
     /// JWT configuration for auth tokens.
@@ -76,21 +68,9 @@ pub struct AppState {
     pub prometheus_handle: PrometheusHandle,
 }
 
-impl FromRef<AppState> for Arc<dyn RunStore> {
+impl FromRef<AppState> for Arc<dyn Store> {
     fn from_ref(state: &AppState) -> Self {
         Arc::clone(&state.store)
-    }
-}
-
-impl FromRef<AppState> for Arc<dyn UserStore> {
-    fn from_ref(state: &AppState) -> Self {
-        Arc::clone(&state.user_store)
-    }
-}
-
-impl FromRef<AppState> for Arc<dyn ApiKeyStore> {
-    fn from_ref(state: &AppState) -> Self {
-        Arc::clone(&state.api_key_store)
     }
 }
 
@@ -108,12 +88,6 @@ impl FromRef<AppState> for PrometheusHandle {
 }
 
 impl AppState {
-    /// Fetch a run by ID or return 404.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ApiError::RunNotFound` if the run does not exist.
-    /// Returns `ApiError::Store` if there is a store error.
     /// Create a new `AppState`.
     ///
     /// When the `prometheus` feature is enabled, a global Prometheus recorder
@@ -124,9 +98,7 @@ impl AppState {
     /// Panics if a Prometheus recorder cannot be installed (should only
     /// happen if another incompatible recorder was set elsewhere).
     pub fn new(
-        store: Arc<dyn RunStore>,
-        user_store: Arc<dyn UserStore>,
-        api_key_store: Arc<dyn ApiKeyStore>,
+        store: Arc<dyn Store>,
         engine: Arc<Engine>,
         jwt_config: Arc<JwtConfig>,
         worker_token: String,
@@ -134,8 +106,6 @@ impl AppState {
     ) -> Self {
         Self {
             store,
-            user_store,
-            api_key_store,
             engine,
             jwt_config,
             worker_token,
@@ -178,11 +148,10 @@ mod tests {
     use super::*;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::store::Store;
 
     fn test_state() -> AppState {
-        let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(JwtConfig {
@@ -195,8 +164,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             engine,
             jwt_config,
             "test-worker-token".to_string(),
@@ -213,7 +180,7 @@ mod tests {
     #[test]
     fn app_state_from_ref() {
         let state = test_state();
-        let extracted: Arc<dyn RunStore> = Arc::from_ref(&state);
+        let extracted: Arc<dyn Store> = Arc::from_ref(&state);
         assert!(Arc::ptr_eq(&extracted, &state.store));
     }
 }

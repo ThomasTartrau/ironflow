@@ -36,9 +36,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
-    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::user_store::UserStore;
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -49,8 +47,6 @@ mod tests {
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -63,8 +59,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             engine,
             jwt_config,
             "test-worker-token".to_string(),

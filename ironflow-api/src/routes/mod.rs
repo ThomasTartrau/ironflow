@@ -17,6 +17,7 @@ pub mod list_workflows;
 pub mod metrics;
 pub mod openapi_spec;
 pub mod retry_run;
+pub mod secrets;
 pub mod users;
 
 use std::path::PathBuf;
@@ -94,15 +95,14 @@ async fn sign_up_disabled() -> impl axum::response::IntoResponse {
 /// use ironflow_api::state::AppState;
 /// use ironflow_auth::jwt::JwtConfig;
 /// use ironflow_store::prelude::*;
-/// use ironflow_store::api_key_store::ApiKeyStore;
 /// use ironflow_engine::engine::Engine;
 /// use ironflow_core::providers::claude::ClaudeCodeProvider;
 /// use std::sync::Arc;
+/// use tokio::sync::broadcast;
+/// use ironflow_engine::notify::Event;
 ///
 /// # async fn example() {
-/// let store = Arc::new(InMemoryStore::new());
-/// let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-/// let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
+/// let store: Arc<dyn ironflow_store::store::Store> = Arc::new(InMemoryStore::new());
 /// let provider = Arc::new(ClaudeCodeProvider::new());
 /// let engine = Arc::new(Engine::new(store.clone(), provider));
 /// let jwt_config = Arc::new(JwtConfig {
@@ -112,8 +112,8 @@ async fn sign_up_disabled() -> impl axum::response::IntoResponse {
 ///     cookie_domain: None,
 ///     cookie_secure: false,
 /// });
-/// let broadcaster = ironflow_api::sse::SseBroadcaster::new();
-/// let state = AppState::new(store, user_store, api_key_store, engine, jwt_config, "token".to_string(), broadcaster.sender());
+/// let (event_sender, _) = broadcast::channel::<Event>(1);
+/// let state = AppState::new(store, engine, jwt_config, "token".to_string(), event_sender);
 /// let router = create_router(state, RouterConfig::default());
 /// # }
 /// ```
@@ -136,6 +136,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             "/step-dependencies",
             post(internal::create_step_dependencies::create_step_dependencies),
         )
+        .route("/secrets/{*key}", get(internal::get_secret::get_secret))
         .layer(axum_mw::from_fn(worker_token_auth))
         .layer(Extension(WorkerToken(state.worker_token.clone())))
         .with_state(state.clone());
@@ -202,7 +203,15 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             get(users::list::list_users).post(users::create::create_user),
         )
         .route("/users/{id}", delete(users::delete::delete_user))
-        .route("/users/{id}/role", patch(users::update_role::update_role));
+        .route("/users/{id}/role", patch(users::update_role::update_role))
+        .route(
+            "/secrets",
+            get(secrets::list::list_secrets).post(secrets::create::create_secret),
+        )
+        .route(
+            "/secrets/{*key}",
+            put(secrets::update::update_secret).delete(secrets::delete::delete_secret),
+        );
 
     #[cfg(feature = "prometheus")]
     {
@@ -256,16 +265,12 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
-    use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::user_store::UserStore;
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
-        let user_store: Arc<dyn UserStore> = Arc::new(InMemoryStore::new());
-        let api_key_store: Arc<dyn ApiKeyStore> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
         let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
@@ -278,8 +283,6 @@ mod tests {
         let (event_sender, _) = broadcast::channel::<Event>(1);
         AppState::new(
             store,
-            user_store,
-            api_key_store,
             engine,
             jwt_config,
             "test-worker-token".to_string(),

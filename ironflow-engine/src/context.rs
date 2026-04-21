@@ -41,7 +41,7 @@ use ironflow_store::models::{
     NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind, StepStatus,
     StepUpdate, TriggerKind,
 };
-use ironflow_store::store::RunStore;
+use ironflow_store::store::Store;
 
 use crate::config::{
     AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig,
@@ -75,7 +75,7 @@ pub(crate) type HandlerResolver =
 /// ```
 pub struct WorkflowContext {
     run_id: Uuid,
-    store: Arc<dyn RunStore>,
+    store: Arc<dyn Store>,
     provider: Arc<dyn AgentProvider>,
     handler_resolver: Option<HandlerResolver>,
     position: u32,
@@ -95,7 +95,7 @@ impl WorkflowContext {
     ///
     /// Not typically called directly — the [`Engine`](crate::engine::Engine)
     /// creates this when executing a [`WorkflowHandler`].
-    pub fn new(run_id: Uuid, store: Arc<dyn RunStore>, provider: Arc<dyn AgentProvider>) -> Self {
+    pub fn new(run_id: Uuid, store: Arc<dyn Store>, provider: Arc<dyn AgentProvider>) -> Self {
         Self {
             run_id,
             store,
@@ -115,7 +115,7 @@ impl WorkflowContext {
     /// look up registered handlers by name.
     pub(crate) fn with_handler_resolver(
         run_id: Uuid,
-        store: Arc<dyn RunStore>,
+        store: Arc<dyn Store>,
         provider: Arc<dyn AgentProvider>,
         resolver: HandlerResolver,
     ) -> Self {
@@ -1066,7 +1066,7 @@ impl WorkflowContext {
     }
 
     /// Access the store directly (advanced usage).
-    pub fn store(&self) -> &Arc<dyn RunStore> {
+    pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
     }
 
