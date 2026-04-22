@@ -75,6 +75,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
     use serde_json::{Value as JsonValue, from_slice, json, to_string};
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::broadcast;
@@ -126,6 +127,8 @@ mod tests {
                     payload: json!({}),
                     max_retries: 0,
                     handler_version: None,
+                    labels: HashMap::new(),
+                    scheduled_at: None,
                 })
                 .await
                 .unwrap();
@@ -192,6 +195,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -256,6 +261,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
