@@ -249,9 +249,10 @@ impl WorkflowContext {
         for (idx, (step_id, step_name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
             let config = config.clone();
-            let step_log_sender = self.log_sender.as_ref().map(|s| {
-                StepLogSender::new(s.clone(), self.run_id, *step_id, step_name.clone())
-            });
+            let step_log_sender = self
+                .log_sender
+                .as_ref()
+                .map(|s| StepLogSender::new(s.clone(), self.run_id, *step_id, step_name.clone()));
             join_set.spawn(async move {
                 (
                     idx,
@@ -1067,9 +1068,10 @@ impl WorkflowContext {
 
         self.start_step(step.id, Utc::now()).await?;
 
-        let step_log_sender = self.log_sender.as_ref().map(|s| {
-            StepLogSender::new(s.clone(), self.run_id, step.id, name.to_string())
-        });
+        let step_log_sender = self
+            .log_sender
+            .as_ref()
+            .map(|s| StepLogSender::new(s.clone(), self.run_id, step.id, name.to_string()));
 
         match execute_step_config(&config, &self.provider, step_log_sender).await {
             Ok(output) => {

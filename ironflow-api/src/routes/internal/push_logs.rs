@@ -87,6 +87,8 @@ mod tests {
     use ironflow_engine::notify::{Event, LogStream};
     use ironflow_store::entities::{NewStep, StepKind};
     use ironflow_store::memory::InMemoryStore;
+    use std::collections::HashMap;
+
     use ironflow_store::models::{NewRun, TriggerKind};
 
     use super::PushLogsRequest;
@@ -126,6 +128,8 @@ mod tests {
                     payload: json!({}),
                     max_retries: 0,
                     handler_version: None,
+                    labels: HashMap::new(),
+                    scheduled_at: None,
                 })
                 .await
                 .unwrap();
@@ -192,6 +196,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -256,6 +262,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

@@ -101,10 +101,7 @@ impl LogPusher {
         }
 
         for (key, (step_name, lines)) in groups {
-            let url = format!(
-                "{}/api/v1/internal/runs/{}/logs",
-                self.base_url, key.run_id
-            );
+            let url = format!("{}/api/v1/internal/runs/{}/logs", self.base_url, key.run_id);
             let payload = PushLogsPayload {
                 step_id: key.step_id,
                 step_name,
