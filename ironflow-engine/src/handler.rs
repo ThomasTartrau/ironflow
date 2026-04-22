@@ -44,13 +44,43 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use schemars::JsonSchema;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+
+/// Generate a JSON Schema [`Value`] from a type that derives [`JsonSchema`].
+///
+/// Use this in [`WorkflowHandler::input_schema`] to automatically derive the
+/// schema from your input struct instead of writing JSON by hand.
+///
+/// # Examples
+///
+/// ```
+/// use schemars::JsonSchema;
+/// use serde::Deserialize;
+/// use ironflow_engine::handler::input_schema_for;
+///
+/// #[derive(Deserialize, JsonSchema)]
+/// struct DeployInput {
+///     environment: String,
+///     dry_run: Option<bool>,
+/// }
+///
+/// let schema = input_schema_for::<DeployInput>();
+/// assert_eq!(schema["type"], "object");
+/// assert!(schema["properties"]["environment"].is_object());
+/// ```
+pub fn input_schema_for<T: JsonSchema>() -> Value {
+    let schema = schemars::schema_for!(T);
+    serde_json::to_value(schema).expect("schema serialization cannot fail")
+}
 
 /// Boxed future returned by [`WorkflowHandler::execute`].
 pub type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<(), EngineError>> + Send + 'a>>;
@@ -77,6 +107,15 @@ pub struct WorkflowInfo {
     /// Handler version string, used to trace which code produced a given run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// JSON Schema describing the expected input payload.
+    ///
+    /// When present, the dashboard renders a dynamic form from this schema
+    /// and the engine validates the payload before creating a run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<Value>,
+    /// Labels automatically applied to every run of this workflow.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub default_labels: HashMap<String, String>,
 }
 
 /// A dynamic workflow handler with context-aware step chaining.
@@ -114,12 +153,30 @@ pub trait WorkflowHandler: Send + Sync {
         None
     }
 
+    /// Return a JSON Schema describing the expected input payload.
+    ///
+    /// When present, the dashboard renders a dynamic form from this schema
+    /// and the engine validates the payload before creating a run.
+    /// The default is `None` (no schema, free-form payload).
+    fn input_schema(&self) -> Option<Value> {
+        None
+    }
+
+    /// Labels automatically applied to every run of this workflow.
+    ///
+    /// These are merged with any labels provided at run creation time.
+    /// User-provided labels take precedence over defaults.
+    fn default_labels(&self) -> HashMap<String, String> {
+        HashMap::new()
+    }
+
     /// Return metadata about this workflow (description, source code).
     ///
     /// Override this to provide a description and source code for the
     /// dashboard UI. The default returns an empty description with no source
-    /// but propagates [`WorkflowHandler::category`] and
-    /// [`WorkflowHandler::version`].
+    /// but propagates [`WorkflowHandler::category`],
+    /// [`WorkflowHandler::version`], [`WorkflowHandler::input_schema`],
+    /// and [`WorkflowHandler::default_labels`].
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: String::new(),
@@ -127,6 +184,8 @@ pub trait WorkflowHandler: Send + Sync {
             sub_workflows: Vec::new(),
             category: self.category().map(str::to_string),
             version: self.version().map(str::to_string),
+            input_schema: self.input_schema(),
+            default_labels: self.default_labels(),
         }
     }
 

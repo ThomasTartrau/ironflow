@@ -102,6 +102,8 @@ pub async fn update_run_status(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -152,6 +154,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -191,6 +195,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

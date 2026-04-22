@@ -3,6 +3,7 @@
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use std::collections::HashMap;
 
 /// Build-and-deploy pipeline that demonstrates outbound notifications.
 ///
@@ -41,6 +42,8 @@ impl WorkflowHandler for NotifiedPipeline {
             sub_workflows: Vec::new(),
             category: None,
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 

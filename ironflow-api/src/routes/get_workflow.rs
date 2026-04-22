@@ -1,11 +1,12 @@
 //! `GET /api/v1/workflows/:name` — Get workflow details.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::response::ok;
@@ -39,6 +40,12 @@ pub struct WorkflowDetailResponse {
     pub category: Option<String>,
     /// Current handler version.
     pub version: Option<String>,
+    /// JSON Schema describing the expected input payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<Value>,
+    /// Labels automatically applied to every run of this workflow.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub default_labels: HashMap<String, String>,
 }
 
 /// Get details about a registered workflow.
@@ -89,6 +96,8 @@ pub async fn get_workflow(
         sub_workflows,
         category: info.category,
         version: info.version,
+        input_schema: info.input_schema,
+        default_labels: info.default_labels,
     }))
 }
 

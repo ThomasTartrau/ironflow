@@ -467,6 +467,18 @@
             }
           },
           {
+            "name": "label",
+            "in": "query",
+            "description": "Filter by labels. Comma-separated `key:value` pairs.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "page",
             "in": "query",
             "description": "Page number (1-based).",
@@ -1076,6 +1088,18 @@
             }
           },
           {
+            "name": "label",
+            "in": "query",
+            "description": "Filter by labels. Comma-separated `key:value` pairs.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "page",
             "in": "query",
             "description": "Page number (1-based).",
@@ -1658,11 +1682,24 @@
       },
       "CreateRunRequest": {
         "type": "object",
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "required": [
           "workflow"
         ],
         "properties": {
+          "labels": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Optional key-value labels for categorization and filtering.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "payload": {
             "type": [
               "object",
@@ -1673,6 +1710,14 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "scheduled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional deferred execution time. `None` means run immediately."
           },
           "workflow": {
             "type": "string",
@@ -2292,6 +2337,13 @@
             ],
             "description": "When `true`, only return runs with at least one step.\nWhen `false`, only return runs with no steps."
           },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Filter by labels. Comma-separated `key:value` pairs."
+          },
           "page": {
             "type": [
               "integer",
@@ -2414,12 +2466,16 @@
       },
       "RunDetailResponse": {
         "type": "object",
-        "description": "Run detail response — includes steps.",
+        "description": "Run detail response — includes steps and payload.",
         "required": [
           "run",
-          "steps"
+          "steps",
+          "payload"
         ],
         "properties": {
+          "payload": {
+            "description": "Input payload that triggered this run."
+          },
           "run": {
             "$ref": "#/components/schemas/RunResponse",
             "description": "The run."
@@ -2492,6 +2548,16 @@
             "format": "uuid",
             "description": "Unique run identifier."
           },
+          "labels": {
+            "type": "object",
+            "description": "User-defined key-value labels.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "max_retries": {
             "type": "integer",
             "format": "int32",
@@ -2503,6 +2569,14 @@
             "format": "int32",
             "description": "Number of times retried.",
             "minimum": 0
+          },
+          "scheduled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Scheduled execution time. `None` means the run executed immediately."
           },
           "started_at": {
             "type": [
@@ -3093,9 +3167,22 @@
             ],
             "description": "Optional `/`-separated category path used to group workflows."
           },
+          "default_labels": {
+            "type": "object",
+            "description": "Labels automatically applied to every run of this workflow.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "description": {
             "type": "string",
             "description": "Human-readable description."
+          },
+          "input_schema": {
+            "description": "JSON Schema describing the expected input payload."
           },
           "name": {
             "type": "string",

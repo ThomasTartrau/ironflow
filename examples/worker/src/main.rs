@@ -58,7 +58,8 @@ async fn main() {
         .register(ironflow_workflows::DeployApproval)
         .register(ironflow_workflows::NotifiedPipeline)
         .register(ironflow_workflows::AgentShowcase)
-        .register(ironflow_workflows::SecretDemo);
+        .register(ironflow_workflows::SecretDemo)
+        .register(ironflow_workflows::Greeting);
 
     let worker = builder.build().expect("failed to build worker");
 

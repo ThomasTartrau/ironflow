@@ -3,6 +3,7 @@ import type { RunResponse } from "@/app/lib/types";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TriggerBadge } from "@/app/components/TriggerBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
+import { RunLabels } from "@/app/components/RunLabels";
 import { formatDuration, formatCost } from "@/app/lib/format";
 import {
 	Table,
@@ -43,9 +44,10 @@ export function RunsTable({ runs }: RunsTableProps) {
 						<TableHead>Workflow</TableHead>
 						{hasVersions && <TableHead>Version</TableHead>}
 						<TableHead>Trigger</TableHead>
+						<TableHead>Labels</TableHead>
 						<TableHead>Duration</TableHead>
 						<TableHead>Cost</TableHead>
-						<TableHead>Started</TableHead>
+						<TableHead>Started / Scheduled</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -67,10 +69,19 @@ export function RunsTable({ runs }: RunsTableProps) {
 							<TableCell>
 								<TriggerBadge trigger={run.trigger} />
 							</TableCell>
+							<TableCell>
+								<RunLabels labels={run.labels} />
+							</TableCell>
 							<TableCell>{formatDuration(run.duration_ms)}</TableCell>
 							<TableCell>{formatCost(run.cost_usd)}</TableCell>
 							<TableCell>
-								<TimeAgo date={run.started_at || run.created_at} />
+								{run.scheduled_at && !run.started_at ? (
+									<span className="text-muted-foreground text-xs">
+										{new Date(run.scheduled_at).toLocaleString()}
+									</span>
+								) : (
+									<TimeAgo date={run.started_at || run.created_at} />
+								)}
 							</TableCell>
 						</TableRow>
 					))}

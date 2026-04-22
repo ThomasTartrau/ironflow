@@ -1,5 +1,7 @@
 //! Run-related DTOs and query parameters.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use ironflow_store::models::{Run, RunStatus, TriggerKind};
 use rust_decimal::Decimal;
@@ -50,6 +52,12 @@ pub struct RunResponse {
     pub completed_at: Option<DateTime<Utc>>,
     /// Version of the handler that created this run.
     pub handler_version: Option<String>,
+    /// User-defined key-value labels.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub labels: HashMap<String, String>,
+    /// Scheduled execution time. `None` means the run executed immediately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_at: Option<DateTime<Utc>>,
 }
 
 impl From<Run> for RunResponse {
@@ -69,11 +77,13 @@ impl From<Run> for RunResponse {
             started_at: run.started_at,
             completed_at: run.completed_at,
             handler_version: run.handler_version,
+            labels: run.labels,
+            scheduled_at: run.scheduled_at,
         }
     }
 }
 
-/// Run detail response — includes steps.
+/// Run detail response — includes steps and payload.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct RunDetailResponse {
@@ -81,6 +91,8 @@ pub struct RunDetailResponse {
     pub run: RunResponse,
     /// Associated steps, ordered by position.
     pub steps: Vec<StepResponse>,
+    /// Input payload that triggered this run.
+    pub payload: serde_json::Value,
 }
 
 /// Query parameters for listing runs.
@@ -94,8 +106,26 @@ pub struct ListRunsQuery {
     /// When `true`, only return runs with at least one step.
     /// When `false`, only return runs with no steps.
     pub has_steps: Option<bool>,
+    /// Filter by labels. Comma-separated `key:value` pairs.
+    pub label: Option<String>,
     /// Page number (1-based).
     pub page: Option<u32>,
     /// Items per page.
     pub per_page: Option<u32>,
+}
+
+impl ListRunsQuery {
+    /// Parse the comma-separated `label` param into a `HashMap`.
+    pub fn parse_labels(&self) -> Option<HashMap<String, String>> {
+        self.label.as_ref().and_then(|raw| {
+            let mut map = HashMap::new();
+            for entry in raw.split(',') {
+                let entry = entry.trim();
+                if let Some((k, v)) = entry.split_once(':') {
+                    map.insert(k.to_string(), v.to_string());
+                }
+            }
+            if map.is_empty() { None } else { Some(map) }
+        })
+    }
 }

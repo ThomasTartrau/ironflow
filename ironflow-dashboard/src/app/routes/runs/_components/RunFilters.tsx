@@ -1,6 +1,12 @@
 import { useState } from "react";
-import { useQueryStates, parseAsString, parseAsBoolean, debounce } from "nuqs";
-import { Filter, X } from "lucide-react";
+import {
+	useQueryStates,
+	parseAsString,
+	parseAsBoolean,
+	parseAsArrayOf,
+	debounce,
+} from "nuqs";
+import { Filter, X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,6 +40,7 @@ const STATUS_OPTIONS: RunStatus[] = [
 
 export function RunFilters() {
 	const [open, setOpen] = useState(false);
+	const [labelInput, setLabelInput] = useState("");
 	const [filters, setFilters] = useQueryStates(
 		{
 			workflow: parseAsString.withDefault("").withOptions({
@@ -44,6 +51,9 @@ export function RunFilters() {
 				shallow: false,
 			}),
 			has_steps: parseAsBoolean.withDefault(true).withOptions({
+				shallow: false,
+			}),
+			label: parseAsArrayOf(parseAsString).withDefault([]).withOptions({
 				shallow: false,
 			}),
 			page: parseAsString.withDefault("1").withOptions({
@@ -57,6 +67,7 @@ export function RunFilters() {
 		filters.workflow,
 		filters.status,
 		!filters.has_steps ? "has_steps" : "",
+		filters.label.length > 0 ? "label" : "",
 	].filter(Boolean).length;
 
 	const handleWorkflowChange = (value: string) => {
@@ -71,8 +82,40 @@ export function RunFilters() {
 		setFilters({ has_steps: checked, page: "1" });
 	};
 
+	const handleAddLabel = () => {
+		const trimmed = labelInput.trim();
+		const colonIdx = trimmed.indexOf(":");
+		if (colonIdx < 1) return;
+		const key = trimmed.slice(0, colonIdx).trim();
+		const value = trimmed.slice(colonIdx + 1).trim();
+		if (!key || !value) return;
+		const normalized = `${key}:${value}`;
+		if (filters.label.includes(normalized)) return;
+		setFilters({ label: [...filters.label, normalized], page: "1" });
+		setLabelInput("");
+	};
+
+	const handleRemoveLabel = (label: string) => {
+		const next = filters.label.filter((l) => l !== label);
+		setFilters({ label: next.length > 0 ? next : null, page: "1" });
+	};
+
+	const handleLabelKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Enter") {
+			e.preventDefault();
+			handleAddLabel();
+		}
+	};
+
 	const handleReset = () => {
-		setFilters({ workflow: null, status: null, has_steps: null, page: null });
+		setFilters({
+			workflow: null,
+			status: null,
+			has_steps: null,
+			label: null,
+			page: null,
+		});
+		setLabelInput("");
 	};
 
 	return (
@@ -124,6 +167,44 @@ export function RunFilters() {
 									))}
 								</SelectContent>
 							</Select>
+						</div>
+
+						<div>
+							<label htmlFor="filter-label" className="text-sm font-medium">
+								Labels
+							</label>
+							<div className="flex gap-1.5 mt-1.5">
+								<Input
+									id="filter-label"
+									placeholder="key:value"
+									value={labelInput}
+									onChange={(e) => setLabelInput(e.target.value)}
+									onKeyDown={handleLabelKeyDown}
+								/>
+								<Button
+									variant="outline"
+									size="icon"
+									onClick={handleAddLabel}
+									disabled={!labelInput.includes(":")}
+								>
+									<Plus className="h-4 w-4" />
+								</Button>
+							</div>
+							{filters.label.length > 0 && (
+								<div className="flex flex-wrap gap-1.5 mt-2">
+									{filters.label.map((l) => (
+										<Badge
+											key={l}
+											variant="secondary"
+											className="font-mono text-xs gap-1 cursor-pointer"
+											onClick={() => handleRemoveLabel(l)}
+										>
+											{l}
+											<X className="h-3 w-3" />
+										</Badge>
+									))}
+								</div>
+							)}
 						</div>
 
 						<div className="flex items-center justify-between">

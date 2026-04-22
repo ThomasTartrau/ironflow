@@ -64,6 +64,8 @@ pub async fn retry_run(
             payload: original.payload,
             max_retries: original.max_retries,
             handler_version: original.handler_version,
+            labels: original.labels,
+            scheduled_at: None,
         })
         .await?;
 
@@ -78,6 +80,8 @@ pub async fn retry_run(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode as HttpStatusCode};
@@ -135,6 +139,8 @@ mod tests {
                 payload: json!({"key": "value"}),
                 max_retries: 3,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -184,6 +190,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -216,6 +224,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -257,6 +267,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

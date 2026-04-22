@@ -31,6 +31,7 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 /// # Examples
 ///
 /// ```no_run
+/// use std::collections::HashMap;
 /// use ironflow_store::prelude::*;
 /// use serde_json::json;
 /// use uuid::Uuid;
@@ -44,6 +45,8 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 ///     payload: json!({}),
 ///     max_retries: 3,
 ///     handler_version: None,
+///     labels: HashMap::new(),
+///     scheduled_at: None,
 /// }).await?;
 ///
 /// let fetched = store.get_run(run.id).await?;
@@ -163,6 +166,7 @@ pub trait RunStore: Send + Sync {
 /// # Examples
 ///
 /// ```no_run
+/// use std::collections::HashMap;
 /// use std::sync::Arc;
 /// use ironflow_store::prelude::*;
 ///
@@ -176,6 +180,8 @@ pub trait RunStore: Send + Sync {
 ///     payload: serde_json::json!({}),
 ///     max_retries: 3,
 ///     handler_version: None,
+///     labels: HashMap::new(),
+///     scheduled_at: None,
 /// }).await?;
 /// let _users = store.count_users().await?;
 /// # Ok(())

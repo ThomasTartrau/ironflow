@@ -157,6 +157,8 @@ async fn resolve_approval(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode as HttpStatusCode};
@@ -213,6 +215,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -266,6 +270,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -406,6 +412,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

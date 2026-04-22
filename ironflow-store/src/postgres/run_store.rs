@@ -39,8 +39,8 @@ impl RunStore for PostgresStore {
             // Insert run with FSM reference
             sqlx::query(
                 r#"
-                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 "#,
             )
             .bind(id)
@@ -50,6 +50,8 @@ impl RunStore for PostgresStore {
             .bind(&req.payload)
             .bind(req.max_retries as i32)
             .bind(&req.handler_version)
+            .bind(serde_json::to_value(&req.labels).unwrap_or_default())
+            .bind(req.scheduled_at)
             .bind(now)
             .bind(now)
             .execute(&mut *tx)
@@ -126,6 +128,10 @@ impl RunStore for PostgresStore {
                 conditions.push(format!("r.created_at <= ${bind_idx}"));
                 bind_idx += 1;
             }
+            if filter.labels.is_some() {
+                conditions.push(format!("r.labels @> ${bind_idx}"));
+                bind_idx += 1;
+            }
             if let Some(has_steps) = filter.has_steps {
                 if has_steps {
                     conditions.push(
@@ -172,6 +178,9 @@ impl RunStore for PostgresStore {
             }
             if let Some(before) = filter.created_before {
                 data_query = data_query.bind(before);
+            }
+            if let Some(ref labels) = filter.labels {
+                data_query = data_query.bind(serde_json::to_value(labels).unwrap_or_default());
             }
 
             data_query = data_query.bind(per_page as i64).bind(offset);
@@ -674,6 +683,11 @@ impl RunStore for PostgresStore {
             }
             if filter.created_before.is_some() {
                 conditions.push(format!("r.created_at <= ${bind_idx}"));
+                bind_idx += 1;
+            }
+            if filter.labels.is_some() {
+                conditions.push(format!("r.labels @> ${bind_idx}"));
+                bind_idx += 1;
             }
             if let Some(has_steps) = filter.has_steps {
                 if has_steps {
@@ -687,6 +701,7 @@ impl RunStore for PostgresStore {
                     );
                 }
             }
+            let _ = bind_idx;
 
             let where_clause = if conditions.is_empty() {
                 String::new()
@@ -723,6 +738,9 @@ impl RunStore for PostgresStore {
             }
             if let Some(before) = filter.created_before {
                 query = query.bind(before);
+            }
+            if let Some(ref labels) = filter.labels {
+                query = query.bind(serde_json::to_value(labels).unwrap_or_default());
             }
 
             let row = query

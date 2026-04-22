@@ -97,6 +97,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
     let trigger_json: serde_json::Value = row.get("trigger");
     let cost_usd: Decimal = row.get("cost_usd");
     let state_machine_id = row.get("state_machine__id");
+    let labels_json: serde_json::Value = row.get("labels");
 
     Ok(Run {
         id: row.get("id"),
@@ -114,6 +115,8 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
         handler_version: row.get("handler_version"),
+        labels: serde_json::from_value(labels_json).unwrap_or_default(),
+        scheduled_at: row.get("scheduled_at"),
     })
 }
 

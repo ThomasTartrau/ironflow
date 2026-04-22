@@ -3,6 +3,8 @@
 //! Integration tests for PostgreSQL NUMERIC type safety.
 //! Verifies that NUMERIC(12,6) columns are correctly deserialized as `rust_decimal::Decimal`.
 
+use std::collections::HashMap;
+
 use ironflow_store::prelude::*;
 use ironflow_store::store::RunStore;
 use rust_decimal::Decimal;
@@ -16,6 +18,8 @@ fn new_run(name: &str) -> NewRun {
         payload: json!({}),
         max_retries: 3,
         handler_version: None,
+        labels: HashMap::new(),
+        scheduled_at: None,
     }
 }
 

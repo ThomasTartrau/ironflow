@@ -11,7 +11,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -348,6 +348,8 @@ impl Engine {
                 payload,
                 max_retries: 0,
                 handler_version,
+                labels: handler.default_labels(),
+                scheduled_at: None,
             })
             .await?;
 
@@ -385,11 +387,40 @@ impl Engine {
         payload: Value,
         max_retries: u32,
     ) -> Result<Run, EngineError> {
+        self.enqueue_handler_with_options(
+            handler_name,
+            trigger,
+            payload,
+            max_retries,
+            HashMap::new(),
+            None,
+        )
+        .await
+    }
+
+    /// Enqueue a handler-based workflow with labels and optional deferred scheduling.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered.
+    #[tracing::instrument(name = "engine.enqueue_handler_with_options", skip_all, fields(workflow = %handler_name))]
+    pub async fn enqueue_handler_with_options(
+        &self,
+        handler_name: &str,
+        trigger: TriggerKind,
+        payload: Value,
+        max_retries: u32,
+        labels: HashMap<String, String>,
+        scheduled_at: Option<DateTime<Utc>>,
+    ) -> Result<Run, EngineError> {
         let handler = self.handlers.get(handler_name).ok_or_else(|| {
             EngineError::InvalidWorkflow(format!("no handler registered: {handler_name}"))
         })?;
 
         let handler_version = handler.version().map(str::to_string);
+        let mut merged_labels = handler.default_labels();
+        merged_labels.extend(labels);
+
         let run = self
             .store
             .create_run(NewRun {
@@ -398,6 +429,8 @@ impl Engine {
                 payload,
                 max_retries,
                 handler_version,
+                labels: merged_labels,
+                scheduled_at,
             })
             .await?;
 
@@ -719,6 +752,8 @@ mod tests {
                 sub_workflows: Vec::new(),
                 category: None,
                 version: self.version().map(str::to_string),
+                input_schema: None,
+                default_labels: HashMap::new(),
             }
         }
 

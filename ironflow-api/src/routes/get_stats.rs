@@ -33,12 +33,15 @@ pub async fn get_stats(
     State(state): State<AppState>,
     Query(params): Query<ListRunsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let labels = params.parse_labels();
+
     let filter = RunFilter {
         workflow_name: params.workflow,
         status: params.status,
         created_after: None,
         created_before: None,
         has_steps: params.has_steps,
+        labels,
     };
     let stats = state.store.get_stats(filter).await?;
 
@@ -62,6 +65,8 @@ pub async fn get_stats(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -141,6 +146,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -153,6 +160,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -173,6 +182,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -216,6 +227,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -228,6 +241,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -318,6 +333,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -328,6 +345,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

@@ -41,6 +41,8 @@ pub async fn pick_next_run(State(state): State<AppState>) -> Result<impl IntoRes
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
@@ -89,6 +91,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -139,6 +143,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

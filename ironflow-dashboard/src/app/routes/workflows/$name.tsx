@@ -1,30 +1,15 @@
-import { useState } from "react";
 import { useLoaderData, useNavigate, Link } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
-import type {
-	WorkflowDetailResponse,
-	RunResponse,
-	CreateRunRequest,
-} from "@/app/lib/types";
+import type { WorkflowDetailResponse, RunResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
-import { withToast } from "@/app/lib/api-toast";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { CodeBlock } from "@/app/components/CodeBlock";
-import { StatusBadge } from "@/app/components/StatusBadge";
-import { TimeAgo } from "@/app/components/TimeAgo";
-import { Button } from "@/components/ui/button";
 import { BackLink } from "@/app/components/BackLink";
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-} from "@/components/ui/table";
-import { formatDuration, formatCost } from "@/app/lib/format";
-import { Play, Tag } from "lucide-react";
+import { RunsTable } from "@/app/routes/runs/_components/RunsTable";
+import { RunDialog } from "./_components/RunDialog";
+import { Button } from "@/components/ui/button";
+import { Tag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useAppSelector } from "@/app/store";
 
@@ -43,7 +28,6 @@ export async function loader({ params }: LoaderFunctionArgs) {
 
 export function Component() {
 	const { workflow, recentRuns } = useLoaderData() as LoaderData;
-	const [loading, setLoading] = useState(false);
 	const navigate = useNavigate();
 	const auth = useAppSelector((state) => state.auth);
 	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
@@ -52,37 +36,16 @@ export function Component() {
 		description: workflow.description || "Workflow details and recent runs.",
 	});
 
-	const handleRun = () => {
-		setLoading(true);
-		const request: CreateRunRequest = {
-			workflow: workflow.name,
-			payload: {},
-		};
-
-		withToast(api.post<RunResponse>("/runs", request), {
-			loading: "Starting run...",
-			success: "Run started!",
-			error: "Failed to start run",
-		})
-			.then((res) => navigate(`/runs/${res.data.id}`))
-			.catch(() => {})
-			.finally(() => setLoading(false));
-	};
-
 	return (
 		<HeaderApp
 			title={workflow.name}
 			description={workflow.description || "No description provided."}
 			titleItem={
 				isAdmin ? (
-					<Button
-						className="w-full sm:w-fit gap-1.5"
-						onClick={handleRun}
-						disabled={loading}
-					>
-						<Play className="size-4" />
-						{loading ? "Starting..." : "Run"}
-					</Button>
+					<RunDialog
+						workflow={workflow}
+						onCreated={(id) => navigate(`/runs/${id}`)}
+					/>
 				) : undefined
 			}
 		>
@@ -147,40 +110,7 @@ export function Component() {
 							</Button>
 						</Link>
 					</div>
-					{recentRuns.length === 0 ? (
-						<div className="text-center py-12 text-muted-foreground border rounded-lg bg-muted/20">
-							No runs yet for this workflow.
-						</div>
-					) : (
-						<div className="rounded-lg border">
-							<Table>
-								<TableHeader>
-									<TableRow>
-										<TableHead>Status</TableHead>
-										<TableHead>Duration</TableHead>
-										<TableHead>Cost</TableHead>
-										<TableHead>Started</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
-									{recentRuns.map((run) => (
-										<TableRow key={run.id}>
-											<TableCell>
-												<Link to={`/runs/${run.id}`}>
-													<StatusBadge status={run.status} />
-												</Link>
-											</TableCell>
-											<TableCell>{formatDuration(run.duration_ms)}</TableCell>
-											<TableCell>{formatCost(run.cost_usd)}</TableCell>
-											<TableCell>
-												<TimeAgo date={run.started_at ?? run.created_at} />
-											</TableCell>
-										</TableRow>
-									))}
-								</TableBody>
-							</Table>
-						</div>
-					)}
+					<RunsTable runs={recentRuns} />
 				</div>
 			</div>
 		</HeaderApp>

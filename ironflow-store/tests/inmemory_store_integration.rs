@@ -1,5 +1,7 @@
 //! Integration tests for InMemoryStore covering all RunStore operations.
 
+use std::collections::HashMap;
+
 use ironflow_store::prelude::*;
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -12,6 +14,8 @@ fn new_run(name: &str) -> NewRun {
         payload: json!({}),
         max_retries: 3,
         handler_version: None,
+        labels: HashMap::new(),
+        scheduled_at: None,
     }
 }
 
@@ -950,6 +954,8 @@ async fn large_payload_preserved_in_roundtrip() {
         payload: large_payload.clone(),
         max_retries: 1,
         handler_version: None,
+        labels: HashMap::new(),
+        scheduled_at: None,
     };
 
     let run = store.create_run(req).await.unwrap();

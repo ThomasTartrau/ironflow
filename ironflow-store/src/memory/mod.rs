@@ -6,6 +6,7 @@
 //! # Examples
 //!
 //! ```no_run
+//! use std::collections::HashMap;
 //! use ironflow_store::prelude::*;
 //! use serde_json::json;
 //!
@@ -18,6 +19,8 @@
 //!     payload: json!({}),
 //!     max_retries: 3,
 //!     handler_version: None,
+//!     labels: HashMap::new(),
+//!     scheduled_at: None,
 //! }).await?;
 //!
 //! assert_eq!(run.status.state, RunStatus::Pending);
@@ -138,6 +141,8 @@ impl Default for InMemoryStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use crate::entities::{NewRun, TriggerKind};
@@ -149,6 +154,8 @@ mod tests {
             payload: json!({}),
             max_retries: 3,
             handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
         }
     }
 }

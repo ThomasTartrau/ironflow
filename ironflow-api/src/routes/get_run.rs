@@ -61,9 +61,11 @@ pub async fn get_run(
         })
         .collect();
 
+    let payload = run.payload.clone();
     let response = RunDetailResponse {
         run: RunResponse::from(run),
         steps: step_responses,
+        payload,
     };
 
     Ok(ok(response))
@@ -129,6 +131,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 3,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

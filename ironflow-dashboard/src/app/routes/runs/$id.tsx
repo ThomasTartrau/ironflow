@@ -23,7 +23,15 @@ import { StepTimeline } from "./_components/StepTimeline";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
-import { Clock, DollarSign, RotateCcw, Calendar, Tag } from "lucide-react";
+import {
+	Clock,
+	DollarSign,
+	RotateCcw,
+	Calendar,
+	Tag,
+	CalendarClock,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
 export async function loader({ params }: LoaderFunctionArgs) {
 	const res = await api.get<RunDetailResponse>(`/runs/${params.id}`);
@@ -46,10 +54,21 @@ function computeLiveDurationMs(run: RunResponse, nowMs: number): number {
 	return Math.max(run.duration_ms, nowMs - started);
 }
 
+function isEmptyPayload(payload: unknown): boolean {
+	if (payload === null || payload === undefined) return true;
+	if (
+		typeof payload === "object" &&
+		Object.keys(payload as object).length === 0
+	)
+		return true;
+	return false;
+}
+
 export function Component() {
-	const { run, steps } = useLoaderData() as {
+	const { run, steps, payload } = useLoaderData() as {
 		run: RunResponse;
 		steps: StepResponse[];
+		payload: unknown;
 	};
 	const active = isRunActive(run.status);
 	const nowMs = useLiveClock({ enabled: active, intervalMs: 500 });
@@ -80,11 +99,19 @@ export function Component() {
 				<BackLink to="/runs" label="Back to Runs" />
 
 				<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-					<StatCard
-						label="Started"
-						value={run.started_at ? <TimeAgo date={run.started_at} /> : "-"}
-						icon={Calendar}
-					/>
+					{run.scheduled_at && !run.started_at ? (
+						<StatCard
+							label="Scheduled for"
+							value={new Date(run.scheduled_at).toLocaleString()}
+							icon={CalendarClock}
+						/>
+					) : (
+						<StatCard
+							label="Started"
+							value={run.started_at ? <TimeAgo date={run.started_at} /> : "-"}
+							icon={Calendar}
+						/>
+					)}
 					<StatCard
 						label="Completed"
 						value={run.completed_at ? <TimeAgo date={run.completed_at} /> : "-"}
@@ -109,6 +136,33 @@ export function Component() {
 						<StatCard label="Version" value={run.handler_version} icon={Tag} />
 					)}
 				</div>
+
+				{run.labels && Object.keys(run.labels).length > 0 && (
+					<div className="flex items-center gap-2">
+						<span className="text-sm font-medium text-muted-foreground">
+							Labels
+						</span>
+						<div className="flex flex-wrap gap-1.5">
+							{Object.entries(run.labels).map(([key, value]) => (
+								<Badge
+									key={key}
+									variant="secondary"
+									className="font-mono text-xs gap-1"
+								>
+									{key}: {value}
+								</Badge>
+							))}
+						</div>
+					</div>
+				)}
+
+				{!isEmptyPayload(payload) && (
+					<CollapsibleSection storageKey="run-payload" title="Payload">
+						<pre className="text-sm font-mono bg-muted/50 rounded-lg p-4 overflow-x-auto">
+							{JSON.stringify(payload, null, 2)}
+						</pre>
+					</CollapsibleSection>
+				)}
 
 				{run.error && (
 					<div className="p-4 rounded-lg border border-red-200 bg-red-50">
