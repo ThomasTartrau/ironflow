@@ -234,6 +234,10 @@ impl RunStore for PostgresStore {
                 });
             }
 
+            if current == new_status && new_status.is_terminal() {
+                return Ok(());
+            }
+
             let event = PostgresStore::run_status_to_event(current, new_status)?;
             let now = Utc::now();
 

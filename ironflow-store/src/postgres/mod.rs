@@ -353,15 +353,17 @@ impl PostgresStore {
                 });
             }
 
-            let event = Self::run_status_to_event(current, new_status)?;
-            let state_machine_id: Uuid = row.get("state_machine__id");
+            if !(current == new_status && new_status.is_terminal()) {
+                let event = Self::run_status_to_event(current, new_status)?;
+                let state_machine_id: Uuid = row.get("state_machine__id");
 
-            sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
-                .bind(state_machine_id)
-                .bind(event)
-                .fetch_one(&mut **tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                    .bind(state_machine_id)
+                    .bind(event)
+                    .fetch_one(&mut **tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
         }
 
         let now = Utc::now();
