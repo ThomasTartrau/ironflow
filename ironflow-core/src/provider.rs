@@ -14,6 +14,7 @@
 //! * [`RecordReplayProvider`](crate::providers::record_replay::RecordReplayProvider) -
 //!   records and replays fixtures for deterministic testing.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -189,6 +190,15 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default)]
     pub verbose: bool,
 
+    /// Custom labels applied to the pod (K8s providers only).
+    ///
+    /// Non-K8s providers ignore this field. Labels are merged with the
+    /// provider-level pod labels and the hardcoded ironflow labels. In case
+    /// of conflict, hardcoded labels always win, then invocation-level labels,
+    /// then provider-level defaults.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pod_labels: BTreeMap<String, String>,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -219,6 +229,7 @@ impl AgentConfig {
             json_schema: None,
             resume_session_id: None,
             verbose: false,
+            pod_labels: BTreeMap::new(),
             _marker: PhantomData,
         }
     }
@@ -376,6 +387,43 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Add a single custom pod label (K8s providers only).
+    ///
+    /// Can be called multiple times. Non-K8s providers ignore this field.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("analyze")
+    ///     .pod_label("ironflow.io/network-profile", "grafana-only")
+    ///     .pod_label("team", "observability");
+    /// ```
+    pub fn pod_label(mut self, key: &str, value: &str) -> Self {
+        self.pod_labels.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Replace the entire custom pod labels map (K8s providers only).
+    ///
+    /// Non-K8s providers ignore this field.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let mut labels = BTreeMap::new();
+    /// labels.insert("env".to_string(), "staging".to_string());
+    /// let config = AgentConfig::new("deploy").pod_labels(labels);
+    /// ```
+    pub fn pod_labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        self.pod_labels = labels;
+        self
+    }
+
     /// Set a session ID to resume a previous conversation.
     pub fn resume(mut self, session_id: &str) -> Self {
         self.resume_session_id = Some(session_id.to_string());
@@ -403,6 +451,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             json_schema: self.json_schema,
             resume_session_id: self.resume_session_id,
             verbose: self.verbose,
+            pod_labels: self.pod_labels,
             _marker: PhantomData,
         }
     }
@@ -812,6 +861,7 @@ mod tests {
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
             resume_session_id: None,
             verbose: false,
+            pod_labels: BTreeMap::new(),
             _marker: PhantomData,
         }
     }
@@ -850,6 +900,7 @@ mod tests {
             json_schema: None,
             resume_session_id: None,
             verbose: false,
+            pod_labels: BTreeMap::new(),
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -1091,5 +1142,69 @@ mod tests {
 
         let back: AgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.disallowed_tools, vec!["Write", "Edit"]);
+    }
+
+    #[test]
+    fn pod_labels_defaults_to_empty() {
+        let config = AgentConfig::new("test");
+        assert!(config.pod_labels.is_empty());
+    }
+
+    #[test]
+    fn pod_label_builder_adds_entry() {
+        let config = AgentConfig::new("test").pod_label("k", "v");
+        assert_eq!(config.pod_labels.len(), 1);
+        assert_eq!(config.pod_labels["k"], "v");
+    }
+
+    #[test]
+    fn pod_labels_builder_replaces_map() {
+        let config = AgentConfig::new("test").pod_label("old", "value");
+        let mut new_map = BTreeMap::new();
+        new_map.insert("new".to_string(), "value".to_string());
+        let config = config.pod_labels(new_map);
+        assert_eq!(config.pod_labels.len(), 1);
+        assert_eq!(config.pod_labels["new"], "value");
+        assert!(!config.pod_labels.contains_key("old"));
+    }
+
+    #[test]
+    fn pod_labels_serde_default_when_missing() {
+        let raw = r#"{"prompt":"hello","model":"sonnet"}"#;
+        let config: AgentConfig = serde_json::from_str(raw).unwrap();
+        assert!(
+            config.pod_labels.is_empty(),
+            "pod_labels must default to empty when absent from serialized payload"
+        );
+    }
+
+    #[test]
+    fn pod_labels_serde_skip_when_empty() {
+        let config = AgentConfig::new("hello");
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            !json.contains("pod_labels"),
+            "empty pod_labels must be skipped during serialization, got: {json}"
+        );
+    }
+
+    #[test]
+    fn pod_labels_serde_roundtrip() {
+        let config = AgentConfig::new("hello")
+            .pod_label("ironflow.io/network-profile", "grafana-only")
+            .pod_label("team", "observability");
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("pod_labels"),
+            "non-empty pod_labels must be present in serialized form, got: {json}"
+        );
+
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pod_labels.len(), 2);
+        assert_eq!(
+            back.pod_labels["ironflow.io/network-profile"],
+            "grafana-only"
+        );
+        assert_eq!(back.pod_labels["team"], "observability");
     }
 }

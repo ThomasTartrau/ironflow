@@ -28,6 +28,7 @@
 //! # }
 //! ```
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use k8s_openapi::api::core::v1::Pod;
@@ -91,6 +92,7 @@ pub struct K8sEphemeralProvider {
     oauth_credentials: Option<String>,
     cluster_config: K8sClusterConfig,
     timeout: Duration,
+    pod_labels: BTreeMap<String, String>,
 }
 
 impl K8sEphemeralProvider {
@@ -109,6 +111,7 @@ impl K8sEphemeralProvider {
             oauth_credentials: None,
             cluster_config: K8sClusterConfig::default(),
             timeout: DEFAULT_TIMEOUT,
+            pod_labels: BTreeMap::new(),
         }
     }
 
@@ -217,6 +220,21 @@ impl K8sEphemeralProvider {
         self.timeout = timeout;
         self
     }
+
+    /// Add a single provider-level pod label applied to every pod created.
+    ///
+    /// Can be called multiple times. These labels serve as defaults and are
+    /// overridden by per-invocation labels from [`AgentConfig::pod_labels`].
+    pub fn pod_label(mut self, key: &str, value: &str) -> Self {
+        self.pod_labels.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Replace the entire provider-level pod labels map.
+    pub fn pod_labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        self.pod_labels = labels;
+        self
+    }
 }
 
 impl AgentProvider for K8sEphemeralProvider {
@@ -254,6 +272,10 @@ impl AgentProvider for K8sEphemeralProvider {
 
             let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
 
+            // Merge pod labels: provider defaults, then invocation overrides
+            let mut merged_labels = self.pod_labels.clone();
+            merged_labels.extend(config.pod_labels.clone());
+
             // Create pod
             let pod_spec = build_pod_spec(&PodConfig {
                 name: &pod_name,
@@ -266,6 +288,7 @@ impl AgentProvider for K8sEphemeralProvider {
                 image_pull_policy: &self.image_pull_policy,
                 env_vars: &self.env_vars,
                 image_pull_secrets: &self.image_pull_secrets,
+                extra_labels: &merged_labels,
             })?;
 
             pods.create(&PostParams::default(), &pod_spec)
@@ -393,5 +416,32 @@ mod tests {
         let cloned = provider.clone();
         assert_eq!(cloned.namespace, "ns");
         assert_eq!(cloned.timeout, Duration::from_secs(42));
+    }
+
+    #[test]
+    fn ephemeral_provider_pod_labels_default_empty() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        assert!(provider.pod_labels.is_empty());
+    }
+
+    #[test]
+    fn ephemeral_provider_pod_labels_builder() {
+        let mut labels = BTreeMap::new();
+        labels.insert("env".to_string(), "staging".to_string());
+        labels.insert("team".to_string(), "platform".to_string());
+        let provider = K8sEphemeralProvider::new("img:v1").pod_labels(labels);
+        assert_eq!(provider.pod_labels.len(), 2);
+        assert_eq!(provider.pod_labels["env"], "staging");
+        assert_eq!(provider.pod_labels["team"], "platform");
+    }
+
+    #[test]
+    fn ephemeral_provider_pod_label_builder() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .pod_label("env", "prod")
+            .pod_label("team", "infra");
+        assert_eq!(provider.pod_labels.len(), 2);
+        assert_eq!(provider.pod_labels["env"], "prod");
+        assert_eq!(provider.pod_labels["team"], "infra");
     }
 }

@@ -164,6 +164,11 @@ pub struct PodConfig<'a> {
     pub env_vars: &'a [(String, String)],
     /// Image pull secrets for private registries.
     pub image_pull_secrets: &'a [String],
+    /// Extra labels to apply to the pod metadata.
+    ///
+    /// Merged with hardcoded ironflow labels. Hardcoded labels always win
+    /// in case of conflict.
+    pub extra_labels: &'a BTreeMap<String, String>,
 }
 
 /// Build a Kubernetes pod spec for running claude.
@@ -182,16 +187,23 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
         Some(json!({ "limits": resource_limits }))
     };
 
+    let mut labels: BTreeMap<String, String> = config.extra_labels.clone();
+    labels.insert(
+        "app.kubernetes.io/managed-by".to_string(),
+        "ironflow".to_string(),
+    );
+    labels.insert(
+        "app.kubernetes.io/component".to_string(),
+        "claude-runner".to_string(),
+    );
+
     let mut pod_json = json!({
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": {
             "name": config.name,
             "namespace": config.namespace,
-            "labels": {
-                "app.kubernetes.io/managed-by": "ironflow",
-                "app.kubernetes.io/component": "claude-runner"
-            }
+            "labels": labels
         },
         "spec": {
             "restartPolicy": config.restart_policy,
@@ -287,6 +299,7 @@ mod tests {
             image_pull_policy: &ImagePullPolicy::default(),
             env_vars: &[],
             image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
         })
         .unwrap();
         assert!(pod.spec.unwrap().image_pull_secrets.is_none());
@@ -306,11 +319,119 @@ mod tests {
             image_pull_policy: &ImagePullPolicy::default(),
             env_vars: &[],
             image_pull_secrets: &secrets,
+            extra_labels: &BTreeMap::new(),
         })
         .unwrap();
         let pull_secrets = pod.spec.unwrap().image_pull_secrets.unwrap();
         assert_eq!(pull_secrets.len(), 2);
         assert_eq!(pull_secrets[0].name, "gitlab-registry");
         assert_eq!(pull_secrets[1].name, "dockerhub");
+    }
+
+    #[test]
+    fn build_pod_spec_without_extra_labels() {
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+        })
+        .unwrap();
+        let labels = pod.metadata.labels.unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels["app.kubernetes.io/managed-by"], "ironflow");
+        assert_eq!(labels["app.kubernetes.io/component"], "claude-runner");
+    }
+
+    #[test]
+    fn build_pod_spec_with_extra_labels() {
+        let mut extra = BTreeMap::new();
+        extra.insert("network-profile".to_string(), "restricted".to_string());
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &extra,
+        })
+        .unwrap();
+        let labels = pod.metadata.labels.unwrap();
+        assert_eq!(labels.len(), 3);
+        assert_eq!(labels["network-profile"], "restricted");
+        assert_eq!(labels["app.kubernetes.io/managed-by"], "ironflow");
+        assert_eq!(labels["app.kubernetes.io/component"], "claude-runner");
+    }
+
+    #[test]
+    fn build_pod_spec_extra_labels_cannot_override_hardcoded() {
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            "app.kubernetes.io/managed-by".to_string(),
+            "attacker".to_string(),
+        );
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &extra,
+        })
+        .unwrap();
+        let labels = pod.metadata.labels.unwrap();
+        assert_eq!(
+            labels["app.kubernetes.io/managed-by"], "ironflow",
+            "hardcoded label must not be overridden by extra_labels"
+        );
+    }
+
+    #[test]
+    fn build_pod_spec_merges_labels_correctly() {
+        let mut extra = BTreeMap::new();
+        extra.insert("team".to_string(), "observability".to_string());
+        extra.insert(
+            "ironflow.io/network-profile".to_string(),
+            "grafana-only".to_string(),
+        );
+        extra.insert("env".to_string(), "staging".to_string());
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &extra,
+        })
+        .unwrap();
+        let labels = pod.metadata.labels.unwrap();
+        assert_eq!(labels.len(), 5);
+        assert_eq!(labels["team"], "observability");
+        assert_eq!(labels["ironflow.io/network-profile"], "grafana-only");
+        assert_eq!(labels["env"], "staging");
+        assert_eq!(labels["app.kubernetes.io/managed-by"], "ironflow");
+        assert_eq!(labels["app.kubernetes.io/component"], "claude-runner");
     }
 }
