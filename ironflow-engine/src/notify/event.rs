@@ -17,7 +17,7 @@ use ironflow_store::models::{RunStatus, StepKind};
 /// let stream: LogStream = "stdout".parse().unwrap();
 /// assert_eq!(stream.as_str(), "stdout");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum LogStream {

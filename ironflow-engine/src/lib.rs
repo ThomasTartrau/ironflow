@@ -47,6 +47,7 @@ pub mod error;
 pub mod executor;
 pub mod fsm;
 pub mod handler;
+pub mod log_sender;
 pub mod notify;
 pub mod operation;
 

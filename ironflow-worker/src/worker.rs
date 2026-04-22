@@ -15,6 +15,7 @@ use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
+use ironflow_engine::log_sender::LogReceiver;
 use ironflow_store::entities::RunStatus;
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -24,6 +25,7 @@ use reqwest::Client;
 
 use crate::api_store::ApiRunStore;
 use crate::error::WorkerError;
+use crate::log_pusher::LogPusher;
 
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -247,6 +249,9 @@ impl WorkerBuilder {
                 .map_err(WorkerError::Engine)?;
         }
 
+        let (log_sender, log_receiver) = ironflow_engine::log_sender::channel();
+        engine.set_log_sender(log_sender);
+
         #[cfg(feature = "heartbeat")]
         let heartbeat_client = Client::builder()
             .timeout(Duration::from_secs(5))
@@ -255,6 +260,9 @@ impl WorkerBuilder {
 
         Ok(Worker {
             engine: Arc::new(engine),
+            api_url: self.api_url,
+            worker_token: self.worker_token,
+            log_receiver: Mutex::new(Some(log_receiver)),
             concurrency: self.concurrency,
             poll_interval: self.poll_interval,
             run_timeout: self.run_timeout,
@@ -273,6 +281,9 @@ impl WorkerBuilder {
 /// Background worker that polls the API and executes workflows.
 pub struct Worker {
     engine: Arc<Engine>,
+    api_url: String,
+    worker_token: String,
+    log_receiver: Mutex<Option<LogReceiver>>,
     concurrency: usize,
     poll_interval: Duration,
     run_timeout: Duration,
@@ -353,6 +364,12 @@ impl Worker {
             run_timeout_secs = self.run_timeout.as_secs(),
             "worker started"
         );
+
+        if let Some(receiver) = self.log_receiver.lock().expect("log_receiver lock").take() {
+            let pusher = LogPusher::new(&self.api_url, &self.worker_token);
+            spawn(pusher.run(receiver));
+            info!("log pusher started");
+        }
 
         // Spawn shutdown signal handler
         let shutdown_clone = shutdown.clone();

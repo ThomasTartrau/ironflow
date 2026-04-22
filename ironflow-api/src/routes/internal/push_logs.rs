@@ -88,6 +88,8 @@ mod tests {
     use ironflow_engine::notify::{Event, LogStream};
     use ironflow_store::entities::{NewStep, StepKind};
     use ironflow_store::memory::InMemoryStore;
+    use std::collections::HashMap;
+
     use ironflow_store::models::{NewRun, TriggerKind};
 
     use super::PushLogsRequest;

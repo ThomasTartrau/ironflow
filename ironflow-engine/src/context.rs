@@ -49,6 +49,7 @@ use crate::config::{
 use crate::error::EngineError;
 use crate::executor::{ParallelStepResult, StepOutput, execute_step_config};
 use crate::handler::WorkflowHandler;
+use crate::log_sender::{LogSender, StepLogSender};
 use crate::operation::Operation;
 
 /// Callback type for resolving workflow handlers by name.
@@ -88,6 +89,8 @@ pub struct WorkflowContext {
     /// Steps from a previous execution, keyed by position.
     /// Used when resuming after approval to replay completed steps.
     replay_steps: HashMap<u32, Step>,
+    /// Optional sender for real-time log streaming.
+    log_sender: Option<LogSender>,
 }
 
 impl WorkflowContext {
@@ -106,6 +109,7 @@ impl WorkflowContext {
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
             replay_steps: HashMap::new(),
+            log_sender: None,
         }
     }
 
@@ -129,7 +133,13 @@ impl WorkflowContext {
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
             replay_steps: HashMap::new(),
+            log_sender: None,
         }
+    }
+
+    /// Attach a log sender for real-time step output streaming.
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = Some(sender);
     }
 
     /// Load existing steps from the store for replay after approval.
@@ -236,10 +246,19 @@ impl WorkflowContext {
         }
 
         let mut join_set = JoinSet::new();
-        for (idx, (_id, _name, config)) in step_records.iter().enumerate() {
+        for (idx, (step_id, step_name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
             let config = config.clone();
-            join_set.spawn(async move { (idx, execute_step_config(&config, &provider).await) });
+            let step_log_sender = self
+                .log_sender
+                .as_ref()
+                .map(|s| StepLogSender::new(s.clone(), self.run_id, *step_id, step_name.clone()));
+            join_set.spawn(async move {
+                (
+                    idx,
+                    execute_step_config(&config, &provider, step_log_sender).await,
+                )
+            });
         }
 
         // JoinSet returns in completion order; indexed_results restores input order.
@@ -926,6 +945,7 @@ impl WorkflowContext {
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
             replay_steps: HashMap::new(),
+            log_sender: self.log_sender.clone(),
         };
 
         let result = handler.execute(&mut child_ctx).await;
@@ -1048,7 +1068,12 @@ impl WorkflowContext {
 
         self.start_step(step.id, Utc::now()).await?;
 
-        match execute_step_config(&config, &self.provider).await {
+        let step_log_sender = self
+            .log_sender
+            .as_ref()
+            .map(|s| StepLogSender::new(s.clone(), self.run_id, step.id, name.to_string()));
+
+        match execute_step_config(&config, &self.provider, step_log_sender).await {
             Ok(output) => {
                 self.total_cost_usd += output.cost_usd;
                 self.total_duration_ms += output.duration_ms;

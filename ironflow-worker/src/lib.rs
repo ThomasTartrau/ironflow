@@ -28,6 +28,7 @@
 
 mod api_store;
 pub mod error;
+mod log_pusher;
 pub mod worker;
 
 pub use error::WorkerError;
