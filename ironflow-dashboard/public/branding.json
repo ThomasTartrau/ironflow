@@ -1,0 +1,10 @@
+{
+	"name": "ironflow",
+	"logoUrl": "/logo.svg",
+	"faviconUrl": "/favicon.svg",
+	"copyright": "ironflow",
+	"storagePrefix": "ironflow",
+	"description": "Workflow orchestration dashboard",
+	"theme": {},
+	"darkTheme": {}
+}

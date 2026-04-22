@@ -7,6 +7,7 @@ import { withToast } from "@/app/lib/api-toast";
 import { useAppDispatch } from "@/app/store";
 import { fetchCurrentUser } from "@/app/store/auth-slice";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
+import { useBranding } from "@/app/lib/branding";
 import { Workflow, Zap, Shield } from "lucide-react";
 
 const FEATURES = [
@@ -37,9 +38,10 @@ export function Component() {
 	const [loading, setLoading] = useState(false);
 	const navigate = useNavigate();
 	const dispatch = useAppDispatch();
+	const branding = useBranding();
 	useDocumentMeta({
 		title: "Sign up",
-		description: "Create your Ironflow account.",
+		description: `Create your ${branding.name} account.`,
 	});
 
 	const handleSubmit = (e: React.FormEvent) => {
@@ -68,8 +70,14 @@ export function Component() {
 				<div className="absolute -bottom-32 -right-32 size-96 rounded-full bg-primary/15 blur-3xl" />
 
 				<div className="relative flex items-center gap-3">
-					<img src="/logo.svg" alt="ironflow" className="size-9 rounded-lg" />
-					<span className="text-xl font-bold tracking-tight">ironflow</span>
+					<img
+						src={branding.logoUrl}
+						alt={branding.name}
+						className="size-9 rounded-lg"
+					/>
+					<span className="text-xl font-bold tracking-tight">
+						{branding.name}
+					</span>
 				</div>
 
 				<div className="relative space-y-8">
@@ -89,14 +97,20 @@ export function Component() {
 				</div>
 
 				<p className="relative text-xs text-neutral-500">
-					&copy; {new Date().getFullYear()} ironflow
+					&copy; {new Date().getFullYear()} {branding.copyright}
 				</p>
 			</div>
 
 			<div className="relative flex flex-col p-6 sm:p-10 overflow-hidden">
 				<div className="relative flex items-center gap-3 lg:hidden mb-auto">
-					<img src="/logo.svg" alt="ironflow" className="size-9 rounded-lg" />
-					<span className="text-xl font-bold tracking-tight">ironflow</span>
+					<img
+						src={branding.logoUrl}
+						alt={branding.name}
+						className="size-9 rounded-lg"
+					/>
+					<span className="text-xl font-bold tracking-tight">
+						{branding.name}
+					</span>
 				</div>
 
 				<div className="relative flex flex-1 flex-col items-center justify-center">

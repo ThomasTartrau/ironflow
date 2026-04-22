@@ -19,6 +19,7 @@ import {
 import { NavMain, type NavItem } from "./nav-main";
 import { NavUser } from "./nav-user";
 import { useAppSelector } from "@/app/store";
+import { useBranding } from "@/app/lib/branding";
 
 const baseNavItems: NavItem[] = [
 	{
@@ -86,6 +87,7 @@ const adminNavItem: NavItem = {
 
 export function AppSidebar() {
 	const auth = useAppSelector((state) => state.auth);
+	const branding = useBranding();
 	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
 
 	const navItems = isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
@@ -94,9 +96,13 @@ export function AppSidebar() {
 		<Sidebar collapsible="icon">
 			<SidebarHeader className="px-4 py-6">
 				<div className="flex items-center gap-2">
-					<img src="/logo.svg" alt="ironflow" className="w-8 h-8 rounded-lg" />
+					<img
+						src={branding.logoUrl}
+						alt={branding.name}
+						className="w-8 h-8 rounded-lg"
+					/>
 					<span className="text-sm font-bold truncate group-data-[collapsible=icon]:hidden">
-						ironflow
+						{branding.name}
 					</span>
 				</div>
 			</SidebarHeader>
