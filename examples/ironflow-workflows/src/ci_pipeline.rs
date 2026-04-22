@@ -3,6 +3,7 @@
 use ironflow_engine::config::{ShellConfig, StepConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use std::collections::HashMap;
 
 /// Simulated CI pipeline that demonstrates DAG features:
 ///
@@ -25,6 +26,8 @@ impl WorkflowHandler for CiPipeline {
             sub_workflows: Vec::new(),
             category: None,
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 

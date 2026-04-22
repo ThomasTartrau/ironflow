@@ -22,6 +22,8 @@ pub async fn create_step_dependencies(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -71,6 +73,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 0,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

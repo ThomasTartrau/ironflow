@@ -26,6 +26,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	const workflow = url.searchParams.get("workflow") ?? "";
 	const status = url.searchParams.get("status") ?? "";
 	const hasSteps = url.searchParams.get("has_steps") ?? "true";
+	const label = url.searchParams.get("label") ?? "";
 
 	const params = new URLSearchParams();
 	params.set("page", page);
@@ -33,6 +34,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	if (workflow) params.set("workflow", workflow);
 	if (status) params.set("status", status);
 	if (hasSteps === "true") params.set("has_steps", "true");
+	if (label) params.set("label", label);
 
 	const res = await api.get<RunResponse[]>(`/runs?${params}`);
 	return { runs: res.data, meta: res.meta };

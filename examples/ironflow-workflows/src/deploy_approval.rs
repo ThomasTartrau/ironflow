@@ -3,6 +3,7 @@
 use ironflow_engine::config::{ApprovalConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use std::collections::HashMap;
 
 /// Deploy pipeline that requires human approval before shipping to production.
 ///
@@ -35,6 +36,8 @@ impl WorkflowHandler for DeployApproval {
             sub_workflows: Vec::new(),
             category: None,
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 

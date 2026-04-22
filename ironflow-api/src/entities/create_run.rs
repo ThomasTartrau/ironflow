@@ -1,5 +1,8 @@
 //! Request type for triggering a workflow.
 
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -14,6 +17,8 @@ use serde_json::Value;
 /// let req = CreateRunRequest {
 ///     workflow: "deploy".to_string(),
 ///     payload: Some(json!({"env": "prod"})),
+///     labels: None,
+///     scheduled_at: None,
 /// };
 /// assert_eq!(req.workflow, "deploy");
 /// ```
@@ -25,4 +30,10 @@ pub struct CreateRunRequest {
     /// Optional input payload for the workflow.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub payload: Option<Value>,
+    /// Optional key-value labels for categorization and filtering.
+    #[serde(default)]
+    pub labels: Option<HashMap<String, String>>,
+    /// Optional deferred execution time. `None` means run immediately.
+    #[serde(default)]
+    pub scheduled_at: Option<DateTime<Utc>>,
 }

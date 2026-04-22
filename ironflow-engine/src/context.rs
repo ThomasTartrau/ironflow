@@ -883,6 +883,13 @@ impl WorkflowContext {
             EngineError::InvalidWorkflow(format!("no handler registered: {}", config.workflow_name))
         })?;
 
+        let parent_labels = self
+            .store
+            .get_run(self.run_id)
+            .await?
+            .map(|r| r.labels)
+            .unwrap_or_default();
+
         let child_run = self
             .store
             .create_run(NewRun {
@@ -891,6 +898,8 @@ impl WorkflowContext {
                 payload: config.payload.clone(),
                 max_retries: 0,
                 handler_version: None,
+                labels: parent_labels,
+                scheduled_at: None,
             })
             .await?;
 

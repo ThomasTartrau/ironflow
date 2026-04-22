@@ -56,10 +56,18 @@ pub async fn create_run(
     }
 
     let payload = req.payload.unwrap_or_else(|| json!({}));
+    let labels = req.labels.unwrap_or_default();
 
     let run = state
         .engine
-        .enqueue_handler(&req.workflow, TriggerKind::Api, payload, 3)
+        .enqueue_handler_with_options(
+            &req.workflow,
+            TriggerKind::Api,
+            payload,
+            3,
+            labels,
+            req.scheduled_at,
+        )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 

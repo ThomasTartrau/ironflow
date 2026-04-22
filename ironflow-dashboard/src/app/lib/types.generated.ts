@@ -716,15 +716,26 @@ export interface components {
 		 *     let req = CreateRunRequest {
 		 *         workflow: "deploy".to_string(),
 		 *         payload: Some(json!({"env": "prod"})),
+		 *         labels: None,
+		 *         scheduled_at: None,
 		 *     };
 		 *     assert_eq!(req.workflow, "deploy");
 		 *     ```
 		 */
 		CreateRunRequest: {
+			/** @description Optional key-value labels for categorization and filtering. */
+			labels?: {
+				[key: string]: string;
+			} | null;
 			/** @description Optional input payload for the workflow. */
 			payload?: {
 				[key: string]: unknown;
 			} | null;
+			/**
+			 * Format: date-time
+			 * @description Optional deferred execution time. `None` means run immediately.
+			 */
+			scheduled_at?: string | null;
 			/** @description The workflow name to trigger. */
 			workflow: string;
 		};
@@ -1117,8 +1128,10 @@ export interface components {
 			/** @description Display username. */
 			username: string;
 		};
-		/** @description Run detail response — includes steps. */
+		/** @description Run detail response — includes steps and payload. */
 		RunDetailResponse: {
+			/** @description Input payload that triggered this run. */
+			payload: unknown;
 			/** @description The run. */
 			run: components["schemas"]["RunResponse"];
 			/** @description Associated steps, ordered by position. */
@@ -1166,6 +1179,10 @@ export interface components {
 			 * @description Unique run identifier.
 			 */
 			id: string;
+			/** @description User-defined key-value labels. */
+			labels?: {
+				[key: string]: string;
+			};
 			/**
 			 * Format: int32
 			 * @description Maximum allowed retries.
@@ -1176,6 +1193,11 @@ export interface components {
 			 * @description Number of times retried.
 			 */
 			retry_count: number;
+			/**
+			 * Format: date-time
+			 * @description Scheduled execution time. `None` means the run executed immediately.
+			 */
+			scheduled_at?: string | null;
 			/**
 			 * Format: date-time
 			 * @description When execution started.
@@ -1536,8 +1558,14 @@ export interface components {
 		WorkflowDetailResponse: {
 			/** @description Optional `/`-separated category path used to group workflows. */
 			category?: string | null;
+			/** @description Labels automatically applied to every run of this workflow. */
+			default_labels?: {
+				[key: string]: string;
+			};
 			/** @description Human-readable description. */
 			description: string;
+			/** @description JSON Schema describing the expected input payload. */
+			input_schema?: unknown;
 			/** @description Workflow name. */
 			name: string;
 			/** @description Optional Rust source code of the handler. */

@@ -1,6 +1,7 @@
 use ironflow_engine::config::{AgentStepConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use std::collections::HashMap;
 
 pub struct SystemAudit;
 
@@ -18,6 +19,8 @@ impl WorkflowHandler for SystemAudit {
             sub_workflows: Vec::new(),
             category: None,
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 

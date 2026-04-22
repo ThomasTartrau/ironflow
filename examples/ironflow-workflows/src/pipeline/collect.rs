@@ -1,6 +1,7 @@
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use std::collections::HashMap;
 
 /// Workflow C: collects raw system metrics (disk, memory, uptime).
 pub struct Collect;
@@ -21,6 +22,8 @@ impl WorkflowHandler for Collect {
             sub_workflows: Vec::new(),
             category: Some("examples/pipeline".to_string()),
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 

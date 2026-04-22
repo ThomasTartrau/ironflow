@@ -7,6 +7,7 @@ mod agent_showcase;
 mod ci_pipeline;
 mod deploy_approval;
 mod git_insight;
+mod greeting;
 mod notified_pipeline;
 mod pipeline;
 mod secret_demo;
@@ -17,6 +18,7 @@ pub use agent_showcase::AgentShowcase;
 pub use ci_pipeline::CiPipeline;
 pub use deploy_approval::DeployApproval;
 pub use git_insight::GitInsight;
+pub use greeting::Greeting;
 pub use notified_pipeline::NotifiedPipeline;
 pub use pipeline::{Collect, Enrich, Report};
 pub use secret_demo::SecretDemo;
@@ -44,5 +46,6 @@ pub fn register_all(engine: &mut Engine) -> Result<(), EngineError> {
     engine.register(NotifiedPipeline)?;
     engine.register(AgentShowcase)?;
     engine.register(SecretDemo)?;
+    engine.register(Greeting)?;
     Ok(())
 }

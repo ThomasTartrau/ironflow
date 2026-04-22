@@ -1,6 +1,11 @@
 import { useLoaderData, useNavigation } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
-import { createLoader, parseAsBoolean, parseAsString } from "nuqs/server";
+import {
+	createLoader,
+	parseAsArrayOf,
+	parseAsBoolean,
+	parseAsString,
+} from "nuqs/server";
 import type { RunResponse, StatsResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
@@ -19,6 +24,7 @@ const filterParsers = {
 	workflow: parseAsString.withDefault(""),
 	status: parseAsString.withDefault(""),
 	has_steps: parseAsBoolean.withDefault(true),
+	label: parseAsArrayOf(parseAsString).withDefault([]),
 };
 
 const loadFilters = createLoader(filterParsers);
@@ -27,11 +33,13 @@ function toApiParams(filters: {
 	workflow: string;
 	status: string;
 	has_steps: boolean;
+	label: string[];
 }): URLSearchParams {
 	const params = new URLSearchParams();
 	if (filters.workflow) params.set("workflow", filters.workflow);
 	if (filters.status) params.set("status", filters.status);
 	if (filters.has_steps) params.set("has_steps", "true");
+	if (filters.label.length > 0) params.set("label", filters.label.join(","));
 	return params;
 }
 

@@ -2,6 +2,7 @@ use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use std::collections::HashMap;
 
 pub struct SecretDemo;
 
@@ -20,6 +21,8 @@ impl WorkflowHandler for SecretDemo {
             sub_workflows: Vec::new(),
             category: Some("examples".to_string()),
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 

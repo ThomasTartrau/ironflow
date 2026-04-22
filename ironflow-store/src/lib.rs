@@ -14,6 +14,7 @@
 //! # Quick start
 //!
 //! ```no_run
+//! use std::collections::HashMap;
 //! use ironflow_store::prelude::*;
 //! use serde_json::json;
 //!
@@ -26,6 +27,8 @@
 //!     payload: json!({}),
 //!     max_retries: 3,
 //!     handler_version: None,
+//!     labels: HashMap::new(),
+//!     scheduled_at: None,
 //! }).await?;
 //!
 //! println!("Run {} is {:?}", run.id, run.status);

@@ -489,6 +489,8 @@ impl SecretStore for ApiRunStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     use ironflow_store::entities::TriggerKind;
@@ -504,6 +506,8 @@ mod tests {
             payload: json!({}),
             max_retries: 0,
             handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
         };
         let result = store.create_run(req).await;
         assert!(result.is_err());

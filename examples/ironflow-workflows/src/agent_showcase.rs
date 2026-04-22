@@ -1,6 +1,7 @@
 use ironflow_engine::config::AgentStepConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use std::collections::HashMap;
 
 /// Showcase workflow that exercises the full verbose agent timeline:
 /// thinking blocks, multiple tool calls, tool results, and per-turn tokens.
@@ -25,6 +26,8 @@ impl WorkflowHandler for AgentShowcase {
             sub_workflows: Vec::new(),
             category: None,
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 

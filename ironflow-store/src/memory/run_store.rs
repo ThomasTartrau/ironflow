@@ -31,6 +31,8 @@ impl RunStore for InMemoryStore {
                 started_at: None,
                 completed_at: None,
                 handler_version: req.handler_version,
+                labels: req.labels,
+                scheduled_at: req.scheduled_at,
             };
 
             let mut state = self.state.write().await;
@@ -78,6 +80,13 @@ impl RunStore for InMemoryStore {
                         let run_has_steps = state.steps.values().any(|s| s.run_id == r.id);
                         if has_steps != run_has_steps {
                             return false;
+                        }
+                    }
+                    if let Some(ref labels) = filter.labels {
+                        for (key, value) in labels {
+                            if r.labels.get(key) != Some(value) {
+                                return false;
+                            }
                         }
                     }
                     true
@@ -184,12 +193,16 @@ impl RunStore for InMemoryStore {
     fn pick_next_pending(&self) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let mut state = self.state.write().await;
+            let now = Utc::now();
 
-            // Find the oldest pending run.
+            // Find the oldest pending run whose scheduled_at has passed (or is None).
             let oldest_id = state
                 .runs
                 .values()
-                .filter(|r| r.status.state == RunStatus::Pending)
+                .filter(|r| {
+                    r.status.state == RunStatus::Pending
+                        && r.scheduled_at.is_none_or(|at| at <= now)
+                })
                 .min_by_key(|r| r.created_at)
                 .map(|r| r.id);
 
@@ -369,6 +382,18 @@ impl RunStore for InMemoryStore {
                         continue;
                     }
                 }
+                if let Some(ref labels) = filter.labels {
+                    let mut all_match = true;
+                    for (key, value) in labels {
+                        if run.labels.get(key) != Some(value) {
+                            all_match = false;
+                            break;
+                        }
+                    }
+                    if !all_match {
+                        continue;
+                    }
+                }
 
                 total_cost_usd += run.cost_usd;
                 total_duration_ms += run.duration_ms;
@@ -455,6 +480,8 @@ impl RunStore for InMemoryStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
     use tokio::spawn;
 
@@ -1379,6 +1406,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 1,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -1392,6 +1421,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 1,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -1405,6 +1436,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 1,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -1416,6 +1449,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 1,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();
@@ -1429,6 +1464,8 @@ mod tests {
                 payload: json!({}),
                 max_retries: 1,
                 handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
             })
             .await
             .unwrap();

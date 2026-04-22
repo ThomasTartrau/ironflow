@@ -2,6 +2,7 @@ use ironflow_engine::config::AgentStepConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
 use serde_json::json;
+use std::collections::HashMap;
 
 use super::Collect;
 
@@ -27,6 +28,8 @@ impl WorkflowHandler for Enrich {
             sub_workflows: vec!["pipeline-collect".to_string()],
             category: Some("examples/pipeline".to_string()),
             version: self.version().map(str::to_string),
+            input_schema: None,
+            default_labels: HashMap::new(),
         }
     }
 
