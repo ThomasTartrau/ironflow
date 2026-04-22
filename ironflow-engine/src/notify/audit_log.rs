@@ -62,7 +62,8 @@ fn extract_run_id(event: &Event) -> Option<Uuid> {
         | Event::StepFailed { run_id, .. }
         | Event::ApprovalRequested { run_id, .. }
         | Event::ApprovalGranted { run_id, .. }
-        | Event::ApprovalRejected { run_id, .. } => Some(*run_id),
+        | Event::ApprovalRejected { run_id, .. }
+        | Event::LogLine { run_id, .. } => Some(*run_id),
         Event::UserSignedIn { .. } | Event::UserSignedUp { .. } | Event::UserSignedOut { .. } => {
             None
         }

@@ -956,6 +956,31 @@ export interface components {
 			| {
 					/**
 					 * Format: date-time
+					 * @description When the line was emitted.
+					 */
+					at: string;
+					/** @description The log line content. */
+					line: string;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/**
+					 * Format: uuid
+					 * @description Step identifier.
+					 */
+					step_id: string;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/** @description Output stream. */
+					stream: components["schemas"]["LogStream"];
+					/** @enum {string} */
+					type: "log_line";
+			  }
+			| {
+					/**
+					 * Format: date-time
 					 * @description When the sign-in occurred.
 					 */
 					at: string;
@@ -1024,6 +1049,7 @@ export interface components {
 			| "approval_requested"
 			| "approval_granted"
 			| "approval_rejected"
+			| "log_line"
 			| "user_signed_in"
 			| "user_signed_up"
 			| "user_signed_out";
@@ -1103,6 +1129,20 @@ export interface components {
 			/** @description Optional case-insensitive partial match on workflow name. */
 			name?: string | null;
 		};
+		/**
+		 * @description Output stream for a [`LogLine`](Event::LogLine) event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::LogStream;
+		 *
+		 *     let stream: LogStream = "stdout".parse().unwrap();
+		 *     assert_eq!(stream.as_str(), "stdout");
+		 *     ```
+		 * @enum {string}
+		 */
+		LogStream: "stdout" | "stderr" | "system";
 		/** @description Current user profile response. */
 		MeResponse: {
 			/** @description Email address. */

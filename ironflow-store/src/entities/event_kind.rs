@@ -49,6 +49,8 @@ pub enum EventKind {
     ApprovalGranted,
     /// A run was rejected.
     ApprovalRejected,
+    /// A log line was emitted by a running step.
+    LogLine,
     /// A user signed in.
     UserSignedIn,
     /// A new user signed up.
@@ -68,6 +70,7 @@ impl EventKind {
         Self::ApprovalRequested,
         Self::ApprovalGranted,
         Self::ApprovalRejected,
+        Self::LogLine,
         Self::UserSignedIn,
         Self::UserSignedUp,
         Self::UserSignedOut,
@@ -103,7 +106,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 11);
+        assert_eq!(EventKind::ALL.len(), 12);
     }
 
     #[test]

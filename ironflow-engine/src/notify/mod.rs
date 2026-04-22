@@ -42,7 +42,7 @@ mod webhook;
 
 pub use audit_log::AuditLogSubscriber;
 pub use betterstack::BetterStackSubscriber;
-pub use event::Event;
+pub use event::{Event, LogStream};
 pub use formatter::{FormattedMessage, MessageFormatter};
 pub use publisher::EventPublisher;
 pub use retry::{RetryConfig, deliver_with_retry, is_accepted_202, is_success_2xx};

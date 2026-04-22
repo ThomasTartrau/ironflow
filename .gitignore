@@ -10,3 +10,5 @@ ironflow-api/dashboard/
 .codegraph
 .codegraph.cache
 .envrc
+
+.claude/
