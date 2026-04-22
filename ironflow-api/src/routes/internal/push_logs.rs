@@ -52,18 +52,18 @@ pub async fn push_logs(
         .await?
         .ok_or(ApiError::RunNotFound(run_id))?;
 
-    let publisher = state.engine.event_publisher();
     let now = Utc::now();
 
     for line in &req.lines {
-        publisher.publish(Event::LogLine {
+        let event = Event::LogLine {
             run_id,
             step_id: req.step_id,
             step_name: req.step_name.clone(),
             stream: req.stream,
             line: line.clone(),
             at: now,
-        });
+        };
+        let _ = state.event_sender.send(event);
     }
 
     Ok(ok(json!({ "accepted": req.lines.len() })))
@@ -76,7 +76,9 @@ mod tests {
     use http_body_util::BodyExt;
     use serde_json::{Value as JsonValue, from_slice, json, to_string};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::broadcast;
+    use tokio::time::timeout;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -114,66 +116,69 @@ mod tests {
 
     #[tokio::test]
     async fn push_logs_broadcasts_events() {
-        let state = test_state();
-        let run = state
-            .store
-            .create_run(NewRun {
-                workflow_name: "test".to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-            })
-            .await
-            .unwrap();
+        timeout(Duration::from_secs(10), async {
+            let state = test_state();
+            let run = state
+                .store
+                .create_run(NewRun {
+                    workflow_name: "test".to_string(),
+                    trigger: TriggerKind::Manual,
+                    payload: json!({}),
+                    max_retries: 0,
+                    handler_version: None,
+                })
+                .await
+                .unwrap();
 
-        let step = state
-            .store
-            .create_step(NewStep {
-                run_id: run.id,
-                name: "build".to_string(),
-                kind: StepKind::Shell,
-                position: 0,
-                input: None,
-            })
-            .await
-            .unwrap();
+            let step = state
+                .store
+                .create_step(NewStep {
+                    run_id: run.id,
+                    name: "build".to_string(),
+                    kind: StepKind::Shell,
+                    position: 0,
+                    input: None,
+                })
+                .await
+                .unwrap();
 
-        let mut rx = state.event_sender.subscribe();
+            let mut rx = state.event_sender.subscribe();
 
-        let app = create_router(state.clone(), RouterConfig::default());
+            let app = create_router(state.clone(), RouterConfig::default());
 
-        let body = PushLogsRequest {
-            step_id: step.id,
-            step_name: "build".to_string(),
-            stream: LogStream::Stdout,
-            lines: vec![
-                "Compiling ironflow v0.1.0".to_string(),
-                "Finished in 2.3s".to_string(),
-            ],
-        };
+            let body = PushLogsRequest {
+                step_id: step.id,
+                step_name: "build".to_string(),
+                stream: LogStream::Stdout,
+                lines: vec![
+                    "Compiling ironflow v0.1.0".to_string(),
+                    "Finished in 2.3s".to_string(),
+                ],
+            };
 
-        let req = Request::builder()
-            .method("POST")
-            .uri(format!("/api/v1/internal/runs/{}/logs", run.id))
-            .header("authorization", "Bearer test-worker-token")
-            .header("content-type", "application/json")
-            .body(Body::from(to_string(&body).unwrap()))
-            .unwrap();
+            let req = Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/internal/runs/{}/logs", run.id))
+                .header("authorization", "Bearer test-worker-token")
+                .header("content-type", "application/json")
+                .body(Body::from(to_string(&body).unwrap()))
+                .unwrap();
 
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
 
-        let resp_body = resp.into_body().collect().await.unwrap().to_bytes();
-        let json_val: JsonValue = from_slice(&resp_body).unwrap();
-        assert_eq!(json_val["data"]["accepted"], 2);
+            let resp_body = resp.into_body().collect().await.unwrap().to_bytes();
+            let json_val: JsonValue = from_slice(&resp_body).unwrap();
+            assert_eq!(json_val["data"]["accepted"], 2);
 
-        // Verify events were broadcast
-        let event1 = rx.recv().await.unwrap();
-        assert_eq!(event1.event_type(), "log_line");
+            let event1 = rx.recv().await.unwrap();
+            assert_eq!(event1.event_type(), "log_line");
 
-        let event2 = rx.recv().await.unwrap();
-        assert_eq!(event2.event_type(), "log_line");
+            let event2 = rx.recv().await.unwrap();
+            assert_eq!(event2.event_type(), "log_line");
+        })
+        .await
+        .expect("test timed out");
     }
 
     #[tokio::test]
