@@ -1,6 +1,5 @@
 import { useEffect } from "react";
-
-const SUFFIX = "Ironflow";
+import { useBranding } from "@/app/lib/branding";
 
 interface DocumentMetaOptions {
 	title: string;
@@ -8,8 +7,10 @@ interface DocumentMetaOptions {
 }
 
 export function useDocumentMeta({ title, description }: DocumentMetaOptions) {
+	const branding = useBranding();
+
 	useEffect(() => {
-		document.title = `${title} - ${SUFFIX}`;
+		document.title = `${title} - ${branding.name}`;
 
 		if (description) {
 			let meta = document.querySelector<HTMLMetaElement>(
@@ -22,5 +23,5 @@ export function useDocumentMeta({ title, description }: DocumentMetaOptions) {
 			}
 			meta.content = description;
 		}
-	}, [title, description]);
+	}, [title, description, branding.name]);
 }
