@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.17.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.16.0...ironflow-api-v2.17.0) - 2026-04-22
+
+### Added
+
+- add real-time log streaming for workflow runs
+
+
+### Fixed
+
+- use broadcast channel instead of event publisher for SSE log streaming
+
 ## [2.16.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.15.0...ironflow-api-v2.16.0) - 2026-04-21
 
 ### Added
