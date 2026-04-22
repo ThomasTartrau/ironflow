@@ -128,6 +128,10 @@ impl RunStore for InMemoryStore {
                 });
             }
 
+            if run.status.state == new_status && new_status.is_terminal() {
+                return Ok(());
+            }
+
             let now = Utc::now();
             run.status.state = new_status;
             run.updated_at = now;
@@ -157,12 +161,14 @@ impl RunStore for InMemoryStore {
                         to: status,
                     });
                 }
-                run.status.state = status;
-                if status == RunStatus::Running && run.started_at.is_none() {
-                    run.started_at = Some(now);
-                }
-                if status.is_terminal() {
-                    run.completed_at = Some(now);
+                if !(run.status.state == status && status.is_terminal()) {
+                    run.status.state = status;
+                    if status == RunStatus::Running && run.started_at.is_none() {
+                        run.started_at = Some(now);
+                    }
+                    if status.is_terminal() {
+                        run.completed_at = Some(now);
+                    }
                 }
             }
 
@@ -583,6 +589,73 @@ mod tests {
         let fetched = store.get_run(run.id).await.unwrap().unwrap();
         assert_eq!(fetched.status.state, RunStatus::Completed);
         assert!(fetched.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_run_status_terminal_to_same_is_idempotent() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let before = store.get_run(run.id).await.unwrap().unwrap();
+        let completed_at_before = before.completed_at;
+
+        store
+            .update_run_status(run.id, RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let after = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(after.status.state, RunStatus::Failed);
+        assert_eq!(after.completed_at, completed_at_before);
+    }
+
+    #[tokio::test]
+    async fn update_run_terminal_to_same_via_update_run_is_idempotent() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Failed),
+                    error: Some("first failure".to_string()),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let before = store.get_run(run.id).await.unwrap().unwrap();
+
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Failed),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let after = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(after.status.state, RunStatus::Failed);
+        assert_eq!(after.completed_at, before.completed_at);
+        assert_eq!(after.error, Some("first failure".to_string()));
     }
 
     // ---- list_runs ----

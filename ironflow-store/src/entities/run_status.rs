@@ -5,12 +5,13 @@ use serde::{Deserialize, Serialize};
 /// Status of a workflow run, forming a finite state machine.
 ///
 /// Valid transitions:
-/// - `Pending` → `Running`, `Cancelled`
-/// - `Running` → `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
-/// - `Retrying` → `Running`, `Failed`, `Cancelled`
-/// - `AwaitingApproval` → `Running`, `Failed`, `Cancelled`
+/// - `Pending` -> `Running`, `Cancelled`
+/// - `Running` -> `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
+/// - `Retrying` -> `Running`, `Failed`, `Cancelled`
+/// - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
 ///
-/// Terminal states: `Completed`, `Failed`, `Cancelled`.
+/// Terminal states (`Completed`, `Failed`, `Cancelled`) are idempotent:
+/// transitioning to the same terminal state is a no-op, not an error.
 ///
 /// # Examples
 ///
@@ -22,6 +23,10 @@ use serde::{Deserialize, Serialize};
 /// assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
 /// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+/// // Terminal-to-same is idempotent:
+/// assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
+/// assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
+/// assert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));
 /// ```
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -45,7 +50,12 @@ pub enum RunStatus {
 
 impl RunStatus {
     /// Returns `true` if the current status can legally transition to `target`.
+    ///
+    /// Transitioning a terminal state to itself is idempotent (returns `true`).
     pub fn can_transition_to(&self, target: &RunStatus) -> bool {
+        if self == target && self.is_terminal() {
+            return true;
+        }
         matches!(
             (self, target),
             (RunStatus::Pending, RunStatus::Running)
@@ -196,6 +206,31 @@ mod tests {
     #[test]
     fn awaiting_approval_cannot_transition_to_completed() {
         assert!(!RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Completed));
+    }
+
+    #[test]
+    fn terminal_to_same_is_idempotent() {
+        assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
+        assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
+        assert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));
+    }
+
+    #[test]
+    fn terminal_to_different_terminal_is_forbidden() {
+        assert!(!RunStatus::Failed.can_transition_to(&RunStatus::Completed));
+        assert!(!RunStatus::Failed.can_transition_to(&RunStatus::Cancelled));
+        assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Failed));
+        assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Cancelled));
+        assert!(!RunStatus::Cancelled.can_transition_to(&RunStatus::Failed));
+        assert!(!RunStatus::Cancelled.can_transition_to(&RunStatus::Completed));
+    }
+
+    #[test]
+    fn non_terminal_same_state_is_forbidden() {
+        assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Pending));
+        assert!(!RunStatus::Running.can_transition_to(&RunStatus::Running));
+        assert!(!RunStatus::Retrying.can_transition_to(&RunStatus::Retrying));
+        assert!(!RunStatus::AwaitingApproval.can_transition_to(&RunStatus::AwaitingApproval));
     }
 
     #[test]

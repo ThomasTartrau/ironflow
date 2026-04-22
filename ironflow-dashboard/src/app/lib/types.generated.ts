@@ -1261,12 +1261,13 @@ export interface components {
 		 * @description Status of a workflow run, forming a finite state machine.
 		 *
 		 *     Valid transitions:
-		 *     - `Pending` → `Running`, `Cancelled`
-		 *     - `Running` → `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
-		 *     - `Retrying` → `Running`, `Failed`, `Cancelled`
-		 *     - `AwaitingApproval` → `Running`, `Failed`, `Cancelled`
+		 *     - `Pending` -> `Running`, `Cancelled`
+		 *     - `Running` -> `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
+		 *     - `Retrying` -> `Running`, `Failed`, `Cancelled`
+		 *     - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
 		 *
-		 *     Terminal states: `Completed`, `Failed`, `Cancelled`.
+		 *     Terminal states (`Completed`, `Failed`, `Cancelled`) are idempotent:
+		 *     transitioning to the same terminal state is a no-op, not an error.
 		 *
 		 *     # Examples
 		 *
@@ -1278,6 +1279,10 @@ export interface components {
 		 *     assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
 		 *     assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+		 *     // Terminal-to-same is idempotent:
+		 *     assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
+		 *     assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
+		 *     assert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));
 		 *     ```
 		 * @enum {string}
 		 */
