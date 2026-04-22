@@ -1074,6 +1074,8 @@ export interface components {
 			 *     When `false`, only return runs with no steps.
 			 */
 			has_steps?: boolean | null;
+			/** @description Filter by labels. Comma-separated `key:value` pairs. */
+			label?: string | null;
 			/**
 			 * Format: int32
 			 * @description Page number (1-based).
@@ -1947,6 +1949,8 @@ export interface operations {
 				 *     When `false`, only return runs with no steps.
 				 */
 				has_steps?: boolean | null;
+				/** @description Filter by labels. Comma-separated `key:value` pairs. */
+				label?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */
@@ -2458,6 +2462,8 @@ export interface operations {
 				 *     When `false`, only return runs with no steps.
 				 */
 				has_steps?: boolean | null;
+				/** @description Filter by labels. Comma-separated `key:value` pairs. */
+				label?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */

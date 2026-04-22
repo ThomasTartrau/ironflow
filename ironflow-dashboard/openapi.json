@@ -467,6 +467,18 @@
             }
           },
           {
+            "name": "label",
+            "in": "query",
+            "description": "Filter by labels. Comma-separated `key:value` pairs.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "page",
             "in": "query",
             "description": "Page number (1-based).",
@@ -1071,6 +1083,18 @@
             "schema": {
               "type": [
                 "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Filter by labels. Comma-separated `key:value` pairs.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
                 "null"
               ]
             }
@@ -2263,6 +2287,13 @@
               "null"
             ],
             "description": "When `true`, only return runs with at least one step.\nWhen `false`, only return runs with no steps."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Filter by labels. Comma-separated `key:value` pairs."
           },
           "page": {
             "type": [
