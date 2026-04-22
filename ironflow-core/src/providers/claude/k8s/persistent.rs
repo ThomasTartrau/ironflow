@@ -30,6 +30,7 @@
 //! # }
 //! ```
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -83,6 +84,7 @@ pub struct K8sPersistentProvider {
     oauth_credentials: Option<String>,
     cluster_config: K8sClusterConfig,
     timeout: Duration,
+    pod_labels: BTreeMap<String, String>,
 }
 
 impl K8sPersistentProvider {
@@ -102,6 +104,7 @@ impl K8sPersistentProvider {
             oauth_credentials: None,
             cluster_config: K8sClusterConfig::default(),
             timeout: DEFAULT_TIMEOUT,
+            pod_labels: BTreeMap::new(),
         }
     }
 
@@ -198,6 +201,21 @@ impl K8sPersistentProvider {
         self
     }
 
+    /// Add a single provider-level pod label applied to the worker pod.
+    ///
+    /// Can be called multiple times. These labels are applied when the
+    /// persistent worker pod is created.
+    pub fn pod_label(mut self, key: &str, value: &str) -> Self {
+        self.pod_labels.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Replace the entire provider-level pod labels map.
+    pub fn pod_labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        self.pod_labels = labels;
+        self
+    }
+
     /// Ensure the worker pod is running, creating it if necessary.
     async fn ensure_pod_running(&self, pods: &Api<Pod>) -> Result<(), AgentError> {
         let needs_create = match pods.get(&self.pod_name).await {
@@ -252,6 +270,7 @@ impl K8sPersistentProvider {
                 image_pull_policy: &self.image_pull_policy,
                 env_vars: &self.env_vars,
                 image_pull_secrets: &self.image_pull_secrets,
+                extra_labels: &self.pod_labels,
             })?;
 
             pods.create(&PostParams::default(), &pod_spec)
@@ -443,5 +462,32 @@ mod tests {
         let cloned = provider.clone();
         assert_eq!(cloned.pod_name, "worker");
         assert_eq!(cloned.timeout, Duration::from_secs(42));
+    }
+
+    #[test]
+    fn persistent_provider_pod_labels_default_empty() {
+        let provider = K8sPersistentProvider::new("img:v1");
+        assert!(provider.pod_labels.is_empty());
+    }
+
+    #[test]
+    fn persistent_provider_pod_labels_builder() {
+        let mut labels = BTreeMap::new();
+        labels.insert("env".to_string(), "staging".to_string());
+        labels.insert("team".to_string(), "platform".to_string());
+        let provider = K8sPersistentProvider::new("img:v1").pod_labels(labels);
+        assert_eq!(provider.pod_labels.len(), 2);
+        assert_eq!(provider.pod_labels["env"], "staging");
+        assert_eq!(provider.pod_labels["team"], "platform");
+    }
+
+    #[test]
+    fn persistent_provider_pod_label_builder() {
+        let provider = K8sPersistentProvider::new("img:v1")
+            .pod_label("env", "prod")
+            .pod_label("team", "infra");
+        assert_eq!(provider.pod_labels.len(), 2);
+        assert_eq!(provider.pod_labels["env"], "prod");
+        assert_eq!(provider.pod_labels["team"], "infra");
     }
 }

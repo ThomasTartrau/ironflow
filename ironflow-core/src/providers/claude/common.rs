@@ -1425,6 +1425,7 @@ mod tests {
             bare: false,
             resume_session_id: None,
             verbose: false,
+            pod_labels: std::collections::BTreeMap::new(),
             _marker: PhantomData,
         };
 
