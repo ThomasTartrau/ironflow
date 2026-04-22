@@ -122,6 +122,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 0,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -185,6 +186,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 0,
+                handler_version: None,
             })
             .await
             .unwrap();
@@ -248,6 +250,7 @@ mod tests {
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
                 max_retries: 0,
+                handler_version: None,
             })
             .await
             .unwrap();
