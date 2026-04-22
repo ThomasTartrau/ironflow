@@ -28,6 +28,7 @@ use metrics::{counter, gauge, histogram};
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
 use crate::handler::{WorkflowHandler, WorkflowInfo};
+use crate::log_sender::LogSender;
 use crate::notify::{Event, EventPublisher, EventSubscriber};
 
 /// The workflow orchestration engine.
@@ -75,6 +76,7 @@ pub struct Engine {
     provider: Arc<dyn AgentProvider>,
     handlers: HashMap<String, Arc<dyn WorkflowHandler>>,
     event_publisher: EventPublisher,
+    log_sender: Option<LogSender>,
 }
 
 /// Validate a workflow category path.
@@ -135,7 +137,17 @@ impl Engine {
             provider,
             handlers: HashMap::new(),
             event_publisher: EventPublisher::new(),
+            log_sender: None,
         }
+    }
+
+    /// Attach a log sender for real-time step output streaming.
+    ///
+    /// When set, all workflow contexts created by this engine will forward
+    /// step output (shell stdout/stderr, agent system messages) to the
+    /// given sender.
+    pub fn set_log_sender(&mut self, sender: LogSender) {
+        self.log_sender = Some(sender);
     }
 
     /// Returns a reference to the backing store.
@@ -153,12 +165,16 @@ impl Engine {
         let handlers = self.handlers.clone();
         let resolver: crate::context::HandlerResolver =
             Arc::new(move |name: &str| handlers.get(name).cloned());
-        WorkflowContext::with_handler_resolver(
+        let mut ctx = WorkflowContext::with_handler_resolver(
             run_id,
             self.store.clone(),
             self.provider.clone(),
             resolver,
-        )
+        );
+        if let Some(ref sender) = self.log_sender {
+            ctx.set_log_sender(sender.clone());
+        }
+        ctx
     }
 
     // -----------------------------------------------------------------------

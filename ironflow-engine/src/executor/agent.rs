@@ -11,6 +11,8 @@ use ironflow_core::operations::agent::Agent;
 use ironflow_core::provider::{AgentConfig, AgentProvider};
 
 use crate::error::EngineError;
+use crate::log_sender::StepLogSender;
+use crate::notify::LogStream;
 
 use super::{StepExecutor, StepOutput};
 
@@ -44,21 +46,39 @@ fn format_agent_output(value: &Value, model: Option<&str>, has_schema: bool) -> 
 /// Executor for agent (AI) steps.
 ///
 /// Runs an AI agent with the given prompt and configuration, capturing
-/// the response value, cost, and token counts.
+/// the response value, cost, and token counts. When a [`StepLogSender`]
+/// is attached, emits system log lines for step start/end.
 pub struct AgentExecutor<'a> {
     config: &'a AgentConfig,
+    log_sender: Option<StepLogSender>,
 }
 
 impl<'a> AgentExecutor<'a> {
     /// Create a new agent executor from a config reference.
     pub fn new(config: &'a AgentConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            log_sender: None,
+        }
+    }
+
+    /// Attach a log sender for system-level log lines.
+    pub fn with_log_sender(mut self, sender: StepLogSender) -> Self {
+        self.log_sender = Some(sender);
+        self
     }
 }
 
 impl StepExecutor for AgentExecutor<'_> {
     async fn execute(&self, provider: &Arc<dyn AgentProvider>) -> Result<StepOutput, EngineError> {
         let start = Instant::now();
+
+        if let Some(ref sender) = self.log_sender {
+            sender.emit(
+                LogStream::System,
+                &format!("agent step started (model={})", self.config.model),
+            );
+        }
 
         if self.config.json_schema.is_some() && self.config.max_turns == Some(1) {
             warn!(
@@ -106,6 +126,17 @@ impl StepExecutor for AgentExecutor<'_> {
             if let Some(out) = output_tokens {
                 counter!(AGENT_TOKENS_OUTPUT_TOTAL, "model" => model_label).increment(out);
             }
+        }
+
+        if let Some(ref sender) = self.log_sender {
+            sender.emit(
+                LogStream::System,
+                &format!(
+                    "agent step completed (cost=${cost}, tokens_in={}, tokens_out={})",
+                    input_tokens.unwrap_or(0),
+                    output_tokens.unwrap_or(0),
+                ),
+            );
         }
 
         let debug_messages = result.debug_messages().map(|msgs| msgs.to_vec());

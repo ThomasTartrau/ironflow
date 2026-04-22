@@ -19,6 +19,7 @@ use ironflow_core::provider::{AgentProvider, DebugMessage};
 
 use crate::config::StepConfig;
 use crate::error::EngineError;
+use crate::log_sender::StepLogSender;
 
 pub use agent::AgentExecutor;
 pub use http::HttpExecutor;
@@ -81,6 +82,9 @@ pub trait StepExecutor: Send + Sync {
 
 /// Execute a [`StepConfig`] and return structured output.
 ///
+/// When a [`StepLogSender`] is provided, executors that support streaming
+/// will emit log lines in real time (e.g. shell stdout/stderr).
+///
 /// # Errors
 ///
 /// Returns [`EngineError::Operation`] if the operation fails.
@@ -97,13 +101,14 @@ pub trait StepExecutor: Send + Sync {
 /// # async fn example() -> Result<(), ironflow_engine::error::EngineError> {
 /// let provider: Arc<dyn AgentProvider> = Arc::new(ClaudeCodeProvider::new());
 /// let config = StepConfig::Shell(ShellConfig::new("echo hello"));
-/// let output = execute_step_config(&config, &provider).await?;
+/// let output = execute_step_config(&config, &provider, None).await?;
 /// # Ok(())
 /// # }
 /// ```
 pub async fn execute_step_config(
     config: &StepConfig,
     provider: &Arc<dyn AgentProvider>,
+    log_sender: Option<StepLogSender>,
 ) -> Result<StepOutput, EngineError> {
     let _kind = match config {
         StepConfig::Shell(_) => "shell",
@@ -114,9 +119,21 @@ pub async fn execute_step_config(
     };
 
     let result = match config {
-        StepConfig::Shell(cfg) => ShellExecutor::new(cfg).execute(provider).await,
+        StepConfig::Shell(cfg) => {
+            let mut executor = ShellExecutor::new(cfg);
+            if let Some(sender) = log_sender {
+                executor = executor.with_log_sender(sender);
+            }
+            executor.execute(provider).await
+        }
         StepConfig::Http(cfg) => HttpExecutor::new(cfg).execute(provider).await,
-        StepConfig::Agent(cfg) => AgentExecutor::new(cfg).execute(provider).await,
+        StepConfig::Agent(cfg) => {
+            let mut executor = AgentExecutor::new(cfg);
+            if let Some(sender) = log_sender {
+                executor = executor.with_log_sender(sender);
+            }
+            executor.execute(provider).await
+        }
         StepConfig::Workflow(_) => Err(EngineError::StepConfig(
             "workflow steps are executed by WorkflowContext, not the executor".to_string(),
         )),
