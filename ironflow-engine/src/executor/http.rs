@@ -86,6 +86,7 @@ impl StepExecutor for HttpExecutor<'_> {
             cost_usd: Decimal::ZERO,
             input_tokens: None,
             output_tokens: None,
+            model: None,
             debug_messages: None,
         })
     }

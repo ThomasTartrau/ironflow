@@ -34,7 +34,7 @@
 //!                     build.output["stdout"], tests.output["stdout"])
 //!             )).await?;
 //!
-//!             if review.output["value"].as_str().unwrap_or("").contains("LGTM") {
+//!             if review.output.as_str().unwrap_or("").contains("LGTM") {
 //!                 ctx.shell("deploy", ShellConfig::new("./deploy.sh")).await?;
 //!             }
 //!
