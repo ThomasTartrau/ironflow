@@ -468,7 +468,7 @@ impl WorkflowContext {
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     /// let review = ctx.agent("review", AgentStepConfig::new("Review the code")).await?;
-    /// println!("review: {}", review.output["value"]);
+    /// println!("review: {}", review.output);
     /// # Ok(())
     /// # }
     /// ```
@@ -759,6 +759,7 @@ impl WorkflowContext {
                     cost_usd: Decimal::ZERO,
                     input_tokens: None,
                     output_tokens: None,
+                    model: None,
                     debug_messages: None,
                 })
             }
@@ -979,6 +980,7 @@ impl WorkflowContext {
                     cost_usd: child_ctx.total_cost_usd,
                     input_tokens: None,
                     output_tokens: None,
+                    model: None,
                     debug_messages: None,
                 })
             }
@@ -1025,6 +1027,7 @@ impl WorkflowContext {
             cost_usd: step.cost_usd,
             input_tokens: step.input_tokens,
             output_tokens: step.output_tokens,
+            model: None,
             debug_messages: None,
         };
         self.total_cost_usd += output.cost_usd;

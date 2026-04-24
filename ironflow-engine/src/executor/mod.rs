@@ -29,6 +29,11 @@ pub use shell::ShellExecutor;
 #[derive(Debug, Clone)]
 pub struct StepOutput {
     /// Serialized output (stdout for shell, body for http, value for agent).
+    ///
+    /// For agent steps with a JSON schema, the value may not strictly conform
+    /// to the schema: Claude CLI can flatten wrapper objects with a single
+    /// array field, returning a bare array instead of `{"items": [...]}`.
+    /// Callers should handle both the expected wrapper and a bare value.
     pub output: Value,
     /// Wall-clock duration in milliseconds.
     pub duration_ms: u64,
@@ -38,6 +43,8 @@ pub struct StepOutput {
     pub input_tokens: Option<u64>,
     /// Output token count (agent steps only).
     pub output_tokens: Option<u64>,
+    /// Model identifier used for agent steps (e.g. `"claude-sonnet-4-20250514"`).
+    pub model: Option<String>,
     /// Conversation trace from verbose agent invocations.
     pub debug_messages: Option<Vec<DebugMessage>>,
 }
