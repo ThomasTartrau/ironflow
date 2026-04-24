@@ -167,5 +167,4 @@ mod tests {
         let mode: PermissionMode = serde_json::from_str(json).unwrap();
         assert!(matches!(mode, PermissionMode::Default));
     }
-
 }
