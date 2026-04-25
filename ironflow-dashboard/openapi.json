@@ -371,6 +371,38 @@
         ]
       }
     },
+    "/api/v1/auth/sign-up": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register a new user with email and password.",
+        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 400 if email/username/password is invalid\n- 409 if email or username is already taken",
+        "operationId": "sign_up",
+        "requestBody": {
+          "description": "Sign up credentials",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "User registered successfully, cookies set"
+          },
+          "400": {
+            "description": "Invalid email, username, or password"
+          },
+          "409": {
+            "description": "Email or username already taken"
+          }
+        }
+      }
+    },
     "/api/v1/health-check": {
       "get": {
         "tags": [
@@ -2673,6 +2705,29 @@
           "password": {
             "type": "string",
             "description": "Plaintext password."
+          }
+        }
+      },
+      "SignUpRequest": {
+        "type": "object",
+        "description": "Sign-up request body.",
+        "required": [
+          "email",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address."
+          },
+          "password": {
+            "type": "string",
+            "description": "Plaintext password (min 8 characters)."
+          },
+          "username": {
+            "type": "string",
+            "description": "Display username."
           }
         }
       },

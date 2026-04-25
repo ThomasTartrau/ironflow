@@ -1,6 +1,6 @@
 //! Snapshot test: ensures `openapi.json` stays in sync with the Rust API.
 //!
-//! Run `UPDATE_OPENAPI=1 cargo test -p ironflow-api --features openapi` to regenerate.
+//! Run `UPDATE_OPENAPI=1 cargo test -p ironflow-api --all-features` to regenerate.
 
 #![cfg(feature = "openapi")]
 
@@ -27,13 +27,13 @@ fn openapi_spec_is_up_to_date() {
 
     let existing = fs::read_to_string(&path).unwrap_or_else(|_| {
         panic!(
-            "openapi.json not found at {}. Run: UPDATE_OPENAPI=1 cargo test -p ironflow-api --features openapi",
+            "openapi.json not found at {}. Run: UPDATE_OPENAPI=1 cargo test -p ironflow-api --all-features",
             path.display()
         )
     });
 
     assert_eq!(
         existing, spec,
-        "openapi.json is outdated. Run: UPDATE_OPENAPI=1 cargo test -p ironflow-api --features openapi"
+        "openapi.json is outdated. Run: UPDATE_OPENAPI=1 cargo test -p ironflow-api --all-features"
     );
 }
