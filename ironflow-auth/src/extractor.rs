@@ -121,6 +121,9 @@ impl IntoResponse for AuthRejection {
 /// API key prefix used to distinguish API keys from JWT tokens.
 pub const API_KEY_PREFIX: &str = "irfl_";
 
+/// Number of hex characters kept after [`API_KEY_PREFIX`] to form the stored prefix.
+pub const API_KEY_SUFFIX_LEN: usize = 8;
+
 /// An authenticated caller via API key.
 ///
 /// Use as an Axum handler parameter to enforce API key authentication.
@@ -203,7 +206,7 @@ where
             });
         }
 
-        let suffix_len = (token.len() - API_KEY_PREFIX.len()).min(8);
+        let suffix_len = (token.len() - API_KEY_PREFIX.len()).min(API_KEY_SUFFIX_LEN);
         let prefix = &token[..API_KEY_PREFIX.len() + suffix_len];
 
         let api_key = store
