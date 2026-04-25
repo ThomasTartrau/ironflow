@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
-use ironflow_auth::extractor::API_KEY_PREFIX;
+use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
 
 /// Request body for creating an API key.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -91,7 +91,7 @@ pub async fn create_api_key(
     }
 
     let raw_key = generate_api_key();
-    let key_prefix = raw_key[..API_KEY_PREFIX.len() + 8].to_string();
+    let key_prefix = raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN].to_string();
     let key_hash =
         password::hash(&raw_key).map_err(|e| ApiError::Internal(format!("hashing: {e}")))?;
 
@@ -127,4 +127,49 @@ fn generate_api_key() -> String {
     let random_bytes: Vec<u8> = (0..32).map(|_| rng.random::<u8>()).collect();
     let encoded = hex::encode(&random_bytes);
     format!("{API_KEY_PREFIX}{encoded}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_api_key_has_correct_prefix() {
+        let key = generate_api_key();
+        assert!(key.starts_with(API_KEY_PREFIX));
+    }
+
+    #[test]
+    fn generate_api_key_is_long_enough_for_prefix_extraction() {
+        let key = generate_api_key();
+        let expected_prefix_len = API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN;
+        assert!(
+            key.len() >= expected_prefix_len,
+            "key length {} is shorter than expected prefix length {}",
+            key.len(),
+            expected_prefix_len
+        );
+
+        let prefix = &key[..expected_prefix_len];
+        assert_eq!(prefix.len(), 13);
+        assert!(prefix.starts_with(API_KEY_PREFIX));
+    }
+
+    #[test]
+    fn generate_api_key_prefix_fits_varchar_16() {
+        let key = generate_api_key();
+        let prefix = &key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN];
+        assert!(
+            prefix.len() <= 16,
+            "prefix length {} exceeds VARCHAR(16)",
+            prefix.len()
+        );
+    }
+
+    #[test]
+    fn generate_api_key_produces_unique_keys() {
+        let key1 = generate_api_key();
+        let key2 = generate_api_key();
+        assert_ne!(key1, key2);
+    }
 }

@@ -1,0 +1,1 @@
+ALTER TABLE iam.api_keys ALTER COLUMN key_prefix TYPE VARCHAR(16);
