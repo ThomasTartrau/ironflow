@@ -41,6 +41,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use ironflow_core::provider::LogSink;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -142,6 +143,17 @@ impl StepLogSender {
     }
 }
 
+impl LogSink for StepLogSender {
+    fn log(&self, stream: &str, line: &str) {
+        let log_stream = match stream {
+            "stderr" => LogStream::Stderr,
+            "system" => LogStream::System,
+            _ => LogStream::Stdout,
+        };
+        self.emit(log_stream, line);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +195,60 @@ mod tests {
 
         assert_eq!(receiver.try_recv().unwrap().line, "from original");
         assert_eq!(receiver.try_recv().unwrap().line, "from clone");
+    }
+
+    #[test]
+    fn log_sink_maps_stdout() {
+        let (sender, mut receiver) = channel();
+        let step = StepLogSender::new(sender, Uuid::now_v7(), Uuid::now_v7(), "test".to_string());
+
+        LogSink::log(&step, "stdout", "hello");
+
+        let line = receiver.try_recv().unwrap();
+        assert_eq!(line.stream, LogStream::Stdout);
+        assert_eq!(line.line, "hello");
+    }
+
+    #[test]
+    fn log_sink_maps_stderr() {
+        let (sender, mut receiver) = channel();
+        let step = StepLogSender::new(sender, Uuid::now_v7(), Uuid::now_v7(), "test".to_string());
+
+        LogSink::log(&step, "stderr", "oops");
+
+        let line = receiver.try_recv().unwrap();
+        assert_eq!(line.stream, LogStream::Stderr);
+        assert_eq!(line.line, "oops");
+    }
+
+    #[test]
+    fn log_sink_maps_system() {
+        let (sender, mut receiver) = channel();
+        let step = StepLogSender::new(sender, Uuid::now_v7(), Uuid::now_v7(), "test".to_string());
+
+        LogSink::log(&step, "system", "info");
+
+        let line = receiver.try_recv().unwrap();
+        assert_eq!(line.stream, LogStream::System);
+        assert_eq!(line.line, "info");
+    }
+
+    #[test]
+    fn log_sink_unknown_stream_defaults_to_stdout() {
+        let (sender, mut receiver) = channel();
+        let step = StepLogSender::new(sender, Uuid::now_v7(), Uuid::now_v7(), "test".to_string());
+
+        LogSink::log(&step, "unknown", "data");
+
+        let line = receiver.try_recv().unwrap();
+        assert_eq!(line.stream, LogStream::Stdout);
+    }
+
+    #[test]
+    fn log_sink_after_receiver_dropped_does_not_panic() {
+        let (sender, receiver) = channel();
+        let step = StepLogSender::new(sender, Uuid::now_v7(), Uuid::now_v7(), "test".to_string());
+        drop(receiver);
+        LogSink::log(&step, "stdout", "should not panic");
     }
 }

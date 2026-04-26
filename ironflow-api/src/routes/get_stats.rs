@@ -218,30 +218,7 @@ mod tests {
         assert!((rate - 50.0).abs() < 0.01);
     }
 
-    async fn create_terminal_run(
-        store: &dyn ironflow_store::store::Store,
-        name: &str,
-        status: RunStatus,
-    ) -> ironflow_store::entities::Run {
-        let run = store
-            .create_run(NewRun {
-                workflow_name: name.to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-                labels: HashMap::new(),
-                scheduled_at: None,
-            })
-            .await
-            .unwrap();
-        store
-            .update_run_status(run.id, RunStatus::Running)
-            .await
-            .unwrap();
-        store.update_run_status(run.id, status).await.unwrap();
-        store.get_run(run.id).await.unwrap().unwrap()
-    }
+    use crate::routes::test_helpers::create_terminal_run;
 
     async fn setup_runs_with_steps(store: &Arc<InMemoryStore>) {
         let _empty = create_terminal_run(store.as_ref(), "empty-wf", RunStatus::Completed).await;

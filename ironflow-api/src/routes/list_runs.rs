@@ -81,30 +81,7 @@ mod tests {
     use tokio::sync::broadcast;
     use tower::ServiceExt;
 
-    async fn create_terminal_run(
-        store: &dyn ironflow_store::store::Store,
-        name: &str,
-        status: RunStatus,
-    ) -> ironflow_store::entities::Run {
-        let run = store
-            .create_run(NewRun {
-                workflow_name: name.to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-                labels: HashMap::new(),
-                scheduled_at: None,
-            })
-            .await
-            .unwrap();
-        store
-            .update_run_status(run.id, RunStatus::Running)
-            .await
-            .unwrap();
-        store.update_run_status(run.id, status).await.unwrap();
-        store.get_run(run.id).await.unwrap().unwrap()
-    }
+    use crate::routes::test_helpers::create_terminal_run;
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
