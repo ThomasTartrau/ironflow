@@ -7,7 +7,7 @@ use rust_decimal::Decimal;
 use tracing::{info, warn};
 
 use ironflow_core::operations::agent::Agent;
-use ironflow_core::provider::{AgentConfig, AgentProvider};
+use ironflow_core::provider::{AgentConfig, AgentProvider, LogSink};
 
 use crate::error::EngineError;
 use crate::log_sender::StepLogSender;
@@ -59,9 +59,11 @@ impl StepExecutor for AgentExecutor<'_> {
             );
         }
 
-        let result = Agent::from_config(self.config.clone())
-            .run(provider.as_ref())
-            .await?;
+        let mut agent = Agent::from_config(self.config.clone());
+        if let Some(ref sender) = self.log_sender {
+            agent = agent.log_sink(Arc::new(sender.clone()) as Arc<dyn LogSink>);
+        }
+        let result = agent.run(provider.as_ref()).await?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let cost = Decimal::try_from(result.cost_usd().unwrap_or(0.0)).unwrap_or(Decimal::ZERO);

@@ -38,16 +38,16 @@ fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
         bind_idx += 1;
     }
     if let Some(has_steps) = filter.has_steps {
-        let completed = run_status_to_db_str(&RunStatus::Completed);
-        let cancelled = run_status_to_db_str(&RunStatus::Cancelled);
         let steps_condition = if has_steps {
             "EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
         } else {
             "NOT EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
         };
         conditions.push(format!(
-            "(ast.name NOT IN ('{completed}', '{cancelled}') OR {steps_condition})"
+            "(ast.name NOT IN (${bind_idx}, ${}) OR {steps_condition})",
+            bind_idx + 1
         ));
+        bind_idx += 2;
     }
 
     let where_clause = if conditions.is_empty() {
@@ -78,6 +78,10 @@ fn bind_run_filter_params<'q>(
     }
     if let Some(ref labels) = filter.labels {
         query = query.bind(serde_json::to_value(labels).unwrap_or_default());
+    }
+    if filter.has_steps.is_some() {
+        query = query.bind(run_status_to_db_str(&RunStatus::Completed));
+        query = query.bind(run_status_to_db_str(&RunStatus::Cancelled));
     }
     query
 }

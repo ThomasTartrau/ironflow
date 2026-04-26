@@ -468,19 +468,8 @@ mod tests {
     use super::*;
     use crate::entities::TriggerKind;
 
-    use crate::entities::Run;
-    use crate::memory::tests::new_run_req;
+    use crate::memory::tests::{create_terminal_run, new_run_req};
     use crate::store::RunStore;
-
-    async fn create_terminal_run(store: &InMemoryStore, name: &str, status: RunStatus) -> Run {
-        let run = store.create_run(new_run_req(name)).await.unwrap();
-        store
-            .update_run_status(run.id, RunStatus::Running)
-            .await
-            .unwrap();
-        store.update_run_status(run.id, status).await.unwrap();
-        store.get_run(run.id).await.unwrap().unwrap()
-    }
 
     // ---- create_run ----
 

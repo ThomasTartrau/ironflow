@@ -19,6 +19,7 @@ use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -805,6 +806,44 @@ impl AgentOutput {
     }
 }
 
+// ── Log sink ──────────────────────────────────────────────────────
+
+/// Sink for streaming log lines from provider invocations in real time.
+///
+/// Providers that support live log streaming (e.g. K8s ephemeral) call
+/// [`log`](LogSink::log) for each output line as it is produced, enabling
+/// downstream consumers (SSE endpoints, log pushers) to display progress
+/// before the invocation completes.
+///
+/// This trait lives in `ironflow-core` so providers can emit logs without
+/// depending on higher-level crates.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::{Arc, Mutex};
+/// use ironflow_core::provider::LogSink;
+///
+/// struct VecSink(Mutex<Vec<(String, String)>>);
+///
+/// impl LogSink for VecSink {
+///     fn log(&self, stream: &str, line: &str) {
+///         self.0.lock().unwrap().push((stream.to_string(), line.to_string()));
+///     }
+/// }
+///
+/// let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+/// sink.log("stdout", "hello world");
+/// assert_eq!(sink.0.lock().unwrap().len(), 1);
+/// ```
+pub trait LogSink: Send + Sync {
+    /// Emit a single log line on the given stream.
+    ///
+    /// `stream` is one of `"stdout"`, `"stderr"`, or `"system"`.
+    /// Implementations should silently drop lines if the receiver is closed.
+    fn log(&self, stream: &str, line: &str);
+}
+
 // ── Provider trait ─────────────────────────────────────────────────
 
 /// Trait for AI agent backends.
@@ -837,6 +876,26 @@ pub trait AgentProvider: Send + Sync {
     /// Returns [`AgentError`] if the underlying backend process fails,
     /// times out, or produces output that does not match the requested schema.
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a>;
+
+    /// Execute an agent invocation with real-time log streaming.
+    ///
+    /// Providers that support live output streaming should override this
+    /// method to pipe each output line to the [`LogSink`] as it arrives.
+    /// The default implementation ignores the sink and delegates to
+    /// [`invoke`](AgentProvider::invoke).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] if the underlying backend process fails,
+    /// times out, or produces output that does not match the requested schema.
+    fn invoke_with_logs<'a>(
+        &'a self,
+        config: &'a AgentConfig,
+        log_sink: Arc<dyn LogSink>,
+    ) -> InvokeFuture<'a> {
+        let _ = log_sink;
+        self.invoke(config)
+    }
 }
 
 #[cfg(test)]
@@ -1206,5 +1265,83 @@ mod tests {
             "grafana-only"
         );
         assert_eq!(back.pod_labels["team"], "observability");
+    }
+
+    // ── LogSink tests ─────────────────────────────────────────────
+
+    use crate::test_support::VecSink;
+
+    #[test]
+    fn log_sink_collects_lines() {
+        let sink = VecSink::new();
+        sink.log("stdout", "line 1");
+        sink.log("stderr", "err!");
+        sink.log("system", "done");
+
+        let lines = sink.0.lock().unwrap();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], ("stdout".to_string(), "line 1".to_string()));
+        assert_eq!(lines[1], ("stderr".to_string(), "err!".to_string()));
+        assert_eq!(lines[2], ("system".to_string(), "done".to_string()));
+    }
+
+    #[test]
+    fn log_sink_arc_is_clone_and_send() {
+        let sink: Arc<dyn LogSink> = VecSink::new();
+        let cloned = sink.clone();
+        sink.log("stdout", "from original");
+        cloned.log("stdout", "from clone");
+    }
+
+    // ── invoke_with_logs default impl ─────────────────────────────
+
+    struct FixedProvider {
+        output: AgentOutput,
+    }
+
+    impl AgentProvider for FixedProvider {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async {
+                Ok(AgentOutput {
+                    value: self.output.value.clone(),
+                    session_id: self.output.session_id.clone(),
+                    cost_usd: self.output.cost_usd,
+                    input_tokens: self.output.input_tokens,
+                    output_tokens: self.output.output_tokens,
+                    model: self.output.model.clone(),
+                    duration_ms: self.output.duration_ms,
+                    debug_messages: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_with_logs_default_delegates_to_invoke() {
+        let provider = FixedProvider {
+            output: AgentOutput::new(json!("ok")),
+        };
+        let config = AgentConfig::new("test");
+        let sink: Arc<dyn LogSink> = VecSink::new();
+
+        let result = provider.invoke_with_logs(&config, sink.clone()).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().value, json!("ok"));
+    }
+
+    #[tokio::test]
+    async fn invoke_with_logs_default_ignores_sink() {
+        let provider = FixedProvider {
+            output: AgentOutput::new(json!("ok")),
+        };
+        let config = AgentConfig::new("test");
+        let sink = VecSink::new();
+
+        let _ = provider
+            .invoke_with_logs(&config, sink.clone() as Arc<dyn LogSink>)
+            .await;
+
+        let lines = sink.0.lock().unwrap();
+        assert!(lines.is_empty(), "default impl should not emit any logs");
     }
 }

@@ -19,6 +19,8 @@ pub mod metrics;
 pub mod openapi_spec;
 pub mod retry_run;
 pub mod secrets;
+#[cfg(test)]
+mod test_helpers;
 pub mod users;
 
 use std::path::PathBuf;

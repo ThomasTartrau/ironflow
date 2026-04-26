@@ -29,17 +29,19 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, DeleteParams, LogParams, PostParams};
-use kube::runtime::wait::await_condition;
+use kube::runtime::wait::{await_condition, conditions};
 use tokio::time;
 
 use tracing::{debug, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
+use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
@@ -258,81 +260,135 @@ impl K8sEphemeralProvider {
     }
 }
 
+/// Shared context after pod creation: the pod API handle, pod name, and start time.
+struct CreatedPod {
+    pods: Api<Pod>,
+    pod_name: String,
+    start: Instant,
+}
+
+impl K8sEphemeralProvider {
+    /// Prepare config, create the K8s pod, and return handles for the wait phase.
+    async fn create_pod(&self, config: &AgentConfig) -> Result<CreatedPod, AgentError> {
+        claude_common::validate_prompt_size(config)?;
+        let args = claude_common::build_args(config)?;
+
+        let claude_cmd = claude_common::build_shell_command(&self.claude_path, &args);
+        let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
+        let full_cmd = match (&self.working_dir, &config.working_dir) {
+            (_, Some(dir)) | (Some(dir), None) => {
+                format!(
+                    "{creds_prefix}cd {} && {}",
+                    claude_common::build_shell_command(dir, &[]),
+                    claude_cmd
+                )
+            }
+            (None, None) => format!("{creds_prefix}{claude_cmd}"),
+        };
+
+        let pod_name = generate_pod_name("claude-code");
+
+        debug!(
+            pod_name = %pod_name,
+            namespace = %self.namespace,
+            image = %self.image,
+            model = %config.model,
+            "creating ephemeral K8s pod"
+        );
+
+        let start = Instant::now();
+        let client = create_client(&self.cluster_config).await?;
+        let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
+
+        let mut merged_labels = self.pod_labels.clone();
+        merged_labels.extend(config.pod_labels.clone());
+
+        let pod_spec = build_pod_spec(&PodConfig {
+            name: &pod_name,
+            image: &self.image,
+            command: vec!["sh".to_string(), "-c".to_string(), full_cmd],
+            namespace: &self.namespace,
+            resources: &self.resources,
+            service_account: self.service_account.as_deref(),
+            restart_policy: "Never",
+            image_pull_policy: &self.image_pull_policy,
+            env_vars: &self.env_vars,
+            image_pull_secrets: &self.image_pull_secrets,
+            extra_labels: &merged_labels,
+            volumes: &self.volumes,
+        })?;
+
+        pods.create(&PostParams::default(), &pod_spec)
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to create K8s pod: {e}"),
+            })?;
+
+        Ok(CreatedPod {
+            pods,
+            pod_name,
+            start,
+        })
+    }
+
+    /// Read pod phase after completion, delete the pod, and parse the output.
+    fn finalize_pod(
+        &self,
+        logs: &str,
+        pod_phase: &str,
+        timed_out: bool,
+        pod_name: &str,
+        config: &AgentConfig,
+        start: Instant,
+    ) -> Result<AgentOutput, AgentError> {
+        if timed_out {
+            warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out");
+            return Err(AgentError::Timeout {
+                limit: self.timeout,
+            });
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let exit_code = if pod_phase == "Succeeded" { 0 } else { 1 };
+
+        if exit_code != 0 {
+            return claude_common::handle_nonzero_exit(
+                exit_code,
+                logs,
+                "",
+                config,
+                duration_ms,
+                "ephemeral k8s",
+            );
+        }
+
+        debug!(stdout_len = logs.len(), "ephemeral claude pod completed");
+        claude_common::parse_output(logs, config, duration_ms)
+    }
+}
+
 impl AgentProvider for K8sEphemeralProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
-            claude_common::validate_prompt_size(config)?;
-            let args = claude_common::build_args(config)?;
-
-            let claude_cmd = claude_common::build_shell_command(&self.claude_path, &args);
-            let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
-            let full_cmd = match (&self.working_dir, &config.working_dir) {
-                (_, Some(dir)) | (Some(dir), None) => {
-                    format!(
-                        "{creds_prefix}cd {} && {}",
-                        claude_common::build_shell_command(dir, &[]),
-                        claude_cmd
-                    )
-                }
-                (None, None) => format!("{creds_prefix}{claude_cmd}"),
-            };
-
-            let pod_name = generate_pod_name("claude-code");
-
-            debug!(
-                pod_name = %pod_name,
-                namespace = %self.namespace,
-                image = %self.image,
-                model = %config.model,
-                "creating ephemeral K8s pod"
-            );
-
-            let start = Instant::now();
-
-            let client = create_client(&self.cluster_config).await?;
-
-            let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
-
-            // Merge pod labels: provider defaults, then invocation overrides
-            let mut merged_labels = self.pod_labels.clone();
-            merged_labels.extend(config.pod_labels.clone());
-
-            // Create pod
-            let pod_spec = build_pod_spec(&PodConfig {
-                name: &pod_name,
-                image: &self.image,
-                command: vec!["sh".to_string(), "-c".to_string(), full_cmd],
-                namespace: &self.namespace,
-                resources: &self.resources,
-                service_account: self.service_account.as_deref(),
-                restart_policy: "Never",
-                image_pull_policy: &self.image_pull_policy,
-                env_vars: &self.env_vars,
-                image_pull_secrets: &self.image_pull_secrets,
-                extra_labels: &merged_labels,
-                volumes: &self.volumes,
-            })?;
-
-            pods.create(&PostParams::default(), &pod_spec)
-                .await
-                .map_err(|e| AgentError::ProcessFailed {
-                    exit_code: -1,
-                    stderr: format!("failed to create K8s pod: {e}"),
-                })?;
+            let created = self.create_pod(config).await?;
+            let CreatedPod {
+                pods,
+                pod_name,
+                start,
+            } = &created;
 
             // Wait for pod to complete
             let wait_result = time::timeout(
                 self.timeout,
-                await_condition(pods.clone(), &pod_name, is_pod_completed()),
+                await_condition(pods.clone(), pod_name, is_pod_completed()),
             )
             .await;
 
-            // Determine exit code from pod phase (must read BEFORE deleting)
             let timed_out = wait_result.is_err();
             let pod_phase = if timed_out {
                 "TimedOut".to_string()
             } else {
-                // await_condition returns the pod when the condition is met
                 let condition_result =
                     wait_result.expect("timeout already handled").map_err(|e| {
                         AgentError::ProcessFailed {
@@ -346,39 +402,132 @@ impl AgentProvider for K8sEphemeralProvider {
                     .unwrap_or_else(|| "Unknown".to_string())
             };
 
-            // Read logs before cleanup
             let logs = pods
-                .logs(&pod_name, &LogParams::default())
+                .logs(pod_name, &LogParams::default())
                 .await
                 .unwrap_or_default();
 
-            // Delete pod (best-effort, after reading phase and logs)
-            let _ = pods.delete(&pod_name, &DeleteParams::default()).await;
+            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
 
-            if timed_out {
-                warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out");
+            self.finalize_pod(&logs, &pod_phase, timed_out, pod_name, config, *start)
+        })
+    }
+
+    fn invoke_with_logs<'a>(
+        &'a self,
+        config: &'a AgentConfig,
+        log_sink: Arc<dyn LogSink>,
+    ) -> InvokeFuture<'a> {
+        Box::pin(async move {
+            let effective_config;
+            let config = if !config.verbose {
+                debug!("forcing verbose=true for log streaming (stream-json output required)");
+                effective_config = config.clone().verbose(true);
+                &effective_config
+            } else {
+                config
+            };
+
+            let created = self.create_pod(config).await?;
+            let CreatedPod {
+                pods,
+                pod_name,
+                start,
+            } = &created;
+
+            let running_result = time::timeout(
+                self.timeout,
+                await_condition(pods.clone(), pod_name, conditions::is_pod_running()),
+            )
+            .await;
+
+            if let Err(_elapsed) = running_result {
+                let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+                warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out waiting for Running");
                 return Err(AgentError::Timeout {
                     limit: self.timeout,
                 });
             }
 
-            let duration_ms = start.elapsed().as_millis() as u64;
-            let exit_code = if pod_phase == "Succeeded" { 0 } else { 1 };
-
-            if exit_code != 0 {
-                return claude_common::handle_nonzero_exit(
-                    exit_code,
-                    &logs,
-                    "",
-                    config,
-                    duration_ms,
-                    "ephemeral k8s",
-                );
+            if let Err(e) = running_result.expect("timeout already handled") {
+                let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+                return Err(AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed waiting for pod to start: {e}"),
+                });
             }
 
-            debug!(stdout_len = logs.len(), "ephemeral claude pod completed");
+            let log_params = LogParams {
+                follow: true,
+                ..Default::default()
+            };
 
-            claude_common::parse_output(&logs, config, duration_ms)
+            const MAX_ACCUMULATED_BYTES: usize = 50 * 1024 * 1024;
+            let mut accumulated = String::new();
+            let mut truncated = false;
+
+            let stream_result = time::timeout(
+                self.timeout,
+                async {
+                    match pods.log_stream(pod_name, &log_params).await {
+                        Ok(stream) => {
+                            let mut lines = stream.lines();
+                            while let Ok(Some(line)) = lines.try_next().await {
+                                log_sink.log("stdout", &line);
+                                if !truncated {
+                                    if accumulated.len() + line.len() + 1 > MAX_ACCUMULATED_BYTES {
+                                        truncated = true;
+                                        warn!(pod = %pod_name, "log accumulation cap reached, further output will only be streamed");
+                                    } else {
+                                        accumulated.push_str(&line);
+                                        accumulated.push('\n');
+                                    }
+                                }
+                            }
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                },
+            )
+            .await;
+
+            let timed_out = stream_result.is_err();
+            if let Ok(Err(e)) = stream_result {
+                warn!(pod = %pod_name, error = %e, "failed to open log stream, falling back to batch read");
+                let _ = time::timeout(
+                    self.timeout,
+                    await_condition(pods.clone(), pod_name, is_pod_completed()),
+                )
+                .await;
+
+                accumulated = pods
+                    .logs(pod_name, &LogParams::default())
+                    .await
+                    .unwrap_or_default();
+                for line in accumulated.lines() {
+                    log_sink.log("stdout", line);
+                }
+            }
+
+            let pod_phase = match pods.get(pod_name).await {
+                Ok(pod) => pod
+                    .status
+                    .and_then(|s| s.phase)
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                Err(_) => "Unknown".to_string(),
+            };
+
+            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+
+            self.finalize_pod(
+                &accumulated,
+                &pod_phase,
+                timed_out,
+                pod_name,
+                config,
+                *start,
+            )
         })
     }
 }

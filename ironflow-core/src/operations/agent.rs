@@ -26,6 +26,7 @@
 //! ```
 
 use std::any;
+use std::sync::Arc;
 
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
@@ -37,7 +38,7 @@ use tracing::{info, warn};
 use crate::error::OperationError;
 #[cfg(feature = "prometheus")]
 use crate::metric_names;
-use crate::provider::{AgentConfig, AgentOutput, AgentProvider, DebugMessage};
+use crate::provider::{AgentConfig, AgentOutput, AgentProvider, DebugMessage, LogSink};
 use crate::retry::RetryPolicy;
 
 /// Provider-agnostic model identifiers.
@@ -177,6 +178,7 @@ pub struct Agent {
     config: AgentConfig,
     dry_run: Option<bool>,
     retry_policy: Option<RetryPolicy>,
+    log_sink: Option<Arc<dyn LogSink>>,
 }
 
 impl Agent {
@@ -189,6 +191,7 @@ impl Agent {
             config: AgentConfig::new(""),
             dry_run: None,
             retry_policy: None,
+            log_sink: None,
         }
     }
 
@@ -215,6 +218,7 @@ impl Agent {
             config: config.into(),
             dry_run: None,
             retry_policy: None,
+            log_sink: None,
         }
     }
 
@@ -441,6 +445,37 @@ impl Agent {
         self
     }
 
+    /// Attach a [`LogSink`] for real-time log streaming.
+    ///
+    /// When set, [`invoke_with_logs`](AgentProvider::invoke_with_logs) is called
+    /// instead of [`invoke`](AgentProvider::invoke), allowing providers that
+    /// support streaming to pipe output lines in real time.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// # struct MySink;
+    /// # impl LogSink for MySink { fn log(&self, _: &str, _: &str) {} }
+    /// let provider = ClaudeCodeProvider::new();
+    /// let sink: Arc<dyn LogSink> = Arc::new(MySink);
+    ///
+    /// let result = Agent::new()
+    ///     .prompt("Analyze src/")
+    ///     .log_sink(sink)
+    ///     .run(&provider)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn log_sink(mut self, sink: Arc<dyn LogSink>) -> Self {
+        self.log_sink = Some(sink);
+        self
+    }
+
     /// Enable verbose/debug mode to capture the full conversation trace.
     ///
     /// When enabled, the provider captures every assistant message and tool
@@ -606,7 +641,11 @@ impl Agent {
         #[cfg(feature = "prometheus")]
         let model_label = self.config.model.to_string();
 
-        let output = match provider.invoke(&self.config).await {
+        let invoke_result = match self.log_sink {
+            Some(ref sink) => provider.invoke_with_logs(&self.config, sink.clone()).await,
+            None => provider.invoke(&self.config).await,
+        };
+        let output = match invoke_result {
             Ok(output) => output,
             Err(e) => {
                 #[cfg(feature = "prometheus")]
@@ -1373,5 +1412,95 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(provider.fail_count.load(Ordering::SeqCst), 1);
+    }
+
+    // ── log_sink tests ────────────────────────────────────────────
+
+    use crate::test_support::VecSink;
+
+    struct SinkCapture {
+        output: AgentOutput,
+        saw_logs: Arc<AtomicU32>,
+    }
+
+    impl AgentProvider for SinkCapture {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async {
+                Ok(AgentOutput {
+                    value: self.output.value.clone(),
+                    session_id: self.output.session_id.clone(),
+                    cost_usd: self.output.cost_usd,
+                    input_tokens: self.output.input_tokens,
+                    output_tokens: self.output.output_tokens,
+                    model: self.output.model.clone(),
+                    duration_ms: self.output.duration_ms,
+                    debug_messages: None,
+                })
+            })
+        }
+
+        fn invoke_with_logs<'a>(
+            &'a self,
+            config: &'a AgentConfig,
+            log_sink: Arc<dyn LogSink>,
+        ) -> InvokeFuture<'a> {
+            self.saw_logs.fetch_add(1, Ordering::SeqCst);
+            log_sink.log("stdout", "streaming line");
+            self.invoke(config)
+        }
+    }
+
+    #[tokio::test]
+    async fn log_sink_routes_to_invoke_with_logs() {
+        let saw_logs = Arc::new(AtomicU32::new(0));
+        let provider = SinkCapture {
+            output: default_output(),
+            saw_logs: saw_logs.clone(),
+        };
+        let sink: Arc<dyn LogSink> = VecSink::new();
+
+        let result = Agent::new()
+            .prompt("test")
+            .log_sink(sink)
+            .run(&provider)
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(saw_logs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn no_log_sink_routes_to_invoke() {
+        let saw_logs = Arc::new(AtomicU32::new(0));
+        let provider = SinkCapture {
+            output: default_output(),
+            saw_logs: saw_logs.clone(),
+        };
+
+        let result = Agent::new().prompt("test").run(&provider).await;
+
+        assert!(result.is_ok());
+        assert_eq!(saw_logs.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn log_sink_receives_provider_lines() {
+        let saw_logs = Arc::new(AtomicU32::new(0));
+        let provider = SinkCapture {
+            output: default_output(),
+            saw_logs: saw_logs.clone(),
+        };
+        let sink = VecSink::new();
+
+        let _ = Agent::new()
+            .prompt("test")
+            .log_sink(sink.clone() as Arc<dyn LogSink>)
+            .run(&provider)
+            .await;
+
+        let lines = sink.0.lock().unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].0, "stdout");
+        assert_eq!(lines[0].1, "streaming line");
     }
 }

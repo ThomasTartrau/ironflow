@@ -147,6 +147,8 @@ mod tests {
 
     use crate::entities::{NewRun, TriggerKind};
 
+    use super::InMemoryStore;
+
     pub(crate) fn new_run_req(name: &str) -> NewRun {
         NewRun {
             workflow_name: name.to_string(),
@@ -157,5 +159,21 @@ mod tests {
             labels: HashMap::new(),
             scheduled_at: None,
         }
+    }
+
+    pub(crate) async fn create_terminal_run(
+        store: &InMemoryStore,
+        name: &str,
+        status: crate::entities::RunStatus,
+    ) -> crate::entities::Run {
+        use crate::store::RunStore;
+
+        let run = store.create_run(new_run_req(name)).await.unwrap();
+        store
+            .update_run_status(run.id, crate::entities::RunStatus::Running)
+            .await
+            .unwrap();
+        store.update_run_status(run.id, status).await.unwrap();
+        store.get_run(run.id).await.unwrap().unwrap()
     }
 }
