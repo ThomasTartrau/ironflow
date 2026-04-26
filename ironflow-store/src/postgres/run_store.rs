@@ -10,7 +10,77 @@ use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
 
 use super::PostgresStore;
-use super::helpers::{row_to_run, row_to_step};
+use super::helpers::{row_to_run, row_to_step, run_status_to_db_str};
+
+/// Build SQL WHERE conditions from a [`RunFilter`], returning `(where_clause, next_bind_idx)`.
+fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
+    let mut conditions = Vec::new();
+    let mut bind_idx = 1u32;
+
+    if filter.workflow_name.is_some() {
+        conditions.push(format!("r.workflow_name ILIKE ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if filter.status.is_some() {
+        conditions.push(format!("ast.name = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if filter.created_after.is_some() {
+        conditions.push(format!("r.created_at >= ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if filter.created_before.is_some() {
+        conditions.push(format!("r.created_at <= ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if filter.labels.is_some() {
+        conditions.push(format!("r.labels @> ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if let Some(has_steps) = filter.has_steps {
+        let completed = run_status_to_db_str(&RunStatus::Completed);
+        let cancelled = run_status_to_db_str(&RunStatus::Cancelled);
+        let steps_condition = if has_steps {
+            "EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
+        } else {
+            "NOT EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
+        };
+        conditions.push(format!(
+            "(ast.name NOT IN ('{completed}', '{cancelled}') OR {steps_condition})"
+        ));
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    (where_clause, bind_idx)
+}
+
+/// Bind [`RunFilter`] parameter values onto a dynamic SQL query.
+fn bind_run_filter_params<'q>(
+    mut query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    filter: &'q RunFilter,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    if let Some(ref wf) = filter.workflow_name {
+        query = query.bind(format!("%{wf}%"));
+    }
+    if let Some(ref status) = filter.status {
+        query = query.bind(run_status_to_db_str(status));
+    }
+    if let Some(after) = filter.created_after {
+        query = query.bind(after);
+    }
+    if let Some(before) = filter.created_before {
+        query = query.bind(before);
+    }
+    if let Some(ref labels) = filter.labels {
+        query = query.bind(serde_json::to_value(labels).unwrap_or_default());
+    }
+    query
+}
 
 impl RunStore for PostgresStore {
     fn create_run(&self, req: NewRun) -> StoreFuture<'_, Run> {
@@ -109,49 +179,8 @@ impl RunStore for PostgresStore {
             let per_page = per_page.clamp(1, 100);
             let offset = ((page - 1) * per_page) as i64;
 
-            let mut conditions = Vec::new();
-            let mut bind_idx = 1u32;
+            let (where_clause, bind_idx) = build_run_filter_conditions(&filter);
 
-            if filter.workflow_name.is_some() {
-                conditions.push(format!("r.workflow_name ILIKE ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.status.is_some() {
-                conditions.push(format!("ast.name = ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.created_after.is_some() {
-                conditions.push(format!("r.created_at >= ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.created_before.is_some() {
-                conditions.push(format!("r.created_at <= ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.labels.is_some() {
-                conditions.push(format!("r.labels @> ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if let Some(has_steps) = filter.has_steps {
-                if has_steps {
-                    conditions.push(
-                        "EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)".to_string(),
-                    );
-                } else {
-                    conditions.push(
-                        "NOT EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
-                            .to_string(),
-                    );
-                }
-            }
-
-            let where_clause = if conditions.is_empty() {
-                String::new()
-            } else {
-                format!("WHERE {}", conditions.join(" AND "))
-            };
-
-            // Use window function to get total count without a separate query
             let limit_idx = bind_idx;
             let offset_idx = bind_idx + 1;
             let data_sql = format!(
@@ -165,25 +194,10 @@ impl RunStore for PostgresStore {
                 LIMIT ${limit_idx} OFFSET ${offset_idx}
                 "#,
             );
-            let mut data_query = sqlx::query(&data_sql);
 
-            if let Some(ref wf) = filter.workflow_name {
-                data_query = data_query.bind(format!("%{wf}%"));
-            }
-            if let Some(ref status) = filter.status {
-                data_query = data_query.bind(super::helpers::run_status_to_db_str(status));
-            }
-            if let Some(after) = filter.created_after {
-                data_query = data_query.bind(after);
-            }
-            if let Some(before) = filter.created_before {
-                data_query = data_query.bind(before);
-            }
-            if let Some(ref labels) = filter.labels {
-                data_query = data_query.bind(serde_json::to_value(labels).unwrap_or_default());
-            }
-
-            data_query = data_query.bind(per_page as i64).bind(offset);
+            let data_query = bind_run_filter_params(sqlx::query(&data_sql), &filter)
+                .bind(per_page as i64)
+                .bind(offset);
 
             let rows = data_query
                 .fetch_all(&self.pool)
@@ -670,48 +684,7 @@ impl RunStore for PostgresStore {
 
     fn get_stats(&self, filter: RunFilter) -> StoreFuture<'_, RunStats> {
         Box::pin(async move {
-            let mut conditions = Vec::new();
-            let mut bind_idx = 1u32;
-
-            if filter.workflow_name.is_some() {
-                conditions.push(format!("r.workflow_name ILIKE ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.status.is_some() {
-                conditions.push(format!("ast.name = ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.created_after.is_some() {
-                conditions.push(format!("r.created_at >= ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.created_before.is_some() {
-                conditions.push(format!("r.created_at <= ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if filter.labels.is_some() {
-                conditions.push(format!("r.labels @> ${bind_idx}"));
-                bind_idx += 1;
-            }
-            if let Some(has_steps) = filter.has_steps {
-                if has_steps {
-                    conditions.push(
-                        "EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)".to_string(),
-                    );
-                } else {
-                    conditions.push(
-                        "NOT EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
-                            .to_string(),
-                    );
-                }
-            }
-            let _ = bind_idx;
-
-            let where_clause = if conditions.is_empty() {
-                String::new()
-            } else {
-                format!("WHERE {}", conditions.join(" AND "))
-            };
+            let (where_clause, _) = build_run_filter_conditions(&filter);
 
             let sql = format!(
                 r#"
@@ -730,24 +703,7 @@ impl RunStore for PostgresStore {
                 "#
             );
 
-            let mut query = sqlx::query(&sql);
-            if let Some(ref wf) = filter.workflow_name {
-                query = query.bind(format!("%{wf}%"));
-            }
-            if let Some(ref status) = filter.status {
-                query = query.bind(super::helpers::run_status_to_db_str(status));
-            }
-            if let Some(after) = filter.created_after {
-                query = query.bind(after);
-            }
-            if let Some(before) = filter.created_before {
-                query = query.bind(before);
-            }
-            if let Some(ref labels) = filter.labels {
-                query = query.bind(serde_json::to_value(labels).unwrap_or_default());
-            }
-
-            let row = query
+            let row = bind_run_filter_params(sqlx::query(&sql), &filter)
                 .fetch_one(&self.pool)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;

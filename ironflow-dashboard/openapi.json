@@ -457,7 +457,7 @@
           {
             "name": "has_steps",
             "in": "query",
-            "description": "When `true`, only return runs with at least one step.\nWhen `false`, only return runs with no steps.",
+            "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps.",
             "required": false,
             "schema": {
               "type": [
@@ -1078,7 +1078,7 @@
           {
             "name": "has_steps",
             "in": "query",
-            "description": "When `true`, only return runs with at least one step.\nWhen `false`, only return runs with no steps.",
+            "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps.",
             "required": false,
             "schema": {
               "type": [
@@ -2335,7 +2335,7 @@
               "boolean",
               "null"
             ],
-            "description": "When `true`, only return runs with at least one step.\nWhen `false`, only return runs with no steps."
+            "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps."
           },
           "label": {
             "type": [

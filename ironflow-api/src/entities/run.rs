@@ -103,8 +103,10 @@ pub struct ListRunsQuery {
     pub workflow: Option<String>,
     /// Filter by run status.
     pub status: Option<RunStatus>,
-    /// When `true`, only return runs with at least one step.
-    /// When `false`, only return runs with no steps.
+    /// Filter by step presence (only applies to completed/cancelled runs).
+    /// Non-terminal runs (pending, running, etc.) are always included.
+    /// When `true`, only return completed/cancelled runs that have steps.
+    /// When `false`, only return completed/cancelled runs without steps.
     pub has_steps: Option<bool>,
     /// Filter by labels. Comma-separated `key:value` pairs.
     pub label: Option<String>,
