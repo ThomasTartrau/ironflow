@@ -93,6 +93,7 @@ pub struct K8sEphemeralProvider {
     cluster_config: K8sClusterConfig,
     timeout: Duration,
     pod_labels: BTreeMap<String, String>,
+    volumes: Vec<(String, String)>,
 }
 
 impl K8sEphemeralProvider {
@@ -112,6 +113,7 @@ impl K8sEphemeralProvider {
             cluster_config: K8sClusterConfig::default(),
             timeout: DEFAULT_TIMEOUT,
             pod_labels: BTreeMap::new(),
+            volumes: Vec::new(),
         }
     }
 
@@ -235,6 +237,25 @@ impl K8sEphemeralProvider {
         self.pod_labels = labels;
         self
     }
+
+    /// Mount a host-path volume into the container.
+    ///
+    /// Can be called multiple times to add several volumes.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::new("img:v1")
+    ///     .volume("/tmp/worktrees", "/data/worktrees")
+    ///     .volume("/tmp/repos", "/data/repos");
+    /// ```
+    pub fn volume(mut self, host_path: &str, container_path: &str) -> Self {
+        self.volumes
+            .push((host_path.to_string(), container_path.to_string()));
+        self
+    }
 }
 
 impl AgentProvider for K8sEphemeralProvider {
@@ -289,6 +310,7 @@ impl AgentProvider for K8sEphemeralProvider {
                 env_vars: &self.env_vars,
                 image_pull_secrets: &self.image_pull_secrets,
                 extra_labels: &merged_labels,
+                volumes: &self.volumes,
             })?;
 
             pods.create(&PostParams::default(), &pod_spec)
@@ -443,5 +465,27 @@ mod tests {
         assert_eq!(provider.pod_labels.len(), 2);
         assert_eq!(provider.pod_labels["env"], "prod");
         assert_eq!(provider.pod_labels["team"], "infra");
+    }
+
+    #[test]
+    fn ephemeral_provider_volume_builder() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .volume("/tmp/worktrees", "/data/worktrees")
+            .volume("/tmp/repos", "/data/repos");
+        assert_eq!(provider.volumes.len(), 2);
+        assert_eq!(
+            provider.volumes[0],
+            ("/tmp/worktrees".to_string(), "/data/worktrees".to_string())
+        );
+        assert_eq!(
+            provider.volumes[1],
+            ("/tmp/repos".to_string(), "/data/repos".to_string())
+        );
+    }
+
+    #[test]
+    fn ephemeral_provider_volumes_default_empty() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        assert!(provider.volumes.is_empty());
     }
 }
