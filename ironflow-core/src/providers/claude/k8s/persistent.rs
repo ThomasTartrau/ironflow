@@ -271,6 +271,7 @@ impl K8sPersistentProvider {
                 env_vars: &self.env_vars,
                 image_pull_secrets: &self.image_pull_secrets,
                 extra_labels: &self.pod_labels,
+                volumes: &[],
             })?;
 
             pods.create(&PostParams::default(), &pod_spec)

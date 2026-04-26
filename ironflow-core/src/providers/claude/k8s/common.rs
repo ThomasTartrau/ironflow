@@ -169,6 +169,11 @@ pub struct PodConfig<'a> {
     /// Merged with hardcoded ironflow labels. Hardcoded labels always win
     /// in case of conflict.
     pub extra_labels: &'a BTreeMap<String, String>,
+    /// Host-path volumes to mount into the container.
+    ///
+    /// Each tuple is `(host_path, container_path)`. An empty slice means
+    /// no volumes are mounted.
+    pub volumes: &'a [(String, String)],
 }
 
 /// Build a Kubernetes pod spec for running claude.
@@ -220,6 +225,29 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
             }]
         }
     });
+
+    if !config.volumes.is_empty() {
+        let (volumes, volume_mounts): (Vec<_>, Vec<_>) = config
+            .volumes
+            .iter()
+            .enumerate()
+            .map(|(i, (host_path, container_path))| {
+                let name = format!("vol-{i}");
+                (
+                    json!({
+                        "name": name,
+                        "hostPath": { "path": host_path, "type": "Directory" }
+                    }),
+                    json!({
+                        "name": name,
+                        "mountPath": container_path
+                    }),
+                )
+            })
+            .unzip();
+        pod_json["spec"]["volumes"] = json!(volumes);
+        pod_json["spec"]["containers"][0]["volumeMounts"] = json!(volume_mounts);
+    }
 
     if let Some(sa) = config.service_account {
         pod_json["spec"]["serviceAccountName"] = json!(sa);
@@ -300,6 +328,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            volumes: &[],
         })
         .unwrap();
         assert!(pod.spec.unwrap().image_pull_secrets.is_none());
@@ -320,6 +349,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &secrets,
             extra_labels: &BTreeMap::new(),
+            volumes: &[],
         })
         .unwrap();
         let pull_secrets = pod.spec.unwrap().image_pull_secrets.unwrap();
@@ -342,6 +372,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            volumes: &[],
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -366,6 +397,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &extra,
+            volumes: &[],
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -394,6 +426,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &extra,
+            volumes: &[],
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -424,6 +457,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &extra,
+            volumes: &[],
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -433,5 +467,70 @@ mod tests {
         assert_eq!(labels["env"], "staging");
         assert_eq!(labels["app.kubernetes.io/managed-by"], "ironflow");
         assert_eq!(labels["app.kubernetes.io/component"], "claude-runner");
+    }
+
+    #[test]
+    fn build_pod_spec_without_volumes() {
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &[],
+        })
+        .unwrap();
+        let spec = pod.spec.unwrap();
+        assert!(spec.volumes.is_none());
+        let container = &spec.containers[0];
+        assert!(container.volume_mounts.is_none());
+    }
+
+    #[test]
+    fn build_pod_spec_with_volumes() {
+        let vols = vec![
+            ("/tmp/worktrees".to_string(), "/data/worktrees".to_string()),
+            ("/tmp/repos".to_string(), "/data/repos".to_string()),
+        ];
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &vols,
+        })
+        .unwrap();
+        let spec = pod.spec.unwrap();
+
+        let volumes = spec.volumes.unwrap();
+        assert_eq!(volumes.len(), 2);
+        assert_eq!(volumes[0].name, "vol-0");
+        let hp0 = volumes[0].host_path.as_ref().unwrap();
+        assert_eq!(hp0.path, "/tmp/worktrees");
+        assert_eq!(hp0.type_.as_deref(), Some("Directory"));
+        assert_eq!(volumes[1].name, "vol-1");
+        let hp1 = volumes[1].host_path.as_ref().unwrap();
+        assert_eq!(hp1.path, "/tmp/repos");
+        assert_eq!(hp1.type_.as_deref(), Some("Directory"));
+
+        let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].name, "vol-0");
+        assert_eq!(mounts[0].mount_path, "/data/worktrees");
+        assert_eq!(mounts[1].name, "vol-1");
+        assert_eq!(mounts[1].mount_path, "/data/repos");
     }
 }
