@@ -498,6 +498,12 @@ impl Worker {
                                 {
                                     error!(run_id = %run_id, error = %store_err, "failed to mark run as failed");
                                 }
+                                if let Err(cleanup_err) = engine
+                                    .fail_orphaned_steps(run_id, "parent run failed")
+                                    .await
+                                {
+                                    error!(run_id = %run_id, error = %cleanup_err, "failed to cleanup orphaned steps");
+                                }
                                 RunOutcome::Failed(workflow)
                             }
                             Err(_) => {
@@ -514,13 +520,19 @@ impl Worker {
                                 {
                                     error!(run_id = %run_id, error = %e, "failed to mark timed-out run as failed");
                                 }
+                                if let Err(e) = engine
+                                    .fail_orphaned_steps(run_id, "parent run timed out")
+                                    .await
+                                {
+                                    error!(run_id = %run_id, error = %e, "failed to cleanup orphaned steps after timeout");
+                                }
                                 RunOutcome::Timeout(workflow)
                             }
                         }
                     });
 
                     // Spawn a watcher to catch panics and report outcomes
-                    let store = self.engine.store().clone();
+                    let watcher_engine = self.engine.clone();
                     let tx = outcome_tx.clone();
                     spawn(async move {
                         match handle.await {
@@ -529,10 +541,18 @@ impl Worker {
                             }
                             Err(e) => {
                                 error!(run_id = %run_id, "spawned task panicked: {e}");
-                                if let Err(store_err) =
-                                    store.update_run_status(run_id, RunStatus::Failed).await
+                                if let Err(store_err) = watcher_engine
+                                    .store()
+                                    .update_run_status(run_id, RunStatus::Failed)
+                                    .await
                                 {
                                     error!(run_id = %run_id, error = %store_err, "failed to mark panicked run as failed");
+                                }
+                                if let Err(cleanup_err) = watcher_engine
+                                    .fail_orphaned_steps(run_id, "parent run panicked")
+                                    .await
+                                {
+                                    error!(run_id = %run_id, error = %cleanup_err, "failed to cleanup orphaned steps after panic");
                                 }
                                 let _ = tx.send(RunOutcome::Panicked(workflow_for_watcher));
                             }
