@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -10,6 +12,51 @@ use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
 
 use super::InMemoryStore;
+
+fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>) -> bool {
+    if let Some(ref wf) = filter.workflow_name
+        && !run
+            .workflow_name
+            .to_lowercase()
+            .contains(&wf.to_lowercase())
+    {
+        return false;
+    }
+    if let Some(ref status) = filter.status
+        && &run.status.state != status
+    {
+        return false;
+    }
+    if let Some(after) = filter.created_after
+        && run.created_at < after
+    {
+        return false;
+    }
+    if let Some(before) = filter.created_before
+        && run.created_at > before
+    {
+        return false;
+    }
+    if let Some(has_steps) = filter.has_steps
+        && matches!(
+            run.status.state,
+            RunStatus::Completed | RunStatus::Cancelled
+        )
+    {
+        let run_has_steps = steps.values().any(|s| s.run_id == run.id);
+        if has_steps != run_has_steps {
+            return false;
+        }
+    }
+    if let Some(ref labels) = filter.labels {
+        for (key, value) in labels {
+            if run.labels.get(key) != Some(value) {
+                return false;
+            }
+        }
+    }
+    true
+}
 
 impl RunStore for InMemoryStore {
     fn create_run(&self, req: NewRun) -> StoreFuture<'_, Run> {
@@ -55,42 +102,7 @@ impl RunStore for InMemoryStore {
             let mut runs: Vec<&Run> = state
                 .runs
                 .values()
-                .filter(|r| {
-                    if let Some(ref wf) = filter.workflow_name
-                        && !r.workflow_name.to_lowercase().contains(&wf.to_lowercase())
-                    {
-                        return false;
-                    }
-                    if let Some(ref status) = filter.status
-                        && &r.status.state != status
-                    {
-                        return false;
-                    }
-                    if let Some(after) = filter.created_after
-                        && r.created_at < after
-                    {
-                        return false;
-                    }
-                    if let Some(before) = filter.created_before
-                        && r.created_at > before
-                    {
-                        return false;
-                    }
-                    if let Some(has_steps) = filter.has_steps {
-                        let run_has_steps = state.steps.values().any(|s| s.run_id == r.id);
-                        if has_steps != run_has_steps {
-                            return false;
-                        }
-                    }
-                    if let Some(ref labels) = filter.labels {
-                        for (key, value) in labels {
-                            if r.labels.get(key) != Some(value) {
-                                return false;
-                            }
-                        }
-                    }
-                    true
-                })
+                .filter(|r| run_matches_filter(r, &filter, &state.steps))
                 .collect();
 
             // Sort newest first.
@@ -359,46 +371,8 @@ impl RunStore for InMemoryStore {
             let mut active_runs = 0u64;
 
             for run in state.runs.values() {
-                if let Some(ref wf) = filter.workflow_name
-                    && !run
-                        .workflow_name
-                        .to_lowercase()
-                        .contains(&wf.to_lowercase())
-                {
+                if !run_matches_filter(run, &filter, &state.steps) {
                     continue;
-                }
-                if let Some(ref status) = filter.status
-                    && &run.status.state != status
-                {
-                    continue;
-                }
-                if let Some(after) = filter.created_after
-                    && run.created_at < after
-                {
-                    continue;
-                }
-                if let Some(before) = filter.created_before
-                    && run.created_at > before
-                {
-                    continue;
-                }
-                if let Some(has_steps) = filter.has_steps {
-                    let run_has_steps = state.steps.values().any(|s| s.run_id == run.id);
-                    if has_steps != run_has_steps {
-                        continue;
-                    }
-                }
-                if let Some(ref labels) = filter.labels {
-                    let mut all_match = true;
-                    for (key, value) in labels {
-                        if run.labels.get(key) != Some(value) {
-                            all_match = false;
-                            break;
-                        }
-                    }
-                    if !all_match {
-                        continue;
-                    }
                 }
 
                 total_cost_usd += run.cost_usd;
@@ -494,7 +468,19 @@ mod tests {
     use super::*;
     use crate::entities::TriggerKind;
 
+    use crate::entities::Run;
     use crate::memory::tests::new_run_req;
+    use crate::store::RunStore;
+
+    async fn create_terminal_run(store: &InMemoryStore, name: &str, status: RunStatus) -> Run {
+        let run = store.create_run(new_run_req(name)).await.unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store.update_run_status(run.id, status).await.unwrap();
+        store.get_run(run.id).await.unwrap().unwrap()
+    }
 
     // ---- create_run ----
 
@@ -1358,13 +1344,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_runs_has_steps_true_only_returns_runs_with_steps() {
+    async fn list_runs_has_steps_true_only_filters_completed_and_cancelled() {
         let store = InMemoryStore::new();
-        let run_with = store.create_run(new_run_req("with-steps")).await.unwrap();
-        let _run_without = store
-            .create_run(new_run_req("without-steps"))
-            .await
-            .unwrap();
+        let run_with = create_terminal_run(&store, "with-steps", RunStatus::Completed).await;
+        let _run_without = create_terminal_run(&store, "without-steps", RunStatus::Completed).await;
 
         store
             .create_step(NewStep {
@@ -1387,13 +1370,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_runs_has_steps_false_only_returns_runs_without_steps() {
+    async fn list_runs_has_steps_false_only_filters_completed_and_cancelled() {
         let store = InMemoryStore::new();
-        let run_with = store.create_run(new_run_req("with-steps")).await.unwrap();
-        let run_without = store
-            .create_run(new_run_req("without-steps"))
-            .await
-            .unwrap();
+        let run_with = create_terminal_run(&store, "with-steps", RunStatus::Cancelled).await;
+        let run_without = create_terminal_run(&store, "without-steps", RunStatus::Cancelled).await;
 
         store
             .create_step(NewStep {
@@ -1441,6 +1421,33 @@ mod tests {
         };
         let page = store.list_runs(filter, 1, 100).await.unwrap();
         assert_eq!(page.total, 2);
+    }
+
+    #[tokio::test]
+    async fn list_runs_has_steps_true_does_not_filter_non_terminal_runs() {
+        let store = InMemoryStore::new();
+        let pending_run = store
+            .create_run(new_run_req("pending-empty"))
+            .await
+            .unwrap();
+        let running_run = store
+            .create_run(new_run_req("running-empty"))
+            .await
+            .unwrap();
+        store
+            .update_run_status(running_run.id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        let filter = RunFilter {
+            has_steps: Some(true),
+            ..RunFilter::default()
+        };
+        let page = store.list_runs(filter, 1, 100).await.unwrap();
+        assert_eq!(page.total, 2);
+        let ids: Vec<_> = page.items.iter().map(|r| r.id).collect();
+        assert!(ids.contains(&pending_run.id));
+        assert!(ids.contains(&running_run.id));
     }
 
     #[tokio::test]

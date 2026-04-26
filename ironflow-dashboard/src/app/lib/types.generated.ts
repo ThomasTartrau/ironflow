@@ -1096,8 +1096,10 @@ export interface components {
 		/** @description Query parameters for listing runs. */
 		ListRunsQuery: {
 			/**
-			 * @description When `true`, only return runs with at least one step.
-			 *     When `false`, only return runs with no steps.
+			 * @description Filter by step presence (only applies to completed/cancelled runs).
+			 *     Non-terminal runs (pending, running, etc.) are always included.
+			 *     When `true`, only return completed/cancelled runs that have steps.
+			 *     When `false`, only return completed/cancelled runs without steps.
 			 */
 			has_steps?: boolean | null;
 			/** @description Filter by labels. Comma-separated `key:value` pairs. */
@@ -1990,8 +1992,10 @@ export interface operations {
 				/** @description Filter by run status. */
 				status?: null | components["schemas"]["RunStatus"];
 				/**
-				 * @description When `true`, only return runs with at least one step.
-				 *     When `false`, only return runs with no steps.
+				 * @description Filter by step presence (only applies to completed/cancelled runs).
+				 *     Non-terminal runs (pending, running, etc.) are always included.
+				 *     When `true`, only return completed/cancelled runs that have steps.
+				 *     When `false`, only return completed/cancelled runs without steps.
 				 */
 				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
@@ -2503,8 +2507,10 @@ export interface operations {
 				/** @description Filter by run status. */
 				status?: null | components["schemas"]["RunStatus"];
 				/**
-				 * @description When `true`, only return runs with at least one step.
-				 *     When `false`, only return runs with no steps.
+				 * @description Filter by step presence (only applies to completed/cancelled runs).
+				 *     Non-terminal runs (pending, running, etc.) are always included.
+				 *     When `true`, only return completed/cancelled runs that have steps.
+				 *     When `false`, only return completed/cancelled runs without steps.
 				 */
 				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */

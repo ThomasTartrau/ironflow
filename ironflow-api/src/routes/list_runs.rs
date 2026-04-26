@@ -75,11 +75,36 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewStep, StepKind, TriggerKind};
+    use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, TriggerKind};
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
+
+    async fn create_terminal_run(
+        store: &dyn ironflow_store::store::Store,
+        name: &str,
+        status: RunStatus,
+    ) -> ironflow_store::entities::Run {
+        let run = store
+            .create_run(NewRun {
+                workflow_name: name.to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store.update_run_status(run.id, status).await.unwrap();
+        store.get_run(run.id).await.unwrap().unwrap()
+    }
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
@@ -291,37 +316,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn has_steps_true_filters_empty_runs() {
+    async fn has_steps_true_filters_completed_and_cancelled_empty_runs() {
         let state = test_state();
         let auth_header = make_auth_header(&state);
 
-        let run_with = state
-            .store
-            .create_run(NewRun {
-                workflow_name: "with-steps".to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-                labels: HashMap::new(),
-                scheduled_at: None,
-            })
-            .await
-            .unwrap();
-
-        state
-            .store
-            .create_run(NewRun {
-                workflow_name: "without-steps".to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-                labels: HashMap::new(),
-                scheduled_at: None,
-            })
-            .await
-            .unwrap();
+        let run_with =
+            create_terminal_run(state.store.as_ref(), "with-steps", RunStatus::Completed).await;
+        let _run_without =
+            create_terminal_run(state.store.as_ref(), "without-steps", RunStatus::Completed).await;
 
         state
             .store
@@ -351,37 +353,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn has_steps_false_returns_only_empty_runs() {
+    async fn has_steps_false_returns_only_completed_or_cancelled_empty_runs() {
         let state = test_state();
         let auth_header = make_auth_header(&state);
 
-        let run_with = state
-            .store
-            .create_run(NewRun {
-                workflow_name: "with-steps".to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-                labels: HashMap::new(),
-                scheduled_at: None,
-            })
-            .await
-            .unwrap();
-
-        state
-            .store
-            .create_run(NewRun {
-                workflow_name: "without-steps".to_string(),
-                trigger: TriggerKind::Manual,
-                payload: json!({}),
-                max_retries: 0,
-                handler_version: None,
-                labels: HashMap::new(),
-                scheduled_at: None,
-            })
-            .await
-            .unwrap();
+        let run_with =
+            create_terminal_run(state.store.as_ref(), "with-steps", RunStatus::Cancelled).await;
+        let _run_without =
+            create_terminal_run(state.store.as_ref(), "without-steps", RunStatus::Cancelled).await;
 
         state
             .store
@@ -408,5 +387,39 @@ mod tests {
         let json_val: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json_val["data"].as_array().unwrap().len(), 1);
         assert_eq!(json_val["data"][0]["workflow_name"], "without-steps");
+    }
+
+    #[tokio::test]
+    async fn has_steps_true_does_not_hide_pending_runs_without_steps() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+
+        state
+            .store
+            .create_run(NewRun {
+                workflow_name: "pending-no-steps".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let app = Router::new().route("/", get(list_runs)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/?has_steps=true")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"].as_array().unwrap().len(), 1);
+        assert_eq!(json_val["data"][0]["workflow_name"], "pending-no-steps");
     }
 }
