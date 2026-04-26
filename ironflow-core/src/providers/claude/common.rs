@@ -19,6 +19,21 @@ use crate::utils::estimate_tokens;
 /// Default timeout for a single Claude CLI invocation (5 minutes).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Maximum byte length for raw response data included in error diagnostics.
+const RAW_RESPONSE_MAX_LEN: usize = 4000;
+
+/// Approximate byte limit for stdout fallback in error diagnostics.
+const RAW_RESPONSE_FALLBACK_MAX_LEN: usize = 2000;
+
+/// Truncate a string to at most `max_len` bytes on a char boundary.
+fn truncate_to(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let end = s.floor_char_boundary(max_len);
+    format!("{}...(truncated)", &s[..end])
+}
+
 /// Return the context window size for a known Claude model identifier.
 ///
 /// Returns `200_000` for all standard models, `1_000_000` for `[1m]` variants,
@@ -305,6 +320,26 @@ pub fn extract_structured_value(parsed: &ClaudeJsonOutput) -> Option<Value> {
     serde_json::from_str(&text[start..=end]).ok()
 }
 
+/// Extract the raw response text from a parsed CLI response for error diagnostics.
+///
+/// Prefers the `result` field (stringified and truncated); falls back to
+/// raw stdout when `result` is null.
+fn extract_raw_response_text(parsed: &ClaudeJsonOutput, stdout: &str) -> Option<String> {
+    if let Some(ref result) = parsed.result
+        && !result.is_null()
+    {
+        let text = match result.as_str() {
+            Some(s) => s.to_string(),
+            None => result.to_string(),
+        };
+        return Some(truncate_to(&text, RAW_RESPONSE_MAX_LEN));
+    }
+    if !stdout.is_empty() {
+        return Some(truncate_to(stdout, RAW_RESPONSE_FALLBACK_MAX_LEN));
+    }
+    None
+}
+
 /// Parse raw stdout from the `claude` CLI into an [`AgentOutput`].
 ///
 /// # Errors
@@ -322,6 +357,7 @@ pub fn parse_response(
             got: format!("parse error: {e}"),
             debug_messages: Vec::new(),
             partial_usage: Box::default(),
+            raw_response: Some(truncate_to(stdout, RAW_RESPONSE_MAX_LEN)),
         })?;
 
     let value = if config.json_schema.is_some() {
@@ -351,6 +387,8 @@ pub fn parse_response(
                 }
                 None => "",
             };
+            let raw_response = extract_raw_response_text(&parsed, stdout);
+
             AgentError::SchemaValidation {
                 expected: "structured_output field".to_string(),
                 got: format!("null{hint}"),
@@ -361,6 +399,7 @@ pub fn parse_response(
                     input_tokens: parsed.usage.as_ref().map(|u| u.total_input_tokens()),
                     output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
                 }),
+                raw_response,
             }
         })?
     } else {
@@ -632,6 +671,11 @@ pub fn parse_stream_response(
                 got: "no result line found in stream output".to_string(),
                 debug_messages,
                 partial_usage: Box::default(),
+                raw_response: if stdout.is_empty() {
+                    None
+                } else {
+                    Some(truncate_to(stdout, RAW_RESPONSE_FALLBACK_MAX_LEN))
+                },
             });
         }
     };
@@ -645,12 +689,14 @@ pub fn parse_stream_response(
             expected,
             got,
             partial_usage,
+            raw_response,
             ..
         }) => Err(AgentError::SchemaValidation {
             expected,
             got,
             debug_messages,
             partial_usage,
+            raw_response,
         }),
         Err(other) => Err(other),
     }
@@ -1620,5 +1666,216 @@ mod tests {
             }
             other => panic!("expected Err(ProcessFailed), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn truncate_to_no_truncation_when_short() {
+        assert_eq!(truncate_to("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_to_adds_marker_when_long() {
+        let result = truncate_to("abcdefghij", 5);
+        assert!(result.starts_with("abcde"));
+        assert!(result.ends_with("...(truncated)"));
+    }
+
+    #[test]
+    fn truncate_to_handles_multibyte_chars() {
+        let text = "cafe\u{0301}"; // e + combining accent = 5 bytes
+        let result = truncate_to(text, 4);
+        assert!(result.ends_with("...(truncated)"));
+    }
+
+    #[test]
+    fn schema_validation_includes_raw_response_from_result_field() {
+        let stdout = r#"{"session_id":"s1","subtype":"success","result":"The model answered with plain text instead of JSON","usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.01,"duration_ms":100}"#;
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let err = parse_response(stdout, &config, 100).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { raw_response, .. } => {
+                let raw = raw_response.expect("raw_response should be Some when result is present");
+                assert!(
+                    raw.contains("The model answered with plain text instead of JSON"),
+                    "raw_response should contain the result text, got: {raw}"
+                );
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_validation_raw_response_from_stdout_when_result_null() {
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":500,"output_tokens":200},"total_cost_usd":0.30,"duration_ms":4500}"#;
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let err = parse_response(stdout, &config, 0).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { raw_response, .. } => {
+                let raw = raw_response
+                    .expect("raw_response should fall back to stdout when result is null");
+                assert!(
+                    raw.contains("error_max_budget_usd"),
+                    "raw_response should contain stdout content, got: {raw}"
+                );
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_validation_raw_response_none_when_both_null_and_empty_stdout() {
+        let stdout = r#"{"result":null,"structured_output":null}"#;
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let err = parse_response(stdout, &config, 0).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { raw_response, .. } => {
+                // stdout is non-empty (it's the JSON itself), so raw_response falls back to it
+                assert!(raw_response.is_some());
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_validation_raw_response_truncated_to_max() {
+        let long_text = "x".repeat(5000);
+        let stdout = format!(
+            r#"{{"result":"{long_text}","structured_output":null,"usage":{{"input_tokens":10,"output_tokens":5}},"total_cost_usd":0.01,"duration_ms":100}}"#,
+        );
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{{"type":"object"}}"#)
+            .into();
+
+        let err = parse_response(&stdout, &config, 0).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { raw_response, .. } => {
+                let raw = raw_response.expect("raw_response should be present");
+                assert!(
+                    raw.len() <= RAW_RESPONSE_MAX_LEN + 20,
+                    "raw_response should be truncated, got len={}",
+                    raw.len()
+                );
+                assert!(raw.contains("...(truncated)"));
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_schema_validation_preserves_raw_response() {
+        let assistant_line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Searching..."}],"stop_reason":"end_turn"}}"#;
+        let result_line = r#"{"type":"result","session_id":"s1","subtype":"success","result":"text response","usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.01,"duration_ms":500}"#;
+
+        let stdout = format!("{assistant_line}\n{result_line}");
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+        let config = config.verbose(true);
+
+        let err = parse_stream_response(&stdout, &config, 500).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation {
+                raw_response,
+                debug_messages,
+                ..
+            } => {
+                assert!(
+                    raw_response.is_some(),
+                    "raw_response should be propagated through stream parser"
+                );
+                assert!(
+                    raw_response.unwrap().contains("text response"),
+                    "raw_response should contain the result text"
+                );
+                assert_eq!(debug_messages.len(), 1);
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_json_parse_error_includes_raw_stdout() {
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .into();
+
+        let err = parse_response("this is not JSON at all", &config, 0).unwrap_err();
+
+        match err {
+            AgentError::SchemaValidation { raw_response, .. } => {
+                let raw = raw_response
+                    .expect("raw_response should contain the raw stdout on parse failure");
+                assert!(
+                    raw.contains("this is not JSON at all"),
+                    "raw_response should contain the unparseable input, got: {raw}"
+                );
+            }
+            other => panic!("expected SchemaValidation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_raw_response_text_prefers_result_string() {
+        let parsed: ClaudeJsonOutput = serde_json::from_value(json!({
+            "result": "The agent said hello",
+            "structured_output": null,
+        }))
+        .unwrap();
+        let raw = extract_raw_response_text(&parsed, "full stdout...");
+        assert_eq!(raw, Some("The agent said hello".to_string()));
+    }
+
+    #[test]
+    fn extract_raw_response_text_falls_back_to_stdout() {
+        let parsed: ClaudeJsonOutput = serde_json::from_value(json!({
+            "result": null,
+            "structured_output": null,
+        }))
+        .unwrap();
+        let raw = extract_raw_response_text(&parsed, "raw stdout content");
+        assert_eq!(raw, Some("raw stdout content".to_string()));
+    }
+
+    #[test]
+    fn extract_raw_response_text_none_when_all_empty() {
+        let parsed: ClaudeJsonOutput = serde_json::from_value(json!({
+            "result": null,
+            "structured_output": null,
+        }))
+        .unwrap();
+        let raw = extract_raw_response_text(&parsed, "");
+        assert!(raw.is_none());
+    }
+
+    #[test]
+    fn extract_raw_response_text_stringifies_non_string_result() {
+        let parsed: ClaudeJsonOutput = serde_json::from_value(json!({
+            "result": {"partial": "data", "count": 42},
+            "structured_output": null,
+        }))
+        .unwrap();
+        let raw = extract_raw_response_text(&parsed, "");
+        let raw = raw.expect("should extract stringified JSON object");
+        assert!(raw.contains("partial"));
+        assert!(raw.contains("42"));
     }
 }

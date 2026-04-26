@@ -320,6 +320,7 @@ impl WorkflowContext {
                     let err_msg = err.to_string();
                     let debug_messages_json = extract_debug_messages_from_error(&err);
                     let partial = extract_partial_usage_from_error(&err);
+                    let raw_response_output = extract_raw_response_from_error(&err);
 
                     if let Some(ref usage) = partial {
                         if let Some(cost) = usage.cost_usd {
@@ -337,6 +338,7 @@ impl WorkflowContext {
                             StepUpdate {
                                 status: Some(StepStatus::Failed),
                                 error: Some(err_msg.clone()),
+                                output: raw_response_output,
                                 completed_at: Some(completed_at),
                                 debug_messages: debug_messages_json,
                                 duration_ms: partial.as_ref().and_then(|p| p.duration_ms),
@@ -1116,6 +1118,7 @@ impl WorkflowContext {
                 let completed_at = Utc::now();
                 let debug_messages_json = extract_debug_messages_from_error(&err);
                 let partial = extract_partial_usage_from_error(&err);
+                let raw_response_output = extract_raw_response_from_error(&err);
 
                 if let Some(ref usage) = partial {
                     if let Some(cost) = usage.cost_usd {
@@ -1133,6 +1136,7 @@ impl WorkflowContext {
                         StepUpdate {
                             status: Some(StepStatus::Failed),
                             error: Some(err.to_string()),
+                            output: raw_response_output,
                             completed_at: Some(completed_at),
                             debug_messages: debug_messages_json,
                             duration_ms: partial.as_ref().and_then(|p| p.duration_ms),
@@ -1241,6 +1245,22 @@ struct StepPartialUsage {
     duration_ms: Option<u64>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+}
+
+/// Extract the raw response text from a schema validation error.
+///
+/// When the agent produced text but structured output extraction failed,
+/// this returns the truncated raw text so it can be persisted as the
+/// step output for dashboard visibility.
+fn extract_raw_response_from_error(err: &EngineError) -> Option<Value> {
+    if let EngineError::Operation(OperationError::Agent(AgentError::SchemaValidation {
+        raw_response: Some(text),
+        ..
+    })) = err
+    {
+        return Some(Value::String(text.clone()));
+    }
+    None
 }
 
 fn extract_partial_usage_from_error(err: &EngineError) -> Option<StepPartialUsage> {
