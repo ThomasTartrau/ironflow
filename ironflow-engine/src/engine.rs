@@ -13,14 +13,16 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[cfg(feature = "prometheus")]
 use ironflow_core::metric_names::{RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::error::StoreError;
-use ironflow_store::models::{NewRun, Run, RunStatus, RunUpdate, TriggerKind};
+use ironflow_store::models::{
+    NewRun, Run, RunStatus, RunUpdate, StepStatus, StepUpdate, TriggerKind,
+};
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge, histogram};
@@ -545,6 +547,75 @@ impl Engine {
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
             .await
+    }
+
+    /// Fail all non-terminal steps for a run.
+    ///
+    /// Called after a run is marked as failed (timeout, error, panic) to clean up
+    /// orphaned steps that are still in `Running`, `Pending`, or `AwaitingApproval`.
+    ///
+    /// - `Running` / `AwaitingApproval` steps are marked `Failed`.
+    /// - `Pending` steps are marked `Skipped` (FSM does not allow Pending -> Failed).
+    ///
+    /// Errors from individual step updates are logged but do not abort the cleanup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if listing steps fails.
+    pub async fn fail_orphaned_steps(
+        &self,
+        run_id: Uuid,
+        error_message: &str,
+    ) -> Result<(), EngineError> {
+        let steps = self.store.list_steps(run_id).await?;
+        let now = Utc::now();
+
+        for step in steps {
+            if step.status.state.is_terminal() {
+                continue;
+            }
+
+            let (target_status, error) = match step.status.state {
+                StepStatus::Running | StepStatus::AwaitingApproval => {
+                    (StepStatus::Failed, Some(error_message.to_string()))
+                }
+                StepStatus::Pending => (StepStatus::Skipped, None),
+                _ => continue,
+            };
+
+            if let Err(e) = self
+                .store
+                .update_step(
+                    step.id,
+                    StepUpdate {
+                        status: Some(target_status),
+                        error,
+                        completed_at: Some(now),
+                        ..StepUpdate::default()
+                    },
+                )
+                .await
+            {
+                warn!(
+                    run_id = %run_id,
+                    step_id = %step.id,
+                    step_name = %step.name,
+                    error = %e,
+                    "failed to cleanup orphaned step"
+                );
+            } else {
+                info!(
+                    run_id = %run_id,
+                    step_id = %step.id,
+                    step_name = %step.name,
+                    from = %step.status.state,
+                    to = %target_status,
+                    "cleaned up orphaned step"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Finalize a run with the given result and context.
@@ -1350,5 +1421,276 @@ mod tests {
         for step in &steps {
             assert_eq!(step.status.state, StepStatus::Completed);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // fail_orphaned_steps tests
+    // -----------------------------------------------------------------------
+
+    use ironflow_store::models::{NewStep, StepUpdate};
+
+    async fn create_step_with_status(
+        store: &Arc<dyn Store>,
+        run_id: Uuid,
+        name: &str,
+        position: u32,
+        status: StepStatus,
+    ) -> ironflow_store::models::Step {
+        let step = store
+            .create_step(NewStep {
+                run_id,
+                name: name.to_string(),
+                kind: StepKind::Shell,
+                position,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        match status {
+            StepStatus::Pending => {}
+            StepStatus::Running => {
+                store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Running),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            StepStatus::Completed => {
+                store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Running),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+                store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Completed),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            StepStatus::AwaitingApproval => {
+                store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Running),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+                store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::AwaitingApproval),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            _ => panic!("unsupported status for test helper: {status}"),
+        }
+
+        store.get_step(step.id).await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_steps_marks_running_as_failed() {
+        let engine = create_test_engine();
+        let run = engine
+            .store()
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let step = create_step_with_status(engine.store(), run.id, "running-step", 0, StepStatus::Running).await;
+
+        engine
+            .fail_orphaned_steps(run.id, "parent run timed out")
+            .await
+            .unwrap();
+
+        let updated = engine.store().get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(updated.status.state, StepStatus::Failed);
+        assert_eq!(updated.error.as_deref(), Some("parent run timed out"));
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_steps_marks_pending_as_skipped() {
+        let engine = create_test_engine();
+        let run = engine
+            .store()
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let step = create_step_with_status(engine.store(), run.id, "pending-step", 0, StepStatus::Pending).await;
+
+        engine
+            .fail_orphaned_steps(run.id, "parent run timed out")
+            .await
+            .unwrap();
+
+        let updated = engine.store().get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(updated.status.state, StepStatus::Skipped);
+        assert!(updated.error.is_none());
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_steps_marks_awaiting_approval_as_failed() {
+        let engine = create_test_engine();
+        let run = engine
+            .store()
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let step = create_step_with_status(engine.store(), run.id, "approval-step", 0, StepStatus::AwaitingApproval).await;
+
+        engine
+            .fail_orphaned_steps(run.id, "parent run timed out")
+            .await
+            .unwrap();
+
+        let updated = engine.store().get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(updated.status.state, StepStatus::Failed);
+        assert_eq!(updated.error.as_deref(), Some("parent run timed out"));
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_steps_skips_terminal_steps() {
+        let engine = create_test_engine();
+        let run = engine
+            .store()
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let completed_step = create_step_with_status(engine.store(), run.id, "done", 0, StepStatus::Completed).await;
+        let running_step = create_step_with_status(engine.store(), run.id, "in-flight", 1, StepStatus::Running).await;
+
+        engine
+            .fail_orphaned_steps(run.id, "parent run timed out")
+            .await
+            .unwrap();
+
+        let completed = engine.store().get_step(completed_step.id).await.unwrap().unwrap();
+        assert_eq!(completed.status.state, StepStatus::Completed);
+
+        let failed = engine.store().get_step(running_step.id).await.unwrap().unwrap();
+        assert_eq!(failed.status.state, StepStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_steps_mixed_states() {
+        let engine = create_test_engine();
+        let run = engine
+            .store()
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let s_completed = create_step_with_status(engine.store(), run.id, "step-1", 0, StepStatus::Completed).await;
+        let s_running = create_step_with_status(engine.store(), run.id, "step-2", 1, StepStatus::Running).await;
+        let s_pending = create_step_with_status(engine.store(), run.id, "step-3", 2, StepStatus::Pending).await;
+
+        engine
+            .fail_orphaned_steps(run.id, "timeout")
+            .await
+            .unwrap();
+
+        let r_completed = engine.store().get_step(s_completed.id).await.unwrap().unwrap();
+        assert_eq!(r_completed.status.state, StepStatus::Completed);
+
+        let r_running = engine.store().get_step(s_running.id).await.unwrap().unwrap();
+        assert_eq!(r_running.status.state, StepStatus::Failed);
+        assert_eq!(r_running.error.as_deref(), Some("timeout"));
+
+        let r_pending = engine.store().get_step(s_pending.id).await.unwrap().unwrap();
+        assert_eq!(r_pending.status.state, StepStatus::Skipped);
+        assert!(r_pending.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_steps_no_steps_is_noop() {
+        let engine = create_test_engine();
+        let run = engine
+            .store()
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let result = engine
+            .fail_orphaned_steps(run.id, "timeout")
+            .await;
+        assert!(result.is_ok());
     }
 }
