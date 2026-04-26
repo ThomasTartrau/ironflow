@@ -1528,7 +1528,14 @@ mod tests {
             .await
             .unwrap();
 
-        let step = create_step_with_status(engine.store(), run.id, "running-step", 0, StepStatus::Running).await;
+        let step = create_step_with_status(
+            engine.store(),
+            run.id,
+            "running-step",
+            0,
+            StepStatus::Running,
+        )
+        .await;
 
         engine
             .fail_orphaned_steps(run.id, "parent run timed out")
@@ -1558,7 +1565,14 @@ mod tests {
             .await
             .unwrap();
 
-        let step = create_step_with_status(engine.store(), run.id, "pending-step", 0, StepStatus::Pending).await;
+        let step = create_step_with_status(
+            engine.store(),
+            run.id,
+            "pending-step",
+            0,
+            StepStatus::Pending,
+        )
+        .await;
 
         engine
             .fail_orphaned_steps(run.id, "parent run timed out")
@@ -1588,7 +1602,14 @@ mod tests {
             .await
             .unwrap();
 
-        let step = create_step_with_status(engine.store(), run.id, "approval-step", 0, StepStatus::AwaitingApproval).await;
+        let step = create_step_with_status(
+            engine.store(),
+            run.id,
+            "approval-step",
+            0,
+            StepStatus::AwaitingApproval,
+        )
+        .await;
 
         engine
             .fail_orphaned_steps(run.id, "parent run timed out")
@@ -1618,18 +1639,31 @@ mod tests {
             .await
             .unwrap();
 
-        let completed_step = create_step_with_status(engine.store(), run.id, "done", 0, StepStatus::Completed).await;
-        let running_step = create_step_with_status(engine.store(), run.id, "in-flight", 1, StepStatus::Running).await;
+        let completed_step =
+            create_step_with_status(engine.store(), run.id, "done", 0, StepStatus::Completed).await;
+        let running_step =
+            create_step_with_status(engine.store(), run.id, "in-flight", 1, StepStatus::Running)
+                .await;
 
         engine
             .fail_orphaned_steps(run.id, "parent run timed out")
             .await
             .unwrap();
 
-        let completed = engine.store().get_step(completed_step.id).await.unwrap().unwrap();
+        let completed = engine
+            .store()
+            .get_step(completed_step.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(completed.status.state, StepStatus::Completed);
 
-        let failed = engine.store().get_step(running_step.id).await.unwrap().unwrap();
+        let failed = engine
+            .store()
+            .get_step(running_step.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(failed.status.state, StepStatus::Failed);
     }
 
@@ -1650,23 +1684,39 @@ mod tests {
             .await
             .unwrap();
 
-        let s_completed = create_step_with_status(engine.store(), run.id, "step-1", 0, StepStatus::Completed).await;
-        let s_running = create_step_with_status(engine.store(), run.id, "step-2", 1, StepStatus::Running).await;
-        let s_pending = create_step_with_status(engine.store(), run.id, "step-3", 2, StepStatus::Pending).await;
+        let s_completed =
+            create_step_with_status(engine.store(), run.id, "step-1", 0, StepStatus::Completed)
+                .await;
+        let s_running =
+            create_step_with_status(engine.store(), run.id, "step-2", 1, StepStatus::Running).await;
+        let s_pending =
+            create_step_with_status(engine.store(), run.id, "step-3", 2, StepStatus::Pending).await;
 
-        engine
-            .fail_orphaned_steps(run.id, "timeout")
+        engine.fail_orphaned_steps(run.id, "timeout").await.unwrap();
+
+        let r_completed = engine
+            .store()
+            .get_step(s_completed.id)
             .await
+            .unwrap()
             .unwrap();
-
-        let r_completed = engine.store().get_step(s_completed.id).await.unwrap().unwrap();
         assert_eq!(r_completed.status.state, StepStatus::Completed);
 
-        let r_running = engine.store().get_step(s_running.id).await.unwrap().unwrap();
+        let r_running = engine
+            .store()
+            .get_step(s_running.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(r_running.status.state, StepStatus::Failed);
         assert_eq!(r_running.error.as_deref(), Some("timeout"));
 
-        let r_pending = engine.store().get_step(s_pending.id).await.unwrap().unwrap();
+        let r_pending = engine
+            .store()
+            .get_step(s_pending.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(r_pending.status.state, StepStatus::Skipped);
         assert!(r_pending.error.is_none());
     }
@@ -1688,9 +1738,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = engine
-            .fail_orphaned_steps(run.id, "timeout")
-            .await;
+        let result = engine.fail_orphaned_steps(run.id, "timeout").await;
         assert!(result.is_ok());
     }
 }
