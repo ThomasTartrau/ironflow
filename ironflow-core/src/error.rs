@@ -114,7 +114,7 @@ pub enum AgentError {
     },
 
     /// The agent output did not match the expected schema.
-    #[error("schema validation failed: expected {expected}, got {got}")]
+    #[error("schema validation failed: expected {expected}, got {got}{}", raw_response.as_ref().map(|r| { let end = r.floor_char_boundary(200); format!(" (raw response: {}...)", &r[..end]) }).unwrap_or_default())]
     SchemaValidation {
         /// What was expected (e.g. `"structured_output field"`).
         expected: String,
@@ -129,6 +129,12 @@ pub enum AgentError {
         /// structured output extraction failed. Boxed to keep `AgentError`
         /// small on the stack.
         partial_usage: Box<PartialUsage>,
+        /// Raw text response from the agent, truncated to ~4000 bytes.
+        ///
+        /// When structured output extraction fails, the model may still have
+        /// produced useful text in the `result` field. This captures it so
+        /// callers can persist it for debugging (e.g. in the step output).
+        raw_response: Option<String>,
     },
 
     /// The prompt exceeds the model's context window.
@@ -225,6 +231,7 @@ mod tests {
             got: "string".to_string(),
             debug_messages: Vec::new(),
             partial_usage: Box::default(),
+            raw_response: None,
         };
         assert_eq!(
             err.to_string(),
@@ -260,6 +267,7 @@ mod tests {
             got: "b".to_string(),
             debug_messages: Vec::new(),
             partial_usage: Box::default(),
+            raw_response: None,
         };
         let op_err: OperationError = agent_err.into();
         assert!(matches!(
@@ -462,5 +470,42 @@ mod tests {
             reason: "r".to_string(),
         };
         assert!(deser.source().is_none());
+    }
+
+    #[test]
+    fn schema_validation_raw_response_preserved() {
+        let err = AgentError::SchemaValidation {
+            expected: "structured_output field".to_string(),
+            got: "null".to_string(),
+            debug_messages: Vec::new(),
+            partial_usage: Box::default(),
+            raw_response: Some("The model said something useful".to_string()),
+        };
+        match err {
+            AgentError::SchemaValidation { raw_response, .. } => {
+                assert_eq!(
+                    raw_response.as_deref(),
+                    Some("The model said something useful")
+                );
+            }
+            _ => panic!("expected SchemaValidation"),
+        }
+    }
+
+    #[test]
+    fn schema_validation_raw_response_none_by_default() {
+        let err = AgentError::SchemaValidation {
+            expected: "a".to_string(),
+            got: "b".to_string(),
+            debug_messages: Vec::new(),
+            partial_usage: Box::default(),
+            raw_response: None,
+        };
+        match err {
+            AgentError::SchemaValidation { raw_response, .. } => {
+                assert!(raw_response.is_none());
+            }
+            _ => panic!("expected SchemaValidation"),
+        }
     }
 }
