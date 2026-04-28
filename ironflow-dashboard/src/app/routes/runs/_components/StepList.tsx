@@ -215,17 +215,33 @@ function NestedStep({ step }: { step: StepResponse }) {
 	);
 }
 
+function extractAgentValue(output: unknown): {
+	text: string;
+	isJson: boolean;
+	model: string | null;
+} {
+	if (typeof output === "string") {
+		return { text: output, isJson: false, model: null };
+	}
+
+	const obj = output as Record<string, unknown>;
+	const model = typeof obj.model === "string" ? obj.model : null;
+
+	if (typeof obj.value === "string") {
+		return { text: obj.value, isJson: false, model };
+	}
+
+	const json = JSON.stringify(obj.value ?? obj, null, 2);
+	return { text: json, isJson: true, model };
+}
+
 function StepOutput({ step }: { step: StepResponse }) {
 	const output = step.output;
 	if (!output) return null;
 
 	if (step.kind === "agent") {
-		const value =
-			typeof output.value === "string"
-				? output.value
-				: (JSON.stringify(output.value, null, 2) ?? "");
-		const model = typeof output.model === "string" ? output.model : null;
-		const hasContent = value.trim().length > 0;
+		const { text, isJson, model } = extractAgentValue(output);
+		const hasContent = text.trim().length > 0;
 
 		return (
 			<div>
@@ -244,7 +260,13 @@ function StepOutput({ step }: { step: StepResponse }) {
 				</div>
 				<div className="max-h-96 overflow-auto border rounded-md p-4 bg-muted/50">
 					{hasContent ? (
-						<MarkdownContent content={value} />
+						isJson ? (
+							<pre className="text-xs whitespace-pre-wrap break-words font-mono leading-relaxed">
+								{text}
+							</pre>
+						) : (
+							<MarkdownContent content={text} />
+						)
 					) : (
 						<span className="text-sm text-muted-foreground italic">
 							No response returned by the agent
