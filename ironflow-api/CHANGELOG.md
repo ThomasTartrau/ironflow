@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.18.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.18.0...ironflow-api-v2.18.1) - 2026-04-28
+
+### Fixed
+
+- initialize MasterKey in get_secret test_state()
+
 ## [2.18.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.17.8...ironflow-api-v2.18.0) - 2026-04-26
 
 ### Added
