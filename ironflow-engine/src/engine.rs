@@ -1,6 +1,6 @@
 //! The core [`Engine`] -- orchestrates workflow execution and persistence.
 //!
-//! The engine ties together a [`RunStore`] for persistence, an [`AgentProvider`]
+//! The engine ties together a `RunStore` for persistence, an [`AgentProvider`]
 //! for AI operations, and a registry of [`WorkflowHandler`]s.
 //!
 //! Handlers are Rust-native: steps can reference previous outputs, use native

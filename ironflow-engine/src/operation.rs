@@ -44,7 +44,6 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde_json::Value;
-use ironflow_core::error::OperationError;
 
 use crate::error::EngineError;
 
@@ -136,6 +135,7 @@ pub trait Operation: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ironflow_core::error::OperationError;
     use serde_json::json;
 
     struct GitLabIssueOp {
