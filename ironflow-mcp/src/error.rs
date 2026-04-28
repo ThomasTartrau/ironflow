@@ -29,3 +29,44 @@ impl From<McpError> for CallToolError {
         CallToolError::new(err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_api_error() {
+        let err = McpError::Api {
+            status: 404,
+            message: "introuvable".to_string(),
+        };
+        assert_eq!(err.to_string(), "erreur API (404) : introuvable");
+    }
+
+    #[test]
+    fn display_deserialize_error() {
+        let err = McpError::Deserialize("champ manquant".to_string());
+        assert_eq!(err.to_string(), "deserialization echouee : champ manquant");
+    }
+
+    #[tokio::test]
+    async fn display_http_error() {
+        let inner = reqwest::Client::new()
+            .get("http://127.0.0.1:1/unreachable")
+            .send()
+            .await
+            .unwrap_err();
+        let err = McpError::Http(inner);
+        let display = err.to_string();
+        assert!(display.starts_with("requete HTTP echouee : "));
+    }
+
+    #[test]
+    fn into_call_tool_error() {
+        let err = McpError::Api {
+            status: 500,
+            message: "boom".to_string(),
+        };
+        let _tool_err: CallToolError = err.into();
+    }
+}

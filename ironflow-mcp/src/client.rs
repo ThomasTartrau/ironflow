@@ -148,3 +148,344 @@ impl ApiClient {
         Ok(api_resp.data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    use axum::extract::Query;
+    use axum::http::header::AUTHORIZATION;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use serde::Deserialize;
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
+
+    use super::*;
+
+    async fn start_server(router: Router) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        addr
+    }
+
+    fn client_for(addr: SocketAddr) -> ApiClient {
+        ApiClient::new(&format!("http://{addr}"), "test-key".to_string())
+    }
+
+    // ---------------------------------------------------------------
+    // new() / url()
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn new_trims_trailing_slash() {
+        let c = ApiClient::new("http://localhost:3000/", "tok".to_string());
+        assert_eq!(c.base_url, "http://localhost:3000");
+    }
+
+    #[test]
+    fn new_trims_multiple_trailing_slashes() {
+        let c = ApiClient::new("http://localhost:3000///", "tok".to_string());
+        assert_eq!(c.base_url, "http://localhost:3000");
+    }
+
+    #[test]
+    fn new_no_trailing_slash_unchanged() {
+        let c = ApiClient::new("http://localhost:3000", "tok".to_string());
+        assert_eq!(c.base_url, "http://localhost:3000");
+    }
+
+    #[test]
+    fn url_builds_versioned_path() {
+        let c = ApiClient::new("http://host:8080", "tok".to_string());
+        assert_eq!(c.url("/workflows"), "http://host:8080/api/v1/workflows");
+    }
+
+    // ---------------------------------------------------------------
+    // get()
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_unwraps_data_envelope() {
+        let app = Router::new().route(
+            "/api/v1/items",
+            get(|| async { Json(json!({ "data": { "id": 42 } })) }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let result: Value = client.get("/items").await.unwrap();
+        assert_eq!(result, json!({ "id": 42 }));
+    }
+
+    #[tokio::test]
+    async fn get_sends_bearer_auth() {
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let captured_clone = captured.clone();
+
+        let app = Router::new().route(
+            "/api/v1/check",
+            get(move |headers: axum::http::HeaderMap| {
+                let captured = captured_clone.clone();
+                async move {
+                    let auth = headers
+                        .get(AUTHORIZATION)
+                        .map(|v| v.to_str().unwrap().to_string());
+                    *captured.lock().await = auth;
+                    Json(json!({ "data": null }))
+                }
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = ApiClient::new(&format!("http://{addr}"), "irfl_secret".to_string());
+
+        let _: Value = client.get("/check").await.unwrap();
+        let header = captured.lock().await.clone().unwrap();
+        assert_eq!(header, "Bearer irfl_secret");
+    }
+
+    #[tokio::test]
+    async fn get_returns_api_error_on_404() {
+        let app = Router::new().route(
+            "/api/v1/missing",
+            get(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": { "code": "NOT_FOUND", "message": "introuvable" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client.get::<Value>("/missing").await.unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 404);
+                assert_eq!(message, "introuvable");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_returns_api_error_with_raw_body_on_non_json() {
+        let app = Router::new().route(
+            "/api/v1/bad",
+            get(|| async { (StatusCode::BAD_GATEWAY, "upstream down").into_response() }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client.get::<Value>("/bad").await.unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 502);
+                assert_eq!(message, "upstream down");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_returns_deserialize_error_on_missing_data_field() {
+        let app = Router::new().route(
+            "/api/v1/no-envelope",
+            get(|| async { Json(json!({ "result": 1 })) }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client.get::<Value>("/no-envelope").await.unwrap_err();
+        assert!(matches!(err, McpError::Deserialize(_)));
+    }
+
+    // ---------------------------------------------------------------
+    // post()
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn post_sends_json_body_and_unwraps_data() {
+        let received: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let received_clone = received.clone();
+
+        let app = Router::new().route(
+            "/api/v1/runs",
+            post(move |Json(body): Json<Value>| {
+                let received = received_clone.clone();
+                async move {
+                    *received.lock().await = Some(body);
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({ "data": { "id": "run-1" } })),
+                    )
+                }
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let payload = json!({ "workflow": "deploy" });
+        let result: Value = client.post("/runs", &payload).await.unwrap();
+
+        assert_eq!(result, json!({ "id": "run-1" }));
+        let body = received.lock().await.clone().unwrap();
+        assert_eq!(body, json!({ "workflow": "deploy" }));
+    }
+
+    #[tokio::test]
+    async fn post_returns_api_error_on_422() {
+        let app = Router::new().route(
+            "/api/v1/runs",
+            post(|| async {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": { "code": "VALIDATION", "message": "champ manquant" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client.post::<Value>("/runs", &json!({})).await.unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 422);
+                assert_eq!(message, "champ manquant");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // post_action()
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn post_action_sends_empty_body_and_unwraps_data() {
+        let app = Router::new().route(
+            "/api/v1/runs/1/cancel",
+            post(|| async { Json(json!({ "data": { "status": "cancelled" } })) }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let result = client.post_action("/runs/1/cancel").await.unwrap();
+        assert_eq!(result, json!({ "status": "cancelled" }));
+    }
+
+    #[tokio::test]
+    async fn post_action_returns_api_error_on_409() {
+        let app = Router::new().route(
+            "/api/v1/runs/1/cancel",
+            post(|| async {
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": { "code": "CONFLICT", "message": "deja termine" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client.post_action("/runs/1/cancel").await.unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 409);
+                assert_eq!(message, "deja termine");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // get_raw_with_query()
+    // ---------------------------------------------------------------
+
+    #[derive(Deserialize)]
+    struct ListParams {
+        page: Option<String>,
+        per_page: Option<String>,
+        status: Option<String>,
+    }
+
+    #[tokio::test]
+    async fn get_raw_with_query_sends_params_and_returns_full_envelope() {
+        let app = Router::new().route(
+            "/api/v1/runs",
+            get(|Query(params): Query<ListParams>| async move {
+                Json(json!({
+                    "data": [{ "id": "r1" }],
+                    "meta": {
+                        "page": params.page.unwrap_or_default(),
+                        "per_page": params.per_page.unwrap_or_default(),
+                        "status": params.status
+                    }
+                }))
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let result = client
+            .get_raw_with_query("/runs", &[("page", "2"), ("per_page", "10"), ("status", "running")])
+            .await
+            .unwrap();
+
+        assert_eq!(result["data"][0]["id"], "r1");
+        assert_eq!(result["meta"]["page"], "2");
+        assert_eq!(result["meta"]["per_page"], "10");
+        assert_eq!(result["meta"]["status"], "running");
+    }
+
+    #[tokio::test]
+    async fn get_raw_with_query_returns_api_error_on_500() {
+        let app = Router::new().route(
+            "/api/v1/runs",
+            get(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": { "code": "INTERNAL", "message": "erreur interne" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client
+            .get_raw_with_query("/runs", &[])
+            .await
+            .unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 500);
+                assert_eq!(message, "erreur interne");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_raw_with_empty_query_works() {
+        let app = Router::new().route(
+            "/api/v1/stats",
+            get(|| async { Json(json!({ "data": { "total": 5 } })) }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let result = client.get_raw_with_query("/stats", &[]).await.unwrap();
+        assert_eq!(result["data"]["total"], 5);
+    }
+}

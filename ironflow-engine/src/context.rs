@@ -1281,3 +1281,483 @@ fn extract_partial_usage_from_error(err: &EngineError) -> Option<StepPartialUsag
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_core::providers::record_replay::RecordReplayProvider;
+    use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::models::RunFilter;
+    use ironflow_store::store::RunStore;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    /// Helper to create a test provider with fixtures
+    fn create_test_provider() -> Arc<dyn ironflow_core::provider::AgentProvider> {
+        let inner = ClaudeCodeProvider::new();
+        Arc::new(RecordReplayProvider::replay(
+            inner,
+            "/tmp/ironflow-fixtures",
+        ))
+    }
+
+    /// Helper to create a test context
+    fn create_test_context() -> WorkflowContext {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+        let run_id = Uuid::now_v7();
+        WorkflowContext::new(run_id, store, provider)
+    }
+
+    #[test]
+    fn context_new_initializes_correctly() {
+        let ctx = create_test_context();
+        assert_eq!(ctx.position, 0);
+        assert_eq!(ctx.total_cost_usd, Decimal::ZERO);
+        assert_eq!(ctx.total_duration_ms, 0);
+        assert!(ctx.last_step_ids.is_empty());
+        assert!(ctx.replay_steps.is_empty());
+        assert!(ctx.log_sender.is_none());
+    }
+
+    #[test]
+    fn context_run_id_returns_correct_id() {
+        let run_id = Uuid::now_v7();
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+        let ctx = WorkflowContext::new(run_id, store, provider);
+        assert_eq!(ctx.run_id(), run_id);
+    }
+
+    #[test]
+    fn context_total_cost_usd_initially_zero() {
+        let ctx = create_test_context();
+        assert_eq!(ctx.total_cost_usd(), Decimal::ZERO);
+    }
+
+    #[test]
+    fn context_total_duration_ms_initially_zero() {
+        let ctx = create_test_context();
+        assert_eq!(ctx.total_duration_ms(), 0);
+    }
+
+    #[test]
+    fn context_with_handler_resolver_creates_context_with_resolver() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+        let run_id = Uuid::now_v7();
+
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+
+        let resolver: HandlerResolver = Arc::new(move |_name: &str| {
+            called_clone.store(true, Ordering::SeqCst);
+            None
+        });
+
+        let ctx = WorkflowContext::with_handler_resolver(
+            run_id,
+            store,
+            provider,
+            resolver,
+        );
+
+        assert_eq!(ctx.run_id(), run_id);
+        assert!(ctx.handler_resolver.is_some());
+    }
+
+    #[tokio::test]
+    async fn context_set_log_sender_attaches_sender() {
+        let mut ctx = create_test_context();
+        let (sender, _receiver) = crate::log_sender::channel();
+        ctx.set_log_sender(sender);
+        assert!(ctx.log_sender.is_some());
+    }
+
+    #[tokio::test]
+    async fn context_skip_creates_skipped_step() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+
+        // Create the run first using RunStore trait
+        store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+            })
+            .await
+            .expect("failed to create run");
+
+        // Get the created run to extract its ID
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        let created_run_id = runs.items[0].id;
+
+        let mut ctx = WorkflowContext::new(created_run_id, store.clone(), provider);
+        let initial_position = ctx.position;
+
+        ctx.skip("skip-step", "condition not met")
+            .await
+            .expect("skip failed");
+
+        assert_eq!(ctx.position, initial_position + 1);
+        assert!(!ctx.last_step_ids.is_empty());
+
+        // Verify the step was recorded with Skipped status
+        let steps = store
+            .list_steps(created_run_id)
+            .await
+            .expect("failed to list steps");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status.state, StepStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn context_parallel_empty_steps_returns_empty_vec() {
+        let mut ctx = create_test_context();
+        let results = ctx
+            .parallel(vec![], true)
+            .await
+            .expect("parallel should not fail on empty input");
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn context_approval_first_execution_returns_error() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+
+        // Create the run first
+        store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+            })
+            .await
+            .expect("failed to create run");
+
+        // Get the created run to extract its ID
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        let created_run_id = runs.items[0].id;
+
+        let mut ctx = WorkflowContext::new(created_run_id, store.clone(), provider);
+
+        let result = ctx
+            .approval(
+                "approve-step",
+                crate::config::ApprovalConfig::new("Continue?"),
+            )
+            .await;
+
+        // First execution should return ApprovalRequired error
+        assert!(matches!(
+            result,
+            Err(EngineError::ApprovalRequired { .. })
+        ));
+
+        // Verify position incremented
+        assert_eq!(ctx.position, 1);
+
+        // Verify step was created with AwaitingApproval status
+        let steps = store
+            .list_steps(created_run_id)
+            .await
+            .expect("failed to list steps");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status.state, StepStatus::AwaitingApproval);
+    }
+
+    #[tokio::test]
+    async fn context_approval_replay_returns_ok() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+
+        // Create the run first
+        store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+            })
+            .await
+            .expect("failed to create run");
+
+        // Get the created run to extract its ID
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        let created_run_id = runs.items[0].id;
+
+        // Create an approval step that's already in AwaitingApproval state
+        let step = store
+            .create_step(NewStep {
+                run_id: created_run_id,
+                name: "approval".to_string(),
+                kind: StepKind::Approval,
+                position: 0,
+                input: None,
+            })
+            .await
+            .expect("failed to create step");
+
+        // Transition through proper states: Pending -> Running -> AwaitingApproval
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    started_at: Some(Utc::now()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("failed to update step to Running");
+
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::AwaitingApproval),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("failed to update step to AwaitingApproval");
+
+        // Create context and load replay steps
+        let mut ctx = WorkflowContext::new(created_run_id, store.clone(), provider);
+        ctx.load_replay_steps()
+            .await
+            .expect("failed to load replay steps");
+
+        // Now approval should succeed (replay)
+        let result = ctx
+            .approval(
+                "approval",
+                crate::config::ApprovalConfig::new("Continue?"),
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        // Verify the step was marked Completed
+        let steps = store
+            .list_steps(created_run_id)
+            .await
+            .expect("failed to list steps");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status.state, StepStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn context_load_replay_steps_loads_completed_steps() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+
+        // Create the run first
+        store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+            })
+            .await
+            .expect("failed to create run");
+
+        // Get the created run to extract its ID
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        let created_run_id = runs.items[0].id;
+
+        // Create multiple steps with different statuses
+        let completed_step = store
+            .create_step(NewStep {
+                run_id: created_run_id,
+                name: "completed".to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .expect("failed to create step");
+
+        // Transition to Running then Completed
+        store
+            .update_step(
+                completed_step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    started_at: Some(Utc::now()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("failed to update step to Running");
+
+        store
+            .update_step(
+                completed_step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Completed),
+                    completed_at: Some(Utc::now()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("failed to update step to Completed");
+
+        let _pending_step = store
+            .create_step(NewStep {
+                run_id: created_run_id,
+                name: "pending".to_string(),
+                kind: StepKind::Shell,
+                position: 1,
+                input: None,
+            })
+            .await
+            .expect("failed to create step");
+
+        // Load replay steps
+        let mut ctx = WorkflowContext::new(created_run_id, store, provider);
+        ctx.load_replay_steps()
+            .await
+            .expect("failed to load replay steps");
+
+        // Only completed step should be in replay_steps
+        assert_eq!(ctx.replay_steps.len(), 1);
+        assert!(ctx.replay_steps.contains_key(&0));
+        assert!(!ctx.replay_steps.contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn context_payload_returns_run_payload() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+        let test_payload = json!({"key": "value", "number": 42});
+
+        // Create the run first
+        store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: test_payload.clone(),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+            })
+            .await
+            .expect("failed to create run");
+
+        // Get the created run to extract its ID
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        let created_run_id = runs.items[0].id;
+
+        let ctx = WorkflowContext::new(created_run_id, store, provider);
+        let payload = ctx.payload().await.expect("failed to get payload");
+
+        assert_eq!(payload, test_payload);
+    }
+
+    #[tokio::test]
+    async fn context_payload_returns_error_for_nonexistent_run() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+        let run_id = Uuid::now_v7();
+
+        let ctx = WorkflowContext::new(run_id, store, provider);
+        let result = ctx.payload().await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn context_store_returns_reference() {
+        let ctx = create_test_context();
+        let _store = ctx.store();
+        // store() returns a reference to the Arc<dyn Store>, which is always available
+    }
+
+    #[test]
+    fn context_debug_formatting() {
+        let ctx = create_test_context();
+        let debug_str = format!("{:?}", ctx);
+        assert!(debug_str.contains("WorkflowContext"));
+        assert!(debug_str.contains("run_id"));
+    }
+
+    #[tokio::test]
+    async fn context_last_step_ids_tracks_executed_steps() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+
+        // Create the run first
+        store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+            })
+            .await
+            .expect("failed to create run");
+
+        // Get the created run to extract its ID
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        let created_run_id = runs.items[0].id;
+
+        let mut ctx = WorkflowContext::new(created_run_id, store, provider);
+        assert!(ctx.last_step_ids.is_empty());
+
+        ctx.skip("step1", "reason")
+            .await
+            .expect("skip failed");
+
+        assert_eq!(ctx.last_step_ids.len(), 1);
+
+        ctx.skip("step2", "reason")
+            .await
+            .expect("skip failed");
+
+        // last_step_ids should now contain only step2's ID
+        assert_eq!(ctx.last_step_ids.len(), 1);
+    }
+}
