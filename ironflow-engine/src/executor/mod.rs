@@ -235,8 +235,8 @@ mod tests {
             }
         ]);
 
-        let messages: Vec<DebugMessage> = serde_json::from_value(json_msgs.clone())
-            .expect("deserialize debug messages");
+        let messages: Vec<DebugMessage> =
+            serde_json::from_value(json_msgs.clone()).expect("deserialize debug messages");
 
         let output = StepOutput {
             output: json!({"result": "ok"}),

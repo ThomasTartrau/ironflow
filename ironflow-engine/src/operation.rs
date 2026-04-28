@@ -188,12 +188,10 @@ mod tests {
 
         fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
             Box::pin(async {
-                Err(EngineError::Operation(
-                    OperationError::Http {
-                        status: Some(500),
-                        message: "test error".to_string(),
-                    }
-                ))
+                Err(EngineError::Operation(OperationError::Http {
+                    status: Some(500),
+                    message: "test error".to_string(),
+                }))
             })
         }
     }

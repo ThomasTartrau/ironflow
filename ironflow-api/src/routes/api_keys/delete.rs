@@ -124,7 +124,6 @@ mod tests {
     #[tokio::test]
     async fn delete_api_key_success() {
         let state = test_state();
-        let user_id = Uuid::now_v7();
         let user = state
             .store
             .create_user(NewUser {
@@ -150,8 +149,8 @@ mod tests {
             .unwrap();
 
         let auth_header = {
-            let token = AccessToken::for_user(user.id, "testuser", false, &state.jwt_config)
-                .unwrap();
+            let token =
+                AccessToken::for_user(user.id, "testuser", false, &state.jwt_config).unwrap();
             format!("Bearer {}", token.0)
         };
 
@@ -231,8 +230,7 @@ mod tests {
             .unwrap();
 
         let auth_header = {
-            let token = AccessToken::for_user(user1.id, "user1", false, &state.jwt_config)
-                .unwrap();
+            let token = AccessToken::for_user(user1.id, "user1", false, &state.jwt_config).unwrap();
             format!("Bearer {}", token.0)
         };
 

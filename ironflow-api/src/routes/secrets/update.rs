@@ -89,7 +89,7 @@ mod tests {
     use ironflow_store::crypto::MasterKey;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
-    use serde_json::{json, to_string, Value as JsonValue};
+    use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
@@ -152,7 +152,11 @@ mod tests {
     #[tokio::test]
     async fn update_secret_admin_only() {
         let state = test_state();
-        state.store.set_secret("api-key", "old-value").await.unwrap();
+        state
+            .store
+            .set_secret("api-key", "old-value")
+            .await
+            .unwrap();
 
         let auth_header = make_regular_token(&state);
 
@@ -176,7 +180,11 @@ mod tests {
     #[tokio::test]
     async fn update_secret_success() {
         let state = test_state();
-        state.store.set_secret("api-key", "old-value").await.unwrap();
+        state
+            .store
+            .set_secret("api-key", "old-value")
+            .await
+            .unwrap();
 
         let auth_header = make_admin_token(&state);
 

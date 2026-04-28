@@ -221,10 +221,7 @@ mod tests {
             "minimal"
         }
 
-        fn execute<'a>(
-            &'a self,
-            _ctx: &'a mut WorkflowContext,
-        ) -> HandlerFuture<'a> {
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -267,10 +264,7 @@ mod tests {
             }
         }
 
-        fn execute<'a>(
-            &'a self,
-            _ctx: &'a mut WorkflowContext,
-        ) -> HandlerFuture<'a> {
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
             Box::pin(async { Ok(()) })
         }
     }

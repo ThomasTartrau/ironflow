@@ -1291,8 +1291,8 @@ mod tests {
     use ironflow_store::models::RunFilter;
     use ironflow_store::store::RunStore;
     use serde_json::json;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use uuid::Uuid;
 
     /// Helper to create a test provider with fixtures
@@ -1358,12 +1358,7 @@ mod tests {
             None
         });
 
-        let ctx = WorkflowContext::with_handler_resolver(
-            run_id,
-            store,
-            provider,
-            resolver,
-        );
+        let ctx = WorkflowContext::with_handler_resolver(run_id, store, provider, resolver);
 
         assert_eq!(ctx.run_id(), run_id);
         assert!(ctx.handler_resolver.is_some());
@@ -1468,10 +1463,7 @@ mod tests {
             .await;
 
         // First execution should return ApprovalRequired error
-        assert!(matches!(
-            result,
-            Err(EngineError::ApprovalRequired { .. })
-        ));
+        assert!(matches!(result, Err(EngineError::ApprovalRequired { .. })));
 
         // Verify position incremented
         assert_eq!(ctx.position, 1);
@@ -1555,10 +1547,7 @@ mod tests {
 
         // Now approval should succeed (replay)
         let result = ctx
-            .approval(
-                "approval",
-                crate::config::ApprovalConfig::new("Continue?"),
-            )
+            .approval("approval", crate::config::ApprovalConfig::new("Continue?"))
             .await;
 
         assert!(result.is_ok());
@@ -1747,15 +1736,11 @@ mod tests {
         let mut ctx = WorkflowContext::new(created_run_id, store, provider);
         assert!(ctx.last_step_ids.is_empty());
 
-        ctx.skip("step1", "reason")
-            .await
-            .expect("skip failed");
+        ctx.skip("step1", "reason").await.expect("skip failed");
 
         assert_eq!(ctx.last_step_ids.len(), 1);
 
-        ctx.skip("step2", "reason")
-            .await
-            .expect("skip failed");
+        ctx.skip("step2", "reason").await.expect("skip failed");
 
         // last_step_ids should now contain only step2's ID
         assert_eq!(ctx.last_step_ids.len(), 1);

@@ -155,8 +155,8 @@ mod tests {
     use std::sync::Arc;
 
     use axum::extract::Query;
-    use axum::http::header::AUTHORIZATION;
     use axum::http::StatusCode;
+    use axum::http::header::AUTHORIZATION;
     use axum::response::IntoResponse;
     use axum::routing::{get, post};
     use axum::{Json, Router};
@@ -438,7 +438,10 @@ mod tests {
         let client = client_for(addr);
 
         let result = client
-            .get_raw_with_query("/runs", &[("page", "2"), ("per_page", "10"), ("status", "running")])
+            .get_raw_with_query(
+                "/runs",
+                &[("page", "2"), ("per_page", "10"), ("status", "running")],
+            )
             .await
             .unwrap();
 
@@ -463,10 +466,7 @@ mod tests {
         let addr = start_server(app).await;
         let client = client_for(addr);
 
-        let err = client
-            .get_raw_with_query("/runs", &[])
-            .await
-            .unwrap_err();
+        let err = client.get_raw_with_query("/runs", &[]).await.unwrap_err();
         match err {
             McpError::Api { status, message } => {
                 assert_eq!(status, 500);

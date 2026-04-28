@@ -135,7 +135,10 @@ mod tests {
         let jwt_config = test_jwt_config();
         let app = Router::new()
             .route("/protected", get(protected_handler))
-            .layer(middleware::from_fn_with_state(jwt_config.clone(), jwt_auth::<Arc<JwtConfig>>))
+            .layer(middleware::from_fn_with_state(
+                jwt_config.clone(),
+                jwt_auth::<Arc<JwtConfig>>,
+            ))
             .with_state(jwt_config);
 
         let req = Request::builder()
@@ -156,7 +159,10 @@ mod tests {
         let jwt_config = test_jwt_config();
         let app = Router::new()
             .route("/protected", get(protected_handler))
-            .layer(middleware::from_fn_with_state(jwt_config.clone(), jwt_auth::<Arc<JwtConfig>>))
+            .layer(middleware::from_fn_with_state(
+                jwt_config.clone(),
+                jwt_auth::<Arc<JwtConfig>>,
+            ))
             .with_state(jwt_config);
 
         let req = Request::builder()
@@ -181,7 +187,10 @@ mod tests {
 
         let app = Router::new()
             .route("/protected", get(protected_handler))
-            .layer(middleware::from_fn_with_state(jwt_config.clone(), jwt_auth::<Arc<JwtConfig>>))
+            .layer(middleware::from_fn_with_state(
+                jwt_config.clone(),
+                jwt_auth::<Arc<JwtConfig>>,
+            ))
             .with_state(jwt_config);
 
         let req = Request::builder()

@@ -64,11 +64,7 @@ mod tests {
     }
 
     fn extract_text(result: &CallToolResult) -> String {
-        result.content[0]
-            .as_text_content()
-            .unwrap()
-            .text
-            .clone()
+        result.content[0].as_text_content().unwrap().text.clone()
     }
 
     fn extract_json(result: &CallToolResult) -> Value {

@@ -133,6 +133,16 @@ mod tests {
 
         assert_eq!(t.from, State::Pending);
         assert_eq!(t.to, State::Running);
+
+        let t2 = Transition {
+            from: State::Running,
+            to: State::Completed,
+            event: Event::Finished,
+            at: now,
+        };
+
+        assert_eq!(t2.from, State::Running);
+        assert_eq!(t2.to, State::Completed);
     }
 
     #[test]

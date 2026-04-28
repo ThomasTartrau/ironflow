@@ -145,7 +145,11 @@ mod tests {
     #[tokio::test]
     async fn delete_secret_success() {
         let state = test_state();
-        state.store.set_secret("api-key", "secret-value").await.unwrap();
+        state
+            .store
+            .set_secret("api-key", "secret-value")
+            .await
+            .unwrap();
 
         let auth_header = make_admin_token(&state);
 

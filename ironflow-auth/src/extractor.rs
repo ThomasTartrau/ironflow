@@ -416,10 +416,10 @@ mod tests {
     use axum::routing::get;
     use axum::{Json, Router};
     use http_body_util::BodyExt;
+    use ironflow_store::entities::NewUser;
     use ironflow_store::entities::{ApiKeyScope, NewApiKey};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
-    use ironflow_store::entities::NewUser;
     use serde_json::Value;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -539,16 +539,10 @@ mod tests {
     #[tokio::test]
     async fn jwt_extractor_rejects_missing_token() {
         let app = Router::new()
-            .route(
-                "/me",
-                get(|_user: AuthenticatedUser| async { "ok" }),
-            )
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
             .with_state(test_state());
 
-        let req = Request::builder()
-            .uri("/me")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/me").body(Body::empty()).unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -560,10 +554,7 @@ mod tests {
     #[tokio::test]
     async fn jwt_extractor_rejects_invalid_token() {
         let app = Router::new()
-            .route(
-                "/me",
-                get(|_user: AuthenticatedUser| async { "ok" }),
-            )
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
             .with_state(test_state());
 
         let req = Request::builder()
@@ -650,10 +641,7 @@ mod tests {
     #[tokio::test]
     async fn api_key_extractor_rejects_missing_header() {
         let app = Router::new()
-            .route(
-                "/check",
-                get(|_key: ApiKeyAuth| async { "ok" }),
-            )
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
             .with_state(test_state());
 
         let req = Request::builder()
@@ -671,10 +659,7 @@ mod tests {
     #[tokio::test]
     async fn api_key_extractor_rejects_non_irfl_token() {
         let app = Router::new()
-            .route(
-                "/check",
-                get(|_key: ApiKeyAuth| async { "ok" }),
-            )
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
             .with_state(test_state());
 
         let req = Request::builder()
@@ -693,10 +678,7 @@ mod tests {
     #[tokio::test]
     async fn api_key_extractor_rejects_unknown_key() {
         let app = Router::new()
-            .route(
-                "/check",
-                get(|_key: ApiKeyAuth| async { "ok" }),
-            )
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
             .with_state(test_state());
 
         let req = Request::builder()
@@ -836,16 +818,10 @@ mod tests {
     #[tokio::test]
     async fn authenticated_rejects_missing_token() {
         let app = Router::new()
-            .route(
-                "/auth",
-                get(|_auth: Authenticated| async { "ok" }),
-            )
+            .route("/auth", get(|_auth: Authenticated| async { "ok" }))
             .with_state(test_state());
 
-        let req = Request::builder()
-            .uri("/auth")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/auth").body(Body::empty()).unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

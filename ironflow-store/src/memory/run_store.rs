@@ -1626,10 +1626,7 @@ mod tests {
             .create_step_dependencies(vec![dep.clone()])
             .await
             .unwrap();
-        store
-            .create_step_dependencies(vec![dep])
-            .await
-            .unwrap();
+        store.create_step_dependencies(vec![dep]).await.unwrap();
 
         let deps = store.list_step_dependencies(run.id).await.unwrap();
         assert_eq!(deps.len(), 1);
@@ -1888,22 +1885,18 @@ mod tests {
             .unwrap();
 
         store
-            .create_step_dependencies(vec![
-                NewStepDependency {
-                    step_id: step2.id,
-                    depends_on: step1.id,
-                },
-            ])
+            .create_step_dependencies(vec![NewStepDependency {
+                step_id: step2.id,
+                depends_on: step1.id,
+            }])
             .await
             .unwrap();
 
         store
-            .create_step_dependencies(vec![
-                NewStepDependency {
-                    step_id: step3.id,
-                    depends_on: step1.id,
-                },
-            ])
+            .create_step_dependencies(vec![NewStepDependency {
+                step_id: step3.id,
+                depends_on: step1.id,
+            }])
             .await
             .unwrap();
 
