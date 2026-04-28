@@ -306,4 +306,131 @@ mod tests {
         let access = AccessToken::for_user(user_id, "user", false, &config).unwrap();
         assert!(RefreshToken::decode(&access.0, &config).is_err());
     }
+
+    #[test]
+    fn decode_with_wrong_secret_fails() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let token = AccessToken::for_user(user_id, "user", false, &config).unwrap();
+
+        let other_config = JwtConfig {
+            secret: "different-secret".to_string(),
+            ..test_config()
+        };
+        assert!(AccessToken::decode(&token.0, &other_config).is_err());
+    }
+
+    #[test]
+    fn refresh_token_decode_with_wrong_secret_fails() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let token = RefreshToken::for_user(user_id, "user", false, &config).unwrap();
+
+        let other_config = JwtConfig {
+            secret: "different-secret".to_string(),
+            ..test_config()
+        };
+        assert!(RefreshToken::decode(&token.0, &other_config).is_err());
+    }
+
+    #[test]
+    fn access_token_claims_serde_roundtrip() {
+        let user_id = Uuid::now_v7();
+        let claims = AccessTokenClaims {
+            sub: user_id,
+            jti: "jti-123".to_string(),
+            iat: 1000,
+            exp: 2000,
+            typ: "access".to_string(),
+            user_id,
+            username: "alice".to_string(),
+            is_admin: true,
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        let decoded: AccessTokenClaims = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.sub, user_id);
+        assert_eq!(decoded.jti, "jti-123");
+        assert_eq!(decoded.typ, "access");
+        assert_eq!(decoded.username, "alice");
+        assert!(decoded.is_admin);
+    }
+
+    #[test]
+    fn refresh_token_claims_serde_roundtrip() {
+        let user_id = Uuid::now_v7();
+        let claims = RefreshTokenClaims {
+            sub: user_id,
+            jti: "jti-456".to_string(),
+            iat: 1000,
+            exp: 2000,
+            typ: "refresh".to_string(),
+            user_id,
+            username: "bob".to_string(),
+            is_admin: false,
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        let decoded: RefreshTokenClaims = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.sub, user_id);
+        assert_eq!(decoded.typ, "refresh");
+        assert_eq!(decoded.username, "bob");
+        assert!(!decoded.is_admin);
+    }
+
+    #[test]
+    fn refresh_token_expiry_from_config() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let before = Utc::now().timestamp();
+        let token = RefreshToken::for_user(user_id, "user", false, &config).unwrap();
+        let claims = RefreshToken::decode(&token.0, &config).unwrap();
+
+        assert!(claims.iat >= before);
+        assert_eq!(claims.exp - claims.iat, config.refresh_token_ttl_secs);
+    }
+
+    #[test]
+    fn refresh_token_admin_flag() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let token = RefreshToken::for_user(user_id, "admin", true, &config).unwrap();
+        let claims = RefreshToken::decode(&token.0, &config).unwrap();
+
+        assert!(claims.is_admin);
+    }
+
+    #[test]
+    fn access_token_unique_jti_per_token() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let t1 = AccessToken::for_user(user_id, "user", false, &config).unwrap();
+        let t2 = AccessToken::for_user(user_id, "user", false, &config).unwrap();
+
+        let c1 = AccessToken::decode(&t1.0, &config).unwrap();
+        let c2 = AccessToken::decode(&t2.0, &config).unwrap();
+        assert_ne!(c1.jti, c2.jti);
+    }
+
+    #[test]
+    fn jwt_config_clone() {
+        let config = test_config();
+        let cloned = config.clone();
+        assert_eq!(cloned.secret, config.secret);
+        assert_eq!(cloned.access_token_ttl_secs, config.access_token_ttl_secs);
+        assert_eq!(cloned.refresh_token_ttl_secs, config.refresh_token_ttl_secs);
+        assert_eq!(cloned.cookie_domain, config.cookie_domain);
+        assert_eq!(cloned.cookie_secure, config.cookie_secure);
+    }
+
+    #[test]
+    fn jwt_config_with_cookie_domain() {
+        let config = JwtConfig {
+            cookie_domain: Some(".example.com".to_string()),
+            cookie_secure: true,
+            ..test_config()
+        };
+        assert_eq!(config.cookie_domain.as_deref(), Some(".example.com"));
+        assert!(config.cookie_secure);
+    }
 }

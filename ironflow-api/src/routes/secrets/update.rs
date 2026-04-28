@@ -72,3 +72,186 @@ pub async fn update_secret(
 
     Ok(ok(SecretResponse::from(secret)))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::put;
+    use http_body_util::BodyExt;
+    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::context::WorkflowContext;
+    use ironflow_engine::engine::Engine;
+    use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    use ironflow_engine::notify::Event;
+    use ironflow_store::crypto::MasterKey;
+    use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::store::Store;
+    use serde_json::{Value as JsonValue, json};
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use super::*;
+
+    struct TestWorkflow;
+
+    impl WorkflowHandler for TestWorkflow {
+        fn name(&self) -> &str {
+            "test-workflow"
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    fn test_jwt_config() -> Arc<JwtConfig> {
+        Arc::new(JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        })
+    }
+
+    fn test_state() -> AppState {
+        let mut in_mem_store = InMemoryStore::new();
+        let master_key = MasterKey::from_bytes(&[42u8; 32]).unwrap();
+        in_mem_store.set_master_key(master_key);
+        let store: Arc<dyn Store> = Arc::new(in_mem_store);
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.register(TestWorkflow).unwrap();
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        AppState::new(
+            store,
+            Arc::new(engine),
+            test_jwt_config(),
+            "test-worker-token".to_string(),
+            event_sender,
+        )
+    }
+
+    fn make_admin_token(state: &AppState) -> String {
+        let user_id = Uuid::now_v7();
+        let token = AccessToken::for_user(user_id, "admin", true, &state.jwt_config).unwrap();
+        format!("Bearer {}", token.0)
+    }
+
+    fn make_regular_token(state: &AppState) -> String {
+        let user_id = Uuid::now_v7();
+        let token = AccessToken::for_user(user_id, "user", false, &state.jwt_config).unwrap();
+        format!("Bearer {}", token.0)
+    }
+
+    #[tokio::test]
+    async fn update_secret_admin_only() {
+        let state = test_state();
+        state
+            .store
+            .set_secret("api-key", "old-value")
+            .await
+            .unwrap();
+
+        let auth_header = make_regular_token(&state);
+
+        let app = Router::new()
+            .route("/{key}", put(update_secret))
+            .with_state(state);
+
+        let body = json!({ "value": "new-value" });
+        let req = Request::builder()
+            .uri("/api-key")
+            .method("PUT")
+            .header("authorization", auth_header)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn update_secret_success() {
+        let state = test_state();
+        state
+            .store
+            .set_secret("api-key", "old-value")
+            .await
+            .unwrap();
+
+        let auth_header = make_admin_token(&state);
+
+        let app = Router::new()
+            .route("/{key}", put(update_secret))
+            .with_state(state);
+
+        let body = json!({ "value": "new-value" });
+        let req = Request::builder()
+            .uri("/api-key")
+            .method("PUT")
+            .header("authorization", auth_header)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp_body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&resp_body).unwrap();
+        assert_eq!(json_val["data"]["key"], "api-key");
+    }
+
+    #[tokio::test]
+    async fn update_secret_not_found() {
+        let state = test_state();
+        let auth_header = make_admin_token(&state);
+
+        let app = Router::new()
+            .route("/{key}", put(update_secret))
+            .with_state(state);
+
+        let body = json!({ "value": "new-value" });
+        let req = Request::builder()
+            .uri("/nonexistent-secret")
+            .method("PUT")
+            .header("authorization", auth_header)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn update_secret_empty_value_validation() {
+        let state = test_state();
+        state.store.set_secret("api-key", "value").await.ok();
+
+        let auth_header = make_admin_token(&state);
+
+        let app = Router::new()
+            .route("/{key}", put(update_secret))
+            .with_state(state);
+
+        let body = json!({ "value": "" });
+        let req = Request::builder()
+            .uri("/api-key")
+            .method("PUT")
+            .header("authorization", auth_header)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+}

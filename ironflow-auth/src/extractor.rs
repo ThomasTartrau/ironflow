@@ -405,3 +405,520 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::extract::FromRef;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use http_body_util::BodyExt;
+    use ironflow_store::entities::NewUser;
+    use ironflow_store::entities::{ApiKeyScope, NewApiKey};
+    use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::store::Store;
+    use serde_json::Value;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use crate::jwt::{AccessToken, JwtConfig};
+    use crate::password;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestState {
+        jwt_config: Arc<JwtConfig>,
+        store: Arc<dyn Store>,
+    }
+
+    impl FromRef<TestState> for Arc<JwtConfig> {
+        fn from_ref(state: &TestState) -> Self {
+            state.jwt_config.clone()
+        }
+    }
+
+    impl FromRef<TestState> for Arc<dyn Store> {
+        fn from_ref(state: &TestState) -> Self {
+            state.store.clone()
+        }
+    }
+
+    fn test_jwt_config() -> Arc<JwtConfig> {
+        Arc::new(JwtConfig {
+            secret: "test-secret-key-for-extractor-tests".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        })
+    }
+
+    fn test_state() -> TestState {
+        TestState {
+            jwt_config: test_jwt_config(),
+            store: Arc::new(InMemoryStore::new()),
+        }
+    }
+
+    async fn response_json(resp: axum::http::Response<Body>) -> Value {
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    // ---------------------------------------------------------------
+    // AuthenticatedUser (JWT only)
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn jwt_extractor_from_bearer_header() {
+        let state = test_state();
+        let user_id = Uuid::now_v7();
+        let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
+
+        let app = Router::new()
+            .route(
+                "/me",
+                get(|user: AuthenticatedUser| async move {
+                    Json(json!({
+                        "user_id": user.user_id,
+                        "username": user.username,
+                        "is_admin": user.is_admin
+                    }))
+                }),
+            )
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/me")
+            .header("authorization", format!("Bearer {}", token.0))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["user_id"], user_id.to_string());
+        assert_eq!(json["username"], "alice");
+        assert_eq!(json["is_admin"], false);
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_from_cookie() {
+        let state = test_state();
+        let user_id = Uuid::now_v7();
+        let token = AccessToken::for_user(user_id, "bob", true, &state.jwt_config).unwrap();
+
+        let app = Router::new()
+            .route(
+                "/me",
+                get(|user: AuthenticatedUser| async move {
+                    Json(json!({ "username": user.username, "is_admin": user.is_admin }))
+                }),
+            )
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/me")
+            .header("cookie", format!("{}={}", AUTH_COOKIE_NAME, token.0))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["username"], "bob");
+        assert_eq!(json["is_admin"], true);
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_rejects_missing_token() {
+        let app = Router::new()
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
+            .with_state(test_state());
+
+        let req = Request::builder().uri("/me").body(Body::empty()).unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "MISSING_TOKEN");
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_rejects_invalid_token() {
+        let app = Router::new()
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
+            .with_state(test_state());
+
+        let req = Request::builder()
+            .uri("/me")
+            .header("authorization", "Bearer invalid.token.here")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "INVALID_TOKEN");
+    }
+
+    // ---------------------------------------------------------------
+    // ApiKeyAuth
+    // ---------------------------------------------------------------
+
+    async fn setup_api_key(store: &Arc<dyn Store>) -> (Uuid, String) {
+        let user = store
+            .create_user(NewUser {
+                email: "key-owner@test.com".to_string(),
+                username: "keyowner".to_string(),
+                password_hash: password::hash("pass123").unwrap(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+
+        let raw_key = "irfl_abcdef12rest-of-secret-key";
+        let key_hash = password::hash(raw_key).unwrap();
+        let prefix = &raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN];
+
+        store
+            .create_api_key(NewApiKey {
+                user_id: user.id,
+                name: "test-key".to_string(),
+                key_hash,
+                key_prefix: prefix.to_string(),
+                scopes: vec![ApiKeyScope::RunsRead, ApiKeyScope::WorkflowsRead],
+                expires_at: None,
+            })
+            .await
+            .unwrap();
+
+        (user.id, raw_key.to_string())
+    }
+
+    #[tokio::test]
+    async fn api_key_extractor_valid_key() {
+        let state = test_state();
+        let (user_id, raw_key) = setup_api_key(&state.store).await;
+
+        let app = Router::new()
+            .route(
+                "/check",
+                get(|key: ApiKeyAuth| async move {
+                    Json(json!({
+                        "user_id": key.user_id,
+                        "key_name": key.key_name,
+                        "scopes": key.scopes,
+                        "owner_is_admin": key.owner_is_admin
+                    }))
+                }),
+            )
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/check")
+            .header("authorization", format!("Bearer {raw_key}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["user_id"], user_id.to_string());
+        assert_eq!(json["key_name"], "test-key");
+        assert_eq!(json["owner_is_admin"], true);
+    }
+
+    #[tokio::test]
+    async fn api_key_extractor_rejects_missing_header() {
+        let app = Router::new()
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
+            .with_state(test_state());
+
+        let req = Request::builder()
+            .uri("/check")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "MISSING_TOKEN");
+    }
+
+    #[tokio::test]
+    async fn api_key_extractor_rejects_non_irfl_token() {
+        let app = Router::new()
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
+            .with_state(test_state());
+
+        let req = Request::builder()
+            .uri("/check")
+            .header("authorization", "Bearer not-an-api-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "INVALID_TOKEN");
+    }
+
+    #[tokio::test]
+    async fn api_key_extractor_rejects_unknown_key() {
+        let app = Router::new()
+            .route("/check", get(|_key: ApiKeyAuth| async { "ok" }))
+            .with_state(test_state());
+
+        let req = Request::builder()
+            .uri("/check")
+            .header("authorization", "Bearer irfl_unknown1rest-of-key")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "INVALID_TOKEN");
+    }
+
+    // ---------------------------------------------------------------
+    // ApiKeyAuth::has_scope()
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn has_scope_returns_true_for_granted_scope() {
+        let auth = ApiKeyAuth {
+            key_id: Uuid::now_v7(),
+            user_id: Uuid::now_v7(),
+            key_name: "k".to_string(),
+            scopes: vec![ApiKeyScope::RunsRead, ApiKeyScope::WorkflowsRead],
+            owner_is_admin: false,
+        };
+        assert!(auth.has_scope(&ApiKeyScope::RunsRead));
+        assert!(auth.has_scope(&ApiKeyScope::WorkflowsRead));
+    }
+
+    #[test]
+    fn has_scope_returns_false_for_missing_scope() {
+        let auth = ApiKeyAuth {
+            key_id: Uuid::now_v7(),
+            user_id: Uuid::now_v7(),
+            key_name: "k".to_string(),
+            scopes: vec![ApiKeyScope::RunsRead],
+            owner_is_admin: false,
+        };
+        assert!(!auth.has_scope(&ApiKeyScope::RunsWrite));
+        assert!(!auth.has_scope(&ApiKeyScope::Admin));
+    }
+
+    #[test]
+    fn has_scope_admin_grants_everything() {
+        let auth = ApiKeyAuth {
+            key_id: Uuid::now_v7(),
+            user_id: Uuid::now_v7(),
+            key_name: "k".to_string(),
+            scopes: vec![ApiKeyScope::Admin],
+            owner_is_admin: true,
+        };
+        assert!(auth.has_scope(&ApiKeyScope::RunsRead));
+        assert!(auth.has_scope(&ApiKeyScope::RunsWrite));
+        assert!(auth.has_scope(&ApiKeyScope::StatsRead));
+    }
+
+    // ---------------------------------------------------------------
+    // Authenticated (dual auth)
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn authenticated_via_jwt() {
+        let state = test_state();
+        let user_id = Uuid::now_v7();
+        let token = AccessToken::for_user(user_id, "alice", true, &state.jwt_config).unwrap();
+
+        let app = Router::new()
+            .route(
+                "/auth",
+                get(|auth: Authenticated| async move {
+                    Json(json!({
+                        "user_id": auth.user_id,
+                        "is_admin": auth.is_admin(),
+                        "method": match auth.method {
+                            AuthMethod::Jwt { .. } => "jwt",
+                            AuthMethod::ApiKey { .. } => "api_key",
+                        }
+                    }))
+                }),
+            )
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/auth")
+            .header("authorization", format!("Bearer {}", token.0))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["user_id"], user_id.to_string());
+        assert_eq!(json["is_admin"], true);
+        assert_eq!(json["method"], "jwt");
+    }
+
+    #[tokio::test]
+    async fn authenticated_via_api_key() {
+        let state = test_state();
+        let (user_id, raw_key) = setup_api_key(&state.store).await;
+
+        let app = Router::new()
+            .route(
+                "/auth",
+                get(|auth: Authenticated| async move {
+                    Json(json!({
+                        "user_id": auth.user_id,
+                        "is_admin": auth.is_admin(),
+                        "method": match auth.method {
+                            AuthMethod::Jwt { .. } => "jwt",
+                            AuthMethod::ApiKey { .. } => "api_key",
+                        }
+                    }))
+                }),
+            )
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/auth")
+            .header("authorization", format!("Bearer {raw_key}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["user_id"], user_id.to_string());
+        assert_eq!(json["is_admin"], true);
+        assert_eq!(json["method"], "api_key");
+    }
+
+    #[tokio::test]
+    async fn authenticated_rejects_missing_token() {
+        let app = Router::new()
+            .route("/auth", get(|_auth: Authenticated| async { "ok" }))
+            .with_state(test_state());
+
+        let req = Request::builder().uri("/auth").body(Body::empty()).unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "MISSING_TOKEN");
+    }
+
+    // ---------------------------------------------------------------
+    // Authenticated::is_admin()
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn is_admin_jwt_true() {
+        let auth = Authenticated {
+            user_id: Uuid::now_v7(),
+            method: AuthMethod::Jwt {
+                username: "admin".to_string(),
+                is_admin: true,
+            },
+        };
+        assert!(auth.is_admin());
+    }
+
+    #[test]
+    fn is_admin_jwt_false() {
+        let auth = Authenticated {
+            user_id: Uuid::now_v7(),
+            method: AuthMethod::Jwt {
+                username: "user".to_string(),
+                is_admin: false,
+            },
+        };
+        assert!(!auth.is_admin());
+    }
+
+    #[test]
+    fn is_admin_api_key_true() {
+        let auth = Authenticated {
+            user_id: Uuid::now_v7(),
+            method: AuthMethod::ApiKey {
+                key_id: Uuid::now_v7(),
+                key_name: "k".to_string(),
+                scopes: vec![],
+                owner_is_admin: true,
+            },
+        };
+        assert!(auth.is_admin());
+    }
+
+    #[test]
+    fn is_admin_api_key_false() {
+        let auth = Authenticated {
+            user_id: Uuid::now_v7(),
+            method: AuthMethod::ApiKey {
+                key_id: Uuid::now_v7(),
+                key_name: "k".to_string(),
+                scopes: vec![],
+                owner_is_admin: false,
+            },
+        };
+        assert!(!auth.is_admin());
+    }
+
+    // ---------------------------------------------------------------
+    // AuthRejection / ApiKeyRejection IntoResponse
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn auth_rejection_into_response() {
+        let rejection = AuthRejection {
+            status: StatusCode::UNAUTHORIZED,
+            code: "TEST_CODE",
+            message: "test message",
+        };
+        let resp = rejection.into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "TEST_CODE");
+        assert_eq!(json["error"]["message"], "test message");
+    }
+
+    #[tokio::test]
+    async fn api_key_rejection_into_response() {
+        let rejection = ApiKeyRejection {
+            status: StatusCode::FORBIDDEN,
+            code: "KEY_DISABLED",
+            message: "API key is disabled",
+        };
+        let resp = rejection.into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "KEY_DISABLED");
+        assert_eq!(json["error"]["message"], "API key is disabled");
+    }
+}

@@ -1546,6 +1546,365 @@ mod tests {
         assert!(matches!(r5.trigger, TriggerKind::Retry { .. }));
     }
 
+    // ---- create_step_dependencies ----
+
+    #[tokio::test]
+    async fn create_step_dependencies_stores_dependencies() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        let step1 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step2 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step2".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 1,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let result = store
+            .create_step_dependencies(vec![NewStepDependency {
+                step_id: step2.id,
+                depends_on: step1.id,
+            }])
+            .await;
+
+        assert!(result.is_ok());
+
+        let deps = store.list_step_dependencies(run.id).await.unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].step_id, step2.id);
+        assert_eq!(deps[0].depends_on, step1.id);
+    }
+
+    #[tokio::test]
+    async fn create_step_dependencies_duplicate_dependencies_are_idempotent() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        let step1 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step2 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step2".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 1,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let dep = NewStepDependency {
+            step_id: step2.id,
+            depends_on: step1.id,
+        };
+
+        store
+            .create_step_dependencies(vec![dep.clone()])
+            .await
+            .unwrap();
+        store.create_step_dependencies(vec![dep]).await.unwrap();
+
+        let deps = store.list_step_dependencies(run.id).await.unwrap();
+        assert_eq!(deps.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_step_dependencies_missing_step_id_returns_error() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        let step1 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let result = store
+            .create_step_dependencies(vec![NewStepDependency {
+                step_id: Uuid::nil(),
+                depends_on: step1.id,
+            }])
+            .await;
+
+        assert!(matches!(result.unwrap_err(), StoreError::StepNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn create_step_dependencies_missing_depends_on_returns_error() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        let step1 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let result = store
+            .create_step_dependencies(vec![NewStepDependency {
+                step_id: step1.id,
+                depends_on: Uuid::nil(),
+            }])
+            .await;
+
+        assert!(matches!(result.unwrap_err(), StoreError::StepNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn create_step_dependencies_multiple_dependencies() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        let step1 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step2 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step2".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 1,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step3 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step3".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 2,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let result = store
+            .create_step_dependencies(vec![
+                NewStepDependency {
+                    step_id: step2.id,
+                    depends_on: step1.id,
+                },
+                NewStepDependency {
+                    step_id: step3.id,
+                    depends_on: step2.id,
+                },
+            ])
+            .await;
+
+        assert!(result.is_ok());
+
+        let deps = store.list_step_dependencies(run.id).await.unwrap();
+        assert_eq!(deps.len(), 2);
+    }
+
+    // ---- list_step_dependencies ----
+
+    #[tokio::test]
+    async fn list_step_dependencies_empty_for_run_with_no_dependencies() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let deps = store.list_step_dependencies(run.id).await.unwrap();
+        assert!(deps.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_step_dependencies_returns_only_deps_for_given_run() {
+        let store = InMemoryStore::new();
+        let run1 = store.create_run(new_run_req("test1")).await.unwrap();
+        let run2 = store.create_run(new_run_req("test2")).await.unwrap();
+
+        let step1_run1 = store
+            .create_step(NewStep {
+                run_id: run1.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step2_run1 = store
+            .create_step(NewStep {
+                run_id: run1.id,
+                name: "step2".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 1,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step1_run2 = store
+            .create_step(NewStep {
+                run_id: run2.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step2_run2 = store
+            .create_step(NewStep {
+                run_id: run2.id,
+                name: "step2".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 1,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        store
+            .create_step_dependencies(vec![
+                NewStepDependency {
+                    step_id: step2_run1.id,
+                    depends_on: step1_run1.id,
+                },
+                NewStepDependency {
+                    step_id: step2_run2.id,
+                    depends_on: step1_run2.id,
+                },
+            ])
+            .await
+            .unwrap();
+
+        let deps_run1 = store.list_step_dependencies(run1.id).await.unwrap();
+        let deps_run2 = store.list_step_dependencies(run2.id).await.unwrap();
+
+        assert_eq!(deps_run1.len(), 1);
+        assert_eq!(deps_run1[0].step_id, step2_run1.id);
+        assert_eq!(deps_run1[0].depends_on, step1_run1.id);
+
+        assert_eq!(deps_run2.len(), 1);
+        assert_eq!(deps_run2[0].step_id, step2_run2.id);
+        assert_eq!(deps_run2[0].depends_on, step1_run2.id);
+    }
+
+    #[tokio::test]
+    async fn list_step_dependencies_returns_empty_for_nonexistent_run() {
+        let store = InMemoryStore::new();
+        let deps = store.list_step_dependencies(Uuid::nil()).await.unwrap();
+        assert!(deps.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_step_dependencies_sorted_by_created_at() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        let step1 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step1".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 0,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step2 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step2".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 1,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        let step3 = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "step3".to_string(),
+                kind: crate::entities::StepKind::Shell,
+                position: 2,
+                input: None,
+            })
+            .await
+            .unwrap();
+
+        store
+            .create_step_dependencies(vec![NewStepDependency {
+                step_id: step2.id,
+                depends_on: step1.id,
+            }])
+            .await
+            .unwrap();
+
+        store
+            .create_step_dependencies(vec![NewStepDependency {
+                step_id: step3.id,
+                depends_on: step1.id,
+            }])
+            .await
+            .unwrap();
+
+        let deps = store.list_step_dependencies(run.id).await.unwrap();
+        assert_eq!(deps.len(), 2);
+        assert!(deps[0].created_at <= deps[1].created_at);
+    }
+
     // ---- update_run_returning ----
 
     #[tokio::test]

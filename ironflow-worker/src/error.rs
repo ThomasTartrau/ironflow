@@ -72,4 +72,109 @@ mod tests {
         let debug_str = format!("{:?}", err);
         assert!(debug_str.contains("Internal"));
     }
+
+    #[test]
+    fn operation_error_display() {
+        use ironflow_core::error::OperationError;
+        use std::time::Duration;
+
+        let op_err = OperationError::Timeout {
+            step: "shell".to_string(),
+            limit: Duration::from_secs(30),
+        };
+        let err = WorkerError::Operation(op_err);
+        let msg = err.to_string();
+        assert!(msg.contains("operation error"));
+    }
+
+    #[test]
+    fn operation_error_from_impl() {
+        use ironflow_core::error::OperationError;
+        use std::time::Duration;
+
+        let op_err = OperationError::Timeout {
+            step: "agent".to_string(),
+            limit: Duration::from_secs(60),
+        };
+        let err: WorkerError = op_err.into();
+        let msg = err.to_string();
+        assert!(msg.contains("operation error"));
+    }
+
+    #[test]
+    fn engine_error_display() {
+        use ironflow_engine::error::EngineError;
+
+        let engine_err = EngineError::InvalidWorkflow("unknown-handler".to_string());
+        let err = WorkerError::Engine(engine_err);
+        let msg = err.to_string();
+        assert!(msg.contains("engine error"));
+    }
+
+    #[test]
+    fn engine_error_from_impl() {
+        use ironflow_engine::error::EngineError;
+
+        let engine_err = EngineError::StepConfig("bad config".to_string());
+        let err: WorkerError = engine_err.into();
+        let msg = err.to_string();
+        assert!(msg.contains("engine error"));
+    }
+
+    #[test]
+    fn store_error_display() {
+        use ironflow_store::error::StoreError;
+        use uuid::Uuid;
+
+        let store_err = StoreError::RunNotFound(Uuid::nil());
+        let err = WorkerError::Store(store_err);
+        let msg = err.to_string();
+        assert!(msg.contains("store error"));
+    }
+
+    #[test]
+    fn store_error_from_impl() {
+        use ironflow_store::error::StoreError;
+        use uuid::Uuid;
+
+        let store_err = StoreError::StepNotFound(Uuid::nil());
+        let err: WorkerError = store_err.into();
+        let msg = err.to_string();
+        assert!(msg.contains("store error"));
+    }
+
+    #[test]
+    fn operation_error_debug() {
+        use ironflow_core::error::OperationError;
+        use std::time::Duration;
+
+        let op_err = OperationError::Timeout {
+            step: "test".to_string(),
+            limit: Duration::from_secs(30),
+        };
+        let err = WorkerError::Operation(op_err);
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("Operation"));
+    }
+
+    #[test]
+    fn engine_error_debug() {
+        use ironflow_engine::error::EngineError;
+
+        let engine_err = EngineError::InvalidWorkflow("test".to_string());
+        let err = WorkerError::Engine(engine_err);
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("Engine"));
+    }
+
+    #[test]
+    fn store_error_debug() {
+        use ironflow_store::error::StoreError;
+        use uuid::Uuid;
+
+        let store_err = StoreError::RunNotFound(Uuid::nil());
+        let err = WorkerError::Store(store_err);
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("Store"));
+    }
 }

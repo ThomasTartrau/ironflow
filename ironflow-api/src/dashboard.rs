@@ -90,6 +90,7 @@ impl Service<Request<Body>> for EmbeddedDashboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
 
     #[test]
     fn mime_for_html() {
@@ -139,5 +140,33 @@ mod tests {
     #[test]
     fn mime_for_no_extension() {
         assert_eq!(mime_for("README"), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn embedded_dashboard_serves_fallback_for_spa_routes() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::Service;
+
+        let mut dashboard = EmbeddedDashboard;
+        let req = Request::builder()
+            .uri("/app/dashboard/some-page")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = dashboard.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let mime = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(mime.contains("text/html"));
+    }
+
+    #[test]
+    fn embedded_dashboard_is_clone() {
+        let dashboard1 = EmbeddedDashboard;
+        let _dashboard2 = dashboard1.clone();
     }
 }
