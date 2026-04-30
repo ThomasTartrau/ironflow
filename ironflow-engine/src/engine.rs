@@ -1818,9 +1818,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(updated_without.status.state, StepStatus::Failed);
-        assert_eq!(
-            updated_without.error.as_deref(),
-            Some("parent run failed"),
-        );
+        assert_eq!(updated_without.error.as_deref(), Some("parent run failed"),);
     }
 }

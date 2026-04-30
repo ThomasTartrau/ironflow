@@ -499,9 +499,7 @@ impl AgentProvider for K8sEphemeralProvider {
                 .ok()
                 .and_then(|p| p.status)
                 .and_then(|s| s.phase);
-            let already_terminal = phase_after_ready
-                .as_deref()
-                .is_some_and(is_terminal_phase);
+            let already_terminal = phase_after_ready.as_deref().is_some_and(is_terminal_phase);
 
             let mut accumulated = String::new();
             let mut timed_out = false;

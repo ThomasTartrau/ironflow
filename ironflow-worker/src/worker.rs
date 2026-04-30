@@ -520,10 +520,8 @@ impl Worker {
                                     timeout_secs = run_timeout.as_secs(),
                                     "run timed out"
                                 );
-                                let timeout_msg = format!(
-                                    "run timed out after {}s",
-                                    run_timeout.as_secs()
-                                );
+                                let timeout_msg =
+                                    format!("run timed out after {}s", run_timeout.as_secs());
                                 if let Err(e) = engine
                                     .store()
                                     .update_run(
