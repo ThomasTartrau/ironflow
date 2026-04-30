@@ -16,7 +16,7 @@ use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
-use ironflow_store::entities::RunStatus;
+use ironflow_store::entities::{RunStatus, RunUpdate};
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge};
@@ -493,7 +493,14 @@ impl Worker {
                                 error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
                                 if let Err(store_err) = engine
                                     .store()
-                                    .update_run_status(run_id, RunStatus::Failed)
+                                    .update_run(
+                                        run_id,
+                                        RunUpdate {
+                                            status: Some(RunStatus::Failed),
+                                            error: Some(e.to_string()),
+                                            ..RunUpdate::default()
+                                        },
+                                    )
                                     .await
                                 {
                                     error!(run_id = %run_id, error = %store_err, "failed to mark run as failed");
@@ -513,9 +520,20 @@ impl Worker {
                                     timeout_secs = run_timeout.as_secs(),
                                     "run timed out"
                                 );
+                                let timeout_msg = format!(
+                                    "run timed out after {}s",
+                                    run_timeout.as_secs()
+                                );
                                 if let Err(e) = engine
                                     .store()
-                                    .update_run_status(run_id, RunStatus::Failed)
+                                    .update_run(
+                                        run_id,
+                                        RunUpdate {
+                                            status: Some(RunStatus::Failed),
+                                            error: Some(timeout_msg),
+                                            ..RunUpdate::default()
+                                        },
+                                    )
                                     .await
                                 {
                                     error!(run_id = %run_id, error = %e, "failed to mark timed-out run as failed");

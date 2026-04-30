@@ -50,12 +50,25 @@ use super::common::{
     build_credentials_prefix, build_pod_spec, create_client, generate_pod_name,
 };
 
+fn is_terminal_phase(phase: &str) -> bool {
+    phase == "Succeeded" || phase == "Failed"
+}
+
 /// Returns `true` when the pod has terminated (Succeeded or Failed).
 fn is_pod_completed() -> impl kube::runtime::wait::Condition<Pod> {
     |obj: Option<&Pod>| {
         obj.and_then(|pod| pod.status.as_ref())
             .and_then(|status| status.phase.as_deref())
-            .is_some_and(|phase| phase == "Succeeded" || phase == "Failed")
+            .is_some_and(is_terminal_phase)
+    }
+}
+
+/// Returns `true` when the pod is Running or already terminal (Succeeded/Failed).
+fn is_pod_running_or_terminal() -> impl kube::runtime::wait::Condition<Pod> {
+    |obj: Option<&Pod>| {
+        obj.and_then(|pod| pod.status.as_ref())
+            .and_then(|status| status.phase.as_deref())
+            .is_some_and(|phase| phase == "Running" || is_terminal_phase(phase))
     }
 }
 
@@ -458,13 +471,13 @@ impl AgentProvider for K8sEphemeralProvider {
                 start,
             } = &created;
 
-            let running_result = time::timeout(
+            let ready_result = time::timeout(
                 self.timeout,
-                await_condition(pods.clone(), pod_name, conditions::is_pod_running()),
+                await_condition(pods.clone(), pod_name, is_pod_running_or_terminal()),
             )
             .await;
 
-            if let Err(_elapsed) = running_result {
+            if let Err(_elapsed) = ready_result {
                 let _ = pods.delete(pod_name, &DeleteParams::default()).await;
                 warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out waiting for Running");
                 return Err(AgentError::Timeout {
@@ -472,7 +485,7 @@ impl AgentProvider for K8sEphemeralProvider {
                 });
             }
 
-            if let Err(e) = running_result.expect("timeout already handled") {
+            if let Err(e) = ready_result.expect("timeout already handled") {
                 let _ = pods.delete(pod_name, &DeleteParams::default()).await;
                 return Err(AgentError::ProcessFailed {
                     exit_code: -1,
@@ -480,50 +493,21 @@ impl AgentProvider for K8sEphemeralProvider {
                 });
             }
 
-            let log_params = LogParams {
-                follow: true,
-                ..Default::default()
-            };
+            let phase_after_ready = pods
+                .get(pod_name)
+                .await
+                .ok()
+                .and_then(|p| p.status)
+                .and_then(|s| s.phase);
+            let already_terminal = phase_after_ready
+                .as_deref()
+                .is_some_and(is_terminal_phase);
 
-            const MAX_ACCUMULATED_BYTES: usize = 50 * 1024 * 1024;
             let mut accumulated = String::new();
-            let mut truncated = false;
+            let mut timed_out = false;
 
-            let stream_result = time::timeout(
-                self.timeout,
-                async {
-                    match pods.log_stream(pod_name, &log_params).await {
-                        Ok(stream) => {
-                            let mut lines = stream.lines();
-                            while let Ok(Some(line)) = lines.try_next().await {
-                                log_sink.log("stdout", &line);
-                                if !truncated {
-                                    if accumulated.len() + line.len() + 1 > MAX_ACCUMULATED_BYTES {
-                                        truncated = true;
-                                        warn!(pod = %pod_name, "log accumulation cap reached, further output will only be streamed");
-                                    } else {
-                                        accumulated.push_str(&line);
-                                        accumulated.push('\n');
-                                    }
-                                }
-                            }
-                            Ok(())
-                        }
-                        Err(e) => Err(e),
-                    }
-                },
-            )
-            .await;
-
-            let timed_out = stream_result.is_err();
-            if let Ok(Err(e)) = stream_result {
-                warn!(pod = %pod_name, error = %e, "failed to open log stream, falling back to batch read");
-                let _ = time::timeout(
-                    self.timeout,
-                    await_condition(pods.clone(), pod_name, is_pod_completed()),
-                )
-                .await;
-
+            if already_terminal {
+                debug!(pod = %pod_name, phase = ?phase_after_ready, "pod already terminal, skipping log stream");
                 accumulated = pods
                     .logs(pod_name, &LogParams::default())
                     .await
@@ -531,14 +515,72 @@ impl AgentProvider for K8sEphemeralProvider {
                 for line in accumulated.lines() {
                     log_sink.log("stdout", line);
                 }
+            } else {
+                let log_params = LogParams {
+                    follow: true,
+                    ..Default::default()
+                };
+
+                const MAX_ACCUMULATED_BYTES: usize = 50 * 1024 * 1024;
+                let mut truncated = false;
+
+                let stream_result = time::timeout(
+                    self.timeout,
+                    async {
+                        match pods.log_stream(pod_name, &log_params).await {
+                            Ok(stream) => {
+                                let mut lines = stream.lines();
+                                while let Ok(Some(line)) = lines.try_next().await {
+                                    log_sink.log("stdout", &line);
+                                    if !truncated {
+                                        if accumulated.len() + line.len() + 1
+                                            > MAX_ACCUMULATED_BYTES
+                                        {
+                                            truncated = true;
+                                            warn!(pod = %pod_name, "log accumulation cap reached, further output will only be streamed");
+                                        } else {
+                                            accumulated.push_str(&line);
+                                            accumulated.push('\n');
+                                        }
+                                    }
+                                }
+                                Ok(())
+                            }
+                            Err(e) => Err(e),
+                        }
+                    },
+                )
+                .await;
+
+                timed_out = stream_result.is_err();
+                if let Ok(Err(e)) = stream_result {
+                    warn!(pod = %pod_name, error = %e, "failed to open log stream, falling back to batch read");
+                    let _ = time::timeout(
+                        self.timeout,
+                        await_condition(pods.clone(), pod_name, is_pod_completed()),
+                    )
+                    .await;
+
+                    accumulated = pods
+                        .logs(pod_name, &LogParams::default())
+                        .await
+                        .unwrap_or_default();
+                    for line in accumulated.lines() {
+                        log_sink.log("stdout", line);
+                    }
+                }
             }
 
-            let pod_phase = match pods.get(pod_name).await {
-                Ok(pod) => pod
-                    .status
-                    .and_then(|s| s.phase)
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                Err(_) => "Unknown".to_string(),
+            let pod_phase = if already_terminal {
+                phase_after_ready.unwrap_or_else(|| "Unknown".to_string())
+            } else {
+                match pods.get(pod_name).await {
+                    Ok(pod) => pod
+                        .status
+                        .and_then(|s| s.phase)
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    Err(_) => "Unknown".to_string(),
+                }
             };
 
             let _ = pods.delete(pod_name, &DeleteParams::default()).await;
