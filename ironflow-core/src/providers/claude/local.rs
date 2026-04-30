@@ -27,18 +27,90 @@
 //! # }
 //! ```
 
+use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use tokio::fs;
 use tokio::process::Command;
 use tokio::time;
 use tracing::{debug, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
+use crate::provider::{AgentConfig, AgentInput, AgentProvider, InvokeFuture};
 use crate::utils::truncate_output;
 
 use super::common::{self, DEFAULT_TIMEOUT};
+
+/// Download every declared input to its `mount_path` on the local filesystem.
+///
+/// Creates intermediate directories as needed. Returns an error if any download
+/// fails or the path cannot be written. Idempotent: existing files are
+/// overwritten.
+async fn materialize_inputs_local(inputs: &[AgentInput]) -> Result<(), AgentError> {
+    if inputs.is_empty() {
+        return Ok(());
+    }
+
+    let client = reqwest::Client::new();
+    for input in inputs {
+        if !input.mount_path.starts_with('/') {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!(
+                    "agent input mount_path must be absolute, got '{}'",
+                    input.mount_path
+                ),
+            });
+        }
+        if let Some(parent) = Path::new(&input.mount_path).parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!(
+                        "failed to create input parent dir '{}': {e}",
+                        parent.display()
+                    ),
+                })?;
+        }
+        let resp = client
+            .get(&input.url)
+            .send()
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to fetch input '{}': {e}", input.url),
+            })?;
+        if !resp.status().is_success() {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!(
+                    "input fetch '{}' returned HTTP {}",
+                    input.url,
+                    resp.status()
+                ),
+            });
+        }
+        let bytes = resp.bytes().await.map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("failed to read input body '{}': {e}", input.url),
+        })?;
+        fs::write(&input.mount_path, &bytes)
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to write input '{}': {e}", input.mount_path),
+            })?;
+        debug!(
+            url = %input.url,
+            path = %input.mount_path,
+            bytes = bytes.len(),
+            "materialized agent input"
+        );
+    }
+    Ok(())
+}
 
 /// [`AgentProvider`] that shells out to the
 /// `claude` CLI on the local machine.
@@ -88,6 +160,7 @@ impl AgentProvider for ClaudeCodeProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             common::validate_prompt_size(config)?;
+            materialize_inputs_local(&config.inputs).await?;
             let args = common::build_args(config)?;
 
             debug!(

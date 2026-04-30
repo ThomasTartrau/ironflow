@@ -1472,6 +1472,7 @@ mod tests {
             resume_session_id: None,
             verbose: false,
             pod_labels: std::collections::BTreeMap::new(),
+            inputs: Vec::new(),
             _marker: PhantomData,
         };
 

@@ -46,8 +46,8 @@ use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
 use super::common::{
-    ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig, build_credentials_prefix,
-    build_pod_spec, create_client, generate_pod_name,
+    DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig,
+    build_credentials_prefix, build_pod_spec, create_client, generate_pod_name,
 };
 
 /// Returns `true` when the pod has terminated (Succeeded or Failed).
@@ -96,6 +96,7 @@ pub struct K8sEphemeralProvider {
     timeout: Duration,
     pod_labels: BTreeMap<String, String>,
     volumes: Vec<(String, String)>,
+    input_init_image: String,
 }
 
 impl K8sEphemeralProvider {
@@ -116,6 +117,7 @@ impl K8sEphemeralProvider {
             timeout: DEFAULT_TIMEOUT,
             pod_labels: BTreeMap::new(),
             volumes: Vec::new(),
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE.to_string(),
         }
     }
 
@@ -258,6 +260,25 @@ impl K8sEphemeralProvider {
             .push((host_path.to_string(), container_path.to_string()));
         self
     }
+
+    /// Override the image used by the input-fetch initContainer.
+    ///
+    /// Defaults to [`DEFAULT_INPUT_INIT_IMAGE`] (`curlimages/curl:8.10.1`).
+    /// The image only needs `sh` and `curl`. It is pulled with the same
+    /// [`ImagePullPolicy`] as the main container.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::new("img:v1")
+    ///     .input_init_image("registry.gitlab.com/org/curl:internal");
+    /// ```
+    pub fn input_init_image(mut self, image: &str) -> Self {
+        self.input_init_image = image.to_string();
+        self
+    }
 }
 
 /// Shared context after pod creation: the pod API handle, pod name, and start time.
@@ -316,6 +337,8 @@ impl K8sEphemeralProvider {
             image_pull_secrets: &self.image_pull_secrets,
             extra_labels: &merged_labels,
             volumes: &self.volumes,
+            inputs: &config.inputs,
+            input_init_image: &self.input_init_image,
         })?;
 
         pods.create(&PostParams::default(), &pod_spec)
