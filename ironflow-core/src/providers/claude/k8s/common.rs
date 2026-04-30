@@ -254,8 +254,8 @@ fn build_input_artifacts(
     init_image: &str,
     image_pull_policy: &ImagePullPolicy,
 ) -> (
-    Vec<serde_json::Value>, // volumes
-    Vec<serde_json::Value>, // shared volume_mounts (init + main)
+    Vec<serde_json::Value>,    // volumes
+    Vec<serde_json::Value>,    // shared volume_mounts (init + main)
     Option<serde_json::Value>, // initContainer
 ) {
     if inputs.is_empty() {
@@ -350,8 +350,11 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
         }
     });
 
-    let (input_volumes, input_mounts, init_container) =
-        build_input_artifacts(config.inputs, config.input_init_image, config.image_pull_policy);
+    let (input_volumes, input_mounts, init_container) = build_input_artifacts(
+        config.inputs,
+        config.input_init_image,
+        config.image_pull_policy,
+    );
 
     let mut volumes_json = Vec::new();
     let mut main_mounts_json = Vec::new();

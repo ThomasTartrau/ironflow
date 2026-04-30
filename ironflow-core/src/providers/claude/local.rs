@@ -74,12 +74,14 @@ async fn materialize_inputs_local(inputs: &[AgentInput]) -> Result<(), AgentErro
                     ),
                 })?;
         }
-        let resp = client.get(&input.url).send().await.map_err(|e| {
-            AgentError::ProcessFailed {
+        let resp = client
+            .get(&input.url)
+            .send()
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
                 exit_code: -1,
                 stderr: format!("failed to fetch input '{}': {e}", input.url),
-            }
-        })?;
+            })?;
         if !resp.status().is_success() {
             return Err(AgentError::ProcessFailed {
                 exit_code: -1,
