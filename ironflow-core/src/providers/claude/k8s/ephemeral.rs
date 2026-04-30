@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use futures_util::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, DeleteParams, LogParams, PostParams};
-use kube::runtime::wait::{await_condition, conditions};
+use kube::runtime::wait::await_condition;
 use tokio::time;
 
 use tracing::{debug, warn};
