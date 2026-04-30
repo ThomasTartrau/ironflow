@@ -9,6 +9,14 @@ use kube::config::{KubeConfigOptions, Kubeconfig};
 use serde_json::json;
 
 use crate::error::AgentError;
+use crate::provider::AgentInput;
+
+/// Default image used by the input-fetch initContainer.
+///
+/// Tiny (~5 MiB), pinned tag for reproducibility. Override at the provider level
+/// when corporate registries forbid Docker Hub or when a specific curl version
+/// is required.
+pub const DEFAULT_INPUT_INIT_IMAGE: &str = "curlimages/curl:8.10.1";
 
 /// Kubernetes cluster connection configuration.
 ///
@@ -174,10 +182,126 @@ pub struct PodConfig<'a> {
     /// Each tuple is `(host_path, container_path)`. An empty slice means
     /// no volumes are mounted.
     pub volumes: &'a [(String, String)],
+    /// Declarative inputs that must be fetched before the main container runs.
+    ///
+    /// When non-empty, an `initContainer` running [`PodConfig::input_init_image`]
+    /// downloads each input via `curl` into a shared `emptyDir` volume mounted
+    /// at the parent directory of `mount_path` on both the init and the main
+    /// containers.
+    pub inputs: &'a [AgentInput],
+    /// Image used by the input-fetch initContainer.
+    ///
+    /// Defaults to [`DEFAULT_INPUT_INIT_IMAGE`]. Ignored when `inputs` is empty.
+    pub input_init_image: &'a str,
+}
+
+/// Return the directory part of an absolute path (everything before the last `/`).
+///
+/// Returns an empty string when there is no directory part, i.e. the path is
+/// not absolute or has no `/`. Callers must validate inputs upstream.
+fn parent_dir(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        Some((dir, _)) if !dir.is_empty() => dir,
+        Some(_) => "/",
+        None => "",
+    }
+}
+
+/// Quote a string for safe inclusion in a `sh -c` argument.
+///
+/// Wraps the value in single quotes and escapes any embedded single quotes.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Validate that every [`AgentInput::mount_path`] is an absolute path with a
+/// non-trivial parent directory.
+///
+/// Returns an error explaining the offending path. The K8s providers reject
+/// pods that would otherwise mount an `emptyDir` at `/` or at an empty path.
+fn validate_inputs(inputs: &[AgentInput]) -> Result<(), AgentError> {
+    for input in inputs {
+        if !input.mount_path.starts_with('/') {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!(
+                    "agent input mount_path must be absolute, got '{}'",
+                    input.mount_path
+                ),
+            });
+        }
+        let parent = parent_dir(&input.mount_path);
+        if parent.is_empty() || parent == "/" {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!(
+                    "agent input mount_path must live under a directory (not '/'), got '{}'",
+                    input.mount_path
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Build the input-fetch initContainer JSON and the emptyDir volume + mount
+/// definitions consumed by both the init and main containers.
+///
+/// Inputs that share the same parent directory share a single `emptyDir`
+/// volume, mounted on both containers at that directory.
+fn build_input_artifacts(
+    inputs: &[AgentInput],
+    init_image: &str,
+    image_pull_policy: &ImagePullPolicy,
+) -> (
+    Vec<serde_json::Value>, // volumes
+    Vec<serde_json::Value>, // shared volume_mounts (init + main)
+    Option<serde_json::Value>, // initContainer
+) {
+    if inputs.is_empty() {
+        return (Vec::new(), Vec::new(), None);
+    }
+
+    let mut by_dir: BTreeMap<String, Vec<&AgentInput>> = BTreeMap::new();
+    for input in inputs {
+        by_dir
+            .entry(parent_dir(&input.mount_path).to_string())
+            .or_default()
+            .push(input);
+    }
+
+    let mut volumes = Vec::with_capacity(by_dir.len());
+    let mut volume_mounts = Vec::with_capacity(by_dir.len());
+    for (idx, dir) in by_dir.keys().enumerate() {
+        let name = format!("ironflow-input-{idx}");
+        volumes.push(json!({ "name": name, "emptyDir": {} }));
+        volume_mounts.push(json!({ "name": name, "mountPath": dir }));
+    }
+
+    let mut script = String::from("set -e\n");
+    for input in inputs {
+        script.push_str(&format!(
+            "curl -sSfL --retry 3 --max-time 300 {url} -o {path}\n",
+            url = shell_quote(&input.url),
+            path = shell_quote(&input.mount_path),
+        ));
+    }
+
+    let init_container = json!({
+        "name": "ironflow-input-fetch",
+        "image": init_image,
+        "imagePullPolicy": image_pull_policy.as_str(),
+        "command": ["sh", "-c", script],
+        "volumeMounts": volume_mounts.clone(),
+    });
+
+    (volumes, volume_mounts, Some(init_container))
 }
 
 /// Build a Kubernetes pod spec for running claude.
 pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
+    validate_inputs(config.inputs)?;
+
     let mut resource_limits: BTreeMap<String, Quantity> = BTreeMap::new();
     if let Some(ref cpu) = config.resources.cpu_limit {
         resource_limits.insert("cpu".to_string(), Quantity(cpu.clone()));
@@ -226,27 +350,36 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
         }
     });
 
+    let (input_volumes, input_mounts, init_container) =
+        build_input_artifacts(config.inputs, config.input_init_image, config.image_pull_policy);
+
+    let mut volumes_json = Vec::new();
+    let mut main_mounts_json = Vec::new();
+
     if !config.volumes.is_empty() {
-        let (volumes, volume_mounts): (Vec<_>, Vec<_>) = config
-            .volumes
-            .iter()
-            .enumerate()
-            .map(|(i, (host_path, container_path))| {
-                let name = format!("vol-{i}");
-                (
-                    json!({
-                        "name": name,
-                        "hostPath": { "path": host_path, "type": "Directory" }
-                    }),
-                    json!({
-                        "name": name,
-                        "mountPath": container_path
-                    }),
-                )
-            })
-            .unzip();
-        pod_json["spec"]["volumes"] = json!(volumes);
-        pod_json["spec"]["containers"][0]["volumeMounts"] = json!(volume_mounts);
+        for (i, (host_path, container_path)) in config.volumes.iter().enumerate() {
+            let name = format!("vol-{i}");
+            volumes_json.push(json!({
+                "name": name,
+                "hostPath": { "path": host_path, "type": "Directory" }
+            }));
+            main_mounts_json.push(json!({
+                "name": name,
+                "mountPath": container_path
+            }));
+        }
+    }
+    volumes_json.extend(input_volumes);
+    main_mounts_json.extend(input_mounts);
+
+    if !volumes_json.is_empty() {
+        pod_json["spec"]["volumes"] = json!(volumes_json);
+    }
+    if !main_mounts_json.is_empty() {
+        pod_json["spec"]["containers"][0]["volumeMounts"] = json!(main_mounts_json);
+    }
+    if let Some(init) = init_container {
+        pod_json["spec"]["initContainers"] = json!([init]);
     }
 
     if let Some(sa) = config.service_account {
@@ -329,6 +462,8 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         assert!(pod.spec.unwrap().image_pull_secrets.is_none());
@@ -350,6 +485,8 @@ mod tests {
             image_pull_secrets: &secrets,
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         let pull_secrets = pod.spec.unwrap().image_pull_secrets.unwrap();
@@ -373,6 +510,8 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -398,6 +537,8 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -427,6 +568,8 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -458,6 +601,8 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -484,6 +629,8 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -511,6 +658,8 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &vols,
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -532,5 +681,150 @@ mod tests {
         assert_eq!(mounts[0].mount_path, "/data/worktrees");
         assert_eq!(mounts[1].name, "vol-1");
         assert_eq!(mounts[1].mount_path, "/data/repos");
+    }
+
+    #[test]
+    fn parent_dir_extracts_directory() {
+        assert_eq!(parent_dir("/work/dossier.pdf"), "/work");
+        assert_eq!(parent_dir("/work/sub/dir/file.pdf"), "/work/sub/dir");
+        assert_eq!(parent_dir("/file.pdf"), "/");
+        assert_eq!(parent_dir("nofile"), "");
+    }
+
+    #[test]
+    fn shell_quote_escapes_single_quotes() {
+        assert_eq!(shell_quote("simple"), "'simple'");
+        assert_eq!(shell_quote("with space"), "'with space'");
+        assert_eq!(shell_quote("don't"), "'don'\\''t'");
+    }
+
+    #[test]
+    fn validate_inputs_rejects_relative_paths() {
+        let inputs = vec![AgentInput::new("https://x.com/f.pdf", "relative/path.pdf")];
+        let err = validate_inputs(&inputs).unwrap_err();
+        assert!(err.to_string().contains("must be absolute"));
+    }
+
+    #[test]
+    fn validate_inputs_rejects_root_mount() {
+        let inputs = vec![AgentInput::new("https://x.com/f.pdf", "/file.pdf")];
+        let err = validate_inputs(&inputs).unwrap_err();
+        assert!(err.to_string().contains("must live under a directory"));
+    }
+
+    #[test]
+    fn build_pod_spec_with_single_input_creates_init_container() {
+        let inputs = vec![AgentInput::new(
+            "https://r2.example.com/dossier.pdf",
+            "/work/dossier.pdf",
+        )];
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &[],
+            inputs: &inputs,
+            input_init_image: "curlimages/curl:8.10.1",
+        })
+        .unwrap();
+
+        let spec = pod.spec.unwrap();
+        let init_containers = spec.init_containers.expect("initContainer present");
+        assert_eq!(init_containers.len(), 1);
+        let init = &init_containers[0];
+        assert_eq!(init.name, "ironflow-input-fetch");
+        assert_eq!(init.image.as_deref(), Some("curlimages/curl:8.10.1"));
+        let init_cmd = init.command.as_ref().unwrap();
+        assert_eq!(init_cmd[0], "sh");
+        assert_eq!(init_cmd[1], "-c");
+        assert!(init_cmd[2].contains("curl -sSfL"));
+        assert!(init_cmd[2].contains("https://r2.example.com/dossier.pdf"));
+        assert!(init_cmd[2].contains("/work/dossier.pdf"));
+
+        let init_mounts = init.volume_mounts.as_ref().unwrap();
+        assert_eq!(init_mounts.len(), 1);
+        assert_eq!(init_mounts[0].name, "ironflow-input-0");
+        assert_eq!(init_mounts[0].mount_path, "/work");
+
+        let main_mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+        assert_eq!(main_mounts.len(), 1);
+        assert_eq!(main_mounts[0].name, "ironflow-input-0");
+        assert_eq!(main_mounts[0].mount_path, "/work");
+
+        let volumes = spec.volumes.unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].name, "ironflow-input-0");
+        assert!(volumes[0].empty_dir.is_some());
+    }
+
+    #[test]
+    fn build_pod_spec_groups_inputs_by_parent_dir() {
+        let inputs = vec![
+            AgentInput::new("https://x.com/a.pdf", "/work/a.pdf"),
+            AgentInput::new("https://x.com/b.pdf", "/work/b.pdf"),
+            AgentInput::new("https://x.com/c.csv", "/data/c.csv"),
+        ];
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &[],
+            inputs: &inputs,
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+        })
+        .unwrap();
+
+        let spec = pod.spec.unwrap();
+        let volumes = spec.volumes.unwrap();
+        assert_eq!(volumes.len(), 2, "/work and /data → 2 volumes");
+
+        let main_mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+        let mount_paths: Vec<_> = main_mounts.iter().map(|m| m.mount_path.as_str()).collect();
+        assert!(mount_paths.contains(&"/work"));
+        assert!(mount_paths.contains(&"/data"));
+
+        let init = &spec.init_containers.unwrap()[0];
+        let script = &init.command.as_ref().unwrap()[2];
+        assert!(script.contains("/work/a.pdf"));
+        assert!(script.contains("/work/b.pdf"));
+        assert!(script.contains("/data/c.csv"));
+    }
+
+    #[test]
+    fn build_pod_spec_no_inputs_no_init_container() {
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+        })
+        .unwrap();
+        assert!(pod.spec.unwrap().init_containers.is_none());
     }
 }

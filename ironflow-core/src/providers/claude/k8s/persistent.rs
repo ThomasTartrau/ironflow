@@ -47,8 +47,8 @@ use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
 use super::common::{
-    ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig, build_credentials_prefix,
-    build_pod_spec, create_client,
+    DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig,
+    build_credentials_prefix, build_pod_spec, create_client,
 };
 
 /// [`AgentProvider`] that reuses a persistent Kubernetes worker pod.
@@ -272,6 +272,8 @@ impl K8sPersistentProvider {
                 image_pull_secrets: &self.image_pull_secrets,
                 extra_labels: &self.pod_labels,
                 volumes: &[],
+                inputs: &[],
+                input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             })?;
 
             pods.create(&PostParams::default(), &pod_spec)

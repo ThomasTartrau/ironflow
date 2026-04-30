@@ -51,6 +51,44 @@ pub struct NoSchema;
 #[derive(Debug, Clone, Copy)]
 pub struct WithSchema;
 
+// ── AgentInput ─────────────────────────────────────────────────────
+
+/// Declarative external input fetched into the agent's filesystem before invocation.
+///
+/// Each input is a URL that the provider must download and materialize at
+/// `mount_path` so the agent can read it via the `Read` tool.
+///
+/// Provider behavior:
+///
+/// * [`ClaudeCodeProvider`](crate::providers::claude::ClaudeCodeProvider) (local) -
+///   downloads via reqwest into a per-invocation temp directory and rewrites
+///   `mount_path` to the resolved local path.
+/// * `K8sEphemeralProvider` - injects a `curlimages/curl` initContainer that
+///   downloads each URL into a shared `emptyDir`, mounted on the main container
+///   at the parent directory of `mount_path`.
+///
+/// The `mount_path` must be an absolute path. Intermediate directories are
+/// created automatically.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentInput {
+    /// Source URL to download (HTTP/HTTPS, including signed S3/R2 URLs).
+    pub url: String,
+
+    /// Absolute filesystem path where the file must be available inside the
+    /// agent's filesystem.
+    pub mount_path: String,
+}
+
+impl AgentInput {
+    /// Create a new input descriptor.
+    pub fn new(url: &str, mount_path: &str) -> Self {
+        Self {
+            url: url.to_string(),
+            mount_path: mount_path.to_string(),
+        }
+    }
+}
+
 // ── AgentConfig ────────────────────────────────────────────────────
 
 /// Serializable configuration passed to an [`AgentProvider`] for a single invocation.
@@ -200,6 +238,14 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pod_labels: BTreeMap<String, String>,
 
+    /// External inputs to materialize on the agent's filesystem before invocation.
+    ///
+    /// See [`AgentInput`] for the semantics. The provider is responsible for
+    /// fetching each URL and placing it at `mount_path` before the agent runs.
+    /// Add inputs with [`AgentConfig::input_file`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<AgentInput>,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -231,6 +277,7 @@ impl AgentConfig {
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
+            inputs: Vec::new(),
             _marker: PhantomData,
         }
     }
@@ -431,6 +478,33 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Declare an external input that the provider must materialize on the
+    /// agent's filesystem before invocation.
+    ///
+    /// `url` is fetched (HTTP/HTTPS) and written to `mount_path` (absolute
+    /// path) inside the agent's runtime. Each provider materializes inputs
+    /// in its own way:
+    ///
+    /// * Local provider: downloads to a temp dir on the host.
+    /// * K8s providers: spawn a `curlimages/curl` initContainer that downloads
+    ///   into a shared `emptyDir` mounted on the main container.
+    ///
+    /// Can be called multiple times to declare several inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("Read /work/dossier.pdf and summarize")
+    ///     .allow_tool("Read")
+    ///     .input_file("https://r2.example.com/dossier.pdf", "/work/dossier.pdf");
+    /// ```
+    pub fn input_file(mut self, url: &str, mount_path: &str) -> Self {
+        self.inputs.push(AgentInput::new(url, mount_path));
+        self
+    }
+
     /// Convert to a different typestate by moving all fields.
     ///
     /// Safe because the marker is a zero-sized [`PhantomData`] -- no
@@ -453,6 +527,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             resume_session_id: self.resume_session_id,
             verbose: self.verbose,
             pod_labels: self.pod_labels,
+            inputs: self.inputs,
             _marker: PhantomData,
         }
     }
@@ -921,6 +996,7 @@ mod tests {
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
+            inputs: Vec::new(),
             _marker: PhantomData,
         }
     }
@@ -960,6 +1036,7 @@ mod tests {
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
+            inputs: Vec::new(),
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();
