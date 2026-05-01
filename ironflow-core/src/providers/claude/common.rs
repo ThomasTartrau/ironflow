@@ -25,6 +25,12 @@ const RAW_RESPONSE_MAX_LEN: usize = 4000;
 /// Approximate byte limit for stdout fallback in error diagnostics.
 const RAW_RESPONSE_FALLBACK_MAX_LEN: usize = 2000;
 
+/// Maximum byte length for error detail in `ProcessFailed` errors.
+///
+/// 50 KB is enough for diagnostic context while staying well under typical
+/// DB column and API payload limits.
+const ERROR_DETAIL_MAX_LEN: usize = 50_000;
+
 /// Truncate a string to at most `max_len` bytes on a char boundary.
 fn truncate_to(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
@@ -769,10 +775,10 @@ pub fn handle_nonzero_exit(
         if stderr.is_empty() {
             "(no output captured)".to_string()
         } else {
-            stderr.to_string()
+            truncate_to(stderr, ERROR_DETAIL_MAX_LEN)
         }
     } else {
-        stdout.to_string()
+        truncate_to(stdout, ERROR_DETAIL_MAX_LEN)
     };
 
     tracing::error!(
@@ -1664,6 +1670,44 @@ mod tests {
         match result {
             Err(AgentError::ProcessFailed { stderr, .. }) => {
                 assert_eq!(stderr, "(no output captured)");
+            }
+            other => panic!("expected Err(ProcessFailed), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_nonzero_exit_truncates_large_stdout_in_error_detail() {
+        let large_stdout = "x".repeat(ERROR_DETAIL_MAX_LEN + 10_000);
+        let config = AgentConfig::new("test");
+        let result = handle_nonzero_exit(1, &large_stdout, "", &config, 0, "test");
+
+        match result {
+            Err(AgentError::ProcessFailed { stderr, .. }) => {
+                assert!(
+                    stderr.len() <= ERROR_DETAIL_MAX_LEN + 20,
+                    "error_detail should be truncated, got {} bytes",
+                    stderr.len()
+                );
+                assert!(stderr.ends_with("...(truncated)"));
+            }
+            other => panic!("expected Err(ProcessFailed), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_nonzero_exit_truncates_large_stderr_in_error_detail() {
+        let large_stderr = "e".repeat(ERROR_DETAIL_MAX_LEN + 5_000);
+        let config = AgentConfig::new("test");
+        let result = handle_nonzero_exit(1, "", &large_stderr, &config, 0, "test");
+
+        match result {
+            Err(AgentError::ProcessFailed { stderr, .. }) => {
+                assert!(
+                    stderr.len() <= ERROR_DETAIL_MAX_LEN + 20,
+                    "error_detail should be truncated, got {} bytes",
+                    stderr.len()
+                );
+                assert!(stderr.ends_with("...(truncated)"));
             }
             other => panic!("expected Err(ProcessFailed), got {other:?}"),
         }
