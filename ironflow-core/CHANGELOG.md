@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.13.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.13.1...ironflow-core-v2.13.2) - 2026-05-01
+
+### Fixed
+
+- truncate error_detail in handle_nonzero_exit to prevent oversized payloads
+
 ## [2.13.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.13.0...ironflow-core-v2.13.1) - 2026-05-01
 
 ### Fixed
