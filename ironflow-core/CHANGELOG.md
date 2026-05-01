@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.13.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.13.0...ironflow-core-v2.13.1) - 2026-05-01
+
+### Fixed
+
+- remove unused `conditions` import in ephemeral.rs
+
+- handle pod pre-Running failures, JoinError step tracking, and error preservation
+
 ## [2.13.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.12.0...ironflow-core-v2.13.0) - 2026-04-30
 
 ### Added
