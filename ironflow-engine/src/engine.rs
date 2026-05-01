@@ -577,7 +577,12 @@ impl Engine {
 
             let (target_status, error) = match step.status.state {
                 StepStatus::Running | StepStatus::AwaitingApproval => {
-                    (StepStatus::Failed, Some(error_message.to_string()))
+                    let err = if step.error.is_some() {
+                        None
+                    } else {
+                        Some(error_message.to_string())
+                    };
+                    (StepStatus::Failed, err)
                 }
                 StepStatus::Pending => (StepStatus::Skipped, None),
                 _ => continue,
@@ -1740,5 +1745,79 @@ mod tests {
 
         let result = engine.fail_orphaned_steps(run.id, "timeout").await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_steps_preserves_existing_error() {
+        let engine = create_test_engine();
+        let run = engine
+            .store()
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        let step_with_error = create_step_with_status(
+            engine.store(),
+            run.id,
+            "already-errored",
+            0,
+            StepStatus::Running,
+        )
+        .await;
+
+        engine
+            .store()
+            .update_step(
+                step_with_error.id,
+                StepUpdate {
+                    error: Some("real error from provider".to_string()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let step_no_error = create_step_with_status(
+            engine.store(),
+            run.id,
+            "no-error-yet",
+            1,
+            StepStatus::Running,
+        )
+        .await;
+
+        engine
+            .fail_orphaned_steps(run.id, "parent run failed")
+            .await
+            .unwrap();
+
+        let updated_with = engine
+            .store()
+            .get_step(step_with_error.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated_with.status.state, StepStatus::Failed);
+        assert_eq!(
+            updated_with.error.as_deref(),
+            Some("real error from provider"),
+        );
+
+        let updated_without = engine
+            .store()
+            .get_step(step_no_error.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated_without.status.state, StepStatus::Failed);
+        assert_eq!(updated_without.error.as_deref(), Some("parent run failed"),);
     }
 }
