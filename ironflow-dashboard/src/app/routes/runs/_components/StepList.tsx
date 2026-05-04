@@ -43,6 +43,15 @@ interface StepListProps {
 	steps: StepResponse[];
 }
 
+function RunningDot() {
+	return (
+		<span className="relative flex h-2 w-2 shrink-0">
+			<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+			<span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+		</span>
+	);
+}
+
 function getKindColor(kind: string): string {
 	switch (kind) {
 		case "shell":
@@ -135,19 +144,24 @@ function NestedStep({ step }: { step: StepResponse }) {
 		};
 	}, [step.id, step.kind, focusThis]);
 
+	const isRunning = step.status === "running";
+
 	return (
 		<div id={`step-${step.id}`} className="space-y-2">
 			<button
 				type="button"
 				onClick={() => setIsExpanded(!isExpanded)}
-				className={`flex items-center gap-2 text-sm w-full text-left hover:bg-muted/50 rounded-md p-1.5 -ml-1.5 transition-colors duration-700 cursor-pointer ${highlight ? "bg-primary/10" : ""}`}
+				className={`flex items-center gap-2 text-sm w-full text-left hover:bg-muted/50 rounded-md p-1.5 -ml-1.5 transition-colors duration-700 cursor-pointer ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-blue-50/50" : ""}`}
 			>
 				{isExpanded ? (
 					<ChevronUp className="w-3 h-3 text-muted-foreground shrink-0" />
 				) : (
 					<ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
 				)}
-				<span className="font-medium truncate">{step.name}</span>
+				<span className="font-medium truncate flex items-center gap-2">
+					{isRunning && <RunningDot />}
+					{step.name}
+				</span>
 				<Badge
 					variant="outline"
 					className={`text-[10px] font-medium shrink-0 ${getKindColor(step.kind)}`}
@@ -550,14 +564,26 @@ function StepRow({ step }: { step: StepResponse }) {
 		};
 	}, [step.id, step.kind]);
 
+	const isRunning = step.status === "running";
+
 	return (
 		<>
 			<TableRow
 				id={`step-${step.id}`}
 				onClick={() => setIsExpanded(!isExpanded)}
-				className={`cursor-pointer hover:bg-muted/50 transition-colors duration-700 ${highlight ? "bg-primary/10" : ""}`}
+				className={`cursor-pointer hover:bg-muted/50 transition-colors duration-700 ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-blue-50/50 border-l-2 border-l-blue-500" : ""}`}
 			>
-				<TableCell className="font-medium">{step.name}</TableCell>
+				<TableCell className="font-medium">
+					<span className="flex items-center gap-2">
+						{isRunning && (
+							<span className="relative flex h-2 w-2 shrink-0">
+								<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+								<span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+							</span>
+						)}
+						{step.name}
+					</span>
+				</TableCell>
 				<TableCell>
 					<Badge
 						variant="outline"
