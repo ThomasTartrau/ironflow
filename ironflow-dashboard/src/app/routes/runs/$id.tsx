@@ -54,6 +54,12 @@ function computeLiveDurationMs(run: RunResponse, nowMs: number): number {
 	return Math.max(run.duration_ms, nowMs - started);
 }
 
+function computeLiveCost(run: RunResponse, steps: StepResponse[]): number {
+	if (run.completed_at) return run.cost_usd;
+	const stepsCost = steps.reduce((sum, s) => sum + s.cost_usd, 0);
+	return Math.max(run.cost_usd, stepsCost);
+}
+
 function isEmptyPayload(payload: unknown): boolean {
 	if (payload === null || payload === undefined) return true;
 	if (
@@ -73,6 +79,7 @@ export function Component() {
 	const active = isRunActive(run.status);
 	const nowMs = useLiveClock({ enabled: active, intervalMs: 500 });
 	const liveDurationMs = computeLiveDurationMs(run, nowMs);
+	const liveCost = computeLiveCost(run, steps);
 
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
@@ -124,7 +131,7 @@ export function Component() {
 					/>
 					<StatCard
 						label="Cost"
-						value={formatCost(run.cost_usd)}
+						value={formatCost(liveCost)}
 						icon={DollarSign}
 					/>
 					<StatCard
@@ -197,16 +204,17 @@ export function Component() {
 							runId={run.id}
 						/>
 					</CollapsibleSection>
+					{active && (
+						<CollapsibleSection
+							storageKey="live-logs"
+							title="Live Logs"
+							defaultOpen
+						>
+							<LogStreamPanel runId={run.id} enabled />
+						</CollapsibleSection>
+					)}
 					<StepList steps={steps} />
 				</div>
-
-				<CollapsibleSection
-					storageKey="live-logs"
-					title="Live Logs"
-					defaultOpen={active}
-				>
-					<LogStreamPanel runId={run.id} enabled={active} />
-				</CollapsibleSection>
 			</div>
 		</HeaderApp>
 	);
