@@ -17,7 +17,7 @@ stages:
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
   IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"
-  GIT_DEPTH: 1
+  GIT_DEPTH: 0
   GIT_STRATEGY: fetch
 
 .rust-cache: &rust-cache
