@@ -199,9 +199,14 @@ release-plz-update:
         "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/merge_requests?state=opened&search=release-plz&in=source_branch&per_page=1" \
         | python3 -c "import sys,json; mrs=json.load(sys.stdin); print(mrs[0]['iid'] if mrs else '')")
       if [ -n "$MR_IID" ]; then
-        curl -s --request PUT --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-          "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/merge_requests/$MR_IID/merge" \
-          --data "merge_when_pipeline_succeeds=true"
+        for i in 1 2 3 4 5 6; do
+          RESP=$(curl -s --request PUT --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/merge_requests/$MR_IID/merge" \
+            --data "merge_when_pipeline_succeeds=true")
+          echo "$RESP"
+          echo "$RESP" | grep -q '"merge_when_pipeline_succeeds":true' && break
+          sleep 10
+        done
       fi
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $RELEASE_COMMIT != "true"
