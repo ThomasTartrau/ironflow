@@ -560,9 +560,13 @@ impl Agent {
     /// Execute the agent invocation using the given [`AgentProvider`].
     ///
     /// If a [`retry_policy`](Agent::retry_policy) is configured, transient
-    /// failures (process crashes, timeouts) are retried with exponential
-    /// backoff. Deterministic errors (prompt too large, schema validation)
-    /// are returned immediately without retry.
+    /// failures (process crashes, timeouts, schema validation) are retried
+    /// with exponential backoff. When structured output is requested
+    /// (`json_schema` is set) and no explicit retry policy is configured,
+    /// an automatic retry policy of 2 retries is applied to handle
+    /// non-deterministic `structured_output: null` responses from the CLI.
+    /// Deterministic errors (prompt too large) are returned immediately
+    /// without retry.
     ///
     /// # Errors
     ///
@@ -595,8 +599,10 @@ impl Agent {
 
         let result = self.invoke_once(provider).await;
 
+        let default_schema_retry = RetryPolicy::new(2);
         let policy = match &self.retry_policy {
             Some(p) => p,
+            None if self.config.json_schema.is_some() => &default_schema_retry,
             None => return result,
         };
 
@@ -613,10 +619,21 @@ impl Agent {
 
         for attempt in 0..policy.max_retries {
             let delay = policy.delay_for_attempt(attempt);
+            let retry_reason = if matches!(
+                &last_result,
+                Err(OperationError::Agent(
+                    crate::error::AgentError::SchemaValidation { .. }
+                ))
+            ) {
+                "structured_output was null (CLI non-determinism)"
+            } else {
+                "transient failure"
+            };
             warn!(
                 attempt = attempt + 1,
                 max_retries = policy.max_retries,
                 delay_ms = delay.as_millis() as u64,
+                reason = retry_reason,
                 "retrying agent invocation"
             );
             time::sleep(delay).await;
@@ -1367,7 +1384,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_does_not_retry_non_retryable_errors() {
+    async fn retry_does_not_retry_prompt_too_large() {
         let call_count = Arc::new(AtomicU32::new(0));
         let count = call_count.clone();
 
@@ -1378,12 +1395,10 @@ mod tests {
             fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
                 self.count.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
-                    Err(AgentError::SchemaValidation {
-                        expected: "object".to_string(),
-                        got: "string".to_string(),
-                        debug_messages: Vec::new(),
-                        partial_usage: Box::default(),
-                        raw_response: None,
+                    Err(AgentError::PromptTooLarge {
+                        chars: 1_000_000,
+                        estimated_tokens: 250_000,
+                        model_limit: 200_000,
                     })
                 })
             }
@@ -1397,8 +1412,120 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        // Only 1 attempt, no retries for non-retryable errors
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retry_retries_schema_validation_errors() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let count = call_count.clone();
+
+        struct SchemaFailProvider {
+            count: Arc<AtomicU32>,
+        }
+        impl AgentProvider for SchemaFailProvider {
+            fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Err(AgentError::SchemaValidation {
+                        expected: "object".to_string(),
+                        got: "null".to_string(),
+                        debug_messages: Vec::new(),
+                        partial_usage: Box::default(),
+                        raw_response: None,
+                    })
+                })
+            }
+        }
+
+        let provider = SchemaFailProvider { count };
+        let result = Agent::new()
+            .prompt("test")
+            .retry_policy(crate::retry::RetryPolicy::new(2).backoff(Duration::from_millis(1)))
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        // 1 initial + 2 retries = 3 total
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn schema_validation_succeeds_on_retry() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let count = call_count.clone();
+
+        struct SchemaFailThenSucceed {
+            count: Arc<AtomicU32>,
+            output: AgentOutput,
+        }
+        impl AgentProvider for SchemaFailThenSucceed {
+            fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+                let current = self.count.fetch_add(1, Ordering::SeqCst);
+                let output = self.output.clone();
+                Box::pin(async move {
+                    if current == 0 {
+                        Err(AgentError::SchemaValidation {
+                            expected: "structured_output field".to_string(),
+                            got: "null".to_string(),
+                            debug_messages: Vec::new(),
+                            partial_usage: Box::default(),
+                            raw_response: None,
+                        })
+                    } else {
+                        Ok(output)
+                    }
+                })
+            }
+        }
+
+        let provider = SchemaFailThenSucceed {
+            count,
+            output: default_output(),
+        };
+        let result = Agent::new()
+            .prompt("test")
+            .retry_policy(crate::retry::RetryPolicy::new(1).backoff(Duration::from_millis(1)))
+            .run(&provider)
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn auto_retry_applied_when_json_schema_set() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let count = call_count.clone();
+
+        struct AlwaysSchemaFail {
+            count: Arc<AtomicU32>,
+        }
+        impl AgentProvider for AlwaysSchemaFail {
+            fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Err(AgentError::SchemaValidation {
+                        expected: "object".to_string(),
+                        got: "null".to_string(),
+                        debug_messages: Vec::new(),
+                        partial_usage: Box::default(),
+                        raw_response: None,
+                    })
+                })
+            }
+        }
+
+        let provider = AlwaysSchemaFail { count };
+        let result = Agent::new()
+            .prompt("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .run(&provider)
+            .await;
+
+        assert!(result.is_err());
+        // auto-retry(2) : 1 initial + 2 retries = 3 total
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@
 //! | Operation | Retried | Not retried |
 //! |-----------|---------|-------------|
 //! | **HTTP** | Transport errors (DNS, timeout, connection refused), 5xx, 429 | SSRF blocks, 4xx (except 429), response too large |
-//! | **Agent** | Process failures, timeouts | Prompt too large, schema validation |
+//! | **Agent** | Process failures, timeouts, schema validation (CLI non-determinism) | Prompt too large |
 //!
 //! # Examples
 //!
@@ -186,7 +186,7 @@ impl RetryPolicy {
 /// # Non-retryable errors
 ///
 /// - [`OperationError::Http`] with 4xx status (except 429)
-/// - [`OperationError::Agent`] wrapping [`AgentError::PromptTooLarge`] or [`AgentError::SchemaValidation`]
+/// - [`OperationError::Agent`] wrapping [`AgentError::PromptTooLarge`]
 /// - [`OperationError::Shell`]
 /// - [`OperationError::Deserialize`]
 pub fn is_retryable(error: &OperationError) -> bool {
@@ -197,7 +197,9 @@ pub fn is_retryable(error: &OperationError) -> bool {
         },
         OperationError::Agent(agent_err) => matches!(
             agent_err,
-            AgentError::ProcessFailed { .. } | AgentError::Timeout { .. }
+            AgentError::ProcessFailed { .. }
+                | AgentError::Timeout { .. }
+                | AgentError::SchemaValidation { .. }
         ),
         OperationError::Timeout { .. } => true,
         OperationError::Shell { .. } | OperationError::Deserialize { .. } => false,
@@ -423,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_schema_validation_is_not_retryable() {
+    fn agent_schema_validation_is_retryable() {
         let err = OperationError::Agent(AgentError::SchemaValidation {
             expected: "object".to_string(),
             got: "string".to_string(),
@@ -431,7 +433,7 @@ mod tests {
             partial_usage: Box::default(),
             raw_response: None,
         });
-        assert!(!is_retryable(&err));
+        assert!(is_retryable(&err));
     }
 
     #[test]

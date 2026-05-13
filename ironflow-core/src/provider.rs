@@ -274,6 +274,7 @@ impl AgentConfig {
             bare: false,
             permission_mode: PermissionMode::Default,
             json_schema: None,
+
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
@@ -993,6 +994,7 @@ mod tests {
             bare: true,
             permission_mode: PermissionMode::Auto,
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
+
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
@@ -1033,6 +1035,7 @@ mod tests {
             bare: false,
             permission_mode: PermissionMode::Default,
             json_schema: None,
+
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),

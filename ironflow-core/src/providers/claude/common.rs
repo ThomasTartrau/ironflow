@@ -14,6 +14,7 @@ use tracing::{trace, warn};
 use crate::error::{AgentError, PartialUsage};
 use crate::operations::agent::PermissionMode;
 use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall, DebugToolResult};
+use crate::schema_transform::transform_schema;
 use crate::utils::estimate_tokens;
 
 /// Default timeout for a single Claude CLI invocation (5 minutes).
@@ -242,7 +243,8 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
         }
     }
 
-    push_opt(&mut args, "--json-schema", &config.json_schema);
+    let transformed_schema = config.json_schema.as_ref().map(|s| transform_schema(s));
+    push_opt(&mut args, "--json-schema", &transformed_schema);
 
     if let Some(ref session_id) = config.resume_session_id {
         args.push("--resume".to_string());
@@ -1487,11 +1489,16 @@ mod tests {
         assert!(args.contains(&"--allowedTools".to_string()));
         assert!(args.contains(&"WebSearch,WebFetch".to_string()));
         assert!(args.contains(&"--json-schema".to_string()));
-        assert!(
-            args.contains(
-                &r#"{"type":"object","properties":{"items":{"type":"array"}}}"#.to_string()
-            )
-        );
+
+        let schema_pos = args
+            .iter()
+            .position(|a| a == "--json-schema")
+            .expect("--json-schema missing");
+        let schema_value: serde_json::Value =
+            serde_json::from_str(&args[schema_pos + 1]).expect("schema is valid JSON");
+        assert_eq!(schema_value["type"], "object");
+        assert_eq!(schema_value["additionalProperties"], false);
+
         assert!(args.contains(&"--output-format".to_string()));
         assert!(args.contains(&"json".to_string()));
     }
