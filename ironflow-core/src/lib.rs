@@ -74,6 +74,7 @@ pub mod parallel;
 pub mod provider;
 pub mod providers;
 pub mod retry;
+pub mod schema_transform;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tracker;

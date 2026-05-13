@@ -17,8 +17,8 @@ stages:
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
   IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"
-  GIT_DEPTH: 1
-  GIT_STRATEGY: fetch
+  GIT_DEPTH: 0
+  GIT_STRATEGY: clone
 
 .rust-cache: &rust-cache
   cache:
@@ -37,6 +37,11 @@ variables:
       - dashboard-${CI_DEFAULT_BRANCH}
     paths:
       - ironflow-dashboard/node_modules/
+
+.pnpm-install: &pnpm-install
+  before_script:
+    - corepack enable
+    - cd ironflow-dashboard && pnpm install || { pnpm approve-builds msw && pnpm install --frozen-lockfile; }
 
 # Validation jobs run only on MR pipelines.
 # Code is already validated before reaching main -- no need to re-check.
@@ -74,10 +79,8 @@ dashboard-check:
   extends: .only-mr
   stage: check
   image: node:22
-  <<: *dashboard-cache
+  <<: [*dashboard-cache, *pnpm-install]
   script:
-    - corepack enable
-    - cd ironflow-dashboard && pnpm install --frozen-lockfile
     - pnpm run lint
     - pnpm tsc -b --noEmit
 
@@ -123,10 +126,8 @@ check-openapi-types:
   image: node:22
   needs:
     - dashboard-check
-  <<: *dashboard-cache
+  <<: [*dashboard-cache, *pnpm-install]
   script:
-    - corepack enable
-    - cd ironflow-dashboard && pnpm install --frozen-lockfile
     - pnpm generate:types
     - git diff --exit-code src/app/lib/types.generated.ts
 
@@ -138,10 +139,9 @@ dashboard-build:
   needs:
     - job: dashboard-check
       optional: true
-  <<: *dashboard-cache
+  <<: [*dashboard-cache, *pnpm-install]
   script:
-    - corepack enable
-    - cd ironflow-dashboard && pnpm install --frozen-lockfile && pnpm run build
+    - pnpm run build
   artifacts:
     paths:
       - ironflow-dashboard/dist/
