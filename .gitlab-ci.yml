@@ -26,9 +26,9 @@ variables:
     fallback_keys:
       - rust-${CI_DEFAULT_BRANCH}
     paths:
-      - .cargo/registry/
-      - .cargo/git/
-      - target/
+      - .cargo/registry/cache/
+      - .cargo/registry/index/
+      - .cargo/git/db/
 
 .dashboard-cache: &dashboard-cache
   cache:
