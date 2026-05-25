@@ -109,14 +109,12 @@ impl Tool for McpBridgeTool {
         Box::pin(async move {
             match self.connection.call_tool(&self.mcp_name, input).await {
                 Ok(content) => Ok(ToolOutput::success(content)),
-                Err(McpError::Timeout { tool_name }) => {
-                    Ok(ToolOutput::error(format!("MCP tool '{tool_name}' timed out")))
-                }
-                Err(McpError::ToolCallFailed { tool_name, message }) => {
-                    Ok(ToolOutput::error(format!(
-                        "MCP tool '{tool_name}' error: {message}"
-                    )))
-                }
+                Err(McpError::Timeout { tool_name }) => Ok(ToolOutput::error(format!(
+                    "MCP tool '{tool_name}' timed out"
+                ))),
+                Err(McpError::ToolCallFailed { tool_name, message }) => Ok(ToolOutput::error(
+                    format!("MCP tool '{tool_name}' error: {message}"),
+                )),
                 Err(e) => Err(ToolError::new(format!("MCP infrastructure error: {e}"))),
             }
         })

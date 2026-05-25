@@ -284,11 +284,7 @@ impl McpConnection {
         }
     }
 
-    async fn send_notification(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<(), McpError> {
+    async fn send_notification(&self, method: &str, params: Option<Value>) -> Result<(), McpError> {
         match self {
             Self::Stdio(transport) => transport.send_notification(method, params).await,
             Self::Http(transport) => transport.send_notification(method, params).await,
@@ -305,10 +301,9 @@ impl StdioTransport {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let request = JsonRpcRequest::new(id, method, params);
 
-        let mut payload =
-            serde_json::to_string(&request).map_err(|e| McpError::ProtocolError {
-                message: format!("failed to serialize request: {e}"),
-            })?;
+        let mut payload = serde_json::to_string(&request).map_err(|e| McpError::ProtocolError {
+            message: format!("failed to serialize request: {e}"),
+        })?;
         payload.push('\n');
 
         {
@@ -346,11 +341,7 @@ impl StdioTransport {
         })
     }
 
-    async fn send_notification(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<(), McpError> {
+    async fn send_notification(&self, method: &str, params: Option<Value>) -> Result<(), McpError> {
         let notification = JsonRpcNotification::new(method, params);
 
         let mut payload =
@@ -410,11 +401,7 @@ impl HttpTransport {
         })
     }
 
-    async fn send_notification(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<(), McpError> {
+    async fn send_notification(&self, method: &str, params: Option<Value>) -> Result<(), McpError> {
         let notification = JsonRpcNotification::new(method, params);
 
         let response = self
