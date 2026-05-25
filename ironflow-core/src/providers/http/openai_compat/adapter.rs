@@ -6,7 +6,12 @@ use crate::error::AgentError;
 use crate::operations::agent::Model;
 use crate::provider::AgentConfig;
 use crate::providers::http::adapter::{HttpAgentAdapter, HttpToolCall, HttpUsage, TurnResult};
-use crate::providers::http::cost::{MISTRAL_COSTS, OPENAI_COSTS};
+#[cfg(feature = "provider-mistral")]
+use crate::providers::http::cost::MISTRAL_COSTS;
+#[cfg(feature = "provider-nvidia")]
+use crate::providers::http::cost::NVIDIA_COSTS;
+#[cfg(feature = "provider-openai")]
+use crate::providers::http::cost::OPENAI_COSTS;
 use crate::providers::http::sse::SseDelta;
 use crate::schema_transform::transform_schema;
 
@@ -96,9 +101,10 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
             .and_then(|c| c.get(0))
             .and_then(|c| c.get("message"));
 
-        let message = choice.ok_or_else(|| AgentError::ProcessFailed {
-            exit_code: -1,
-            stderr: "no choices in response".to_string(),
+        let message = choice.ok_or_else(|| AgentError::HttpProvider {
+            provider: self.config.provider_name().to_string(),
+            status_code: 0,
+            message: "no choices in response".to_string(),
         })?;
 
         let text = message
@@ -284,12 +290,15 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
     }
 
     fn compute_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
-        let table = if self.config.provider_name() == "mistral" {
-            &*MISTRAL_COSTS
-        } else {
-            &*OPENAI_COSTS
-        };
-        table.compute(model, input_tokens, output_tokens)
+        match self.config.provider_name() {
+            #[cfg(feature = "provider-openai")]
+            "openai" => OPENAI_COSTS.compute(model, input_tokens, output_tokens),
+            #[cfg(feature = "provider-mistral")]
+            "mistral" => MISTRAL_COSTS.compute(model, input_tokens, output_tokens),
+            #[cfg(feature = "provider-nvidia")]
+            "nvidia" => NVIDIA_COSTS.compute(model, input_tokens, output_tokens),
+            _ => None,
+        }
     }
 
     fn resolve_model(&self, model: &str) -> String {
@@ -345,7 +354,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::providers::http::openai_compat::config::{MistralConfig, OpenAiConfig};
+    use crate::providers::http::openai_compat::config::{
+        MistralConfig, NvidiaConfig, OpenAiConfig,
+    };
 
     fn openai_adapter() -> OpenAiCompatAdapter<OpenAiConfig> {
         OpenAiCompatAdapter::new(OpenAiConfig::new(
@@ -544,5 +555,69 @@ mod tests {
         assert_eq!(result.text.as_deref(), Some("Hello"));
         assert_eq!(result.usage.input_tokens, Some(10));
         assert_eq!(result.usage.output_tokens, Some(5));
+    }
+
+    fn nvidia_adapter() -> OpenAiCompatAdapter<NvidiaConfig> {
+        OpenAiCompatAdapter::new(NvidiaConfig::new("nvapi-test-key".to_string()))
+    }
+
+    #[test]
+    fn nvidia_endpoint_url() {
+        let adapter = nvidia_adapter();
+        assert_eq!(
+            adapter.endpoint_url("z-ai/glm-5.1"),
+            "https://integrate.api.nvidia.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn nvidia_auth_headers() {
+        let adapter = nvidia_adapter();
+        let headers = adapter.auth_headers();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].0, "Authorization");
+        assert_eq!(headers[0].1, "Bearer nvapi-test-key");
+    }
+
+    #[test]
+    fn nvidia_resolve_model_aliases() {
+        let adapter = nvidia_adapter();
+        assert_eq!(
+            adapter.resolve_model("sonnet"),
+            "deepseek-ai/deepseek-v4-flash"
+        );
+        assert_eq!(
+            adapter.resolve_model("haiku"),
+            "nvidia/nvidia-nemotron-nano-9b-v2"
+        );
+        assert_eq!(adapter.resolve_model("z-ai/glm-5.1"), "z-ai/glm-5.1");
+    }
+
+    #[test]
+    fn nvidia_build_request_uses_json_object() {
+        let adapter = nvidia_adapter();
+        let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
+        let config = AgentConfig::new("Give x").output_schema_raw(schema).into();
+        let body = adapter.build_request(&config).expect("test");
+
+        assert_eq!(body["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn nvidia_build_request_default_model() {
+        let adapter = nvidia_adapter();
+        let config = AgentConfig::new("Hello");
+        let body = adapter.build_request(&config).expect("test");
+
+        assert_eq!(body["model"], "deepseek-ai/deepseek-v4-flash");
+    }
+
+    #[test]
+    fn nvidia_build_request_explicit_model() {
+        let adapter = nvidia_adapter();
+        let config = AgentConfig::new("Hello").model("z-ai/glm-5.1");
+        let body = adapter.build_request(&config).expect("test");
+
+        assert_eq!(body["model"], "z-ai/glm-5.1");
     }
 }
