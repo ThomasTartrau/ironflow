@@ -1,6 +1,6 @@
 //! OpenAI-compatible adapter implementation shared by OpenAI and Mistral.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::AgentError;
 use crate::operations::agent::Model;
@@ -345,7 +345,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::providers::http::openai_compat::config::{OpenAiConfig, MistralConfig};
+    use crate::providers::http::openai_compat::config::{MistralConfig, OpenAiConfig};
 
     fn openai_adapter() -> OpenAiCompatAdapter<OpenAiConfig> {
         OpenAiCompatAdapter::new(OpenAiConfig::new(
@@ -374,8 +374,7 @@ mod tests {
     #[test]
     fn build_request_with_system_prompt() {
         let adapter = openai_adapter();
-        let config = AgentConfig::new("Hello")
-            .system_prompt("You are helpful");
+        let config = AgentConfig::new("Hello").system_prompt("You are helpful");
         let body = adapter.build_request(&config).expect("test");
 
         assert_eq!(body["messages"][0]["role"], "system");
@@ -389,7 +388,8 @@ mod tests {
         let adapter = openai_adapter();
         let schema = r#"{"type":"object","properties":{"name":{"type":"string"}}}"#;
         let config = AgentConfig::new("Give name")
-            .output_schema_raw(schema).into();
+            .output_schema_raw(schema)
+            .into();
         let body = adapter.build_request(&config).expect("test");
 
         let rf = &body["response_format"];
@@ -402,8 +402,7 @@ mod tests {
     fn build_request_with_json_schema_mistral_uses_json_object() {
         let adapter = mistral_adapter();
         let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
-        let config = AgentConfig::new("Give x")
-            .output_schema_raw(schema).into();
+        let config = AgentConfig::new("Give x").output_schema_raw(schema).into();
         let body = adapter.build_request(&config).expect("test");
 
         assert_eq!(body["response_format"]["type"], "json_object");
@@ -437,8 +436,7 @@ mod tests {
             "model": "gpt-5.5"
         });
         let schema = r#"{"type":"object"}"#;
-        let config = AgentConfig::new("Name?")
-            .output_schema_raw(schema).into();
+        let config = AgentConfig::new("Name?").output_schema_raw(schema).into();
         let result = adapter.parse_response(&body, &config).expect("test");
 
         assert!(result.text.is_none());
@@ -485,7 +483,13 @@ mod tests {
         let adapter = openai_adapter();
         let line = r#"{"usage":{"prompt_tokens":100,"completion_tokens":50}}"#;
         let delta = adapter.parse_sse_line(line).expect("test");
-        assert!(matches!(delta, SseDelta::Usage { input_tokens: 100, output_tokens: 50 }));
+        assert!(matches!(
+            delta,
+            SseDelta::Usage {
+                input_tokens: 100,
+                output_tokens: 50
+            }
+        ));
     }
 
     #[test]
@@ -528,7 +532,10 @@ mod tests {
         let deltas = vec![
             SseDelta::Text("Hel".to_string()),
             SseDelta::Text("lo".to_string()),
-            SseDelta::Usage { input_tokens: 10, output_tokens: 5 },
+            SseDelta::Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+            },
             SseDelta::Done,
         ];
         let config = AgentConfig::new("Hi");

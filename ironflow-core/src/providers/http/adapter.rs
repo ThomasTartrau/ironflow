@@ -185,10 +185,13 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
             let deltas = collect_sse_stream(&self.adapter, response, self.timeout).await?;
             self.adapter.fold_sse_deltas(deltas, config)
         } else {
-            let body: Value = response.json().await.map_err(|e| AgentError::ProcessFailed {
-                exit_code: -1,
-                stderr: format!("failed to parse response JSON: {e}"),
-            })?;
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to parse response JSON: {e}"),
+                })?;
             self.adapter.parse_response(&body, config)
         }
     }
@@ -241,10 +244,7 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
 
             info!(
                 provider = self.adapter.provider_name(),
-                duration_ms,
-                input_tokens,
-                output_tokens,
-                "invocation complete"
+                duration_ms, input_tokens, output_tokens, "invocation complete"
             );
 
             Ok(AgentOutput {

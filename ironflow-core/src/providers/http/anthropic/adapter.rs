@@ -1,6 +1,6 @@
 //! Anthropic Messages API adapter implementation.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::AgentError;
 use crate::operations::agent::Model;
@@ -385,8 +385,7 @@ mod tests {
     #[test]
     fn build_request_with_system_prompt() {
         let a = adapter();
-        let config = AgentConfig::new("Hi")
-            .system_prompt("Be concise");
+        let config = AgentConfig::new("Hi").system_prompt("Be concise");
         let body = a.build_request(&config).expect("build_request failed");
 
         assert_eq!(body["system"], "Be concise");
@@ -396,8 +395,7 @@ mod tests {
     fn build_request_with_json_schema_uses_tool_forcing() {
         let a = adapter();
         let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
-        let config = AgentConfig::new("Give x")
-            .output_schema_raw(schema).into();
+        let config = AgentConfig::new("Give x").output_schema_raw(schema).into();
         let body = a.build_request(&config).expect("build_request failed");
 
         assert_eq!(body["tools"][0]["name"], "structured_output");
@@ -434,8 +432,7 @@ mod tests {
             "model": "claude-sonnet-4-6"
         });
         let schema = r#"{"type":"object"}"#;
-        let config = AgentConfig::new("Give x")
-            .output_schema_raw(schema).into();
+        let config = AgentConfig::new("Give x").output_schema_raw(schema).into();
         let result = a.parse_response(&body, &config).expect("parse failed");
 
         assert_eq!(result.structured_value, Some(json!({"x": 42})));
@@ -472,12 +469,16 @@ mod tests {
     fn auth_headers_format() {
         let a = adapter();
         let headers = a.auth_headers();
-        assert!(headers
-            .iter()
-            .any(|(k, v)| k == "x-api-key" && v == "test-key"));
-        assert!(headers
-            .iter()
-            .any(|(k, v)| k == "anthropic-version" && v == "2023-06-01"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "x-api-key" && v == "test-key")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "anthropic-version" && v == "2023-06-01")
+        );
     }
 
     #[test]

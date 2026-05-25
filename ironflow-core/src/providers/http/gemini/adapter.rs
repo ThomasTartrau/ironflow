@@ -1,6 +1,6 @@
 //! Google Gemini API adapter implementation.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::AgentError;
 use crate::operations::agent::Model;
@@ -340,8 +340,7 @@ mod tests {
     #[test]
     fn build_request_with_system_prompt() {
         let a = adapter();
-        let config = AgentConfig::new("Hi")
-            .system_prompt("Be brief");
+        let config = AgentConfig::new("Hi").system_prompt("Be brief");
         let body = a.build_request(&config).expect("build_request failed");
 
         assert_eq!(body["system_instruction"]["parts"][0]["text"], "Be brief");
@@ -351,8 +350,7 @@ mod tests {
     fn build_request_with_json_schema() {
         let a = adapter();
         let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
-        let config = AgentConfig::new("Give x")
-            .output_schema_raw(schema).into();
+        let config = AgentConfig::new("Give x").output_schema_raw(schema).into();
         let body = a.build_request(&config).expect("build_request failed");
 
         assert_eq!(
@@ -388,8 +386,7 @@ mod tests {
             "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5}
         });
         let schema = r#"{"type":"object"}"#;
-        let config = AgentConfig::new("Give x")
-            .output_schema_raw(schema).into();
+        let config = AgentConfig::new("Give x").output_schema_raw(schema).into();
         let result = a.parse_response(&body, &config).expect("parse failed");
 
         assert!(result.text.is_none());

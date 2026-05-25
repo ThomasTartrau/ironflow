@@ -11,7 +11,6 @@ members = [
     "examples/ironflow-workflows",
     "examples/server",
     "examples/worker",
-    "examples/http-providers",
     "ironflow-mcp",
 ]
 

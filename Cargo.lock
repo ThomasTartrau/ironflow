@@ -1826,18 +1826,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-providers-examples"
-version = "0.1.0"
-dependencies = [
- "ironflow-core",
- "schemars",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "http-range-header"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
