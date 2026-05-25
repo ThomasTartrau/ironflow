@@ -1,4 +1,6 @@
 mod helpers;
+#[cfg(feature = "tool-mcp")]
+mod mcp_bridge;
 mod workflow_agent;
 mod workflow_dry_run;
 mod workflow_errors;

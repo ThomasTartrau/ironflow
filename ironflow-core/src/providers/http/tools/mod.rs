@@ -21,6 +21,8 @@
 
 #[cfg(feature = "tool-bash")]
 pub mod bash;
+#[cfg(feature = "tool-mcp")]
+pub mod mcp;
 #[cfg(feature = "tool-read-file")]
 pub mod read_file;
 #[cfg(feature = "tool-web-fetch")]
