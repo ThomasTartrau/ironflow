@@ -15,3 +15,4 @@
 pub mod claude;
 pub mod http;
 pub mod record_replay;
+pub mod router;

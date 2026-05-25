@@ -113,4 +113,6 @@ pub mod prelude {
     pub use crate::providers::http::NvidiaProvider;
     #[cfg(feature = "provider-openai")]
     pub use crate::providers::http::OpenAiProvider;
+
+    pub use crate::providers::router::{ProviderMatcher, ProviderRouter};
 }

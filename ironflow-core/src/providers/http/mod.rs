@@ -11,6 +11,7 @@
 pub mod adapter;
 pub mod cost;
 pub mod sse;
+pub mod tools;
 
 #[cfg(any(
     feature = "provider-openai",
