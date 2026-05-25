@@ -163,6 +163,26 @@ pub enum AgentError {
         /// The [`Duration`] that was exceeded.
         limit: Duration,
     },
+
+    /// The provider returned HTTP 429 Too Many Requests.
+    #[error("rate limited by {provider}, retry after {retry_after_secs:?}s")]
+    RateLimited {
+        /// Provider name (e.g. `"openai"`, `"anthropic"`).
+        provider: String,
+        /// Value from the `Retry-After` header, if present.
+        retry_after_secs: Option<u64>,
+    },
+
+    /// The provider returned an unexpected HTTP error.
+    #[error("{provider} HTTP {status_code}: {message}")]
+    HttpProvider {
+        /// Provider name (e.g. `"openai"`, `"gemini"`).
+        provider: String,
+        /// HTTP status code.
+        status_code: u16,
+        /// Error message from the provider response body.
+        message: String,
+    },
 }
 
 #[cfg(test)]
