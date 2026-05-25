@@ -2185,7 +2185,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-api"
-version = "2.18.5"
+version = "2.18.6"
 dependencies = [
  "axum 0.8.9",
  "chrono",
@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-core"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "bollard",
  "futures-util",
@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.15.5"
+version = "2.15.6"
 dependencies = [
  "axum 0.8.9",
  "chrono",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.1.21"
+version = "2.1.22"
 dependencies = [
  "axum 0.8.9",
  "dotenvy",
@@ -2377,7 +2377,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.8.14"
+version = "2.8.15"
 dependencies = [
  "axum 0.7.9",
  "chrono",
