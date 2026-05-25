@@ -102,4 +102,13 @@ pub mod prelude {
     pub use crate::tracker::WorkflowTracker;
     pub use schemars::JsonSchema;
     pub use serde::{Deserialize, Serialize};
+
+    #[cfg(feature = "provider-anthropic-api")]
+    pub use crate::providers::http::AnthropicApiProvider;
+    #[cfg(feature = "provider-gemini")]
+    pub use crate::providers::http::GeminiProvider;
+    #[cfg(feature = "provider-mistral")]
+    pub use crate::providers::http::MistralProvider;
+    #[cfg(feature = "provider-openai")]
+    pub use crate::providers::http::OpenAiProvider;
 }

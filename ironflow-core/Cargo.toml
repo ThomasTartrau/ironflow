@@ -40,6 +40,10 @@ prometheus = ["metrics"]
 transport-ssh = ["russh"]
 transport-docker = ["bollard"]
 transport-k8s = ["kube", "k8s-openapi", "tokio-util"]
+provider-openai = []
+provider-mistral = []
+provider-gemini = []
+provider-anthropic-api = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

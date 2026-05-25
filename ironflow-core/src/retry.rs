@@ -195,12 +195,14 @@ pub fn is_retryable(error: &OperationError) -> bool {
             None => true,
             Some(code) => *code >= 500 || *code == 429,
         },
-        OperationError::Agent(agent_err) => matches!(
-            agent_err,
+        OperationError::Agent(agent_err) => match agent_err {
             AgentError::ProcessFailed { .. }
-                | AgentError::Timeout { .. }
-                | AgentError::SchemaValidation { .. }
-        ),
+            | AgentError::Timeout { .. }
+            | AgentError::SchemaValidation { .. }
+            | AgentError::RateLimited { .. } => true,
+            AgentError::HttpProvider { status_code, .. } => *status_code >= 500,
+            AgentError::PromptTooLarge { .. } => false,
+        },
         OperationError::Timeout { .. } => true,
         OperationError::Shell { .. } | OperationError::Deserialize { .. } => false,
     }
