@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.16.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.15.0...ironflow-core-v2.16.0) - 2026-05-25
+
+### Added
+
+- add NVIDIA NIM provider with 25+ model constants
+
 ## [2.15.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.14.0...ironflow-core-v2.15.0) - 2026-05-25
 
 ### Added
