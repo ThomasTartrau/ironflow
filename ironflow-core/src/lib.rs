@@ -109,6 +109,8 @@ pub mod prelude {
     pub use crate::providers::http::GeminiProvider;
     #[cfg(feature = "provider-mistral")]
     pub use crate::providers::http::MistralProvider;
+    #[cfg(feature = "provider-nvidia")]
+    pub use crate::providers::http::NvidiaProvider;
     #[cfg(feature = "provider-openai")]
     pub use crate::providers::http::OpenAiProvider;
 }

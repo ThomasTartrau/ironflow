@@ -44,6 +44,7 @@ provider-openai = []
 provider-mistral = []
 provider-gemini = []
 provider-anthropic-api = []
+provider-nvidia = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

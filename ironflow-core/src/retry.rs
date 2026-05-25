@@ -200,7 +200,9 @@ pub fn is_retryable(error: &OperationError) -> bool {
             | AgentError::Timeout { .. }
             | AgentError::SchemaValidation { .. }
             | AgentError::RateLimited { .. } => true,
-            AgentError::HttpProvider { status_code, .. } => *status_code >= 500,
+            AgentError::HttpProvider { status_code, .. } => {
+                *status_code == 0 || *status_code >= 500
+            }
             AgentError::PromptTooLarge { .. } => false,
         },
         OperationError::Timeout { .. } => true,

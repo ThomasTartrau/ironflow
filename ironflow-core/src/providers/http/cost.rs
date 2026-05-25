@@ -5,7 +5,8 @@ use std::collections::HashMap;
     feature = "provider-openai",
     feature = "provider-mistral",
     feature = "provider-gemini",
-    feature = "provider-anthropic-api"
+    feature = "provider-anthropic-api",
+    feature = "provider-nvidia"
 ))]
 use std::sync::LazyLock;
 
@@ -191,6 +192,37 @@ pub static ANTHROPIC_COSTS: LazyLock<CostTable> = LazyLock::new(|| {
             CostEntry {
                 input_per_mtok: 3.00,
                 output_per_mtok: 15.00,
+            },
+        ),
+    ]);
+    CostTable { entries }
+});
+
+/// NVIDIA NIM model costs (Nemotron models with known pricing).
+#[cfg(feature = "provider-nvidia")]
+pub static NVIDIA_COSTS: LazyLock<CostTable> = LazyLock::new(|| {
+    use crate::providers::http::openai_compat::config::NvidiaModel;
+
+    let entries = HashMap::from([
+        (
+            NvidiaModel::NEMOTRON_NANO_9B,
+            CostEntry {
+                input_per_mtok: 0.04,
+                output_per_mtok: 0.16,
+            },
+        ),
+        (
+            NvidiaModel::NEMOTRON_SUPER_49B,
+            CostEntry {
+                input_per_mtok: 0.10,
+                output_per_mtok: 0.40,
+            },
+        ),
+        (
+            NvidiaModel::NEMOTRON_ULTRA_253B,
+            CostEntry {
+                input_per_mtok: 0.90,
+                output_per_mtok: 0.90,
             },
         ),
     ]);

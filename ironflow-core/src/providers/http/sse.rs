@@ -80,9 +80,10 @@ pub async fn collect_sse_stream<A: HttpAgentAdapter>(
             }
             Ok(Ok(None)) => break,
             Ok(Err(e)) => {
-                return Err(AgentError::ProcessFailed {
-                    exit_code: -1,
-                    stderr: format!("SSE stream read error: {e}"),
+                return Err(AgentError::HttpProvider {
+                    provider: adapter.provider_name().to_string(),
+                    status_code: 0,
+                    message: format!("SSE stream read error: {e}"),
                 });
             }
             Err(_) => {

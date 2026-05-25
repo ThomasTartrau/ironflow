@@ -173,14 +173,17 @@ pub enum AgentError {
         retry_after_secs: Option<u64>,
     },
 
-    /// The provider returned an unexpected HTTP error.
+    /// The provider returned an unexpected HTTP error or a transport-level failure.
+    ///
+    /// When `status_code` is `0`, no HTTP response was received (connection failure,
+    /// DNS resolution error, TLS handshake failure, or response body read error).
     #[error("{provider} HTTP {status_code}: {message}")]
     HttpProvider {
-        /// Provider name (e.g. `"openai"`, `"gemini"`).
+        /// Provider name (e.g. `"openai"`, `"nvidia"`).
         provider: String,
-        /// HTTP status code.
+        /// HTTP status code, or `0` for transport-level failures.
         status_code: u16,
-        /// Error message from the provider response body.
+        /// Error message from the provider response body, or transport error description.
         message: String,
     },
 }

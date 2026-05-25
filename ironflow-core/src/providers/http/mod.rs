@@ -6,13 +6,17 @@
 //! only implement request/response format differences.
 //!
 //! Enable providers via feature flags: `provider-openai`, `provider-mistral`,
-//! `provider-gemini`, `provider-anthropic-api`.
+//! `provider-gemini`, `provider-anthropic-api`, `provider-nvidia`.
 
 pub mod adapter;
 pub mod cost;
 pub mod sse;
 
-#[cfg(any(feature = "provider-openai", feature = "provider-mistral"))]
+#[cfg(any(
+    feature = "provider-openai",
+    feature = "provider-mistral",
+    feature = "provider-nvidia"
+))]
 pub mod openai_compat;
 
 #[cfg(feature = "provider-anthropic-api")]
@@ -34,3 +38,6 @@ pub use anthropic::{AnthropicApiProvider, AnthropicModel};
 
 #[cfg(feature = "provider-gemini")]
 pub use gemini::{GeminiModel, GeminiProvider};
+
+#[cfg(feature = "provider-nvidia")]
+pub use openai_compat::{NvidiaModel, NvidiaProvider};

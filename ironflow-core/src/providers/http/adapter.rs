@@ -144,9 +144,18 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
             .map_err(|_| AgentError::Timeout {
                 limit: self.timeout,
             })?
-            .map_err(|e| AgentError::ProcessFailed {
-                exit_code: -1,
-                stderr: format!("HTTP request failed: {e}"),
+            .map_err(|e| {
+                if e.is_timeout() {
+                    AgentError::Timeout {
+                        limit: self.timeout,
+                    }
+                } else {
+                    AgentError::HttpProvider {
+                        provider: self.adapter.provider_name().to_string(),
+                        status_code: 0,
+                        message: format!("connection failed: {e}"),
+                    }
+                }
             })?;
 
         let status = response.status().as_u16();
@@ -188,9 +197,10 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
             let body: Value = response
                 .json()
                 .await
-                .map_err(|e| AgentError::ProcessFailed {
-                    exit_code: -1,
-                    stderr: format!("failed to parse response JSON: {e}"),
+                .map_err(|e| AgentError::HttpProvider {
+                    provider: self.adapter.provider_name().to_string(),
+                    status_code: 0,
+                    message: format!("failed to parse response JSON: {e}"),
                 })?;
             self.adapter.parse_response(&body, config)
         }
