@@ -3,12 +3,16 @@
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
-use serde_json::Value;
-use tracing::info;
+use serde_json::{Value, json};
+use tracing::{debug, info, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentOutput, AgentProvider, DebugMessage, InvokeFuture};
+use crate::provider::{
+    AgentConfig, AgentOutput, AgentProvider, DebugMessage, DebugToolCall, DebugToolResult,
+    InvokeFuture,
+};
 use crate::providers::http::sse::{SseDelta, collect_sse_stream};
+use crate::providers::http::tools::ToolRegistry;
 
 /// Normalized result of one API turn (one HTTP request/response cycle).
 #[derive(Debug)]
@@ -94,11 +98,19 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 ///
 /// Implements [`AgentProvider`] by delegating request construction and response
 /// parsing to the adapter while handling the HTTP transport, timeout, and
-/// single-turn execution loop.
+/// agentic execution loop.
+///
+/// When a [`ToolRegistry`] is attached via [`with_tools`](Self::with_tools),
+/// the provider runs a multi-turn agentic loop: executing tool calls locally
+/// and feeding results back to the model until it produces a final response
+/// (or hits `max_turns` / `max_budget_usd` limits).
+///
+/// Without a registry, the provider behaves as single-turn (backward-compatible).
 pub struct HttpAgentProvider<A: HttpAgentAdapter> {
     adapter: A,
     client: Client,
     timeout: Duration,
+    tool_registry: Option<ToolRegistry>,
 }
 
 impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
@@ -112,7 +124,19 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
             adapter,
             client,
             timeout: DEFAULT_TIMEOUT,
+            tool_registry: None,
         }
+    }
+
+    /// Attach a tool registry to enable multi-turn agentic execution.
+    ///
+    /// When tools are registered, the provider will:
+    /// 1. Include the tools in every request (OpenAI `tools` format).
+    /// 2. Execute tool calls returned by the model.
+    /// 3. Loop until the model produces a final response or limits are hit.
+    pub fn with_tools(mut self, registry: ToolRegistry) -> Self {
+        self.tool_registry = Some(registry);
+        self
     }
 
     /// Override the request timeout.
@@ -207,66 +231,261 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
     }
 }
 
+/// Accumulates usage across turns and builds the final [`AgentOutput`].
+struct LoopState {
+    start: Instant,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    total_cost: f64,
+    model_name: Option<String>,
+    debug_messages: Vec<DebugMessage>,
+    verbose: bool,
+}
+
+impl LoopState {
+    fn new(start: Instant, verbose: bool) -> Self {
+        Self {
+            start,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost: 0.0,
+            model_name: None,
+            debug_messages: Vec::new(),
+            verbose,
+        }
+    }
+
+    fn into_output(self, value: Value) -> AgentOutput {
+        AgentOutput {
+            value,
+            session_id: None,
+            cost_usd: if self.total_cost > 0.0 {
+                Some(self.total_cost)
+            } else {
+                None
+            },
+            input_tokens: Some(self.total_input_tokens),
+            output_tokens: Some(self.total_output_tokens),
+            model: self.model_name,
+            duration_ms: self.start.elapsed().as_millis() as u64,
+            debug_messages: if self.verbose {
+                Some(self.debug_messages)
+            } else {
+                None
+            },
+        }
+    }
+}
+
+/// Extract the final value from a turn result (structured or text).
+fn extract_value(turn_result: &TurnResult) -> Value {
+    if let Some(ref structured) = turn_result.structured_value {
+        structured.clone()
+    } else {
+        turn_result
+            .text
+            .as_ref()
+            .map(|t| Value::String(t.clone()))
+            .unwrap_or(Value::String(String::new()))
+    }
+}
+
+/// Extract the text value from a turn result (ignoring structured).
+fn extract_text_value(turn_result: &TurnResult) -> Value {
+    turn_result
+        .text
+        .as_ref()
+        .map(|t| Value::String(t.clone()))
+        .unwrap_or(Value::String(String::new()))
+}
+
 impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
-            let start = Instant::now();
+            let mut request_body = self.adapter.build_request(config)?;
 
-            let request_body = self.adapter.build_request(config)?;
-            let turn_result = self.execute_turn(&request_body, config).await?;
+            // Inject tools into the request if a registry is available
+            if let Some(ref registry) = self.tool_registry
+                && !registry.is_empty()
+            {
+                let tools_array = registry.to_openai_tools();
+                request_body["tools"] = Value::Array(tools_array);
+            }
 
-            let duration_ms = start.elapsed().as_millis() as u64;
-            let input_tokens = turn_result.usage.input_tokens.unwrap_or(0);
-            let output_tokens = turn_result.usage.output_tokens.unwrap_or(0);
-            let model_name = turn_result.model.clone();
+            let max_turns = config.max_turns.unwrap_or(25) as usize;
+            let max_budget = config.max_budget_usd.unwrap_or(f64::MAX);
+            let mut state = LoopState::new(Instant::now(), config.verbose);
 
-            let cost = model_name
-                .as_deref()
-                .and_then(|m| self.adapter.compute_cost(m, input_tokens, output_tokens));
+            // Messages array for multi-turn
+            let mut messages: Vec<Value> = request_body
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .cloned()
+                .unwrap_or_default();
 
-            let debug_messages = if config.verbose {
-                Some(vec![DebugMessage {
-                    text: turn_result.text.clone(),
-                    thinking: None,
-                    thinking_redacted: false,
-                    tool_calls: Vec::new(),
-                    tool_results: Vec::new(),
-                    stop_reason: if turn_result.is_final {
-                        Some("end_turn".to_string())
-                    } else {
-                        Some("tool_use".to_string())
-                    },
-                    input_tokens: turn_result.usage.input_tokens,
-                    output_tokens: turn_result.usage.output_tokens,
-                }])
-            } else {
-                None
-            };
+            for turn in 0..max_turns {
+                request_body["messages"] = Value::Array(messages.clone());
+                let turn_result = self.execute_turn(&request_body, config).await?;
 
-            let value = if let Some(structured) = turn_result.structured_value {
-                structured
-            } else {
-                turn_result
-                    .text
-                    .map(Value::String)
-                    .unwrap_or(Value::String(String::new()))
-            };
+                // Accumulate usage
+                let turn_input = turn_result.usage.input_tokens.unwrap_or(0);
+                let turn_output = turn_result.usage.output_tokens.unwrap_or(0);
+                state.total_input_tokens += turn_input;
+                state.total_output_tokens += turn_output;
 
-            info!(
+                if state.model_name.is_none() {
+                    state.model_name = turn_result.model.clone();
+                }
+
+                if let Some(ref model) = state.model_name
+                    && let Some(turn_cost) =
+                        self.adapter.compute_cost(model, turn_input, turn_output)
+                {
+                    state.total_cost += turn_cost;
+                }
+
+                // Record debug trace for this turn
+                if config.verbose {
+                    let tool_calls_debug: Vec<DebugToolCall> = turn_result
+                        .tool_calls
+                        .iter()
+                        .map(|tc| DebugToolCall {
+                            id: Some(tc.id.clone()),
+                            name: tc.name.clone(),
+                            input: tc.input.clone(),
+                        })
+                        .collect();
+
+                    state.debug_messages.push(DebugMessage {
+                        text: turn_result.text.clone(),
+                        thinking: None,
+                        thinking_redacted: false,
+                        tool_calls: tool_calls_debug,
+                        tool_results: Vec::new(),
+                        stop_reason: if turn_result.is_final {
+                            Some("end_turn".to_string())
+                        } else {
+                            Some("tool_use".to_string())
+                        },
+                        input_tokens: Some(turn_input),
+                        output_tokens: Some(turn_output),
+                    });
+                }
+
+                // Final response (no tool calls) -> return
+                if turn_result.is_final || turn_result.tool_calls.is_empty() {
+                    info!(
+                        provider = self.adapter.provider_name(),
+                        turns = turn + 1,
+                        duration_ms = state.start.elapsed().as_millis() as u64,
+                        input_tokens = state.total_input_tokens,
+                        output_tokens = state.total_output_tokens,
+                        "invocation complete"
+                    );
+                    return Ok(state.into_output(extract_value(&turn_result)));
+                }
+
+                // Tool calls but no registry -> return text (backward compat)
+                let registry = match self.tool_registry {
+                    Some(ref r) => r,
+                    None => {
+                        warn!(
+                            provider = self.adapter.provider_name(),
+                            tool_calls = turn_result.tool_calls.len(),
+                            "model requested tool calls but no registry attached, returning text"
+                        );
+                        return Ok(state.into_output(extract_text_value(&turn_result)));
+                    }
+                };
+
+                // Budget exceeded -> stop
+                if state.total_cost >= max_budget {
+                    warn!(
+                        provider = self.adapter.provider_name(),
+                        cost = state.total_cost,
+                        budget = max_budget,
+                        "budget exceeded, stopping agentic loop"
+                    );
+                    return Ok(state.into_output(extract_text_value(&turn_result)));
+                }
+
+                // Build assistant message with tool_calls for conversation history
+                let assistant_tool_calls: Vec<Value> = turn_result
+                    .tool_calls
+                    .iter()
+                    .map(|tc| {
+                        json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.input.to_string()
+                            }
+                        })
+                    })
+                    .collect();
+
+                let mut assistant_msg = json!({"role": "assistant"});
+                if let Some(ref text) = turn_result.text {
+                    assistant_msg["content"] = Value::String(text.clone());
+                } else {
+                    assistant_msg["content"] = Value::Null;
+                }
+                assistant_msg["tool_calls"] = Value::Array(assistant_tool_calls);
+                messages.push(assistant_msg);
+
+                // Execute each tool call
+                let mut tool_results_debug: Vec<DebugToolResult> = Vec::new();
+
+                for tc in &turn_result.tool_calls {
+                    debug!(
+                        provider = self.adapter.provider_name(),
+                        tool = %tc.name,
+                        call_id = %tc.id,
+                        "executing tool call"
+                    );
+
+                    let (content, is_error) =
+                        match registry.execute(&tc.name, tc.input.clone()).await {
+                            Some(Ok(output)) => (output.content, output.is_error),
+                            Some(Err(err)) => (format!("Tool execution error: {err}"), true),
+                            None => (format!("Unknown tool: {}", tc.name), true),
+                        };
+
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": content
+                    }));
+
+                    if config.verbose {
+                        tool_results_debug.push(DebugToolResult {
+                            tool_use_id: Some(tc.id.clone()),
+                            content: Value::String(content.clone()),
+                            is_error,
+                        });
+                    }
+                }
+
+                if config.verbose
+                    && let Some(last_msg) = state.debug_messages.last_mut()
+                {
+                    last_msg.tool_results = tool_results_debug;
+                }
+
+                info!(
+                    provider = self.adapter.provider_name(),
+                    turn = turn + 1,
+                    tools_executed = turn_result.tool_calls.len(),
+                    "turn complete, continuing loop"
+                );
+            }
+
+            warn!(
                 provider = self.adapter.provider_name(),
-                duration_ms, input_tokens, output_tokens, "invocation complete"
+                max_turns, "max turns reached, returning last state"
             );
-
-            Ok(AgentOutput {
-                value,
-                session_id: None,
-                cost_usd: cost,
-                input_tokens: Some(input_tokens),
-                output_tokens: Some(output_tokens),
-                model: model_name,
-                duration_ms,
-                debug_messages,
-            })
+            Ok(state.into_output(Value::String(String::new())))
         })
     }
 }
