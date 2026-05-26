@@ -124,8 +124,7 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
         let is_final = finish_reason == "stop" || finish_reason == "length";
 
         let structured_value = if config.json_schema.is_some() {
-            text.as_deref()
-                .and_then(|t| serde_json::from_str::<Value>(t).ok())
+            text.as_deref().and_then(|t| parse_json_content(t))
         } else {
             None
         };
@@ -268,9 +267,7 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
         let is_final = tool_calls.is_empty();
 
         let structured_value = if config.json_schema.is_some() {
-            full_text
-                .as_deref()
-                .and_then(|t| serde_json::from_str::<Value>(t).ok())
+            full_text.as_deref().and_then(|t| parse_json_content(t))
         } else {
             None
         };
@@ -308,6 +305,35 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
             other => other.to_string(),
         }
     }
+}
+
+/// Strip markdown code fences from a string if present.
+///
+/// Handles both `` ```json ... ``` `` and `` ``` ... ``` `` patterns
+/// that some providers (NVIDIA, Mistral) wrap around JSON output.
+fn strip_code_fences(s: &str) -> &str {
+    let trimmed = s.trim();
+    let after_open = if trimmed.starts_with("```json\n") || trimmed.starts_with("```json\r") {
+        trimmed["```json".len()..].trim_start()
+    } else if trimmed.starts_with("```\n") || trimmed.starts_with("```\r") {
+        trimmed["```".len()..].trim_start()
+    } else {
+        return trimmed;
+    };
+    match after_open.strip_suffix("```") {
+        Some(inner) => inner.trim_end(),
+        None => trimmed,
+    }
+}
+
+/// Try to parse JSON content, stripping code fences if necessary.
+///
+/// First attempts direct parsing, then retries after stripping markdown
+/// code fences that some providers wrap around structured output.
+fn parse_json_content(s: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(s)
+        .ok()
+        .or_else(|| serde_json::from_str::<Value>(strip_code_fences(s)).ok())
 }
 
 fn parse_tool_calls(message: &Value) -> Vec<HttpToolCall> {
@@ -619,5 +645,96 @@ mod tests {
         let body = adapter.build_request(&config).expect("test");
 
         assert_eq!(body["model"], "z-ai/glm-5.1");
+    }
+
+    #[test]
+    fn strip_code_fences_json_tag() {
+        let input = "```json\n{\"action\": \"query\"}\n```";
+        assert_eq!(strip_code_fences(input), "{\"action\": \"query\"}");
+    }
+
+    #[test]
+    fn strip_code_fences_no_tag() {
+        let input = "```\n{\"action\": \"query\"}\n```";
+        assert_eq!(strip_code_fences(input), "{\"action\": \"query\"}");
+    }
+
+    #[test]
+    fn strip_code_fences_passthrough_plain_json() {
+        let input = "{\"action\": \"query\"}";
+        assert_eq!(strip_code_fences(input), input);
+    }
+
+    #[test]
+    fn strip_code_fences_with_surrounding_whitespace() {
+        let input = "  \n```json\n{\"action\": \"query\"}\n```\n  ";
+        assert_eq!(strip_code_fences(input), "{\"action\": \"query\"}");
+    }
+
+    #[test]
+    fn strip_code_fences_no_closing_fence() {
+        let input = "```json\n{\"action\": \"query\"}";
+        assert_eq!(strip_code_fences(input), input.trim());
+    }
+
+    #[test]
+    fn parse_json_content_plain() {
+        let result = parse_json_content("{\"name\": \"Alice\"}");
+        assert_eq!(result, Some(json!({"name": "Alice"})));
+    }
+
+    #[test]
+    fn parse_json_content_with_code_fences() {
+        let input = "```json\n{\"name\": \"Alice\"}\n```";
+        let result = parse_json_content(input);
+        assert_eq!(result, Some(json!({"name": "Alice"})));
+    }
+
+    #[test]
+    fn parse_json_content_with_bare_fences() {
+        let input = "```\n{\"x\": 42}\n```";
+        let result = parse_json_content(input);
+        assert_eq!(result, Some(json!({"x": 42})));
+    }
+
+    #[test]
+    fn parse_json_content_invalid() {
+        assert_eq!(parse_json_content("not json at all"), None);
+    }
+
+    #[test]
+    fn parse_response_structured_with_code_fences() {
+        let adapter = nvidia_adapter();
+        let body = json!({
+            "choices": [{"message": {"content": "```json\n{\"action\":\"query\",\"params\":{\"domain\":\"grafana\"}}\n```"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 8},
+            "model": "deepseek-ai/deepseek-v4-flash"
+        });
+        let schema = r#"{"type":"object"}"#;
+        let config = AgentConfig::new("Action?").output_schema_raw(schema).into();
+        let result = adapter.parse_response(&body, &config).expect("test");
+
+        assert!(result.text.is_none());
+        assert_eq!(
+            result.structured_value,
+            Some(json!({"action": "query", "params": {"domain": "grafana"}}))
+        );
+    }
+
+    #[test]
+    fn fold_sse_deltas_structured_with_code_fences() {
+        let adapter = nvidia_adapter();
+        let deltas = vec![
+            SseDelta::Text("```json\n".to_string()),
+            SseDelta::Text("{\"action\":\"query\"}".to_string()),
+            SseDelta::Text("\n```".to_string()),
+            SseDelta::Done,
+        ];
+        let schema = r#"{"type":"object"}"#;
+        let config = AgentConfig::new("Action?").output_schema_raw(schema).into();
+        let result = adapter.fold_sse_deltas(deltas, &config).expect("test");
+
+        assert!(result.text.is_none());
+        assert_eq!(result.structured_value, Some(json!({"action": "query"})));
     }
 }
