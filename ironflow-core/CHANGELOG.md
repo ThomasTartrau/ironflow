@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.19.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.18.1...ironflow-core-v2.19.0) - 2026-05-29
+
+### Added
+
+- add Claude Opus 4.8 model support
+
 ## [2.18.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.18.0...ironflow-core-v2.18.1) - 2026-05-26
 
 ### Fixed
