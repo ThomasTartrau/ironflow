@@ -104,10 +104,17 @@ impl Model {
 
     // ── Claude 4.7 - 1M context native ─────────────────────────────
 
-    /// Claude Opus 4.7 - latest flagship, 1M token context native.
+    /// Claude Opus 4.7 - previous flagship, 1M token context native.
     pub const OPUS_47: &str = "claude-opus-4-7";
     /// Claude Opus 4.7 with 1M token context window explicit.
     pub const OPUS_47_1M: &str = "claude-opus-4-7[1m]";
+
+    // ── Claude 4.8 - 1M context native ─────────────────────────────
+
+    /// Claude Opus 4.8 - latest flagship, 1M token context native.
+    pub const OPUS_48: &str = "claude-opus-4-8";
+    /// Claude Opus 4.8 with 1M token context window explicit.
+    pub const OPUS_48_1M: &str = "claude-opus-4-8[1m]";
 }
 
 /// Controls how the agent handles tool-use permission prompts.
@@ -890,6 +897,8 @@ mod tests {
         assert_eq!(Model::OPUS_46_1M, "claude-opus-4-6[1m]");
         assert_eq!(Model::OPUS_47, "claude-opus-4-7");
         assert_eq!(Model::OPUS_47_1M, "claude-opus-4-7[1m]");
+        assert_eq!(Model::OPUS_48, "claude-opus-4-8");
+        assert_eq!(Model::OPUS_48_1M, "claude-opus-4-8[1m]");
     }
 
     // --- Agent::new() defaults via ConfigCapture ---

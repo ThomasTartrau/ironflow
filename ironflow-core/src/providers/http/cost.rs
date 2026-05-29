@@ -160,6 +160,13 @@ pub static ANTHROPIC_COSTS: LazyLock<CostTable> = LazyLock::new(|| {
 
     let entries = HashMap::from([
         (
+            AnthropicModel::OPUS_4_8,
+            CostEntry {
+                input_per_mtok: 5.00,
+                output_per_mtok: 25.00,
+            },
+        ),
+        (
             AnthropicModel::OPUS_4_7,
             CostEntry {
                 input_per_mtok: 5.00,

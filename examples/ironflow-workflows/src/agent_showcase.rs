@@ -42,7 +42,7 @@ impl WorkflowHandler for AgentShowcase {
                      Then produce a short markdown report summarising what \
                      you found. Think step by step before acting.",
                 )
-                .model("claude-opus-4-7")
+                .model("claude-opus-4-8")
                 .allow_tool("Bash")
                 .allow_tool("Read")
                 .max_budget_usd(0.50)
