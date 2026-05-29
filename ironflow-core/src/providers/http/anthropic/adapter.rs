@@ -14,7 +14,9 @@ use crate::schema_transform::transform_schema;
 pub struct AnthropicModel;
 
 impl AnthropicModel {
-    /// Claude Opus 4.7 - most capable model, best for complex reasoning and agentic coding (1M context).
+    /// Claude Opus 4.8 - most capable model, best for complex reasoning and agentic coding (1M context).
+    pub const OPUS_4_8: &str = "claude-opus-4-8";
+    /// Claude Opus 4.7 - previous generation flagship (1M context).
     pub const OPUS_4_7: &str = "claude-opus-4-7";
     /// Claude Sonnet 4.6 - best combination of speed and intelligence (1M context).
     pub const SONNET_4_6: &str = "claude-sonnet-4-6";
@@ -332,7 +334,7 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
     fn resolve_model(&self, model: &str) -> String {
         match model {
             m if m == Model::SONNET => AnthropicModel::SONNET_4_6.to_string(),
-            m if m == Model::OPUS => AnthropicModel::OPUS_4_7.to_string(),
+            m if m == Model::OPUS => AnthropicModel::OPUS_4_8.to_string(),
             m if m == Model::HAIKU => AnthropicModel::HAIKU_4_5.to_string(),
             other => other.to_string(),
         }
@@ -460,9 +462,10 @@ mod tests {
     fn resolve_model_aliases() {
         let a = adapter();
         assert_eq!(a.resolve_model("sonnet"), AnthropicModel::SONNET_4_6);
-        assert_eq!(a.resolve_model("opus"), AnthropicModel::OPUS_4_7);
+        assert_eq!(a.resolve_model("opus"), AnthropicModel::OPUS_4_8);
         assert_eq!(a.resolve_model("haiku"), AnthropicModel::HAIKU_4_5);
         assert_eq!(a.resolve_model("claude-opus-4-6"), "claude-opus-4-6");
+        assert_eq!(a.resolve_model("claude-opus-4-8"), "claude-opus-4-8");
     }
 
     #[test]
