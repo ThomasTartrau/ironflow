@@ -14,25 +14,25 @@ export function StatsCards({ stats }: StatsCardsProps) {
 				label="Total Runs"
 				value={stats.total_runs}
 				icon={Activity}
-				iconClassName="bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400"
+				iconClassName="bg-chart-1/15 text-chart-1"
 			/>
 			<StatCard
 				label="Success Rate"
 				value={formatPercent(stats.success_rate_percent)}
 				icon={CheckCircle}
-				iconClassName="bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400"
+				iconClassName="bg-chart-2/15 text-chart-2"
 			/>
 			<StatCard
 				label="Active"
 				value={stats.active_runs}
 				icon={Zap}
-				iconClassName="bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400"
+				iconClassName="bg-chart-3/15 text-chart-3"
 			/>
 			<StatCard
 				label="Total Cost"
 				value={formatCost(stats.total_cost_usd)}
 				icon={DollarSign}
-				iconClassName="bg-violet-100 text-violet-600 dark:bg-violet-950 dark:text-violet-400"
+				iconClassName="bg-chart-4/15 text-chart-4"
 			/>
 		</div>
 	);

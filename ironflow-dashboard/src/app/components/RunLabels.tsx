@@ -6,45 +6,51 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const MAX_VISIBLE = 2;
+const DEFAULT_MAX_VISIBLE = 2;
 
 interface RunLabelsProps {
 	labels?: Record<string, string>;
+	maxVisible?: number;
 }
 
-export function RunLabels({ labels }: RunLabelsProps) {
+export function RunLabels({
+	labels,
+	maxVisible = DEFAULT_MAX_VISIBLE,
+}: RunLabelsProps) {
 	if (!labels) return null;
 	const entries = Object.entries(labels);
 	if (entries.length === 0) return null;
 
-	const visible = entries.slice(0, MAX_VISIBLE);
-	const remaining = entries.length - MAX_VISIBLE;
+	const visible = entries.slice(0, maxVisible);
+	const remaining = entries.length - maxVisible;
 
 	return (
-		<div className="flex items-center gap-1 flex-wrap">
-			{visible.map(([key, value]) => (
-				<Badge
-					key={key}
-					variant="secondary"
-					className="font-mono text-[10px] px-1.5 py-0"
-				>
-					{key}: {value}
-				</Badge>
-			))}
-			{remaining > 0 && (
-				<TooltipProvider>
+		<TooltipProvider delay={200}>
+			<div className="flex items-center gap-1 flex-wrap">
+				{visible.map(([key, value]) => (
+					<Badge
+						key={key}
+						variant="secondary"
+						className="font-mono text-[10px] px-1.5 py-0"
+					>
+						{key}: {value}
+					</Badge>
+				))}
+				{remaining > 0 && (
 					<Tooltip>
-						<TooltipTrigger>
-							<Badge
-								variant="outline"
-								className="text-[10px] px-1.5 py-0 cursor-default"
-							>
-								+{remaining}
-							</Badge>
-						</TooltipTrigger>
+						<TooltipTrigger
+							render={
+								<Badge
+									variant="outline"
+									className="text-[10px] px-1.5 py-0 cursor-default"
+								>
+									+{remaining}
+								</Badge>
+							}
+						/>
 						<TooltipContent side="bottom" className="max-w-xs">
 							<div className="flex flex-col gap-1">
-								{entries.slice(MAX_VISIBLE).map(([key, value]) => (
+								{entries.slice(maxVisible).map(([key, value]) => (
 									<span key={key} className="font-mono text-xs">
 										{key}: {value}
 									</span>
@@ -52,8 +58,8 @@ export function RunLabels({ labels }: RunLabelsProps) {
 							</div>
 						</TooltipContent>
 					</Tooltip>
-				</TooltipProvider>
-			)}
-		</div>
+				)}
+			</div>
+		</TooltipProvider>
 	);
 }

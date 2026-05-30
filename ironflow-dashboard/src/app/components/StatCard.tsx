@@ -19,21 +19,22 @@ export function StatCard({
 }: StatCardProps) {
 	return (
 		<Card className={cn("py-0 gap-0", className)}>
-			<CardContent className="p-5">
-				<div className="flex items-center gap-4">
+			<CardContent className="p-4">
+				<div className="flex items-center gap-3">
 					{Icon && (
 						<div
+							aria-hidden="true"
 							className={cn(
-								"flex-shrink-0 rounded-lg p-2.5",
+								"flex-shrink-0 rounded-[var(--radius-sm)] p-2",
 								iconClassName ?? "bg-muted text-muted-foreground",
 							)}
 						>
-							<Icon className="w-5 h-5" />
+							<Icon className="w-4 h-4" />
 						</div>
 					)}
 					<div className="min-w-0">
-						<p className="text-sm text-muted-foreground truncate">{label}</p>
-						<p className="text-2xl font-semibold tracking-tight truncate">
+						<p className="text-xs text-muted-foreground truncate">{label}</p>
+						<p className="text-xl font-semibold tracking-tight truncate tabular-nums">
 							{value}
 						</p>
 					</div>

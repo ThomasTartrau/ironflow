@@ -10,6 +10,35 @@ interface SchemaFieldProps {
 	required: boolean;
 }
 
+interface FieldWrapperProps {
+	name: string;
+	label: string;
+	description: string | undefined;
+	required: boolean;
+	children: React.ReactNode;
+}
+
+function FieldWrapper({
+	name,
+	label,
+	description,
+	required,
+	children,
+}: FieldWrapperProps) {
+	return (
+		<div className="space-y-1.5">
+			<label className="text-sm font-medium" htmlFor={`field-${name}`}>
+				{label}
+				{required && <span className="text-destructive ml-0.5">*</span>}
+			</label>
+			{description && (
+				<p className="text-xs text-muted-foreground">{description}</p>
+			)}
+			{children}
+		</div>
+	);
+}
+
 export function SchemaField({
 	name,
 	schema,
@@ -23,7 +52,9 @@ export function SchemaField({
 		return (
 			<div className="flex items-center justify-between gap-3">
 				<div>
-					<p className="text-sm font-medium">{label}</p>
+					<label htmlFor={`field-${name}`} className="text-sm font-medium">
+						{label}
+					</label>
 					{schema.description && (
 						<p className="text-xs text-muted-foreground">
 							{schema.description}
@@ -31,6 +62,7 @@ export function SchemaField({
 					)}
 				</div>
 				<Switch
+					id={`field-${name}`}
 					checked={value === true}
 					onCheckedChange={(checked) => onChange(checked)}
 				/>
@@ -40,14 +72,12 @@ export function SchemaField({
 
 	if (schema.type === "number" || schema.type === "integer") {
 		return (
-			<div className="space-y-1.5">
-				<label className="text-sm font-medium" htmlFor={`field-${name}`}>
-					{label}
-					{required && <span className="text-destructive ml-0.5">*</span>}
-				</label>
-				{schema.description && (
-					<p className="text-xs text-muted-foreground">{schema.description}</p>
-				)}
+			<FieldWrapper
+				name={name}
+				label={label}
+				description={schema.description}
+				required={required}
+			>
 				<Input
 					id={`field-${name}`}
 					type="number"
@@ -64,19 +94,17 @@ export function SchemaField({
 						);
 					}}
 				/>
-			</div>
+			</FieldWrapper>
 		);
 	}
 
 	return (
-		<div className="space-y-1.5">
-			<label className="text-sm font-medium" htmlFor={`field-${name}`}>
-				{label}
-				{required && <span className="text-destructive ml-0.5">*</span>}
-			</label>
-			{schema.description && (
-				<p className="text-xs text-muted-foreground">{schema.description}</p>
-			)}
+		<FieldWrapper
+			name={name}
+			label={label}
+			description={schema.description}
+			required={required}
+		>
 			<Input
 				id={`field-${name}`}
 				type="text"
@@ -86,6 +114,6 @@ export function SchemaField({
 					schema.default != null ? String(schema.default) : undefined
 				}
 			/>
-		</div>
+		</FieldWrapper>
 	);
 }

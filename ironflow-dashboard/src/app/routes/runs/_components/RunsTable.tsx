@@ -5,6 +5,7 @@ import { TriggerBadge } from "@/app/components/TriggerBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { RunLabels } from "@/app/components/RunLabels";
 import { formatDuration, formatCost } from "@/app/lib/format";
+import { Workflow } from "lucide-react";
 import {
 	Table,
 	TableBody,
@@ -27,8 +28,15 @@ export function RunsTable({ runs }: RunsTableProps) {
 
 	if (runs.length === 0) {
 		return (
-			<div className="text-center py-12 text-muted-foreground border rounded-lg bg-muted/20">
-				No runs found. Create one to get started.
+			<div className="flex flex-col items-center justify-center min-h-[200px] gap-4 border border-dashed rounded-[var(--radius)] bg-muted/20 py-12">
+				<Workflow
+					className="size-8 text-muted-foreground/40"
+					aria-hidden="true"
+				/>
+				<p className="text-sm font-medium text-foreground">No runs yet</p>
+				<p className="text-xs text-muted-foreground">
+					Trigger a workflow to create your first run.
+				</p>
 			</div>
 		);
 	}
@@ -36,18 +44,18 @@ export function RunsTable({ runs }: RunsTableProps) {
 	const hasVersions = runs.some((r) => r.handler_version);
 
 	return (
-		<div className="rounded-lg border">
-			<Table>
+		<div className="rounded-[var(--radius)] border overflow-hidden">
+			<Table className="table-fixed">
 				<TableHeader>
 					<TableRow>
-						<TableHead>Status</TableHead>
+						<TableHead className="w-28">Status</TableHead>
 						<TableHead>Workflow</TableHead>
-						{hasVersions && <TableHead>Version</TableHead>}
-						<TableHead>Trigger</TableHead>
-						<TableHead>Labels</TableHead>
-						<TableHead>Duration</TableHead>
-						<TableHead>Cost</TableHead>
-						<TableHead>Started / Scheduled</TableHead>
+						{hasVersions && <TableHead className="w-20">Version</TableHead>}
+						<TableHead className="w-32">Trigger</TableHead>
+						<TableHead className="w-36">Labels</TableHead>
+						<TableHead className="w-24">Duration</TableHead>
+						<TableHead className="w-20">Cost</TableHead>
+						<TableHead className="w-36">Started / Scheduled</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -55,14 +63,25 @@ export function RunsTable({ runs }: RunsTableProps) {
 						<TableRow
 							key={run.id}
 							onClick={() => handleRowClick(run.id)}
-							className="cursor-pointer hover:bg-muted/50"
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									e.preventDefault();
+									handleRowClick(run.id);
+								}
+							}}
+							tabIndex={0}
+							role="link"
+							aria-label={`View run for ${run.workflow_name}`}
+							className="cursor-pointer hover:bg-hover-bg"
 						>
 							<TableCell>
 								<StatusBadge status={run.status} />
 							</TableCell>
-							<TableCell className="font-medium">{run.workflow_name}</TableCell>
+							<TableCell className="font-mono font-medium truncate max-w-[220px]">
+								{run.workflow_name}
+							</TableCell>
 							{hasVersions && (
-								<TableCell className="font-mono text-xs text-muted-foreground">
+								<TableCell className="font-mono text-xs text-muted-foreground tabular-nums">
 									{run.handler_version || "-"}
 								</TableCell>
 							)}
@@ -72,11 +91,15 @@ export function RunsTable({ runs }: RunsTableProps) {
 							<TableCell>
 								<RunLabels labels={run.labels} />
 							</TableCell>
-							<TableCell>{formatDuration(run.duration_ms)}</TableCell>
-							<TableCell>{formatCost(run.cost_usd)}</TableCell>
-							<TableCell>
+							<TableCell className="tabular-nums">
+								{formatDuration(run.duration_ms)}
+							</TableCell>
+							<TableCell className="tabular-nums">
+								{formatCost(run.cost_usd)}
+							</TableCell>
+							<TableCell className="tabular-nums">
 								{run.scheduled_at && !run.started_at ? (
-									<span className="text-muted-foreground text-xs">
+									<span className="text-muted-foreground text-xs font-mono">
 										{new Date(run.scheduled_at).toLocaleString()}
 									</span>
 								) : (

@@ -16,5 +16,9 @@ export function TimeAgo({ date }: TimeAgoProps) {
 		return then.toLocaleDateString();
 	};
 
-	return <span>{getTimeAgo(date)}</span>;
+	return (
+		<time dateTime={date} title={new Date(date).toLocaleString()}>
+			{getTimeAgo(date)}
+		</time>
+	);
 }

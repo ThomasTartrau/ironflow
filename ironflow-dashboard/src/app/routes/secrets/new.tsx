@@ -7,6 +7,7 @@ import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { withToast } from "@/app/lib/api-toast";
 import { createSecret } from "./_actions/actions";
+import { Card, CardContent } from "@/components/ui/card";
 
 export function Component() {
 	const navigate = useNavigate();
@@ -42,49 +43,68 @@ export function Component() {
 
 	return (
 		<HeaderApp title="New Secret" description="Create a new encrypted secret.">
-			<div className="max-w-lg space-y-6">
-				<div>
-					<label htmlFor="secret-key" className="text-sm font-medium">
-						Key
-					</label>
-					<Input
-						id="secret-key"
-						placeholder="e.g., STRIPE_SECRET_KEY"
-						value={key}
-						onChange={(e) => setKey(e.target.value)}
-						className="mt-1"
-					/>
-					<p className="text-xs text-muted-foreground mt-1">
-						A unique identifier for this secret
-					</p>
-				</div>
+			<Card className="max-w-lg shadow-none">
+				<CardContent className="p-6">
+					<form
+						onSubmit={(e) => {
+							e.preventDefault();
+							if (canCreate) handleCreate();
+						}}
+						className="space-y-4"
+					>
+						<div>
+							<label htmlFor="secret-key" className="text-sm font-medium">
+								Key
+							</label>
+							<Input
+								id="secret-key"
+								placeholder="e.g., STRIPE_SECRET_KEY"
+								value={key}
+								onChange={(e) => setKey(e.target.value)}
+								className="mt-1 font-mono"
+								aria-describedby="key-hint"
+								autoComplete="off"
+								autoCapitalize="characters"
+								spellCheck={false}
+							/>
+							<p id="key-hint" className="text-xs text-muted-foreground mt-1">
+								Use uppercase letters, digits, and underscores (e.g. MY_SECRET)
+							</p>
+						</div>
 
-				<div>
-					<label htmlFor="secret-value" className="text-sm font-medium">
-						Value
-					</label>
-					<Textarea
-						id="secret-value"
-						placeholder="Enter the secret value (API key, token, etc.)"
-						value={value}
-						onChange={(e) => setValue(e.target.value)}
-						className="mt-1"
-						rows={4}
-					/>
-					<p className="text-xs text-muted-foreground mt-1">
-						Store tokens, API keys, passwords, or any sensitive data
-					</p>
-				</div>
+						<div>
+							<label htmlFor="secret-value" className="text-sm font-medium">
+								Value
+							</label>
+							<Textarea
+								id="secret-value"
+								placeholder="Enter the secret value (API key, token, etc.)"
+								value={value}
+								onChange={(e) => setValue(e.target.value)}
+								className="mt-1 min-h-[6rem]"
+								autoComplete="off"
+								spellCheck={false}
+							/>
+							<p className="text-xs text-muted-foreground mt-1">
+								Store tokens, API keys, passwords, or any sensitive data
+							</p>
+						</div>
 
-				<div className="flex gap-3">
-					<Button variant="outline" onClick={() => navigate("/secrets")}>
-						Cancel
-					</Button>
-					<Button onClick={handleCreate} disabled={!canCreate}>
-						{pending ? "Creating..." : "Create Secret"}
-					</Button>
-				</div>
-			</div>
+						<div className="flex gap-3 pt-2">
+							<Button
+								type="button"
+								variant="outline"
+								onClick={() => navigate("/secrets")}
+							>
+								Cancel
+							</Button>
+							<Button type="submit" disabled={!canCreate}>
+								{pending ? "Creating..." : "Create Secret"}
+							</Button>
+						</div>
+					</form>
+				</CardContent>
+			</Card>
 		</HeaderApp>
 	);
 }

@@ -42,7 +42,7 @@ export function StepTimeline({
 
 	return (
 		<TooltipProvider delay={200}>
-			<div className="rounded-2xl border border-border/40 bg-background/60 backdrop-blur pb-2">
+			<div className="rounded-[var(--radius)] border border-border bg-card pb-2">
 				<div className="flex">
 					<TimelineLabels
 						rows={rows}

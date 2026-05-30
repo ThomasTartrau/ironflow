@@ -165,16 +165,18 @@ export function Component() {
 
 				{!isEmptyPayload(payload) && (
 					<CollapsibleSection storageKey="run-payload" title="Payload">
-						<pre className="text-sm font-mono bg-muted/50 rounded-lg p-4 overflow-x-auto">
+						<pre className="text-sm font-mono bg-muted/50 rounded-[var(--radius)] p-4 overflow-x-auto">
 							{JSON.stringify(payload, null, 2)}
 						</pre>
 					</CollapsibleSection>
 				)}
 
 				{run.error && (
-					<div className="p-4 rounded-lg border border-red-200 bg-red-50">
-						<div className="text-sm font-semibold text-red-600 mb-1">Error</div>
-						<div className="text-sm text-red-700 whitespace-pre-wrap break-words">
+					<div className="p-4 rounded-[var(--radius)] border border-destructive/30 bg-destructive/10">
+						<div className="text-sm font-semibold text-destructive mb-1">
+							Error
+						</div>
+						<div className="text-sm text-destructive/90 whitespace-pre-wrap break-words">
 							{run.error}
 						</div>
 					</div>

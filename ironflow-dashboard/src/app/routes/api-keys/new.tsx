@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLoaderData, useNavigate } from "react-router";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -71,21 +71,35 @@ export function Component() {
 				title="API Key Created"
 				description="Copy this key now. You will not be able to see it again."
 			>
-				<div className="max-w-lg space-y-6">
+				<div className="max-w-lg space-y-4">
+					<div className="flex items-start gap-2 rounded-[var(--radius)] border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-destructive">
+						<TriangleAlert
+							className="mt-0.5 size-4 shrink-0"
+							aria-hidden="true"
+						/>
+						<p className="text-sm">
+							Copy this key now. You will not be able to see it again after
+							leaving this page.
+						</p>
+					</div>
 					<div className="flex items-center gap-2">
-						<code className="flex-1 rounded bg-muted px-3 py-2 text-sm font-mono break-all">
+						<code className="flex-1 select-all rounded-[var(--radius-sm)] bg-muted px-3 py-2 font-mono text-sm break-anywhere">
 							{createdKey}
 						</code>
-						<Button variant="outline" size="icon-sm" onClick={handleCopy}>
-							{copied ? (
-								<Check className="h-4 w-4 text-green-500" />
-							) : (
-								<Copy className="h-4 w-4" />
-							)}
+						<Button
+							variant="outline"
+							size="icon-sm"
+							onClick={handleCopy}
+							aria-label={copied ? "Copied" : "Copy API key"}
+						>
+							{copied ? <Check /> : <Copy />}
 						</Button>
 					</div>
+					<span className="sr-only" aria-live="polite" aria-atomic="true">
+						{copied ? "API key copied to clipboard" : ""}
+					</span>
 					<Button onClick={() => navigate("/api-keys")}>
-						Back to API Keys
+						Done, I copied the key
 					</Button>
 				</div>
 			</HeaderApp>
@@ -97,42 +111,54 @@ export function Component() {
 			title="New API Key"
 			description="Create a new API key for programmatic access."
 		>
-			<div className="max-w-lg space-y-6">
-				<div>
-					<label htmlFor="api-key-name" className="text-sm font-medium">
-						Name
-					</label>
-					<Input
-						id="api-key-name"
-						placeholder="My integration key"
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-						className="mt-1"
-					/>
-				</div>
+			<div className="max-w-lg">
+				<form
+					onSubmit={(e) => {
+						e.preventDefault();
+						if (canCreate) handleCreate();
+					}}
+					className="space-y-6"
+				>
+					<div>
+						<label htmlFor="api-key-name" className="text-sm font-medium">
+							Name
+						</label>
+						<Input
+							id="api-key-name"
+							placeholder="My integration key"
+							value={name}
+							onChange={(e) => setName(e.target.value)}
+							className="mt-1"
+						/>
+					</div>
 
-				<div>
-					<label htmlFor="scopes" className="text-sm font-medium">
-						Scopes
-					</label>
-					<MultiSelect
-						id="scopes"
-						options={scopeOptions}
-						value={scopes}
-						onChange={setScopes}
-						placeholder="Select scopes..."
-						className="mt-1"
-					/>
-				</div>
+					<div>
+						<label htmlFor="scopes" className="text-sm font-medium">
+							Scopes
+						</label>
+						<MultiSelect
+							id="scopes"
+							options={scopeOptions}
+							value={scopes}
+							onChange={setScopes}
+							placeholder="Select scopes..."
+							className="mt-1"
+						/>
+					</div>
 
-				<div className="flex gap-3">
-					<Button variant="outline" onClick={() => navigate("/api-keys")}>
-						Cancel
-					</Button>
-					<Button onClick={handleCreate} disabled={!canCreate}>
-						{pending ? "Creating..." : "Create API Key"}
-					</Button>
-				</div>
+					<div className="flex gap-3">
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => navigate("/api-keys")}
+						>
+							Cancel
+						</Button>
+						<Button type="submit" disabled={!canCreate}>
+							{pending ? "Creating..." : "Create API Key"}
+						</Button>
+					</div>
+				</form>
 			</div>
 		</HeaderApp>
 	);

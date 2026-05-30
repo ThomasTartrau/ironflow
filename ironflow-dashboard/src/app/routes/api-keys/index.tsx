@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLoaderData, useNavigate, useRevalidator } from "react-router";
-import { Plus, Trash2 } from "lucide-react";
+import { Key, Plus, Trash2 } from "lucide-react";
 import { api } from "@/app/lib/api";
 import type { ApiKeyResponse, ApiKeyScope } from "@/app/lib/types";
 import { HeaderApp } from "@/app/components/HeaderApp";
@@ -15,6 +15,14 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { withToast } from "@/app/lib/api-toast";
 import { deleteApiKey } from "./_actions/actions";
 
@@ -45,6 +53,10 @@ export function Component() {
 	const navigate = useNavigate();
 	const revalidator = useRevalidator();
 	const [deletingId, setDeletingId] = useState<string | null>(null);
+	const [confirmDeleteKey, setConfirmDeleteKey] = useState<{
+		id: string;
+		name: string;
+	} | null>(null);
 
 	useDocumentMeta({
 		title: "API Keys",
@@ -52,6 +64,7 @@ export function Component() {
 	});
 
 	function handleDelete(id: string, name: string) {
+		setConfirmDeleteKey(null);
 		setDeletingId(id);
 		withToast(deleteApiKey(id), {
 			loading: `Deleting ${name}...`,
@@ -68,18 +81,33 @@ export function Component() {
 			description="Manage your API keys for programmatic access."
 			titleItem={
 				<Button onClick={() => navigate("/api-keys/new")}>
-					<Plus className="h-4 w-4 mr-1" />
+					<Plus />
 					New API Key
 				</Button>
 			}
 		>
 			<div className="space-y-6">
 				{apiKeys.length === 0 ? (
-					<div className="text-center py-16 text-muted-foreground border rounded-lg bg-muted/20">
-						No API keys yet. Create one to get started.
+					<div className="flex flex-col items-center justify-center gap-4 py-16 text-center border border-dashed rounded-[var(--radius)] bg-muted/20">
+						<Key
+							className="size-10 text-muted-foreground/40"
+							aria-hidden="true"
+						/>
+						<div className="space-y-1">
+							<p className="text-sm font-medium text-foreground">
+								No API keys yet
+							</p>
+							<p className="text-xs text-muted-foreground">
+								Create an API key to access Ironflow programmatically.
+							</p>
+						</div>
+						<Button onClick={() => navigate("/api-keys/new")}>
+							<Plus />
+							New API Key
+						</Button>
 					</div>
 				) : (
-					<div className="rounded-lg border">
+					<div className="rounded-[var(--radius)] border">
 						<Table>
 							<TableHeader>
 								<TableRow>
@@ -97,16 +125,16 @@ export function Component() {
 									<TableRow key={key.id}>
 										<TableCell className="font-medium">{key.name}</TableCell>
 										<TableCell>
-											<code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+											<code className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded-[var(--radius-sm)]">
 												{key.key_prefix}...
 											</code>
 										</TableCell>
-										<TableCell>
-											<div className="flex flex-wrap gap-1">
+										<TableCell className="align-top">
+											<div className="flex flex-wrap gap-1 max-w-[240px]">
 												{key.scopes.map((scope) => (
 													<Badge
 														key={scope}
-														variant="outline"
+														variant="secondary"
 														className="text-xs"
 													>
 														{SCOPE_LABELS[scope] ?? scope}
@@ -117,31 +145,40 @@ export function Component() {
 										<TableCell>
 											{key.is_active ? (
 												<Badge
-													variant="default"
-													className="bg-green-500/10 text-green-700 border-green-500/20"
+													variant="outline"
+													className="bg-success/10 text-success border-success/20 text-xs"
 												>
 													Active
 												</Badge>
 											) : (
-												<Badge variant="secondary">Disabled</Badge>
+												<Badge variant="secondary" className="text-xs">
+													Disabled
+												</Badge>
 											)}
 										</TableCell>
-										<TableCell className="text-sm text-muted-foreground">
-											{key.last_used_at
-												? formatDate(key.last_used_at)
-												: "Never"}
+										<TableCell className="text-xs text-muted-foreground tabular-nums">
+											{key.last_used_at ? (
+												formatDate(key.last_used_at)
+											) : (
+												<span className="italic text-muted-foreground/60">
+													Never
+												</span>
+											)}
 										</TableCell>
-										<TableCell className="text-sm text-muted-foreground">
+										<TableCell className="text-xs text-muted-foreground tabular-nums">
 											{formatDate(key.created_at)}
 										</TableCell>
 										<TableCell>
 											<Button
 												variant="ghost"
 												size="icon-sm"
-												onClick={() => handleDelete(key.id, key.name)}
+												aria-label={`Delete ${key.name}`}
 												disabled={deletingId === key.id}
+												onClick={() =>
+													setConfirmDeleteKey({ id: key.id, name: key.name })
+												}
 											>
-												<Trash2 className="h-4 w-4 text-destructive" />
+												<Trash2 className="text-destructive" />
 											</Button>
 										</TableCell>
 									</TableRow>
@@ -151,6 +188,45 @@ export function Component() {
 					</div>
 				)}
 			</div>
+
+			<Dialog
+				open={confirmDeleteKey !== null}
+				onOpenChange={(open) => {
+					if (!open) setConfirmDeleteKey(null);
+				}}
+			>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Delete API key</DialogTitle>
+						<DialogDescription>
+							Are you sure you want to delete{" "}
+							<span className="font-mono font-medium text-foreground">
+								{confirmDeleteKey?.name}
+							</span>
+							? Any integrations using this key will immediately lose access.
+							This action cannot be undone.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setConfirmDeleteKey(null)}>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							disabled={
+								confirmDeleteKey !== null && deletingId === confirmDeleteKey.id
+							}
+							onClick={() => {
+								if (confirmDeleteKey) {
+									handleDelete(confirmDeleteKey.id, confirmDeleteKey.name);
+								}
+							}}
+						>
+							Delete
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</HeaderApp>
 	);
 }

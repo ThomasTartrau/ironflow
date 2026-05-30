@@ -119,19 +119,21 @@ export function RunFilters() {
 	};
 
 	return (
-		<div className="flex items-center gap-2">
+		<div className="flex flex-wrap items-center gap-2">
 			<Sheet open={open} onOpenChange={setOpen}>
-				<SheetTrigger>
-					<Button variant="outline" className="gap-1.5">
-						<Filter className="h-4 w-4" />
-						Filters
-						{activeCount > 0 && (
-							<Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">
-								{activeCount}
-							</Badge>
-						)}
-					</Button>
-				</SheetTrigger>
+				<SheetTrigger
+					render={
+						<Button variant="outline" className="gap-1.5">
+							<Filter className="h-4 w-4" />
+							Filters
+							{activeCount > 0 && (
+								<Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">
+									{activeCount}
+								</Badge>
+							)}
+						</Button>
+					}
+				/>
 				<SheetContent>
 					<SheetHeader>
 						<SheetTitle>Filters</SheetTitle>
@@ -146,7 +148,7 @@ export function RunFilters() {
 								placeholder="Filter by workflow name..."
 								value={filters.workflow}
 								onChange={(e) => handleWorkflowChange(e.target.value)}
-								className="mt-1.5"
+								className="mt-1.5 font-mono"
 							/>
 						</div>
 
@@ -180,6 +182,7 @@ export function RunFilters() {
 									value={labelInput}
 									onChange={(e) => setLabelInput(e.target.value)}
 									onKeyDown={handleLabelKeyDown}
+									className="font-mono"
 								/>
 								<Button
 									variant="outline"
@@ -193,15 +196,22 @@ export function RunFilters() {
 							{filters.label.length > 0 && (
 								<div className="flex flex-wrap gap-1.5 mt-2">
 									{filters.label.map((l) => (
-										<Badge
+										<button
 											key={l}
-											variant="secondary"
-											className="font-mono text-xs gap-1 cursor-pointer"
+											type="button"
+											aria-label={`Remove label filter ${l}`}
 											onClick={() => handleRemoveLabel(l)}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" || e.key === " ") {
+													e.preventDefault();
+													handleRemoveLabel(l);
+												}
+											}}
+											className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
 										>
 											{l}
-											<X className="h-3 w-3" />
-										</Badge>
+											<X className="h-3 w-3" aria-hidden="true" />
+										</button>
 									))}
 								</div>
 							)}
@@ -229,6 +239,41 @@ export function RunFilters() {
 				</SheetContent>
 			</Sheet>
 
+			{filters.workflow && (
+				<button
+					type="button"
+					aria-label="Remove workflow filter"
+					onClick={() => setFilters({ workflow: null, page: "1" })}
+					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
+				>
+					workflow: {filters.workflow}
+					<X className="h-3 w-3" aria-hidden="true" />
+				</button>
+			)}
+			{filters.status && (
+				<button
+					type="button"
+					aria-label="Remove status filter"
+					onClick={() => setFilters({ status: null, page: "1" })}
+					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
+				>
+					status: {filters.status}
+					<X className="h-3 w-3" aria-hidden="true" />
+				</button>
+			)}
+			{filters.label.map((l) => (
+				<button
+					key={l}
+					type="button"
+					aria-label={`Remove label filter ${l}`}
+					onClick={() => handleRemoveLabel(l)}
+					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
+				>
+					{l}
+					<X className="h-3 w-3" aria-hidden="true" />
+				</button>
+			))}
+
 			{activeCount > 0 && (
 				<Button
 					variant="ghost"
@@ -237,7 +282,7 @@ export function RunFilters() {
 					className="text-muted-foreground"
 				>
 					<X className="h-3.5 w-3.5 mr-1" />
-					Clear
+					Clear all
 				</Button>
 			)}
 		</div>

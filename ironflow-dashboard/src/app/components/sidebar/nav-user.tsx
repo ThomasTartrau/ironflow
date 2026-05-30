@@ -1,4 +1,5 @@
-import { ChevronsUpDown, LogOut, User } from "lucide-react";
+import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "lucide-react";
+import type { ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -17,6 +18,7 @@ import {
 	useSidebar,
 } from "@/components/ui/sidebar";
 import { api } from "@/app/lib/api";
+import { useTheme, type ThemeMode } from "@/app/lib/theme";
 import { useAppDispatch, useAppSelector } from "@/app/store";
 import { logout } from "@/app/store/auth-slice";
 
@@ -29,6 +31,7 @@ export function NavUser() {
 	const navigate = useNavigate();
 	const dispatch = useAppDispatch();
 	const auth = useAppSelector((state) => state.auth);
+	const { theme, setTheme } = useTheme();
 
 	if (auth.status !== "authenticated") {
 		return null;
@@ -46,6 +49,16 @@ export function NavUser() {
 			});
 	};
 
+	const themeItems: { value: ThemeMode; label: string; icon: ReactNode }[] = [
+		{ value: "light", label: "Light", icon: <Sun className="size-4" /> },
+		{ value: "dark", label: "Dark", icon: <Moon className="size-4" /> },
+		{
+			value: "system",
+			label: "System",
+			icon: <Monitor className="size-4" />,
+		},
+	];
+
 	return (
 		<SidebarMenu>
 			<SidebarMenuItem>
@@ -55,9 +68,14 @@ export function NavUser() {
 							<SidebarMenuButton
 								size="lg"
 								className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+								aria-label={`User menu for ${user.username}`}
 							>
-								<Avatar className="h-8 w-8 rounded-lg">
-									<AvatarFallback className="rounded-lg text-xs">
+								<Avatar
+									className="h-8 w-8 rounded-[var(--radius-sm)]"
+									role="img"
+									aria-label={user.username}
+								>
+									<AvatarFallback className="rounded-[var(--radius-sm)] text-xs">
 										{getInitials(user.username)}
 									</AvatarFallback>
 								</Avatar>
@@ -72,16 +90,20 @@ export function NavUser() {
 						}
 					/>
 					<DropdownMenuContent
-						className="w-56 rounded-lg"
 						side={isMobile ? "bottom" : "right"}
 						align="end"
 						sideOffset={4}
+						className="w-56"
 					>
 						<DropdownMenuGroup>
 							<DropdownMenuLabel className="p-0 font-normal">
 								<div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-									<Avatar className="h-8 w-8 rounded-lg">
-										<AvatarFallback className="rounded-lg text-xs">
+									<Avatar
+										className="h-8 w-8 rounded-[var(--radius-sm)]"
+										role="img"
+										aria-label={user.username}
+									>
+										<AvatarFallback className="rounded-[var(--radius-sm)] text-xs">
 											{getInitials(user.username)}
 										</AvatarFallback>
 									</Avatar>
@@ -98,10 +120,25 @@ export function NavUser() {
 						</DropdownMenuGroup>
 						<DropdownMenuSeparator />
 						<DropdownMenuGroup>
-							<DropdownMenuItem onClick={() => navigate("/")}>
-								<User className="size-4" />
-								Dashboard
-							</DropdownMenuItem>
+							{themeItems.map((item) => (
+								<DropdownMenuItem
+									key={item.value}
+									onClick={() => setTheme(item.value)}
+									className={
+										theme === item.value
+											? "bg-accent text-accent-foreground"
+											: ""
+									}
+								>
+									{item.icon}
+									{item.label}
+									{theme === item.value && (
+										<span className="ml-auto text-xs text-muted-foreground">
+											active
+										</span>
+									)}
+								</DropdownMenuItem>
+							))}
 						</DropdownMenuGroup>
 						<DropdownMenuSeparator />
 						<DropdownMenuGroup>

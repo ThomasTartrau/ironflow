@@ -54,7 +54,7 @@ export function Component() {
 					<BackLink to="/workflows" label="Back to Workflows" />
 					{workflow.version !== "unversioned" && (
 						<Badge variant="outline" className="gap-1 font-mono text-xs">
-							<Tag className="size-3" />
+							<Tag className="size-3" aria-hidden="true" />
 							{workflow.version}
 						</Badge>
 					)}
@@ -62,7 +62,7 @@ export function Component() {
 
 				{workflow.source_code && (
 					<div className="space-y-3">
-						<h2 className="text-base font-semibold tracking-tight">
+						<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground border-l-2 border-primary pl-3">
 							Handler source
 						</h2>
 						<CodeBlock code={workflow.source_code} />
@@ -71,7 +71,7 @@ export function Component() {
 
 				{workflow.sub_workflows.length > 0 && (
 					<div className="space-y-4">
-						<h2 className="text-base font-semibold tracking-tight">
+						<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground border-l-2 border-primary pl-3">
 							Sub-workflows ({workflow.sub_workflows.length})
 						</h2>
 						{workflow.sub_workflows.map((sub) => (
@@ -79,7 +79,7 @@ export function Component() {
 								<div className="flex items-center gap-2">
 									<Link
 										to={`/workflows/${sub.name}`}
-										className="text-sm font-medium text-indigo-600 hover:underline"
+										className="text-sm font-medium text-primary hover:text-primary/80 underline underline-offset-2"
 									>
 										{sub.name}
 									</Link>
@@ -97,7 +97,7 @@ export function Component() {
 
 				<div className="space-y-3">
 					<div className="flex items-center justify-between">
-						<h2 className="text-base font-semibold tracking-tight">
+						<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground border-l-2 border-primary pl-3">
 							Recent runs ({recentRuns.length})
 						</h2>
 						<Link to={`/runs?workflow=${workflow.name}`}>

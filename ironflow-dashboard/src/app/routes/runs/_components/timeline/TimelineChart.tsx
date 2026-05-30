@@ -75,8 +75,8 @@ export function TimelineChart({
 							<TooltipTrigger
 								className={`absolute rounded-sm border cursor-pointer transition-all ${meta.barBg} ${meta.barBorder} ${statusMod} ${
 									isSelected
-										? "ring-2 ring-primary/50 shadow-sm z-10"
-										: "hover:brightness-110 hover:shadow-sm"
+										? "ring-2 ring-primary/50 z-10"
+										: "hover:brightness-110"
 								}`}
 								style={{
 									left: `${row.offsetPercent}%`,
@@ -96,7 +96,7 @@ export function TimelineChart({
 			</div>
 
 			<div
-				className="relative border-t border-foreground/10"
+				className="relative border-t border-border"
 				style={{ height: AXIS_HEIGHT }}
 			>
 				{markers.map((marker, index) => {
@@ -109,9 +109,9 @@ export function TimelineChart({
 							className="absolute top-0"
 							style={{ left: `${leftPercent}%` }}
 						>
-							<div className="w-px h-1.5 bg-foreground/30" />
+							<div className="w-px h-1.5 bg-border" />
 							<span
-								className={`text-[10px] text-foreground/40 font-medium whitespace-nowrap inline-block mt-0.5 ${
+								className={`text-[10px] text-muted-foreground font-mono tabular-nums whitespace-nowrap inline-block mt-0.5 ${
 									isFirst
 										? ""
 										: isLast
