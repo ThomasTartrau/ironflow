@@ -6,6 +6,13 @@ import {
 	parseAsBoolean,
 	parseAsString,
 } from "nuqs/server";
+import {
+	useQueryStates,
+	parseAsArrayOf as parseAsArrayOfClient,
+	parseAsBoolean as parseAsBooleanClient,
+	parseAsString as parseAsStringClient,
+} from "nuqs";
+import { Info } from "lucide-react";
 import type { RunResponse, StatsResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
@@ -65,6 +72,21 @@ export function Component() {
 	const { stats, recentRuns } = useLoaderData() as DashboardLoaderData;
 	const navigation = useNavigation();
 	const isLoading = navigation.state === "loading";
+
+	const [filters] = useQueryStates({
+		workflow: parseAsStringClient.withDefault(""),
+		status: parseAsStringClient.withDefault(""),
+		has_steps: parseAsBooleanClient.withDefault(true),
+		label: parseAsArrayOfClient(parseAsStringClient).withDefault([]),
+	});
+
+	const activeCount = [
+		filters.workflow,
+		filters.status,
+		!filters.has_steps ? "has_steps" : "",
+		filters.label.length > 0 ? "label" : "",
+	].filter(Boolean).length;
+
 	useDocumentMeta({
 		title: "Dashboard",
 		description: "Overview of your workflow executions.",
@@ -78,14 +100,30 @@ export function Component() {
 		>
 			<div className="space-y-6">
 				<RunFilters />
-				<div
-					className={
-						isLoading ? "opacity-50 pointer-events-none transition-opacity" : ""
-					}
-				>
-					<StatsCards stats={stats} />
-					<RecentRuns runs={recentRuns} />
-				</div>
+				<section className="border-t border-border pt-6 space-y-6">
+					{activeCount > 0 && (
+						<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded px-3 py-1.5">
+							<Info className="size-3.5 shrink-0" aria-hidden="true" />
+							Stats filtered by active filters
+						</div>
+					)}
+					<div
+						aria-busy={isLoading}
+						className={
+							isLoading
+								? "opacity-50 pointer-events-none transition-opacity"
+								: ""
+						}
+					>
+						{isLoading && (
+							<span className="sr-only" aria-live="polite">
+								Loading dashboard data
+							</span>
+						)}
+						<StatsCards stats={stats} />
+						<RecentRuns runs={recentRuns} />
+					</div>
+				</section>
 			</div>
 		</HeaderApp>
 	);

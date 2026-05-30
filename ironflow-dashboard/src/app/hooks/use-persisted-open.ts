@@ -8,9 +8,13 @@ export function usePersistedOpen(
 	const branding = useBranding();
 	const storageKey = `${branding.storagePrefix}:${key}`;
 	const [open, setOpen] = useState(() => {
-		const stored = localStorage.getItem(storageKey);
-		if (stored !== null) return stored === "true";
-		return defaultOpen;
+		try {
+			const stored = localStorage.getItem(storageKey);
+			if (stored !== null) return stored === "true";
+			return defaultOpen;
+		} catch {
+			return defaultOpen;
+		}
 	});
 
 	const toggle = useCallback(() => {

@@ -78,7 +78,7 @@ export function Component() {
 					<Link to="/workflows" className="block">
 						<Button className="w-full sm:w-fit gap-1.5">
 							<Plus className="w-4 h-4" />
-							New Run
+							Go to Workflows
 						</Button>
 					</Link>
 				) : undefined
@@ -87,6 +87,8 @@ export function Component() {
 			<div className="space-y-6">
 				<RunFilters />
 				<div
+					aria-busy={isLoading}
+					aria-live="polite"
 					className={
 						isLoading ? "opacity-50 pointer-events-none transition-opacity" : ""
 					}
@@ -97,6 +99,7 @@ export function Component() {
 					currentPage={currentPage}
 					totalPages={totalPages}
 					total={meta?.total ?? runs.length}
+					perPage={PER_PAGE}
 					onPageChange={handlePageChange}
 				/>
 			</div>

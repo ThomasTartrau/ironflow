@@ -94,14 +94,16 @@ export function AppSidebar() {
 
 	return (
 		<Sidebar collapsible="icon">
-			<SidebarHeader className="px-4 py-6">
+			<SidebarHeader className="px-3 py-4">
 				<div className="flex items-center gap-2">
 					<img
 						src={branding.logoUrl}
 						alt={branding.name}
-						className="w-8 h-8 rounded-lg"
+						className="w-7 h-7 rounded-[var(--radius-sm)] shrink-0"
+						width={28}
+						height={28}
 					/>
-					<span className="text-sm font-bold truncate group-data-[collapsible=icon]:hidden">
+					<span className="text-sm font-semibold tracking-tight truncate group-data-[collapsible=icon]:hidden">
 						{branding.name}
 					</span>
 				</div>

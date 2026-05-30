@@ -53,44 +53,55 @@ function getKindMeta(kind: string): {
 	}
 }
 
+// Node color classes are safe for both light and dark: alpha-based palette colors
+// remain readable in dark mode because they use opacity fractions, not absolute lightness.
 const nodeColors: Record<string, string> = {
-	amber: "border-amber-400/40 bg-amber-400/10 text-amber-500",
-	blue: "border-blue-400/40 bg-blue-400/10 text-blue-500",
-	purple: "border-purple-400/40 bg-purple-400/10 text-purple-500",
-	indigo: "border-indigo-400/40 bg-indigo-400/10 text-indigo-500",
-	emerald: "border-emerald-400/40 bg-emerald-400/10 text-emerald-500",
-	rose: "border-rose-400/40 bg-rose-400/10 text-rose-500",
-	slate: "border-slate-400/40 bg-slate-400/10 text-slate-500",
+	amber:
+		"border-amber-400/40 bg-amber-400/10 text-amber-400 dark:text-amber-300",
+	blue: "border-blue-400/40 bg-blue-400/10 text-blue-400 dark:text-blue-300",
+	purple:
+		"border-purple-400/40 bg-purple-400/10 text-purple-400 dark:text-purple-300",
+	indigo:
+		"border-indigo-400/40 bg-indigo-400/10 text-indigo-400 dark:text-indigo-300",
+	emerald:
+		"border-emerald-400/40 bg-emerald-400/10 text-emerald-400 dark:text-emerald-300",
+	rose: "border-rose-400/40 bg-rose-400/10 text-rose-400 dark:text-rose-300",
+	slate:
+		"border-slate-400/40 bg-slate-400/10 text-slate-400 dark:text-slate-300",
 };
 
 const groupColors = [
-	{ border: "border-blue-300/50", bg: "bg-blue-50/40", text: "text-blue-400" },
 	{
-		border: "border-violet-300/50",
-		bg: "bg-violet-50/40",
-		text: "text-violet-400",
+		border: "border-blue-400/30",
+		bg: "bg-blue-400/5",
+		text: "text-blue-400 dark:text-blue-300",
 	},
 	{
-		border: "border-amber-300/50",
-		bg: "bg-amber-50/40",
-		text: "text-amber-500",
+		border: "border-violet-400/30",
+		bg: "bg-violet-400/5",
+		text: "text-violet-400 dark:text-violet-300",
 	},
 	{
-		border: "border-emerald-300/50",
-		bg: "bg-emerald-50/40",
-		text: "text-emerald-400",
+		border: "border-amber-400/30",
+		bg: "bg-amber-400/5",
+		text: "text-amber-400 dark:text-amber-300",
+	},
+	{
+		border: "border-emerald-400/30",
+		bg: "bg-emerald-400/5",
+		text: "text-emerald-400 dark:text-emerald-300",
 	},
 ];
 
 const statusDot: Record<string, string> = {
-	completed: "bg-emerald-500",
-	failed: "bg-red-500",
-	running: "bg-blue-500 animate-pulse",
-	pending: "bg-amber-500",
-	cancelled: "bg-gray-400",
-	skipped: "bg-slate-400",
-	awaiting_approval: "bg-purple-500 animate-pulse",
-	rejected: "bg-rose-500",
+	completed: "bg-[var(--status-completed-fg)]",
+	failed: "bg-[var(--status-failed-fg)]",
+	running: "bg-[var(--status-running-fg)] animate-pulse",
+	pending: "bg-[var(--status-pending-fg)]",
+	cancelled: "bg-[var(--status-cancelled-fg)]",
+	skipped: "bg-muted-foreground/40",
+	awaiting_approval: "bg-[var(--status-awaiting-fg)] animate-pulse",
+	rejected: "bg-[var(--status-rejected-fg)]",
 };
 
 function formatNodeCost(usd: number): string {
@@ -116,7 +127,7 @@ function StepNode({
 	return (
 		<button
 			type="button"
-			className="block shrink-0 w-[120px] transition-transform hover:scale-105 text-left"
+			className="block shrink-0 w-[140px] transition-transform hover:scale-105 text-left"
 			onClick={() => {
 				window.__focusStepTarget = step.id;
 				window.dispatchEvent(
@@ -144,16 +155,16 @@ function StepNode({
 			}}
 		>
 			<Card
-				className={`relative w-full overflow-hidden rounded-lg border ${nodeColors[meta.color]} bg-background/70 px-2 py-1.5 backdrop-blur cursor-pointer`}
+				className={`relative w-full overflow-hidden rounded-[var(--radius)] border ${nodeColors[meta.color]} bg-card px-2 py-1.5 cursor-pointer`}
 			>
 				<div className="space-y-0.5">
 					<div className="flex items-center gap-1">
 						<div
-							className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${nodeColors[meta.color]} bg-background/80`}
+							className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border ${nodeColors[meta.color]} bg-card`}
 						>
 							<Icon className="h-2.5 w-2.5" />
 						</div>
-						<span className="text-[8px] uppercase tracking-wider text-foreground/50 font-medium">
+						<span className="text-[11px] uppercase tracking-wider text-foreground/50 font-medium">
 							{meta.label}
 						</span>
 						<div
@@ -163,7 +174,7 @@ function StepNode({
 					<h3 className="truncate text-[11px] font-semibold text-foreground leading-tight">
 						{step.name}
 					</h3>
-					<div className="flex items-center gap-1 text-[9px] text-foreground/45">
+					<div className="flex items-center gap-1 text-[11px] text-foreground/45 font-mono tabular-nums">
 						<span>{formatDuration(step.duration_ms)}</span>
 						{cost && (
 							<>
@@ -221,8 +232,8 @@ function FlowItemView({
 
 	if (item.kind === "parallel") {
 		return (
-			<div className="flex flex-col gap-1.5 shrink-0 rounded-lg border border-dashed border-foreground/15 bg-foreground/[0.02] px-1.5 py-1.5">
-				<span className="text-[8px] uppercase tracking-[0.2em] text-foreground/30 font-semibold px-0.5">
+			<div className="flex flex-col gap-1.5 shrink-0 rounded-[var(--radius)] border border-dashed border-foreground/15 bg-foreground/[0.02] px-1.5 py-1.5">
+				<span className="text-[11px] uppercase tracking-[0.2em] text-foreground/30 font-semibold px-0.5">
 					parallel
 				</span>
 				{item.items.map((child) => (
@@ -241,11 +252,11 @@ function FlowItemView({
 
 	return (
 		<div
-			className={`relative rounded-xl border ${gc.border} ${gc.bg} px-2.5 pb-2.5 pt-5 shrink-0`}
+			className={`relative rounded-[var(--radius)] border ${gc.border} ${gc.bg} px-2.5 pb-2.5 pt-5 shrink-0`}
 		>
 			<Link
 				to={`/runs/${item.runId}`}
-				className={`absolute top-1 left-2.5 text-[9px] font-semibold uppercase tracking-[0.15em] ${gc.text} hover:underline`}
+				className={`absolute top-1 left-2.5 text-[11px] font-semibold uppercase tracking-[0.15em] font-mono ${gc.text} hover:underline`}
 				onClick={(e) => e.stopPropagation()}
 			>
 				{item.name}
@@ -425,21 +436,26 @@ export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 	};
 
 	return (
-		<div className="rounded-2xl border border-border/40 bg-background/60 backdrop-blur p-4">
+		<section
+			aria-label="Step flow diagram"
+			className="rounded-[var(--radius)] border border-border bg-card p-4"
+		>
 			<div className="mb-3 flex items-center justify-end gap-1">
 				<button
 					type="button"
 					onClick={zoomOut}
 					className="rounded p-1 text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5 transition-colors"
 					title="Zoom out"
+					aria-label="Zoom out"
 				>
-					<ZoomOut className="h-3.5 w-3.5" />
+					<ZoomOut className="h-3.5 w-3.5" aria-hidden="true" />
 				</button>
 				<button
 					type="button"
 					onClick={zoomReset}
-					className="rounded px-1.5 py-0.5 text-[9px] text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5 transition-colors tabular-nums"
+					className="rounded px-1.5 py-0.5 text-[11px] text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5 transition-colors tabular-nums font-mono"
 					title="Reset zoom"
+					aria-label={`Reset zoom, currently at ${Math.round(zoom * 100)}%`}
 				>
 					{Math.round(zoom * 100)}%
 				</button>
@@ -448,8 +464,9 @@ export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 					onClick={zoomIn}
 					className="rounded p-1 text-foreground/40 hover:text-foreground/70 hover:bg-foreground/5 transition-colors"
 					title="Zoom in"
+					aria-label="Zoom in"
 				>
-					<ZoomIn className="h-3.5 w-3.5" />
+					<ZoomIn className="h-3.5 w-3.5" aria-hidden="true" />
 				</button>
 			</div>
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: canvas drag/pan requires mouse events on container */}
@@ -472,6 +489,6 @@ export function StepFlow({ steps, workflowName, runId }: StepFlowProps) {
 					<FlowItemView item={rootGroup} currentRunId={runId} />
 				</div>
 			</div>
-		</div>
+		</section>
 	);
 }

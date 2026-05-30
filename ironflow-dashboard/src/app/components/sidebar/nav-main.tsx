@@ -19,7 +19,6 @@ export interface NavItem {
 	title: string;
 	url: string;
 	icon?: LucideIcon;
-	isActive?: boolean;
 	exactMatch?: boolean;
 	items?: {
 		title: string;
@@ -54,7 +53,7 @@ export function NavMain({ items }: NavMainProps) {
 					return (
 						<Collapsible
 							key={item.title}
-							defaultOpen={item.isActive || isActive}
+							defaultOpen={isActive}
 							className="group/collapsible"
 						>
 							<SidebarMenuItem>
@@ -63,7 +62,10 @@ export function NavMain({ items }: NavMainProps) {
 										<SidebarMenuButton tooltip={item.title} isActive={isActive}>
 											{item.icon && <item.icon />}
 											<span>{item.title}</span>
-											<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+											<ChevronRight
+												className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90"
+												aria-hidden="true"
+											/>
 										</SidebarMenuButton>
 									}
 								/>

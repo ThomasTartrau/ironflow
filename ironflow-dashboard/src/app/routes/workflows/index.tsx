@@ -1,6 +1,6 @@
 import { ChevronRight, FolderClosed, FolderOpen, Workflow } from "lucide-react";
 import { useMemo } from "react";
-import { useLoaderData, useNavigate } from "react-router";
+import { useLoaderData, useNavigate, useParams } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { debounce, parseAsArrayOf, parseAsString, useQueryState } from "nuqs";
 import { HeaderApp } from "@/app/components/HeaderApp";
@@ -17,7 +17,6 @@ import {
 import { Input } from "@/components/ui/input";
 
 const UNCATEGORIZED_KEY = "__uncategorized__";
-const UNCATEGORIZED_API_FILTER = "__uncategorized__";
 
 interface TreeNode {
 	name: string;
@@ -103,7 +102,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	const params = new URLSearchParams();
 	if (name) params.set("name", name);
 	if (uncategorizedOnly) {
-		params.set("category", UNCATEGORIZED_API_FILTER);
+		params.set("category", UNCATEGORIZED_KEY);
 	} else if (category) {
 		params.set("category", category);
 	}
@@ -120,9 +119,16 @@ interface TreeNodeRowProps {
 	depth: number;
 	openFolders: Set<string>;
 	onToggle: (path: string, open: boolean) => void;
+	currentWorkflowName: string | undefined;
 }
 
-function TreeNodeRow({ node, depth, openFolders, onToggle }: TreeNodeRowProps) {
+function TreeNodeRow({
+	node,
+	depth,
+	openFolders,
+	onToggle,
+	currentWorkflowName,
+}: TreeNodeRowProps) {
 	const navigate = useNavigate();
 	const isOpen = openFolders.has(node.path);
 	const descendantCount = countDescendantWorkflows(node);
@@ -130,21 +136,30 @@ function TreeNodeRow({ node, depth, openFolders, onToggle }: TreeNodeRowProps) {
 	return (
 		<Collapsible open={isOpen} onOpenChange={(v) => onToggle(node.path, v)}>
 			<CollapsibleTrigger
-				className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50 transition-colors"
-				style={{ paddingLeft: `${depth * 16 + 12}px` }}
+				className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent hover:text-accent-foreground transition-colors"
+				style={{ "--tree-depth": depth } as React.CSSProperties}
+				aria-label={`${node.name} folder, ${descendantCount} ${descendantCount === 1 ? "workflow" : "workflows"}`}
 			>
+				<span className="pl-[calc(var(--tree-depth,0)*1rem)] contents" />
 				<ChevronRight
-					className={`size-4 text-muted-foreground transition-transform ${
+					aria-hidden="true"
+					className={`size-4 text-muted-foreground transition-transform duration-200 ${
 						isOpen ? "rotate-90" : ""
 					}`}
 				/>
 				{isOpen ? (
-					<FolderOpen className="size-4 text-muted-foreground" />
+					<FolderOpen
+						aria-hidden="true"
+						className="size-4 text-muted-foreground"
+					/>
 				) : (
-					<FolderClosed className="size-4 text-muted-foreground" />
+					<FolderClosed
+						aria-hidden="true"
+						className="size-4 text-muted-foreground"
+					/>
 				)}
 				<span className="font-medium text-sm">{node.name}</span>
-				<span className="ml-auto text-xs text-muted-foreground">
+				<span className="ml-auto text-xs text-muted-foreground tabular-nums">
 					{descendantCount} {descendantCount === 1 ? "workflow" : "workflows"}
 				</span>
 			</CollapsibleTrigger>
@@ -157,26 +172,36 @@ function TreeNodeRow({ node, depth, openFolders, onToggle }: TreeNodeRowProps) {
 							depth={depth + 1}
 							openFolders={openFolders}
 							onToggle={onToggle}
+							currentWorkflowName={currentWorkflowName}
 						/>
 					))}
-					{node.workflows.map((wf) => (
-						<button
-							type="button"
-							key={wf.name}
-							onClick={() => navigate(`/workflows/${wf.name}`)}
-							className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors"
-							style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}
-						>
-							<span className="size-4 shrink-0" aria-hidden />
-							<Workflow className="size-4 text-muted-foreground" />
-							<span className="font-mono">{wf.name}</span>
-							{wf.version !== "unversioned" && (
-								<span className="ml-auto text-xs font-mono text-muted-foreground">
-									{wf.version}
-								</span>
-							)}
-						</button>
-					))}
+					{node.workflows.map((wf) => {
+						const isActive = wf.name === currentWorkflowName;
+						return (
+							<button
+								type="button"
+								key={wf.name}
+								onClick={() => navigate(`/workflows/${wf.name}`)}
+								aria-label={`Open workflow ${wf.name}`}
+								data-active={isActive}
+								className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground transition-colors data-[active=true]:bg-accent/70"
+								style={{ "--tree-depth": depth + 1 } as React.CSSProperties}
+							>
+								<span className="pl-[calc(var(--tree-depth,0)*1rem)] contents" />
+								<span className="size-4 shrink-0" aria-hidden="true" />
+								<Workflow
+									aria-hidden="true"
+									className="size-4 text-muted-foreground"
+								/>
+								<span className="font-mono text-sm">{wf.name}</span>
+								{wf.version !== "unversioned" && (
+									<span className="ml-auto text-xs font-mono text-muted-foreground tabular-nums">
+										{wf.version}
+									</span>
+								)}
+							</button>
+						);
+					})}
 				</div>
 			</CollapsibleContent>
 		</Collapsible>
@@ -185,6 +210,8 @@ function TreeNodeRow({ node, depth, openFolders, onToggle }: TreeNodeRowProps) {
 
 export function Component() {
 	const { workflows } = useLoaderData() as { workflows: WorkflowSummary[] };
+	const params = useParams();
+	const currentWorkflowName = params.name;
 
 	const [nameFilter, setNameFilter] = useQueryState(
 		"name",
@@ -248,13 +275,15 @@ export function Component() {
 		nameFilter || categoryFilter || isUncategorizedOnly,
 	);
 
+	const totalWorkflows = workflows.length;
+
 	return (
 		<HeaderApp
 			title="Workflows"
 			description="Registered workflow handlers in the engine."
 		>
-			<div className="space-y-6">
-				<div className="flex flex-col gap-4 md:flex-row md:items-end">
+			<div className="space-y-4">
+				<div className="rounded-[var(--radius)] border bg-card px-4 py-3 flex flex-col gap-4 md:flex-row md:items-center">
 					<div className="flex-1">
 						<label htmlFor="filter-name" className="text-sm font-medium">
 							Workflow Name
@@ -282,7 +311,7 @@ export function Component() {
 					</div>
 					<label
 						htmlFor="filter-uncategorized-only"
-						className="flex items-center gap-2 text-sm select-none cursor-pointer pb-2"
+						className="flex items-center gap-2 text-sm select-none cursor-pointer self-end pb-[0.1875rem]"
 					>
 						<Checkbox
 							id="filter-uncategorized-only"
@@ -305,6 +334,7 @@ export function Component() {
 								setUncategorizedOnly(null);
 							}}
 							variant="outline"
+							size="sm"
 						>
 							Remove all filters
 						</Button>
@@ -312,20 +342,66 @@ export function Component() {
 				</div>
 
 				{workflows.length === 0 ? (
-					<div className="text-center py-16 text-muted-foreground border rounded-lg bg-muted/20">
-						No workflows registered.
+					<div className="flex flex-col items-center justify-center gap-4 py-20 border border-dashed rounded-[var(--radius)] bg-muted/20">
+						<Workflow
+							className="size-10 text-muted-foreground/40"
+							aria-hidden="true"
+						/>
+						{hasFilters ? (
+							<>
+								<p className="text-sm font-medium text-muted-foreground">
+									No workflows match your filters.
+								</p>
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => {
+										setNameFilter(null);
+										setCategoryFilter(null);
+										setUncategorizedOnly(null);
+									}}
+								>
+									Remove filters
+								</Button>
+							</>
+						) : (
+							<>
+								<p className="text-sm font-medium text-muted-foreground">
+									No workflows registered.
+								</p>
+								<p className="text-xs text-muted-foreground">
+									Register a workflow handler in your engine to see it here.
+								</p>
+							</>
+						)}
 					</div>
 				) : (
-					<>
-						<div className="flex justify-end gap-2">
-							<Button variant="ghost" size="sm" onClick={handleExpandAll}>
-								Expand all
-							</Button>
-							<Button variant="ghost" size="sm" onClick={handleCollapseAll}>
-								Collapse all
-							</Button>
+					<div className="rounded-[var(--radius)] border overflow-hidden">
+						<div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
+							<span className="text-xs text-muted-foreground tabular-nums">
+								{totalWorkflows}{" "}
+								{totalWorkflows === 1 ? "workflow" : "workflows"}
+							</span>
+							<div className="flex gap-1">
+								<Button
+									variant="ghost"
+									size="sm"
+									onClick={handleExpandAll}
+									className="h-7 text-xs px-2"
+								>
+									Expand all
+								</Button>
+								<Button
+									variant="ghost"
+									size="sm"
+									onClick={handleCollapseAll}
+									className="h-7 text-xs px-2"
+								>
+									Collapse all
+								</Button>
+							</div>
 						</div>
-						<div className="rounded-lg border divide-y">
+						<div className="divide-y">
 							{[...tree.children.values()].map((child) => (
 								<TreeNodeRow
 									key={child.path}
@@ -333,10 +409,11 @@ export function Component() {
 									depth={0}
 									openFolders={openFolders}
 									onToggle={handleToggle}
+									currentWorkflowName={currentWorkflowName}
 								/>
 							))}
 						</div>
-					</>
+					</div>
 				)}
 			</div>
 		</HeaderApp>

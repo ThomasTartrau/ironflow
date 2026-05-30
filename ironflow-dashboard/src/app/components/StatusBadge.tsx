@@ -12,22 +12,22 @@ export function StatusBadge({ status }: StatusBadgeProps) {
 	const getStatusStyles = (stat: Status): string => {
 		switch (stat) {
 			case "pending":
-				return "bg-amber-100 text-amber-700 border-amber-200";
+				return "bg-[var(--status-pending-bg)] text-[var(--status-pending-fg)] border-[var(--status-pending-border)]";
 			case "running":
-				return "bg-blue-100 text-blue-700 border-blue-200 animate-pulse";
+				return "bg-[var(--status-running-bg)] text-[var(--status-running-fg)] border-[var(--status-running-border)] animate-pulse";
 			case "completed":
-				return "bg-emerald-100 text-emerald-700 border-emerald-200";
+				return "bg-[var(--status-completed-bg)] text-[var(--status-completed-fg)] border-[var(--status-completed-border)]";
 			case "failed":
-				return "bg-red-100 text-red-700 border-red-200";
+				return "bg-[var(--status-failed-bg)] text-[var(--status-failed-fg)] border-[var(--status-failed-border)]";
 			case "retrying":
-				return "bg-orange-100 text-orange-700 border-orange-200";
+				return "bg-[var(--status-retrying-bg)] text-[var(--status-retrying-fg)] border-[var(--status-retrying-border)]";
 			case "awaiting_approval":
-				return "bg-purple-100 text-purple-700 border-purple-200 animate-pulse";
+				return "bg-[var(--status-awaiting-bg)] text-[var(--status-awaiting-fg)] border-[var(--status-awaiting-border)] animate-pulse";
 			case "rejected":
-				return "bg-rose-100 text-rose-700 border-rose-200";
+				return "bg-[var(--status-rejected-bg)] text-[var(--status-rejected-fg)] border-[var(--status-rejected-border)]";
 			case "cancelled":
 			case "skipped":
-				return "bg-gray-100 text-gray-600 border-gray-200";
+				return "bg-[var(--status-cancelled-bg)] text-[var(--status-cancelled-fg)] border-[var(--status-cancelled-border)]";
 			default: {
 				const _exhaustive: never = stat;
 				return _exhaustive;
@@ -40,7 +40,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
 	return (
 		<Badge
 			variant="outline"
-			className={`text-xs font-medium ${getStatusStyles(status)}`}
+			className={`text-[11px] font-medium uppercase tracking-wide tabular-nums ${getStatusStyles(status)}`}
 		>
 			{displayLabel}
 		</Badge>

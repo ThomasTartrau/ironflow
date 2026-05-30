@@ -72,7 +72,7 @@ export function RunActions({ run }: RunActionsProps) {
 						}
 						disabled={isLoading}
 						variant="default"
-						className="bg-emerald-600 hover:bg-emerald-700"
+						className="bg-success text-success-foreground hover:bg-success/90"
 					>
 						{pendingAction === "approving" ? "Approving..." : "Approve"}
 					</Button>
@@ -101,7 +101,8 @@ export function RunActions({ run }: RunActionsProps) {
 						})
 					}
 					disabled={isLoading}
-					variant="destructive"
+					variant="outline"
+					className="border-destructive text-destructive hover:bg-destructive/10"
 				>
 					{pendingAction === "cancelling" ? "Cancelling..." : "Cancel"}
 				</Button>

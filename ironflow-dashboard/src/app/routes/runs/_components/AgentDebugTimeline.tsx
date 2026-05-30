@@ -84,22 +84,22 @@ function truncate(value: string, max: number): string {
 function getToolColor(name: string): string {
 	const lower = name.toLowerCase();
 	if (lower.includes("bash") || lower.includes("shell")) {
-		return "bg-amber-50 text-amber-700 border-amber-200";
+		return "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-400/15 dark:text-amber-300 dark:border-amber-400/30";
 	}
 	if (
 		lower.includes("read") ||
 		lower.includes("grep") ||
 		lower.includes("glob")
 	) {
-		return "bg-sky-50 text-sky-700 border-sky-200";
+		return "bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-400/15 dark:text-sky-300 dark:border-sky-400/30";
 	}
 	if (lower.includes("edit") || lower.includes("write")) {
-		return "bg-emerald-50 text-emerald-700 border-emerald-200";
+		return "bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-400/15 dark:text-emerald-300 dark:border-emerald-400/30";
 	}
 	if (lower.includes("web") || lower.includes("fetch")) {
-		return "bg-violet-50 text-violet-700 border-violet-200";
+		return "bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-400/15 dark:text-violet-300 dark:border-violet-400/30";
 	}
-	return "bg-gray-50 text-gray-700 border-gray-200";
+	return "bg-muted text-muted-foreground border-border";
 }
 
 interface ThinkingBlockProps {
@@ -109,32 +109,38 @@ interface ThinkingBlockProps {
 function ThinkingBlock({ text }: ThinkingBlockProps) {
 	const [open, setOpen] = useState(false);
 	const preview = truncate(text.replace(/\n+/g, " "), 120);
+	const contentId = `thinking-content-${text.slice(0, 8).replace(/\s/g, "")}`;
 
 	return (
-		<div className="rounded-md border border-dashed border-indigo-200 bg-indigo-50/40">
+		<div className="rounded-[var(--radius-sm)] border border-dashed border-indigo-200 bg-indigo-50/40 dark:border-indigo-400/25 dark:bg-indigo-400/10">
 			<button
 				type="button"
 				onClick={() => setOpen(!open)}
-				className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-indigo-50/60 transition-colors cursor-pointer"
+				aria-expanded={open}
+				aria-controls={contentId}
+				className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-indigo-50/60 dark:hover:bg-indigo-400/10 transition-colors cursor-pointer"
 			>
 				{open ? (
-					<ChevronDown className="w-3 h-3 text-indigo-500 shrink-0 mt-1" />
+					<ChevronDown className="w-3 h-3 text-indigo-500 dark:text-indigo-400 shrink-0 mt-1" />
 				) : (
-					<ChevronRight className="w-3 h-3 text-indigo-500 shrink-0 mt-1" />
+					<ChevronRight className="w-3 h-3 text-indigo-500 dark:text-indigo-400 shrink-0 mt-1" />
 				)}
-				<Brain className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
-				<span className="text-xs font-semibold text-indigo-700 shrink-0">
+				<Brain
+					className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400 shrink-0 mt-0.5"
+					aria-hidden="true"
+				/>
+				<span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 shrink-0">
 					Thinking
 				</span>
 				{!open && (
-					<span className="text-xs text-indigo-600/80 italic truncate">
+					<span className="text-xs text-indigo-600/80 dark:text-indigo-400/80 italic truncate">
 						{preview}
 					</span>
 				)}
 			</button>
 			{open && (
-				<div className="px-3 pb-3 pl-8">
-					<pre className="text-xs whitespace-pre-wrap break-words text-indigo-900/90 font-mono leading-relaxed">
+				<div id={contentId} className="px-3 pb-3 pl-8">
+					<pre className="text-xs whitespace-pre-wrap break-words text-indigo-900/90 dark:text-indigo-200/90 font-mono leading-relaxed">
 						{text}
 					</pre>
 				</div>
@@ -145,10 +151,15 @@ function ThinkingBlock({ text }: ThinkingBlockProps) {
 
 function RedactedThinkingBlock() {
 	return (
-		<div className="rounded-md border border-dashed border-indigo-200 bg-indigo-50/40 px-3 py-2 flex items-center gap-2">
-			<Brain className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-			<span className="text-xs font-semibold text-indigo-700">Thinking</span>
-			<span className="text-xs text-indigo-600/70 italic">
+		<div className="rounded-[var(--radius-sm)] border border-dashed border-indigo-200 bg-indigo-50/40 dark:border-indigo-400/25 dark:bg-indigo-400/10 px-3 py-2 flex items-center gap-2">
+			<Brain
+				className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400 shrink-0"
+				aria-hidden="true"
+			/>
+			<span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+				Thinking
+			</span>
+			<span className="text-xs text-indigo-600/70 dark:text-indigo-400/70 italic">
 				redacted by the model (signature only)
 			</span>
 		</div>
@@ -166,14 +177,17 @@ function ToolCallBlock({ call, result }: ToolCallBlockProps) {
 	const inputPreview = truncate(inputText.replace(/\s+/g, " "), 80);
 	const hasError = result?.is_error === true;
 	const resultText = result ? formatToolResult(result.content) : null;
+	const contentId = `tool-content-${call.id ?? call.name}`;
 
 	return (
 		<div
-			className={`rounded-md border ${hasError ? "border-red-200 bg-red-50/30" : "border-muted bg-muted/20"}`}
+			className={`rounded-[var(--radius-sm)] border ${hasError ? "border-destructive/30 bg-destructive/10" : "border-border bg-muted/20"}`}
 		>
 			<button
 				type="button"
 				onClick={() => setOpen(!open)}
+				aria-expanded={open}
+				aria-controls={contentId}
 				className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-muted/30 transition-colors cursor-pointer"
 			>
 				{open ? (
@@ -193,30 +207,36 @@ function ToolCallBlock({ call, result }: ToolCallBlockProps) {
 				</span>
 				{result &&
 					(hasError ? (
-						<AlertTriangle className="w-3.5 h-3.5 text-red-500 shrink-0 ml-auto" />
+						<AlertTriangle
+							className="w-3.5 h-3.5 text-destructive shrink-0 ml-auto"
+							aria-hidden="true"
+						/>
 					) : (
-						<CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 ml-auto" />
+						<CheckCircle2
+							className="w-3.5 h-3.5 text-[var(--status-completed-fg)] shrink-0 ml-auto"
+							aria-hidden="true"
+						/>
 					))}
 			</button>
 			{open && (
-				<div className="px-3 pb-3 pl-8 space-y-2">
+				<div id={contentId} className="px-3 pb-3 pl-8 space-y-2">
 					<div>
 						<div className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground mb-1">
 							Input
 						</div>
-						<pre className="text-xs max-h-48 overflow-auto whitespace-pre-wrap break-words bg-background border rounded p-2 font-mono leading-relaxed">
+						<pre className="text-xs max-h-48 overflow-auto whitespace-pre-wrap break-words bg-background border border-border rounded-[var(--radius-sm)] p-2 font-mono leading-relaxed">
 							{inputText || "(no input)"}
 						</pre>
 					</div>
 					{resultText !== null && (
 						<div>
 							<div
-								className={`text-[10px] uppercase tracking-wide font-semibold mb-1 ${hasError ? "text-red-600" : "text-emerald-600"}`}
+								className={`text-[10px] uppercase tracking-wide font-semibold mb-1 ${hasError ? "text-destructive" : "text-[var(--status-completed-fg)]"}`}
 							>
 								{hasError ? "Error" : "Result"}
 							</div>
 							<pre
-								className={`text-xs max-h-64 overflow-auto whitespace-pre-wrap break-words border rounded p-2 font-mono leading-relaxed ${hasError ? "bg-red-50/50 text-red-800 border-red-200" : "bg-background"}`}
+								className={`text-xs max-h-64 overflow-auto whitespace-pre-wrap break-words border rounded-[var(--radius-sm)] p-2 font-mono leading-relaxed ${hasError ? "bg-destructive/10 text-destructive border-destructive/20" : "bg-background border-border"}`}
 							>
 								{resultText || "(no content)"}
 							</pre>
@@ -234,10 +254,15 @@ interface AssistantTextBlockProps {
 
 function AssistantTextBlock({ text }: AssistantTextBlockProps) {
 	return (
-		<div className="rounded-md border border-violet-100 bg-violet-50/30 px-3 py-2">
+		<div className="rounded-[var(--radius-sm)] border border-violet-200 bg-violet-50/30 dark:border-violet-400/25 dark:bg-violet-400/10 px-3 py-2">
 			<div className="flex items-center gap-2 mb-1">
-				<MessageSquare className="w-3.5 h-3.5 text-violet-500" />
-				<span className="text-xs font-semibold text-violet-700">Assistant</span>
+				<MessageSquare
+					className="w-3.5 h-3.5 text-violet-500 dark:text-violet-400"
+					aria-hidden="true"
+				/>
+				<span className="text-xs font-semibold text-violet-700 dark:text-violet-300">
+					Assistant
+				</span>
 			</div>
 			<div className="pl-5">
 				<MarkdownContent content={text} />
@@ -267,7 +292,7 @@ function Turn({ index, message }: TurnProps) {
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center gap-2">
-				<div className="w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-xs font-semibold flex items-center justify-center shrink-0">
+				<div className="w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-xs font-semibold flex items-center justify-center shrink-0 dark:bg-violet-400/15 dark:text-violet-300 tabular-nums">
 					{index + 1}
 				</div>
 				<span className="text-xs font-semibold text-foreground">
@@ -337,7 +362,7 @@ export function AgentDebugTimeline({ debugMessages }: AgentDebugTimelineProps) {
 	}
 
 	return (
-		<div className="space-y-4 border-l-2 border-violet-200 pl-4">
+		<div className="space-y-4 border-l-2 border-border pl-4">
 			{visibleMessages.map((message, i) => (
 				<Turn key={`turn-${i}`} index={i} message={message} />
 			))}

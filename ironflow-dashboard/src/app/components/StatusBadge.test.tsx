@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { StatusBadge } from "./StatusBadge";
+import { capitalize } from "@/app/lib/format";
 import type { RunStatus, StepStatus } from "@/app/lib/types";
 
 describe("StatusBadge", () => {
@@ -28,65 +29,63 @@ describe("StatusBadge", () => {
 		runStatuses,
 	)("renders run status '%s' with capitalized label", (status) => {
 		render(<StatusBadge status={status} />);
-		const expected = status.charAt(0).toUpperCase() + status.slice(1);
-		expect(screen.getByText(expected)).toBeInTheDocument();
+		expect(screen.getByText(capitalize(status))).toBeInTheDocument();
 	});
 
 	it.each(
 		stepStatuses,
 	)("renders step status '%s' with capitalized label", (status) => {
 		render(<StatusBadge status={status} />);
-		const expected = status.charAt(0).toUpperCase() + status.slice(1);
-		expect(screen.getByText(expected)).toBeInTheDocument();
+		expect(screen.getByText(capitalize(status))).toBeInTheDocument();
 	});
 
-	it("applies amber styles for pending", () => {
+	it("applies the pending status token for pending", () => {
 		const { container } = render(<StatusBadge status="pending" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-amber-100");
+		expect(badge?.className).toContain("var(--status-pending-bg)");
 	});
 
-	it("applies blue styles with pulse for running", () => {
+	it("applies the running status token with pulse for running", () => {
 		const { container } = render(<StatusBadge status="running" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-blue-100");
+		expect(badge?.className).toContain("var(--status-running-bg)");
 		expect(badge?.className).toContain("animate-pulse");
 	});
 
-	it("applies emerald styles for completed", () => {
+	it("applies the completed status token for completed", () => {
 		const { container } = render(<StatusBadge status="completed" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-emerald-100");
+		expect(badge?.className).toContain("var(--status-completed-bg)");
 	});
 
-	it("applies red styles for failed", () => {
+	it("applies the failed status token for failed", () => {
 		const { container } = render(<StatusBadge status="failed" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-red-100");
+		expect(badge?.className).toContain("var(--status-failed-bg)");
 	});
 
-	it("applies gray styles for cancelled", () => {
+	it("applies the cancelled status token for cancelled", () => {
 		const { container } = render(<StatusBadge status="cancelled" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-gray-100");
+		expect(badge?.className).toContain("var(--status-cancelled-bg)");
 	});
 
-	it("applies gray styles for skipped", () => {
+	it("applies the cancelled status token for skipped", () => {
 		const { container } = render(<StatusBadge status="skipped" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-gray-100");
+		expect(badge?.className).toContain("var(--status-cancelled-bg)");
 	});
 
-	it("applies rose styles for rejected", () => {
+	it("applies the rejected status token for rejected", () => {
 		const { container } = render(<StatusBadge status="rejected" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-rose-100");
+		expect(badge?.className).toContain("var(--status-rejected-bg)");
 	});
 
-	it("applies purple styles with pulse for awaiting_approval", () => {
+	it("applies the awaiting status token with pulse for awaiting_approval", () => {
 		const { container } = render(<StatusBadge status="awaiting_approval" />);
 		const badge = container.firstElementChild;
-		expect(badge?.className).toContain("bg-purple-100");
+		expect(badge?.className).toContain("var(--status-awaiting-bg)");
 		expect(badge?.className).toContain("animate-pulse");
 	});
 });

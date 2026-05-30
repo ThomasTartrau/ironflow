@@ -46,8 +46,8 @@ interface StepListProps {
 function RunningDot() {
 	return (
 		<span className="relative flex h-2 w-2 shrink-0">
-			<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-			<span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+			<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--status-running-fg)] opacity-75" />
+			<span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--status-running-fg)]" />
 		</span>
 	);
 }
@@ -55,19 +55,19 @@ function RunningDot() {
 function getKindColor(kind: string): string {
 	switch (kind) {
 		case "shell":
-			return "bg-amber-100 text-amber-700 border-amber-200";
+			return "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-400/15 dark:text-amber-300 dark:border-amber-400/30";
 		case "http":
-			return "bg-sky-100 text-sky-700 border-sky-200";
+			return "bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-400/15 dark:text-sky-300 dark:border-sky-400/30";
 		case "agent":
-			return "bg-violet-100 text-violet-700 border-violet-200";
+			return "bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-400/15 dark:text-violet-300 dark:border-violet-400/30";
 		case "workflow":
-			return "bg-indigo-100 text-indigo-700 border-indigo-200";
+			return "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-400/15 dark:text-indigo-300 dark:border-indigo-400/30";
 		case "approval":
-			return "bg-rose-100 text-rose-700 border-rose-200";
+			return "bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-400/15 dark:text-rose-300 dark:border-rose-400/30";
 		case "skip":
-			return "bg-slate-100 text-slate-600 border-slate-200";
+			return "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-400/15 dark:text-slate-300 dark:border-slate-400/30";
 		default:
-			return "bg-gray-100 text-gray-700 border-gray-200";
+			return "bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-400/15 dark:text-gray-300 dark:border-gray-400/30";
 	}
 }
 
@@ -101,7 +101,7 @@ function ChildRunSteps({ runId }: { runId: string }) {
 	if (steps.length === 0) return null;
 
 	return (
-		<div className="border-l-2 border-indigo-200 pl-4 space-y-2">
+		<div className="border-l-2 border-border pl-4 space-y-2">
 			{steps.map((childStep) => (
 				<NestedStep key={childStep.id} step={childStep} />
 			))}
@@ -151,7 +151,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 			<button
 				type="button"
 				onClick={() => setIsExpanded(!isExpanded)}
-				className={`flex items-center gap-2 text-sm w-full text-left hover:bg-muted/50 rounded-md p-1.5 -ml-1.5 transition-colors duration-700 cursor-pointer ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-blue-50/50" : ""}`}
+				className={`flex items-center gap-2 text-sm w-full text-left hover:bg-muted/50 rounded-[var(--radius-sm)] p-1.5 -ml-1.5 transition-colors duration-700 cursor-pointer ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-[var(--status-running-bg)]" : ""}`}
 			>
 				{isExpanded ? (
 					<ChevronUp className="w-3 h-3 text-muted-foreground shrink-0" />
@@ -181,18 +181,18 @@ function NestedStep({ step }: { step: StepResponse }) {
 					{step.status === "skipped" &&
 						step.output &&
 						typeof step.output.reason === "string" && (
-							<div className="p-2 rounded-md bg-slate-50 border border-slate-200">
-								<div className="text-xs font-semibold text-slate-600 mb-0.5">
+							<div className="p-2 rounded-[var(--radius-sm)] bg-muted/50 border border-border">
+								<div className="text-xs font-semibold text-muted-foreground mb-0.5">
 									Skip reason
 								</div>
-								<div className="text-xs text-slate-700 whitespace-pre-wrap break-words">
+								<div className="text-xs text-muted-foreground whitespace-pre-wrap break-words">
 									{step.output.reason}
 								</div>
 							</div>
 						)}
 					{step.error && (
-						<div className="p-2 rounded-md bg-red-50 border border-red-200">
-							<div className="text-xs text-red-700 font-mono whitespace-pre-wrap break-words">
+						<div className="p-2 rounded-[var(--radius-sm)] bg-destructive/10 border border-destructive/20">
+							<div className="text-xs text-destructive font-mono whitespace-pre-wrap break-words">
 								{step.error}
 							</div>
 						</div>
@@ -212,7 +212,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 							labelExtra={
 								<Badge
 									variant="outline"
-									className="text-[10px] bg-violet-50 text-violet-700 border-violet-200"
+									className="text-[10px] bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-400/15 dark:text-violet-300 dark:border-violet-400/30"
 								>
 									{countVisibleTurns(step.debug_messages)} turn
 									{countVisibleTurns(step.debug_messages) > 1 ? "s" : ""}
@@ -266,7 +266,7 @@ function StepOutput({ step }: { step: StepResponse }) {
 					{model && (
 						<Badge
 							variant="outline"
-							className="text-[10px] px-1.5 py-0 bg-violet-50 text-violet-600 border-violet-200"
+							className="text-[10px] px-1.5 py-0 bg-violet-50 text-violet-600 border-violet-200 dark:bg-violet-400/15 dark:text-violet-300 dark:border-violet-400/30"
 						>
 							{model}
 						</Badge>
@@ -306,7 +306,7 @@ function StepOutput({ step }: { step: StepResponse }) {
 							</span>
 							{exitCode !== undefined && (
 								<span
-									className={`text-[10px] font-mono ${exitCode === 0 ? "text-emerald-600" : "text-red-600"}`}
+									className={`text-[10px] font-mono ${exitCode === 0 ? "text-[var(--status-completed-fg)]" : "text-destructive"}`}
 								>
 									exit {String(exitCode)}
 								</span>
@@ -319,10 +319,10 @@ function StepOutput({ step }: { step: StepResponse }) {
 				)}
 				{stderr && stderr.trim().length > 0 && (
 					<div>
-						<div className="text-xs font-semibold text-red-600 mb-1.5">
+						<div className="text-xs font-semibold text-destructive mb-1.5">
 							stderr
 						</div>
-						<pre className="text-xs max-h-40 overflow-auto whitespace-pre-wrap break-words text-red-700 bg-red-50 border border-red-200 rounded-md p-3 font-mono leading-relaxed">
+						<pre className="text-xs max-h-40 overflow-auto whitespace-pre-wrap break-words text-destructive bg-destructive/10 border border-destructive/20 rounded-[var(--radius-sm)] p-3 font-mono leading-relaxed">
 							{stderr}
 						</pre>
 					</div>
@@ -346,7 +346,7 @@ function StepOutput({ step }: { step: StepResponse }) {
 					</span>
 					{httpStatus !== undefined && (
 						<span
-							className={`text-[10px] font-mono ${Number(httpStatus) < 400 ? "text-emerald-600" : "text-red-600"}`}
+							className={`text-[10px] font-mono ${Number(httpStatus) < 400 ? "text-[var(--status-completed-fg)]" : "text-destructive"}`}
 						>
 							HTTP {String(httpStatus)}
 						</span>
@@ -379,7 +379,7 @@ function StepOutput({ step }: { step: StepResponse }) {
 					{childRunId && (
 						<Link
 							to={`/runs/${childRunId}`}
-							className="text-indigo-600 hover:underline font-mono text-xs"
+							className="text-primary hover:underline font-mono text-xs"
 							onClick={(e) => e.stopPropagation()}
 						>
 							{childRunId}
@@ -417,7 +417,7 @@ function CollapsibleBlock({
 	return (
 		<Collapsible defaultOpen={defaultOpen}>
 			<CollapsibleTrigger className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-1.5 hover:text-foreground transition-colors cursor-pointer">
-				<ChevronDown className="w-3 h-3 transition-transform [[data-panel-open]_&]:rotate-180" />
+				<ChevronDown className="w-3 h-3 transition-transform duration-200 [[data-state=open]_&]:rotate-180" />
 				<span>{label}</span>
 				{labelExtra}
 			</CollapsibleTrigger>
@@ -571,16 +571,11 @@ function StepRow({ step }: { step: StepResponse }) {
 			<TableRow
 				id={`step-${step.id}`}
 				onClick={() => setIsExpanded(!isExpanded)}
-				className={`cursor-pointer hover:bg-muted/50 transition-colors duration-700 ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-blue-50/50 border-l-2 border-l-blue-500" : ""}`}
+				className={`cursor-pointer hover:bg-muted/50 transition-colors duration-700 ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-[var(--status-running-bg)] border-l-2 border-l-[var(--status-running-fg)]" : ""}`}
 			>
 				<TableCell className="font-medium">
 					<span className="flex items-center gap-2">
-						{isRunning && (
-							<span className="relative flex h-2 w-2 shrink-0">
-								<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-								<span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
-							</span>
-						)}
+						{isRunning && <RunningDot />}
 						{step.name}
 					</span>
 				</TableCell>
@@ -635,22 +630,22 @@ function StepRow({ step }: { step: StepResponse }) {
 							{step.status === "skipped" &&
 								step.output &&
 								typeof step.output.reason === "string" && (
-									<div className="p-3 rounded-md bg-slate-50 border border-slate-200">
-										<div className="text-xs font-semibold text-slate-600 mb-1">
+									<div className="p-3 rounded-[var(--radius-sm)] bg-muted/50 border border-border">
+										<div className="text-xs font-semibold text-muted-foreground mb-1">
 											Skip reason
 										</div>
-										<div className="text-sm text-slate-700 whitespace-pre-wrap break-words">
+										<div className="text-sm text-muted-foreground whitespace-pre-wrap break-words">
 											{step.output.reason}
 										</div>
 									</div>
 								)}
 
 							{step.error && (
-								<div className="p-3 rounded-md bg-red-50 border border-red-200">
-									<div className="text-xs font-semibold text-red-600 mb-1">
+								<div className="p-3 rounded-[var(--radius-sm)] bg-destructive/10 border border-destructive/20">
+									<div className="text-xs font-semibold text-destructive mb-1">
 										Error
 									</div>
-									<div className="text-sm text-red-700 font-mono whitespace-pre-wrap break-words">
+									<div className="text-sm text-destructive font-mono whitespace-pre-wrap break-words">
 										{step.error}
 									</div>
 								</div>
@@ -673,7 +668,7 @@ function StepRow({ step }: { step: StepResponse }) {
 									labelExtra={
 										<Badge
 											variant="outline"
-											className="text-[10px] bg-violet-50 text-violet-700 border-violet-200"
+											className="text-[10px] bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-400/15 dark:text-violet-300 dark:border-violet-400/30"
 										>
 											{countVisibleTurns(step.debug_messages)} turn
 											{countVisibleTurns(step.debug_messages) > 1 ? "s" : ""}
@@ -696,14 +691,14 @@ function StepRow({ step }: { step: StepResponse }) {
 export function StepList({ steps }: StepListProps) {
 	if (steps.length === 0) {
 		return (
-			<div className="text-center py-12 text-muted-foreground border rounded-lg bg-muted/20">
+			<div className="text-center py-12 text-muted-foreground border border-border rounded-[var(--radius)] bg-muted/20">
 				No steps in this run
 			</div>
 		);
 	}
 
 	return (
-		<div className="rounded-lg border overflow-hidden">
+		<div className="rounded-[var(--radius)] border border-border overflow-hidden">
 			<Table className="table-fixed">
 				<TableHeader>
 					<TableRow>

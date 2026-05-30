@@ -1,40 +1,29 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+	InputGroup,
+	InputGroupInput,
+	InputGroupButton,
+} from "@/components/ui/input-group";
 import { api } from "@/app/lib/api";
 import { withToast } from "@/app/lib/api-toast";
 import { useAppDispatch } from "@/app/store";
 import { fetchCurrentUser } from "@/app/store/auth-slice";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { useBranding } from "@/app/lib/branding";
-import { Workflow, Zap, Shield } from "lucide-react";
+import { Loader2, Eye, EyeOff } from "lucide-react";
 
-const FEATURES = [
-	{
-		icon: Workflow,
-		title: "Workflow Orchestration",
-		description:
-			"Build and run multi-step workflows with shell, HTTP, and AI agent steps.",
-	},
-	{
-		icon: Zap,
-		title: "Real-time Monitoring",
-		description:
-			"Track workflow executions, costs, and durations from a single dashboard.",
-	},
-	{
-		icon: Shield,
-		title: "Built-in AI Agents",
-		description:
-			"Leverage Claude to analyze, summarize, and act on workflow data.",
-	},
-];
+type FormState =
+	| { status: "idle" }
+	| { status: "submitting" }
+	| { status: "error"; message: string };
 
 export function Component() {
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
-	const [loading, setLoading] = useState(false);
+	const [showPassword, setShowPassword] = useState(false);
+	const [formState, setFormState] = useState<FormState>({ status: "idle" });
 	const navigate = useNavigate();
 	const dispatch = useAppDispatch();
 	const branding = useBranding();
@@ -45,7 +34,7 @@ export function Component() {
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
-		setLoading(true);
+		setFormState({ status: "submitting" });
 
 		withToast(
 			api
@@ -58,64 +47,78 @@ export function Component() {
 			},
 		)
 			.then(() => navigate("/"))
-			.catch(() => {})
-			.finally(() => setLoading(false));
+			.catch((err: unknown) => {
+				const message =
+					err instanceof Error
+						? err.message
+						: "Sign in failed. Please try again.";
+				setFormState({ status: "error", message });
+			})
+			.finally(() => {
+				setFormState((prev) =>
+					prev.status === "submitting" ? { status: "idle" } : prev,
+				);
+			});
 	};
+
+	const isSubmitting = formState.status === "submitting";
 
 	return (
 		<div className="grid min-h-screen lg:grid-cols-2">
-			<div className="relative hidden lg:flex flex-col justify-between bg-gradient-to-b from-neutral-900 to-neutral-950 p-10 text-white overflow-hidden">
-				<div className="absolute -top-24 -left-24 size-96 rounded-full bg-primary/20 blur-3xl" />
-				<div className="absolute -bottom-32 -right-32 size-96 rounded-full bg-primary/15 blur-3xl" />
-
+			{/* Left panel */}
+			<div className="relative hidden lg:flex flex-col justify-between bg-sidebar border-r border-sidebar-border p-10 overflow-hidden">
 				<div className="relative flex items-center gap-3">
 					<img
 						src={branding.logoUrl}
 						alt={branding.name}
-						className="size-9 rounded-lg"
+						className="size-9 rounded-[var(--radius-sm)]"
+						width={36}
+						height={36}
+						fetchPriority="high"
 					/>
-					<span className="text-xl font-bold tracking-tight">
+					<span className="text-xl font-semibold tracking-tight text-sidebar-foreground">
 						{branding.name}
 					</span>
 				</div>
 
-				<div className="relative space-y-8">
-					{FEATURES.map((feature) => (
-						<div key={feature.title} className="flex gap-4">
-							<div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 backdrop-blur-sm">
-								<feature.icon className="size-5 text-primary" />
-							</div>
-							<div>
-								<h3 className="font-semibold">{feature.title}</h3>
-								<p className="text-neutral-400 text-sm mt-1">
-									{feature.description}
-								</p>
-							</div>
-						</div>
-					))}
+				<div className="relative space-y-3">
+					<p className="text-sm text-sidebar-foreground/60 leading-relaxed max-w-xs">
+						Orchestrate workflows, automate operations, and monitor executions
+						from a single control plane.
+					</p>
+					<span className="inline-block font-mono text-xs text-muted-foreground border border-border rounded-[var(--radius-sm)] px-2 py-0.5">
+						{branding.name}
+					</span>
 				</div>
 
-				<p className="relative text-xs text-neutral-500">
+				<p className="relative text-xs text-muted-foreground">
 					&copy; {new Date().getFullYear()} {branding.copyright}
 				</p>
 			</div>
 
+			{/* Right panel -- form */}
 			<div className="relative flex flex-col p-6 sm:p-10 overflow-hidden">
 				<div className="relative flex items-center gap-3 lg:hidden mb-auto">
 					<img
 						src={branding.logoUrl}
 						alt={branding.name}
-						className="size-9 rounded-lg"
+						className="size-9 rounded-[var(--radius-sm)]"
+						width={36}
+						height={36}
+						fetchPriority="high"
 					/>
-					<span className="text-xl font-bold tracking-tight">
+					<span className="text-xl font-semibold tracking-tight">
 						{branding.name}
 					</span>
 				</div>
 
 				<div className="relative flex flex-1 flex-col items-center justify-center">
 					<div className="w-full max-w-sm space-y-8">
-						<div className="space-y-2 text-center lg:text-left">
-							<h1 className="text-2xl font-bold tracking-tight">
+						<div className="space-y-2">
+							<span className="block text-xs font-mono uppercase tracking-widest text-primary mb-2">
+								{branding.name}
+							</span>
+							<h1 className="text-2xl font-semibold tracking-tight">
 								Welcome back
 							</h1>
 							<p className="text-muted-foreground text-sm">
@@ -123,50 +126,86 @@ export function Component() {
 							</p>
 						</div>
 
-						<form onSubmit={handleSubmit} className="space-y-4">
-							<div className="space-y-2">
+						<form
+							onSubmit={handleSubmit}
+							className="space-y-4"
+							aria-busy={isSubmitting}
+						>
+							<div className="space-y-1.5">
 								<label htmlFor="email" className="text-sm font-medium">
 									Email
 								</label>
-								<Input
-									id="email"
-									type="email"
-									placeholder="you@example.com"
-									value={email}
-									onChange={(e) => setEmail(e.target.value)}
-									required
-								/>
+								<InputGroup>
+									<InputGroupInput
+										id="email"
+										type="email"
+										placeholder="you@example.com"
+										value={email}
+										onChange={(e) => setEmail(e.target.value)}
+										required
+										autoComplete="email"
+									/>
+								</InputGroup>
 							</div>
 
-							<div className="space-y-2">
+							<div className="space-y-1.5">
 								<label htmlFor="password" className="text-sm font-medium">
 									Password
 								</label>
-								<Input
-									id="password"
-									type="password"
-									placeholder="********"
-									value={password}
-									onChange={(e) => setPassword(e.target.value)}
-									required
-								/>
+								<InputGroup>
+									<InputGroupInput
+										id="password"
+										type={showPassword ? "text" : "password"}
+										placeholder=""
+										value={password}
+										onChange={(e) => setPassword(e.target.value)}
+										required
+										autoComplete="current-password"
+									/>
+									<InputGroupButton
+										size="icon-sm"
+										type="button"
+										aria-label={
+											showPassword ? "Hide password" : "Show password"
+										}
+										onClick={() => setShowPassword((v) => !v)}
+									>
+										{showPassword ? (
+											<EyeOff className="size-4" aria-hidden="true" />
+										) : (
+											<Eye className="size-4" aria-hidden="true" />
+										)}
+									</InputGroupButton>
+								</InputGroup>
+								<p className="text-xs text-muted-foreground">
+									Contact your admin to reset your password.
+								</p>
 							</div>
 
 							<Button
 								type="submit"
 								className="w-full"
 								size="lg"
-								disabled={loading}
+								disabled={isSubmitting}
 							>
-								{loading ? "Signing in..." : "Sign in"}
+								{isSubmitting && (
+									<Loader2 className="size-4 animate-spin" aria-hidden="true" />
+								)}
+								{isSubmitting ? "Signing in..." : "Sign in"}
 							</Button>
+
+							{formState.status === "error" && (
+								<p className="text-sm text-destructive mt-2" role="alert">
+									{formState.message}
+								</p>
+							)}
 						</form>
 
 						<p className="text-center text-sm text-muted-foreground">
 							Don't have an account?{" "}
 							<Link
 								to="/sign-up"
-								className="font-medium text-foreground hover:underline"
+								className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
 							>
 								Sign up
 							</Link>

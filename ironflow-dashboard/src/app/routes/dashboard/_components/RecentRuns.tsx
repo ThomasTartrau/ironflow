@@ -8,10 +8,15 @@ interface RecentRunsProps {
 
 export function RecentRuns({ runs }: RecentRunsProps) {
 	return (
-		<div className="mt-8">
+		<div>
 			<div className="flex items-center justify-between mb-4">
-				<h2 className="text-2xl font-bold">Recent Runs</h2>
-				<Link to="/runs" className="text-sm text-blue-600 hover:text-blue-700">
+				<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+					Recent Runs
+				</h2>
+				<Link
+					to="/runs"
+					className="text-sm font-medium text-primary hover:text-primary/80"
+				>
 					View All
 				</Link>
 			</div>

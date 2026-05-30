@@ -37,6 +37,7 @@ function resolveProperty(def: JSONSchema7Definition): JSONSchema7 | null {
 }
 
 interface LabelEntry {
+	id: string;
 	key: string;
 	value: string;
 }
@@ -75,7 +76,11 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 	const [labels, setLabels] = useState<LabelEntry[]>(() => {
 		const defaults = workflow.default_labels;
 		if (!defaults) return [];
-		return Object.entries(defaults).map(([key, value]) => ({ key, value }));
+		return Object.entries(defaults).map(([key, value]) => ({
+			id: crypto.randomUUID(),
+			key,
+			value,
+		}));
 	});
 	const [scheduleEnabled, setScheduleEnabled] = useState(false);
 	const [scheduledAt, setScheduledAt] = useState("");
@@ -85,21 +90,20 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 	};
 
 	const addLabel = () => {
-		setLabels((prev) => [...prev, { key: "", value: "" }]);
+		setLabels((prev) => [
+			...prev,
+			{ id: crypto.randomUUID(), key: "", value: "" },
+		]);
 	};
 
-	const removeLabel = (index: number) => {
-		setLabels((prev) => prev.filter((_, i) => i !== index));
+	const removeLabel = (id: string) => {
+		setLabels((prev) => prev.filter((entry) => entry.id !== id));
 	};
 
-	const updateLabel = (
-		index: number,
-		field: "key" | "value",
-		value: string,
-	) => {
+	const updateLabel = (id: string, field: "key" | "value", value: string) => {
 		setLabels((prev) =>
-			prev.map((entry, i) =>
-				i === index ? { ...entry, [field]: value } : entry,
+			prev.map((entry) =>
+				entry.id === id ? { ...entry, [field]: value } : entry,
 			),
 		);
 	};
@@ -150,17 +154,25 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 	const fieldNames = Object.keys(properties);
 
 	return (
-		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-xs hover:bg-primary/90 w-full sm:w-fit cursor-pointer">
-				<Play className="size-4" />
-				Run
-			</DialogTrigger>
+		<Dialog open={open} onOpenChange={loading ? undefined : setOpen}>
+			<DialogTrigger
+				render={
+					<Button className="w-full sm:w-fit gap-1.5">
+						<Play className="size-4" aria-hidden="true" />
+						Run
+					</Button>
+				}
+			/>
 			<DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
 				<DialogHeader>
-					<DialogTitle>Run {workflow.name}</DialogTitle>
-					{schema && (
-						<DialogDescription>Fill in the parameters below.</DialogDescription>
-					)}
+					<DialogTitle>
+						Run <span className="font-mono">{workflow.name}</span>
+					</DialogTitle>
+					<DialogDescription>
+						{schema
+							? "Fill in the parameters below."
+							: "This workflow takes no input parameters. Click Run now to start it."}
+					</DialogDescription>
 				</DialogHeader>
 
 				<div className="space-y-5 py-2">
@@ -189,32 +201,35 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 								className="gap-1 h-7 text-xs"
 								onClick={addLabel}
 							>
-								<Plus className="size-3" />
+								<Plus className="size-3" aria-hidden="true" />
 								Add
 							</Button>
 						</div>
 						{labels.map((entry, index) => (
-							<div key={index} className="flex gap-2 items-center">
+							<div key={entry.id} className="flex gap-2 items-center">
 								<Input
 									placeholder="key"
-									className="text-sm"
+									className="text-sm font-mono"
 									value={entry.key}
-									onChange={(e) => updateLabel(index, "key", e.target.value)}
+									onChange={(e) => updateLabel(entry.id, "key", e.target.value)}
 								/>
 								<Input
 									placeholder="value"
 									className="text-sm"
 									value={entry.value}
-									onChange={(e) => updateLabel(index, "value", e.target.value)}
+									onChange={(e) =>
+										updateLabel(entry.id, "value", e.target.value)
+									}
 								/>
 								<Button
 									type="button"
 									variant="ghost"
 									size="icon"
 									className="size-8 shrink-0"
-									onClick={() => removeLabel(index)}
+									onClick={() => removeLabel(entry.id)}
+									aria-label={`Remove label ${entry.key || String(index + 1)}`}
 								>
-									<X className="size-3.5" />
+									<X className="size-3.5" aria-hidden="true" />
 								</Button>
 							</div>
 						))}
@@ -223,7 +238,10 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 					<div className="space-y-3">
 						<div className="flex items-center justify-between">
 							<div className="flex items-center gap-2">
-								<Clock className="size-4 text-muted-foreground" />
+								<Clock
+									className="size-4 text-muted-foreground"
+									aria-hidden="true"
+								/>
 								<span className="text-sm font-medium">Schedule for later</span>
 							</div>
 							<Switch
@@ -242,6 +260,12 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 					</div>
 				</div>
 
+				{missingRequired.length > 0 && (
+					<p className="text-xs text-destructive mt-1">
+						Required fields: {missingRequired.join(", ")}
+					</p>
+				)}
+
 				<DialogFooter>
 					<Button
 						variant="outline"
@@ -255,7 +279,7 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 						disabled={loading || missingRequired.length > 0}
 						className="gap-1.5"
 					>
-						<Play className="size-4" />
+						<Play className="size-4" aria-hidden="true" />
 						{loading ? "Starting..." : scheduleEnabled ? "Schedule" : "Run now"}
 					</Button>
 				</DialogFooter>
