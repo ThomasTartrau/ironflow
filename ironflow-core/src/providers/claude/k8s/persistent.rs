@@ -272,6 +272,7 @@ impl K8sPersistentProvider {
                 image_pull_secrets: &self.image_pull_secrets,
                 extra_labels: &self.pod_labels,
                 volumes: &[],
+                pvc_volumes: &[],
                 inputs: &[],
                 input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             })?;

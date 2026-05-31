@@ -109,6 +109,7 @@ pub struct K8sEphemeralProvider {
     timeout: Duration,
     pod_labels: BTreeMap<String, String>,
     volumes: Vec<(String, String)>,
+    pvc_volumes: Vec<(String, String)>,
     input_init_image: String,
 }
 
@@ -130,6 +131,7 @@ impl K8sEphemeralProvider {
             timeout: DEFAULT_TIMEOUT,
             pod_labels: BTreeMap::new(),
             volumes: Vec::new(),
+            pvc_volumes: Vec::new(),
             input_init_image: DEFAULT_INPUT_INIT_IMAGE.to_string(),
         }
     }
@@ -274,6 +276,28 @@ impl K8sEphemeralProvider {
         self
     }
 
+    /// Mount a PersistentVolumeClaim into the container.
+    ///
+    /// The PVC must already exist in the target namespace. Use `ReadWriteMany`
+    /// access mode when multiple pods mount the same claim concurrently.
+    ///
+    /// Can be called multiple times to add several PVC mounts.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::new("img:v1")
+    ///     .pvc_volume("jarvis-repos", "/data/repos")
+    ///     .pvc_volume("jarvis-worktrees", "/data/worktrees");
+    /// ```
+    pub fn pvc_volume(mut self, claim_name: &str, mount_path: &str) -> Self {
+        self.pvc_volumes
+            .push((claim_name.to_string(), mount_path.to_string()));
+        self
+    }
+
     /// Override the image used by the input-fetch initContainer.
     ///
     /// Defaults to [`DEFAULT_INPUT_INIT_IMAGE`] (`curlimages/curl:8.10.1`).
@@ -350,6 +374,7 @@ impl K8sEphemeralProvider {
             image_pull_secrets: &self.image_pull_secrets,
             extra_labels: &merged_labels,
             volumes: &self.volumes,
+            pvc_volumes: &self.pvc_volumes,
             inputs: &config.inputs,
             input_init_image: &self.input_init_image,
         })?;
@@ -699,5 +724,27 @@ mod tests {
     fn ephemeral_provider_volumes_default_empty() {
         let provider = K8sEphemeralProvider::new("img:v1");
         assert!(provider.volumes.is_empty());
+    }
+
+    #[test]
+    fn ephemeral_provider_pvc_volume_builder() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .pvc_volume("jarvis-repos", "/data/repos")
+            .pvc_volume("jarvis-worktrees", "/data/worktrees");
+        assert_eq!(provider.pvc_volumes.len(), 2);
+        assert_eq!(
+            provider.pvc_volumes[0],
+            ("jarvis-repos".to_string(), "/data/repos".to_string())
+        );
+        assert_eq!(
+            provider.pvc_volumes[1],
+            ("jarvis-worktrees".to_string(), "/data/worktrees".to_string())
+        );
+    }
+
+    #[test]
+    fn ephemeral_provider_pvc_volumes_default_empty() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        assert!(provider.pvc_volumes.is_empty());
     }
 }

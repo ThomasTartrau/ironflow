@@ -182,6 +182,12 @@ pub struct PodConfig<'a> {
     /// Each tuple is `(host_path, container_path)`. An empty slice means
     /// no volumes are mounted.
     pub volumes: &'a [(String, String)],
+    /// PersistentVolumeClaim volumes to mount into the container.
+    ///
+    /// Each tuple is `(claim_name, mount_path)`. The PVC must already exist
+    /// in the target namespace. Requires `ReadWriteMany` access mode when
+    /// multiple pods mount the same claim concurrently.
+    pub pvc_volumes: &'a [(String, String)],
     /// Declarative inputs that must be fetched before the main container runs.
     ///
     /// When non-empty, an `initContainer` running [`PodConfig::input_init_image`]
@@ -372,6 +378,19 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
             }));
         }
     }
+    if !config.pvc_volumes.is_empty() {
+        for (i, (claim_name, mount_path)) in config.pvc_volumes.iter().enumerate() {
+            let name = format!("pvc-{i}");
+            volumes_json.push(json!({
+                "name": name,
+                "persistentVolumeClaim": { "claimName": claim_name }
+            }));
+            main_mounts_json.push(json!({
+                "name": name,
+                "mountPath": mount_path
+            }));
+        }
+    }
     volumes_json.extend(input_volumes);
     main_mounts_json.extend(input_mounts);
 
@@ -465,6 +484,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -488,6 +508,7 @@ mod tests {
             image_pull_secrets: &secrets,
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -513,6 +534,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -540,6 +562,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -571,6 +594,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -604,6 +628,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -632,6 +657,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -661,6 +687,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &vols,
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -684,6 +711,90 @@ mod tests {
         assert_eq!(mounts[0].mount_path, "/data/worktrees");
         assert_eq!(mounts[1].name, "vol-1");
         assert_eq!(mounts[1].mount_path, "/data/repos");
+    }
+
+    #[test]
+    fn build_pod_spec_with_pvc_volumes() {
+        let pvcs = vec![
+            ("jarvis-repos".to_string(), "/data/repos".to_string()),
+            ("jarvis-worktrees".to_string(), "/data/worktrees".to_string()),
+        ];
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &[],
+            pvc_volumes: &pvcs,
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+        })
+        .unwrap();
+        let spec = pod.spec.unwrap();
+
+        let volumes = spec.volumes.unwrap();
+        assert_eq!(volumes.len(), 2);
+        assert_eq!(volumes[0].name, "pvc-0");
+        let pvc0 = volumes[0]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap();
+        assert_eq!(pvc0.claim_name, "jarvis-repos");
+        assert_eq!(volumes[1].name, "pvc-1");
+        let pvc1 = volumes[1]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap();
+        assert_eq!(pvc1.claim_name, "jarvis-worktrees");
+
+        let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].name, "pvc-0");
+        assert_eq!(mounts[0].mount_path, "/data/repos");
+        assert_eq!(mounts[1].name, "pvc-1");
+        assert_eq!(mounts[1].mount_path, "/data/worktrees");
+    }
+
+    #[test]
+    fn build_pod_spec_with_hostpath_and_pvc_volumes() {
+        let vols = vec![("/tmp/cache".to_string(), "/cache".to_string())];
+        let pvcs = vec![("data-pvc".to_string(), "/data".to_string())];
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &vols,
+            pvc_volumes: &pvcs,
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+        })
+        .unwrap();
+        let spec = pod.spec.unwrap();
+
+        let volumes = spec.volumes.unwrap();
+        assert_eq!(volumes.len(), 2);
+        assert!(volumes[0].host_path.is_some());
+        assert!(volumes[1].persistent_volume_claim.is_some());
+
+        let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].mount_path, "/cache");
+        assert_eq!(mounts[1].mount_path, "/data");
     }
 
     #[test]
@@ -734,6 +845,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &inputs,
             input_init_image: "curlimages/curl:8.10.1",
         })
@@ -788,6 +900,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &inputs,
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
@@ -824,6 +937,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             volumes: &[],
+            pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
         })
