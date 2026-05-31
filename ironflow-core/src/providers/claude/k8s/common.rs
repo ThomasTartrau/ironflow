@@ -717,7 +717,10 @@ mod tests {
     fn build_pod_spec_with_pvc_volumes() {
         let pvcs = vec![
             ("jarvis-repos".to_string(), "/data/repos".to_string()),
-            ("jarvis-worktrees".to_string(), "/data/worktrees".to_string()),
+            (
+                "jarvis-worktrees".to_string(),
+                "/data/worktrees".to_string(),
+            ),
         ];
         let pod = build_pod_spec(&PodConfig {
             name: "test-pod",
@@ -742,16 +745,10 @@ mod tests {
         let volumes = spec.volumes.unwrap();
         assert_eq!(volumes.len(), 2);
         assert_eq!(volumes[0].name, "pvc-0");
-        let pvc0 = volumes[0]
-            .persistent_volume_claim
-            .as_ref()
-            .unwrap();
+        let pvc0 = volumes[0].persistent_volume_claim.as_ref().unwrap();
         assert_eq!(pvc0.claim_name, "jarvis-repos");
         assert_eq!(volumes[1].name, "pvc-1");
-        let pvc1 = volumes[1]
-            .persistent_volume_claim
-            .as_ref()
-            .unwrap();
+        let pvc1 = volumes[1].persistent_volume_claim.as_ref().unwrap();
         assert_eq!(pvc1.claim_name, "jarvis-worktrees");
 
         let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();

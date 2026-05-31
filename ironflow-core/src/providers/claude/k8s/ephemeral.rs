@@ -738,7 +738,10 @@ mod tests {
         );
         assert_eq!(
             provider.pvc_volumes[1],
-            ("jarvis-worktrees".to_string(), "/data/worktrees".to_string())
+            (
+                "jarvis-worktrees".to_string(),
+                "/data/worktrees".to_string()
+            )
         );
     }
 
