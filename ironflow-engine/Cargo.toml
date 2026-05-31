@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-engine"
-version = "2.15.12"
+version = "2.15.13"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -11,7 +11,7 @@ keywords = ["workflow", "engine", "orchestration", "fsm"]
 categories = ["asynchronous", "development-tools"]
 
 [dependencies]
-ironflow-core = { version = "2.20.0", path = "../ironflow-core" }
+ironflow-core = { version = "2.20.1", path = "../ironflow-core" }
 ironflow-store = { version = "2.14.1", path = "../ironflow-store" }
 
 uuid = { version = "1", features = ["v7", "serde"] }

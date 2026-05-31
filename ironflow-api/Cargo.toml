@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.18.12"
+version = "2.18.13"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -21,8 +21,8 @@ openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi"]
 [dependencies]
 ironflow-store = { version = "2.14.1", path = "../ironflow-store" }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
-ironflow-engine = { version = "2.15.12", path = "../ironflow-engine" }
-ironflow-core = { version = "2.20.0", path = "../ironflow-core" }
+ironflow-engine = { version = "2.15.13", path = "../ironflow-engine" }
+ironflow-core = { version = "2.20.1", path = "../ironflow-core" }
 ironflow-auth = { version = "2.3.8", path = "../ironflow-auth" }
 
 axum = { version = "0.8", features = ["json"] }
