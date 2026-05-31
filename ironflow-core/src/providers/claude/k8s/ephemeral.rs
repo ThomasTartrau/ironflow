@@ -547,34 +547,79 @@ impl AgentProvider for K8sEphemeralProvider {
                 const MAX_ACCUMULATED_BYTES: usize = 50 * 1024 * 1024;
                 let mut truncated = false;
 
+                let completion_notify = Arc::new(tokio::sync::Notify::new());
+
+                let watcher_handle = {
+                    let pods = pods.clone();
+                    let pod_name = pod_name.to_string();
+                    let notify = completion_notify.clone();
+                    tokio::spawn(async move {
+                        let _ = await_condition(pods, &pod_name, is_pod_completed()).await;
+                        notify.notify_waiters();
+                    })
+                };
+
                 let stream_result = time::timeout(
                     self.timeout,
                     async {
-                        match pods.log_stream(pod_name, &log_params).await {
+                        let stream_outcome = match pods.log_stream(pod_name, &log_params).await {
                             Ok(stream) => {
                                 let mut lines = stream.lines();
-                                while let Ok(Some(line)) = lines.try_next().await {
-                                    log_sink.log("stdout", &line);
-                                    if !truncated {
-                                        if accumulated.len() + line.len() + 1
-                                            > MAX_ACCUMULATED_BYTES
-                                        {
-                                            truncated = true;
-                                            warn!(pod = %pod_name, "log accumulation cap reached, further output will only be streamed");
-                                        } else {
-                                            accumulated.push_str(&line);
-                                            accumulated.push('\n');
+                                loop {
+                                    tokio::select! {
+                                        line_result = lines.try_next() => {
+                                            match line_result {
+                                                Ok(Some(line)) => {
+                                                    log_sink.log("stdout", &line);
+                                                    if !truncated {
+                                                        if accumulated.len() + line.len() + 1
+                                                            > MAX_ACCUMULATED_BYTES
+                                                        {
+                                                            truncated = true;
+                                                            warn!(pod = %pod_name, "log accumulation cap reached, further output will only be streamed");
+                                                        } else {
+                                                            accumulated.push_str(&line);
+                                                            accumulated.push('\n');
+                                                        }
+                                                    }
+                                                }
+                                                Ok(None) => break,
+                                                Err(_) => break,
+                                            }
+                                        }
+                                        _ = completion_notify.notified() => {
+                                            debug!(pod = %pod_name, "pod completed, draining remaining log lines");
+                                            while let Ok(Some(line)) = time::timeout(
+                                                Duration::from_secs(2),
+                                                lines.try_next(),
+                                            ).await.unwrap_or(Ok(None)) {
+                                                log_sink.log("stdout", &line);
+                                                if !truncated {
+                                                    if accumulated.len() + line.len() + 1
+                                                        > MAX_ACCUMULATED_BYTES
+                                                    {
+                                                        truncated = true;
+                                                    } else {
+                                                        accumulated.push_str(&line);
+                                                        accumulated.push('\n');
+                                                    }
+                                                }
+                                            }
+                                            break;
                                         }
                                     }
                                 }
                                 Ok(())
                             }
                             Err(e) => Err(e),
-                        }
+                        };
+
+                        stream_outcome
                     },
                 )
                 .await;
 
+                watcher_handle.abort();
                 timed_out = stream_result.is_err();
                 if let Ok(Err(e)) = stream_result {
                     warn!(pod = %pod_name, error = %e, "failed to open log stream, falling back to batch read");
