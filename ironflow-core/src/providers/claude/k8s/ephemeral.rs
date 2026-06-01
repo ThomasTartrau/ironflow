@@ -562,7 +562,7 @@ impl AgentProvider for K8sEphemeralProvider {
                 let stream_result = time::timeout(
                     self.timeout,
                     async {
-                        let stream_outcome = match pods.log_stream(pod_name, &log_params).await {
+                        match pods.log_stream(pod_name, &log_params).await {
                             Ok(stream) => {
                                 let mut lines = stream.lines();
                                 loop {
@@ -612,9 +612,7 @@ impl AgentProvider for K8sEphemeralProvider {
                                 Ok(())
                             }
                             Err(e) => Err(e),
-                        };
-
-                        stream_outcome
+                        }
                     },
                 )
                 .await;
