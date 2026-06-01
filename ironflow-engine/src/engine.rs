@@ -32,6 +32,7 @@ use crate::error::EngineError;
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
 use crate::notify::{Event, EventPublisher, EventSubscriber};
+use crate::schedule::CronSchedule;
 
 /// The workflow orchestration engine.
 ///
@@ -69,7 +70,7 @@ use crate::notify::{Event, EventPublisher, EventSubscriber};
 /// engine.register(CiWorkflow)?;
 ///
 /// let run = engine.run_handler("ci", TriggerKind::Manual, json!({})).await?;
-/// println!("Run {} completed with status {:?}", run.id, run.status);
+/// tracing::info!(run_id = %run.id, status = ?run.status, "run completed");
 /// # Ok(())
 /// # }
 /// ```
@@ -271,6 +272,36 @@ impl Engine {
     /// Get detailed info about a registered workflow handler.
     pub fn handler_info(&self, name: &str) -> Option<WorkflowInfo> {
         self.handlers.get(name).map(|h| h.describe())
+    }
+
+    /// List handlers that have a cron schedule configured.
+    ///
+    /// Returns pairs of `(workflow_name, cron_expression)` for all handlers
+    /// where [`WorkflowHandler::schedule`] returns `Some`.
+    ///
+    /// Use this to wire scheduled handlers into a cron scheduler
+    /// (e.g. `ironflow_runtime::Runtime::cron`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use ironflow_engine::engine::Engine;
+    /// # use ironflow_store::memory::InMemoryStore;
+    /// # use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// );
+    /// for (name, schedule) in engine.scheduled_handlers() {
+    ///     tracing::info!("{name} runs on schedule: {schedule}");
+    /// }
+    /// ```
+    pub fn scheduled_handlers(&self) -> Vec<(&str, &CronSchedule)> {
+        self.handlers
+            .iter()
+            .filter_map(|(name, handler)| handler.schedule().map(|sched| (name.as_str(), sched)))
+            .collect()
     }
 
     /// Register an event subscriber for domain events.
@@ -846,6 +877,7 @@ mod tests {
                 version: self.version().map(str::to_string),
                 input_schema: None,
                 default_labels: HashMap::new(),
+                schedule: self.schedule().cloned(),
             }
         }
 
@@ -973,6 +1005,79 @@ mod tests {
         engine.register(EchoWorkflow).unwrap();
         let info = engine.handler_info("echo-workflow").unwrap();
         assert!(info.category.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Schedule tests
+    // -----------------------------------------------------------------------
+
+    struct ScheduledWorkflow {
+        schedule: CronSchedule,
+    }
+
+    impl ScheduledWorkflow {
+        fn new() -> Self {
+            Self {
+                schedule: CronSchedule::new("0 0 * * * *").unwrap(),
+            }
+        }
+    }
+
+    impl WorkflowHandler for ScheduledWorkflow {
+        fn name(&self) -> &str {
+            "scheduled"
+        }
+        fn schedule(&self) -> Option<&CronSchedule> {
+            Some(&self.schedule)
+        }
+        fn execute<'a>(
+            &'a self,
+            _ctx: &'a mut WorkflowContext,
+        ) -> crate::handler::HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn engine_default_describe_propagates_schedule() {
+        let mut engine = create_test_engine();
+        engine.register(ScheduledWorkflow::new()).unwrap();
+        let info = engine.handler_info("scheduled").unwrap();
+        assert_eq!(
+            info.schedule.as_ref().map(|s| s.as_str()),
+            Some("0 0 * * * *")
+        );
+    }
+
+    #[test]
+    fn engine_default_describe_without_schedule() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        let info = engine.handler_info("echo-workflow").unwrap();
+        assert!(info.schedule.is_none());
+    }
+
+    #[test]
+    fn scheduled_handlers_returns_only_scheduled() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        engine.register(ScheduledWorkflow::new()).unwrap();
+        engine.register(FailingWorkflow).unwrap();
+
+        let scheduled = engine.scheduled_handlers();
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduled[0].0, "scheduled");
+        assert_eq!(scheduled[0].1.as_str(), "0 0 * * * *");
+    }
+
+    #[test]
+    fn scheduled_handlers_empty_when_none_scheduled() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        engine.register(FailingWorkflow).unwrap();
+
+        let scheduled = engine.scheduled_handlers();
+        assert!(scheduled.is_empty());
     }
 
     struct BadCategoryWorkflow(&'static str);

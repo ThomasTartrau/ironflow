@@ -30,6 +30,7 @@ impl WorkflowHandler for Enrich {
             version: self.version().map(str::to_string),
             input_schema: None,
             default_labels: HashMap::new(),
+            schedule: None,
         }
     }
 

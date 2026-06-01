@@ -50,6 +50,7 @@ pub mod handler;
 pub mod log_sender;
 pub mod notify;
 pub mod operation;
+pub mod schedule;
 
 /// Convenience re-exports.
 pub mod prelude {
@@ -61,4 +62,5 @@ pub mod prelude {
     pub use crate::handler::{HandlerFuture, WorkflowHandler};
     pub use crate::notify::{Event, EventPublisher, EventSubscriber, WebhookSubscriber};
     pub use crate::operation::Operation;
+    pub use crate::schedule::CronSchedule;
 }

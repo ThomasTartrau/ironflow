@@ -46,6 +46,9 @@ pub struct WorkflowDetailResponse {
     /// Labels automatically applied to every run of this workflow.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub default_labels: HashMap<String, String>,
+    /// Optional 6-field cron expression for automatic execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
 }
 
 /// Get details about a registered workflow.
@@ -98,6 +101,7 @@ pub async fn get_workflow(
         version: info.version,
         input_schema: info.input_schema,
         default_labels: info.default_labels,
+        schedule: info.schedule.map(|s| s.as_str().to_string()),
     }))
 }
 
@@ -262,6 +266,92 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert!(json_val["data"]["category"].is_null());
+    }
+
+    struct ScheduledWorkflow {
+        schedule: ironflow_engine::prelude::CronSchedule,
+    }
+    impl ScheduledWorkflow {
+        fn new() -> Self {
+            Self {
+                schedule: ironflow_engine::prelude::CronSchedule::new("0 0 * * * *").unwrap(),
+            }
+        }
+    }
+    impl WorkflowHandler for ScheduledWorkflow {
+        fn name(&self) -> &str {
+            "sched-workflow"
+        }
+        fn schedule(&self) -> Option<&ironflow_engine::prelude::CronSchedule> {
+            Some(&self.schedule)
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    fn test_state_with_schedule() -> AppState {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.register(DescribedWorkflow).unwrap();
+        engine.register(ScheduledWorkflow::new()).unwrap();
+        let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        AppState::new(
+            store,
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        )
+    }
+
+    #[tokio::test]
+    async fn get_workflow_returns_schedule_when_set() {
+        let state = test_state_with_schedule();
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{name}", get(get_workflow))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/sched-workflow")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["schedule"], "0 0 * * * *");
+    }
+
+    #[tokio::test]
+    async fn get_workflow_schedule_null_when_unscheduled() {
+        let state = test_state_with_schedule();
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{name}", get(get_workflow))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/my-workflow")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert!(json_val["data"]["schedule"].is_null());
     }
 
     #[tokio::test]
