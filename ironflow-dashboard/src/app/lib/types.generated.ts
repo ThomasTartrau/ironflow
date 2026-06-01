@@ -1617,6 +1617,8 @@ export interface components {
 			input_schema?: unknown;
 			/** @description Workflow name. */
 			name: string;
+			/** @description Optional 6-field cron expression for automatic execution. */
+			schedule?: string | null;
 			/** @description Optional Rust source code of the handler. */
 			source_code?: string | null;
 			/** @description Sub-workflows invoked by this handler (recursive, depth-limited). */
@@ -1630,6 +1632,8 @@ export interface components {
 			category?: string | null;
 			/** @description Workflow name (unique identifier). */
 			name: string;
+			/** @description Optional 6-field cron expression for automatic execution. */
+			schedule?: string | null;
 			/** @description Current handler version. */
 			version?: string | null;
 		};

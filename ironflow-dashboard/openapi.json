@@ -3188,6 +3188,13 @@
             "type": "string",
             "description": "Workflow name."
           },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional 6-field cron expression for automatic execution."
+          },
           "source_code": {
             "type": [
               "string",
@@ -3228,6 +3235,13 @@
           "name": {
             "type": "string",
             "description": "Workflow name (unique identifier)."
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional 6-field cron expression for automatic execution."
           },
           "version": {
             "type": [

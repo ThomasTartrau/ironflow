@@ -54,6 +54,7 @@ use serde_json::Value;
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+use crate::schedule::CronSchedule;
 
 /// Generate a JSON Schema [`Value`] from a type that derives [`JsonSchema`].
 ///
@@ -116,6 +117,9 @@ pub struct WorkflowInfo {
     /// Labels automatically applied to every run of this workflow.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub default_labels: HashMap<String, String>,
+    /// Optional cron schedule for automatic execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<CronSchedule>,
 }
 
 /// A dynamic workflow handler with context-aware step chaining.
@@ -170,13 +174,48 @@ pub trait WorkflowHandler: Send + Sync {
         HashMap::new()
     }
 
+    /// Optional cron schedule for automatic execution.
+    ///
+    /// Return a [`CronSchedule`] built from a cron expression
+    /// (5 or 6 fields, as supported by [`croner`]).
+    ///
+    /// When set, the engine exposes this handler via
+    /// [`Engine::scheduled_handlers`](crate::engine::Engine::scheduled_handlers)
+    /// so the runtime can wire it into a cron scheduler automatically.
+    ///
+    /// The default is `None` (no automatic scheduling).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// # use ironflow_engine::schedule::CronSchedule;
+    /// struct HourlySync;
+    ///
+    /// impl WorkflowHandler for HourlySync {
+    ///     fn name(&self) -> &str { "hourly-sync" }
+    ///     fn schedule(&self) -> Option<&CronSchedule> {
+    ///         // In practice, store as a field or use `std::sync::LazyLock`.
+    ///         None
+    ///     }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    /// ```
+    fn schedule(&self) -> Option<&CronSchedule> {
+        None
+    }
+
     /// Return metadata about this workflow (description, source code).
     ///
     /// Override this to provide a description and source code for the
     /// dashboard UI. The default returns an empty description with no source
     /// but propagates [`WorkflowHandler::category`],
     /// [`WorkflowHandler::version`], [`WorkflowHandler::input_schema`],
-    /// and [`WorkflowHandler::default_labels`].
+    /// [`WorkflowHandler::default_labels`],
+    /// and [`WorkflowHandler::schedule`].
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: String::new(),
@@ -186,6 +225,7 @@ pub trait WorkflowHandler: Send + Sync {
             version: self.version().map(str::to_string),
             input_schema: self.input_schema(),
             default_labels: self.default_labels(),
+            schedule: self.schedule().cloned(),
         }
     }
 
@@ -261,6 +301,7 @@ mod tests {
                 version: self.version().map(str::to_string),
                 input_schema: self.input_schema(),
                 default_labels: self.default_labels(),
+                schedule: self.schedule().cloned(),
             }
         }
 
@@ -301,6 +342,12 @@ mod tests {
     }
 
     #[test]
+    fn minimal_handler_defaults_to_no_schedule() {
+        let handler = MinimalHandler;
+        assert_eq!(handler.schedule(), None);
+    }
+
+    #[test]
     fn minimal_handler_describe_reflects_defaults() {
         let handler = MinimalHandler;
         let info = handler.describe();
@@ -311,6 +358,7 @@ mod tests {
         assert_eq!(info.version, None);
         assert_eq!(info.input_schema, None);
         assert!(info.default_labels.is_empty());
+        assert_eq!(info.schedule, None);
     }
 
     #[test]
@@ -370,6 +418,7 @@ mod tests {
             version: None,
             input_schema: None,
             default_labels: HashMap::new(),
+            schedule: None,
         };
 
         let json = serde_json::to_value(&info).expect("serialize");
@@ -389,6 +438,7 @@ mod tests {
             version: Some("1.0.0".to_string()),
             input_schema: Some(serde_json::json!({"type": "object"})),
             default_labels: HashMap::from([("key".to_string(), "value".to_string())]),
+            schedule: Some(CronSchedule::new("0 0 * * * *").unwrap()),
         };
 
         let json = serde_json::to_value(&info).expect("serialize");
@@ -398,5 +448,6 @@ mod tests {
         assert_eq!(json["category"], "cat");
         assert_eq!(json["version"], "1.0.0");
         assert_eq!(json["default_labels"]["key"], "value");
+        assert_eq!(json["schedule"], "0 0 * * * *");
     }
 }

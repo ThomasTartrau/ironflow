@@ -33,6 +33,9 @@ pub struct WorkflowSummary {
     pub category: Option<String>,
     /// Current handler version.
     pub version: Option<String>,
+    /// Optional 6-field cron expression for automatic execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
 }
 
 /// Sentinel value for the `category` query parameter that selects only
@@ -73,11 +76,13 @@ pub async fn list_workflows(
         .map(|name| {
             let info = state.engine.handler_info(name);
             let category = info.as_ref().and_then(|i| i.category.clone());
-            let version = info.and_then(|i| i.version);
+            let version = info.as_ref().and_then(|i| i.version.clone());
+            let schedule = info.and_then(|i| i.schedule.map(|s| s.as_str().to_string()));
             WorkflowSummary {
                 name: name.to_string(),
                 category,
                 version,
+                schedule,
             }
         })
         .collect();
@@ -352,5 +357,52 @@ mod tests {
         let (_, summaries) = run_request(state, "/?category=__uncategorized__").await;
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].name, "test-workflow");
+    }
+
+    struct ScheduledWorkflow {
+        schedule: ironflow_engine::prelude::CronSchedule,
+    }
+    impl ScheduledWorkflow {
+        fn new() -> Self {
+            Self {
+                schedule: ironflow_engine::prelude::CronSchedule::new("0 30 9 * * MON-FRI")
+                    .unwrap(),
+            }
+        }
+    }
+
+    impl WorkflowHandler for ScheduledWorkflow {
+        fn name(&self) -> &str {
+            "scheduled-workflow"
+        }
+        fn schedule(&self) -> Option<&ironflow_engine::prelude::CronSchedule> {
+            Some(&self.schedule)
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn list_workflows_returns_schedule_when_present() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.register(TestWorkflow).unwrap();
+        engine.register(ScheduledWorkflow::new()).unwrap();
+        let state = base_state(engine);
+
+        let (_, summaries) = run_request(state, "/").await;
+        let scheduled = summaries
+            .iter()
+            .find(|s| s.name == "scheduled-workflow")
+            .unwrap();
+        assert_eq!(scheduled.schedule.as_deref(), Some("0 30 9 * * MON-FRI"));
+
+        let unscheduled = summaries
+            .iter()
+            .find(|s| s.name == "test-workflow")
+            .unwrap();
+        assert!(unscheduled.schedule.is_none());
     }
 }

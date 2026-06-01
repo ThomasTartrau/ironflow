@@ -63,6 +63,7 @@ impl WorkflowHandler for Greeting {
             version: self.version().map(str::to_string),
             input_schema: self.input_schema(),
             default_labels: self.default_labels(),
+            schedule: None,
         }
     }
 
