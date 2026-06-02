@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.20.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.19.0...ironflow-api-v2.20.0) - 2026-06-02
+
+### Added
+
+- #12 add ironflow-sdk and ironflow-types crates
+
+
+### Fixed
+
+- #12 resolve unused import and clippy let_and_return warnings
+
 ## [2.19.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.18.13...ironflow-api-v2.19.0) - 2026-06-01
 
 ### Added
