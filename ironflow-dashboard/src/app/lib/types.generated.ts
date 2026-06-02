@@ -176,31 +176,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	"/api/v1/auth/sign-up": {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/**
-		 * Register a new user with email and password.
-		 * @description Returns access and refresh tokens on success, and sets HttpOnly cookies.
-		 *
-		 *     # Errors
-		 *
-		 *     - 400 if email/username/password is invalid
-		 *     - 409 if email or username is already taken
-		 */
-		post: operations["sign_up"];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	"/api/v1/health-check": {
 		parameters: {
 			query?: never;
@@ -1339,15 +1314,6 @@ export interface components {
 			/** @description Plaintext password. */
 			password: string;
 		};
-		/** @description Sign-up request body. */
-		SignUpRequest: {
-			/** @description Email address. */
-			email: string;
-			/** @description Plaintext password (min 8 characters). */
-			password: string;
-			/** @description Display username. */
-			username: string;
-		};
 		/**
 		 * @description Aggregate statistics response.
 		 *
@@ -1804,7 +1770,9 @@ export interface operations {
 				headers: {
 					[name: string]: unknown;
 				};
-				content?: never;
+				content: {
+					"application/json": components["schemas"]["AuditLogEntry"][];
+				};
 			};
 			/** @description Unauthorized */
 			401: {
@@ -1929,43 +1897,6 @@ export interface operations {
 			};
 		};
 	};
-	sign_up: {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** @description Sign up credentials */
-		requestBody: {
-			content: {
-				"application/json": components["schemas"]["SignUpRequest"];
-			};
-		};
-		responses: {
-			/** @description User registered successfully, cookies set */
-			204: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Invalid email, username, or password */
-			400: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Email or username already taken */
-			409: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-		};
-	};
 	health_check: {
 		parameters: {
 			query?: never;
@@ -2016,7 +1947,9 @@ export interface operations {
 				headers: {
 					[name: string]: unknown;
 				};
-				content?: never;
+				content: {
+					"application/json": components["schemas"]["RunResponse"][];
+				};
 			};
 			/** @description Unauthorized */
 			401: {

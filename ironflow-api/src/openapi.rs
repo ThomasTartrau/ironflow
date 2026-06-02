@@ -20,7 +20,26 @@ use crate::routes::{
 };
 use ironflow_engine::notify::Event;
 use ironflow_store::entities::AuditLogEntry;
-use utoipa::OpenApi;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
+
+/// Adds the `Bearer` security scheme to the OpenAPI spec.
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_default();
+        components.add_security_scheme(
+            "Bearer",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("JWT")
+                    .build(),
+            ),
+        );
+    }
+}
 
 #[cfg(feature = "sign-up")]
 mod with_signup {
@@ -35,6 +54,7 @@ mod with_signup {
             description = "REST API for the ironflow workflow engine",
             version = "1.0.0"
         ),
+        modifiers(&SecurityAddon),
         paths(
             health_check::health_check,
             list_runs::list_runs,
@@ -124,6 +144,7 @@ mod without_signup {
             description = "REST API for the ironflow workflow engine",
             version = "1.0.0"
         ),
+        modifiers(&SecurityAddon),
         paths(
             health_check::health_check,
             list_runs::list_runs,

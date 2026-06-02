@@ -1,0 +1,3091 @@
+{
+  "components": {
+    "schemas": {
+      "ApiKeyResponse": {
+        "description": "API key summary (never includes the hash or raw key).",
+        "properties": {
+          "created_at": {
+            "description": "Creation date.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Expiration date.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "API key ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "is_active": {
+            "description": "Whether the key is active.",
+            "type": "boolean"
+          },
+          "key_prefix": {
+            "description": "First characters for identification.",
+            "type": "string"
+          },
+          "last_used_at": {
+            "description": "Last used date.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Key name.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Granted scopes.",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "key_prefix",
+          "scopes",
+          "is_active",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "ApiKeyScope": {
+        "description": "Permission scope for an API key.\n\nEach scope grants access to a specific set of actions.\nA key with no scopes has no permissions.",
+        "enum": [
+          "workflows_read",
+          "runs_read",
+          "runs_write",
+          "runs_manage",
+          "stats_read",
+          "admin"
+        ],
+        "type": "string"
+      },
+      "AuditLogEntry": {
+        "description": "A persisted audit log entry capturing a domain event.\n\nEach entry records the full event payload as JSON alongside\ndenormalized contextual IDs for efficient filtering.\n\n# Examples\n\n```\nuse ironflow_store::entities::{AuditLogEntry, EventKind};\nuse uuid::Uuid;\nuse chrono::Utc;\nuse serde_json::json;\n\nlet entry = AuditLogEntry {\n    id: Uuid::now_v7(),\n    event_type: EventKind::RunStatusChanged,\n    payload: json!({\"run_id\": \"...\"}),\n    run_id: Some(Uuid::now_v7()),\n    step_id: None,\n    user_id: None,\n    created_at: Utc::now(),\n};\nassert_eq!(entry.event_type, EventKind::RunStatusChanged);\n```",
+        "properties": {
+          "created_at": {
+            "description": "When the event was recorded.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventKind",
+            "description": "Event type."
+          },
+          "id": {
+            "description": "Unique entry ID (UUID v7).",
+            "format": "uuid",
+            "type": "string"
+          },
+          "payload": {
+            "description": "Full serialized event payload."
+          },
+          "run_id": {
+            "description": "Associated run ID, if the event is run-scoped.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Associated step ID, if the event is step-scoped.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "user_id": {
+            "description": "Associated user ID, if the event is user-scoped.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event_type",
+          "payload",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "CreateApiKeyRequest": {
+        "description": "Request body for creating an API key.",
+        "properties": {
+          "expires_at": {
+            "description": "Optional expiration date (ISO 8601).",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Human-readable name for this key.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Scopes to grant.",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "CreateApiKeyResponse": {
+        "description": "Response returned when creating an API key.\nThe raw key is only shown once.",
+        "properties": {
+          "created_at": {
+            "description": "Creation date.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Expiration date.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "API key ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "key": {
+            "description": "The full raw API key (only returned at creation time).",
+            "type": "string"
+          },
+          "key_prefix": {
+            "description": "First characters for identification.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Key name.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Granted scopes.",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "key_prefix",
+          "name",
+          "scopes",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "CreateRunRequest": {
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional key-value labels for categorization and filtering.",
+            "nullable": true,
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "payload": {
+            "additionalProperties": {},
+            "description": "Optional input payload for the workflow.",
+            "nullable": true,
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "scheduled_at": {
+            "description": "Optional deferred execution time. `None` means run immediately.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "workflow": {
+            "description": "The workflow name to trigger.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow"
+        ],
+        "type": "object"
+      },
+      "CreateUserRequest": {
+        "description": "Request body for creating a user (admin only).",
+        "properties": {
+          "email": {
+            "description": "Email address.",
+            "type": "string"
+          },
+          "is_admin": {
+            "description": "Whether the new user should be an admin.",
+            "type": "boolean"
+          },
+          "password": {
+            "description": "Plaintext password (min 8 characters).",
+            "type": "string"
+          },
+          "username": {
+            "description": "Display username.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "username",
+          "password",
+          "is_admin"
+        ],
+        "type": "object"
+      },
+      "Event": {
+        "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\n# Examples\n\n```\nuse ironflow_engine::notify::Event;\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    at: chrono::Utc::now(),\n};\n```",
+        "oneOf": [
+          {
+            "description": "A new run was created (status: Pending).",
+            "properties": {
+              "at": {
+                "description": "When the run was created.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "run_created"
+                ],
+                "type": "string"
+              },
+              "workflow_name": {
+                "description": "Workflow name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "workflow_name",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A run changed status.",
+            "properties": {
+              "at": {
+                "description": "When the transition occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "cost_usd": {
+                "description": "Aggregated cost in USD at the time of transition.",
+                "format": "double",
+                "type": "number"
+              },
+              "duration_ms": {
+                "description": "Aggregated duration in milliseconds at the time of transition.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "error": {
+                "description": "Error message (when transitioning to Failed).",
+                "nullable": true,
+                "type": "string"
+              },
+              "from": {
+                "$ref": "#/components/schemas/RunStatus",
+                "description": "Previous status."
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "to": {
+                "$ref": "#/components/schemas/RunStatus",
+                "description": "New status."
+              },
+              "type": {
+                "enum": [
+                  "run_status_changed"
+                ],
+                "type": "string"
+              },
+              "workflow_name": {
+                "description": "Workflow name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "workflow_name",
+              "from",
+              "to",
+              "cost_usd",
+              "duration_ms",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A run transitioned to [`Failed`](ironflow_store::models::RunStatus::Failed).\n\nThis is a convenience event emitted alongside [`RunStatusChanged`](Event::RunStatusChanged)\nwhen the target status is `Failed`. Subscribe to this instead of\n`RUN_STATUS_CHANGED` when you only care about failures.",
+            "properties": {
+              "at": {
+                "description": "When the failure occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "cost_usd": {
+                "description": "Aggregated cost in USD at the time of failure.",
+                "format": "double",
+                "type": "number"
+              },
+              "duration_ms": {
+                "description": "Aggregated duration in milliseconds at the time of failure.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "error": {
+                "description": "Error message.",
+                "nullable": true,
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "run_failed"
+                ],
+                "type": "string"
+              },
+              "workflow_name": {
+                "description": "Workflow name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "workflow_name",
+              "cost_usd",
+              "duration_ms",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A step completed successfully.",
+            "properties": {
+              "at": {
+                "description": "When the step completed.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "cost_usd": {
+                "description": "Step cost in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "duration_ms": {
+                "description": "Step duration in milliseconds.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "description": "Step operation kind.",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_id": {
+                "description": "Step identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "step_completed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "step_name",
+              "kind",
+              "duration_ms",
+              "cost_usd",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A step failed.",
+            "properties": {
+              "at": {
+                "description": "When the step failed.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "error": {
+                "description": "Error message.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Step operation kind.",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_id": {
+                "description": "Step identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "step_failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "step_name",
+              "kind",
+              "error",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A run is waiting for human approval.",
+            "properties": {
+              "at": {
+                "description": "When the approval was requested.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "message": {
+                "description": "Message displayed to reviewers.",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_id": {
+                "description": "Approval step identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "approval_requested"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "message",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A run was approved by a human.",
+            "properties": {
+              "approved_by": {
+                "description": "User who approved (ID or username).",
+                "type": "string"
+              },
+              "at": {
+                "description": "When the approval was granted.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "approval_granted"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "approved_by",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A run was rejected by a human.",
+            "properties": {
+              "at": {
+                "description": "When the rejection occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "rejected_by": {
+                "description": "User who rejected (ID or username).",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "approval_rejected"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "rejected_by",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A log line emitted during step execution.\n\nPushed by the worker in real time so that SSE clients can stream\nstep output as it happens, without waiting for step completion.",
+            "properties": {
+              "at": {
+                "description": "When the line was emitted.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "line": {
+                "description": "The log line content.",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_id": {
+                "description": "Step identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "stream": {
+                "$ref": "#/components/schemas/LogStream",
+                "description": "Output stream."
+              },
+              "type": {
+                "enum": [
+                  "log_line"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "step_name",
+              "stream",
+              "line",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A user signed in.",
+            "properties": {
+              "at": {
+                "description": "When the sign-in occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "user_signed_in"
+                ],
+                "type": "string"
+              },
+              "user_id": {
+                "description": "User identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "username": {
+                "description": "Username.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id",
+              "username",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A new user signed up.",
+            "properties": {
+              "at": {
+                "description": "When the sign-up occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "user_signed_up"
+                ],
+                "type": "string"
+              },
+              "user_id": {
+                "description": "User identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "username": {
+                "description": "Username.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id",
+              "username",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A user signed out.",
+            "properties": {
+              "at": {
+                "description": "When the sign-out occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "user_signed_out"
+                ],
+                "type": "string"
+              },
+              "user_id": {
+                "description": "User identifier.",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "EventKind": {
+        "description": "Strongly-typed event kind matching domain event variants.\n\nSerializes to/from `snake_case` strings (e.g. `\"run_status_changed\"`).\n\n# Examples\n\n```\nuse ironflow_store::entities::EventKind;\n\nlet kind: EventKind = \"run_status_changed\".parse().unwrap();\nassert_eq!(kind, EventKind::RunStatusChanged);\nassert_eq!(kind.as_str(), \"run_status_changed\");\n```",
+        "enum": [
+          "run_created",
+          "run_status_changed",
+          "run_failed",
+          "step_completed",
+          "step_failed",
+          "approval_requested",
+          "approval_granted",
+          "approval_rejected",
+          "log_line",
+          "user_signed_in",
+          "user_signed_up",
+          "user_signed_out"
+        ],
+        "type": "string"
+      },
+      "ListAuditLogsQuery": {
+        "description": "Query parameters for listing audit log entries.",
+        "properties": {
+          "event_type": {
+            "$ref": "#/components/schemas/EventKind",
+            "description": "Filter by event type (e.g. `run_status_changed`).",
+            "nullable": true
+          },
+          "from": {
+            "description": "Filter entries created at or after this timestamp.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "page": {
+            "description": "Page number (1-based, default: 1).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "per_page": {
+            "description": "Items per page (default: 50, max: 100).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "run_id": {
+            "description": "Filter by run ID.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "to": {
+            "description": "Filter entries created at or before this timestamp.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListRunsQuery": {
+        "description": "Query parameters for listing runs.",
+        "properties": {
+          "has_steps": {
+            "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps.",
+            "nullable": true,
+            "type": "boolean"
+          },
+          "label": {
+            "description": "Filter by labels. Comma-separated `key:value` pairs.",
+            "nullable": true,
+            "type": "string"
+          },
+          "page": {
+            "description": "Page number (1-based).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "per_page": {
+            "description": "Items per page.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus",
+            "description": "Filter by run status.",
+            "nullable": true
+          },
+          "workflow": {
+            "description": "Filter by workflow name.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListUsersQuery": {
+        "description": "Query parameters for listing users.",
+        "properties": {
+          "page": {
+            "description": "Page number (1-based, defaults to 1).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "per_page": {
+            "description": "Items per page (defaults to 20, max 100).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ListWorkflowsQuery": {
+        "description": "Query parameters for listing workflows.",
+        "properties": {
+          "category": {
+            "description": "Optional case-insensitive partial match on the category path\n(e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).\n\nPass `__uncategorized__` to list only workflows without any\ncategory.",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Optional case-insensitive partial match on workflow name.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LogStream": {
+        "description": "Output stream for a [`LogLine`](Event::LogLine) event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::LogStream;\n\nlet stream: LogStream = \"stdout\".parse().unwrap();\nassert_eq!(stream.as_str(), \"stdout\");\n```",
+        "enum": [
+          "stdout",
+          "stderr",
+          "system"
+        ],
+        "type": "string"
+      },
+      "MeResponse": {
+        "description": "Current user profile response.",
+        "properties": {
+          "email": {
+            "description": "Email address.",
+            "type": "string"
+          },
+          "is_admin": {
+            "description": "Admin flag.",
+            "type": "boolean"
+          },
+          "user_id": {
+            "description": "User ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "description": "Display username.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "username",
+          "is_admin"
+        ],
+        "type": "object"
+      },
+      "RunDetailResponse": {
+        "description": "Run detail response — includes steps and payload.",
+        "properties": {
+          "payload": {
+            "description": "Input payload that triggered this run."
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunResponse",
+            "description": "The run."
+          },
+          "steps": {
+            "description": "Associated steps, ordered by position.",
+            "items": {
+              "$ref": "#/components/schemas/StepResponse"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "run",
+          "steps",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "RunResponse": {
+        "description": "Run response DTO — public API representation of a run.\n\nMaps from the internal [`Run`] model, exposing only necessary fields.\n\n# Examples\n\n```\nuse ironflow_store::models::{Run, RunStatus, TriggerKind};\nuse ironflow_api::entities::RunResponse;\n```",
+        "properties": {
+          "completed_at": {
+            "description": "When execution completed.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "cost_usd": {
+            "description": "Aggregated cost in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "created_at": {
+            "description": "When created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "duration_ms": {
+            "description": "Total duration in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "description": "Optional error message.",
+            "nullable": true,
+            "type": "string"
+          },
+          "handler_version": {
+            "description": "Version of the handler that created this run.",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "Unique run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "User-defined key-value labels.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "max_retries": {
+            "description": "Maximum allowed retries.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_count": {
+            "description": "Number of times retried.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scheduled_at": {
+            "description": "Scheduled execution time. `None` means the run executed immediately.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "started_at": {
+            "description": "When execution started.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus",
+            "description": "Current status."
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/TriggerKind",
+            "description": "How the run was triggered."
+          },
+          "updated_at": {
+            "description": "When last updated.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "workflow_name": {
+            "description": "Workflow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workflow_name",
+          "status",
+          "trigger",
+          "retry_count",
+          "max_retries",
+          "cost_usd",
+          "duration_ms",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "RunStatus": {
+        "description": "Status of a workflow run, forming a finite state machine.\n\nValid transitions:\n- `Pending` -> `Running`, `Cancelled`\n- `Running` -> `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`\n- `Retrying` -> `Running`, `Failed`, `Cancelled`\n- `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`\n\nTerminal states (`Completed`, `Failed`, `Cancelled`) are idempotent:\ntransitioning to the same terminal state is a no-op, not an error.\n\n# Examples\n\n```\nuse ironflow_store::entities::RunStatus;\n\nassert!(RunStatus::Pending.can_transition_to(&RunStatus::Running));\nassert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));\nassert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));\nassert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));\n// Terminal-to-same is idempotent:\nassert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));\nassert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));\nassert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));\n```",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "retrying",
+          "cancelled",
+          "awaiting_approval"
+        ],
+        "type": "string"
+      },
+      "ScopeEntry": {
+        "description": "A scope entry with its machine name and human-readable label.",
+        "properties": {
+          "description": {
+            "description": "Short description.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Human-readable label (e.g. \"Runs Read\").",
+            "type": "string"
+          },
+          "value": {
+            "description": "Machine-readable scope value (e.g. \"runs_read\").",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label",
+          "description"
+        ],
+        "type": "object"
+      },
+      "SecretResponse": {
+        "description": "Response DTO for a secret (never exposes the value).",
+        "properties": {
+          "created_at": {
+            "description": "Creation timestamp.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Secret ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "key": {
+            "description": "Secret key.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Last update timestamp.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "SetSecretRequest": {
+        "description": "Request body for creating or updating a secret.",
+        "properties": {
+          "key": {
+            "description": "Secret key (namespaced, e.g. `workflows/inbox/gmail_token`).",
+            "type": "string"
+          },
+          "value": {
+            "description": "Secret value (plaintext, will be encrypted at rest).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "SignInRequest": {
+        "description": "Sign-in request body.",
+        "properties": {
+          "email": {
+            "description": "Email address.",
+            "type": "string"
+          },
+          "password": {
+            "description": "Plaintext password.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "type": "object"
+      },
+      "StatsResponse": {
+        "description": "Aggregate statistics response.\n\nComputed from all runs in the store.\n\n# Examples\n\n```\nuse ironflow_api::entities::StatsResponse;\n```",
+        "properties": {
+          "active_runs": {
+            "description": "Number of pending or running runs.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cancelled_runs": {
+            "description": "Number of cancelled runs.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completed_runs": {
+            "description": "Number of completed runs.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_runs": {
+            "description": "Number of failed runs.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "success_rate_percent": {
+            "description": "Success rate: completed / (completed + failed), as a percentage.",
+            "format": "double",
+            "type": "number"
+          },
+          "total_cost_usd": {
+            "description": "Aggregated cost across all runs in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "total_duration_ms": {
+            "description": "Aggregated duration across all runs in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_runs": {
+            "description": "Total number of runs.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_runs",
+          "completed_runs",
+          "failed_runs",
+          "cancelled_runs",
+          "active_runs",
+          "success_rate_percent",
+          "total_cost_usd",
+          "total_duration_ms"
+        ],
+        "type": "object"
+      },
+      "StepResponse": {
+        "description": "Step response DTO — public API representation of a step.\n\n# Examples\n\n```\nuse ironflow_store::models::Step;\nuse ironflow_api::entities::StepResponse;\n```",
+        "properties": {
+          "completed_at": {
+            "description": "When execution completed.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "cost_usd": {
+            "description": "Cost in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "created_at": {
+            "description": "When created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "debug_messages": {
+            "description": "Verbose conversation trace for agent steps (thinking blocks, tool\ncalls, tool results, per-turn usage). `None` when verbose mode was\noff or the step is not an agent step."
+          },
+          "dependencies": {
+            "description": "IDs of steps this step depends on (direct dependencies).",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "duration_ms": {
+            "description": "Execution duration in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "description": "Optional error message.",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "Unique step identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": {},
+            "description": "Input configuration.",
+            "nullable": true,
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "input_tokens": {
+            "description": "Input token count (agent steps).",
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "Step operation type.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Step name.",
+            "type": "string"
+          },
+          "output": {
+            "additionalProperties": {},
+            "description": "Step output.",
+            "nullable": true,
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "output_tokens": {
+            "description": "Output token count (agent steps).",
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "position": {
+            "description": "Execution order (0-based).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "description": "Parent run ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "started_at": {
+            "description": "When execution started.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StepStatus",
+            "description": "Current status."
+          },
+          "updated_at": {
+            "description": "When updated.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "name",
+          "kind",
+          "position",
+          "status",
+          "duration_ms",
+          "cost_usd",
+          "created_at",
+          "updated_at",
+          "dependencies"
+        ],
+        "type": "object"
+      },
+      "StepStatus": {
+        "description": "Status of an individual step within a run.\n\n# Examples\n\n```\nuse ironflow_store::entities::StepStatus;\n\nassert!(!StepStatus::Pending.is_terminal());\nassert!(StepStatus::Completed.is_terminal());\n```",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "skipped",
+          "awaiting_approval",
+          "rejected"
+        ],
+        "type": "string"
+      },
+      "SubWorkflowDetail": {
+        "description": "Sub-workflow detail included in the workflow response.",
+        "properties": {
+          "description": {
+            "description": "Human-readable description.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Sub-workflow name.",
+            "type": "string"
+          },
+          "source_code": {
+            "description": "Optional Rust source code of the handler.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object"
+      },
+      "TriggerKind": {
+        "description": "How a run was triggered.\n\n# Examples\n\n```\nuse ironflow_store::entities::TriggerKind;\n\nlet trigger = TriggerKind::Manual;\nlet json = serde_json::to_string(&trigger).unwrap();\nassert!(json.contains(\"manual\"));\n```",
+        "oneOf": [
+          {
+            "description": "Triggered manually (CLI or programmatic call).",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "manual"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Triggered by an incoming webhook.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "webhook"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "description": "The webhook path that received the request.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Triggered by a cron schedule.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "cron"
+                ],
+                "type": "string"
+              },
+              "schedule": {
+                "description": "The cron expression that fired.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schedule",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Triggered via the REST API.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "api"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Retry of a previously failed run.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "retry"
+                ],
+                "type": "string"
+              },
+              "parent_run_id": {
+                "description": "The original run that failed.",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "parent_run_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Triggered by a parent workflow as a sub-workflow step.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "workflow"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "UpdateRoleRequest": {
+        "description": "Request body for updating a user's role (admin only).",
+        "properties": {
+          "is_admin": {
+            "description": "New admin status.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "is_admin"
+        ],
+        "type": "object"
+      },
+      "UpdateSecretRequest": {
+        "description": "Request body for updating a secret value.",
+        "properties": {
+          "value": {
+            "description": "New secret value (plaintext, will be encrypted at rest).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "UserResponse": {
+        "description": "Response DTO for a user (never exposes password hash).",
+        "properties": {
+          "created_at": {
+            "description": "Creation timestamp.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "email": {
+            "description": "Email address.",
+            "type": "string"
+          },
+          "id": {
+            "description": "User ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "is_admin": {
+            "description": "Whether the user is an admin.",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "description": "Last update timestamp.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "username": {
+            "description": "Display username.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "username",
+          "is_admin",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "WorkflowDetailResponse": {
+        "description": "Workflow detail response.",
+        "properties": {
+          "category": {
+            "description": "Optional `/`-separated category path used to group workflows.",
+            "nullable": true,
+            "type": "string"
+          },
+          "default_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels automatically applied to every run of this workflow.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": {
+            "description": "Human-readable description.",
+            "type": "string"
+          },
+          "input_schema": {
+            "description": "JSON Schema describing the expected input payload."
+          },
+          "name": {
+            "description": "Workflow name.",
+            "type": "string"
+          },
+          "source_code": {
+            "description": "Optional Rust source code of the handler.",
+            "nullable": true,
+            "type": "string"
+          },
+          "sub_workflows": {
+            "description": "Sub-workflows invoked by this handler (recursive, depth-limited).",
+            "items": {
+              "$ref": "#/components/schemas/SubWorkflowDetail"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "Current handler version.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "sub_workflows"
+        ],
+        "type": "object"
+      },
+      "WorkflowSummary": {
+        "description": "Summary entry returned by `GET /api/v1/workflows`.",
+        "properties": {
+          "category": {
+            "description": "Optional `/`-separated category path.",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Workflow name (unique identifier).",
+            "type": "string"
+          },
+          "version": {
+            "description": "Current handler version.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "Bearer": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "contact": {
+      "name": "Thomas Tartrau"
+    },
+    "description": "REST API for the ironflow workflow engine",
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
+    "title": "Ironflow REST API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v1/api-keys": {
+      "get": {
+        "operationId": "list_api_keys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "List of API keys"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List all API keys for the authenticated user.",
+        "tags": [
+          "api-keys"
+        ]
+      },
+      "post": {
+        "description": "# Errors\n\n- 400 if the name is empty or scopes are invalid",
+        "operationId": "create_api_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "description": "API key configuration",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateApiKeyResponse"
+                }
+              }
+            },
+            "description": "API key created successfully"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden (member trying to assign forbidden scopes)"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Create a new API key for the authenticated user.",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api/v1/api-keys/scopes": {
+      "get": {
+        "description": "Admins get all scopes, members only get read-only scopes.",
+        "operationId": "available_scopes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScopeEntry"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "List of available scopes"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Return the list of scopes the current user is allowed to assign to API keys.",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api/v1/api-keys/{id}": {
+      "delete": {
+        "description": "# Errors\n\n- 404 if the key does not exist or belongs to another user",
+        "operationId": "delete_api_key",
+        "parameters": [
+          {
+            "description": "API key ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "API key deleted successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "API key not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Delete an API key owned by the authenticated user.",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api/v1/audit-logs": {
+      "get": {
+        "description": "Admin-only. Returns a paginated list of persisted domain events\nfor compliance review and post-mortem debugging.",
+        "operationId": "list_audit_logs",
+        "parameters": [
+          {
+            "description": "Filter by event type (e.g. `run_status_changed`).",
+            "in": "query",
+            "name": "event_type",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/EventKind",
+              "nullable": true
+            }
+          },
+          {
+            "description": "Filter by run ID.",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter entries created at or after this timestamp.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter entries created at or before this timestamp.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number (1-based, default: 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (default: 50, max: 100).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AuditLogEntry"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "List of audit log entries with pagination"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden - admin only"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List audit log entries with optional filtering and pagination.",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "description": "# Errors\n\n- 401 if no valid token is provided\n- 404 if the user no longer exists in the store",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Current user profile"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Return the current user's profile.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "description": "# Errors\n\n- 401 if the refresh token is missing, invalid, or expired",
+        "operationId": "refresh",
+        "responses": {
+          "204": {
+            "description": "Access token refreshed successfully, new cookies set"
+          },
+          "401": {
+            "description": "Invalid or expired refresh token"
+          }
+        },
+        "summary": "Refresh the access token using a valid refresh token from cookies.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/sign-in": {
+      "post": {
+        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 401 if email not found or password is wrong",
+        "operationId": "sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInRequest"
+              }
+            }
+          },
+          "description": "Sign in credentials",
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "User authenticated successfully, cookies set"
+          },
+          "401": {
+            "description": "Invalid email or password"
+          }
+        },
+        "summary": "Authenticate a user with email and password.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/sign-out": {
+      "post": {
+        "operationId": "sign_out",
+        "responses": {
+          "200": {
+            "description": "User signed out successfully, cookies cleared"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Sign out the current user by clearing auth cookies.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/health-check": {
+      "get": {
+        "operationId": "health_check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy"
+          }
+        },
+        "summary": "Health check handler. Always returns 200 OK.",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "description": "Filter by workflow name.",
+            "in": "query",
+            "name": "workflow",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by run status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RunStatus",
+              "nullable": true
+            }
+          },
+          {
+            "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps.",
+            "in": "query",
+            "name": "has_steps",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Filter by labels. Comma-separated `key:value` pairs.",
+            "in": "query",
+            "name": "label",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number (1-based).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page.",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "List of runs with pagination"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List runs with optional filtering and pagination.",
+        "tags": [
+          "runs"
+        ]
+      },
+      "post": {
+        "description": "Returns 201 Created with the newly enqueued run.\nReturns 400 Bad Request if the workflow is unknown.",
+        "operationId": "create_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRunRequest"
+              }
+            }
+          },
+          "description": "Workflow to trigger",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Run created successfully"
+          },
+          "400": {
+            "description": "Unknown workflow"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Trigger a workflow by name.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}": {
+      "get": {
+        "description": "Returns 404 if the run does not exist.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailResponse"
+                }
+              }
+            },
+            "description": "Run details with steps"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Get a run by ID, including all its steps and dependency edges.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/approve": {
+      "post": {
+        "description": "Transitions the run from `AwaitingApproval` back to `Running`.\nReturns 400 if the run is not in `AwaitingApproval` state.",
+        "operationId": "approve_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Run approved successfully"
+          },
+          "400": {
+            "description": "Run not awaiting approval"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Approve a run that is awaiting human approval.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/cancel": {
+      "post": {
+        "description": "Transitions the run to `Cancelled` status. Returns 400 if the run\nis already in a terminal state.",
+        "operationId": "cancel_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Run cancelled successfully"
+          },
+          "400": {
+            "description": "Run cannot be cancelled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Cancel a pending or running run.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/reject": {
+      "post": {
+        "description": "Transitions the run from `AwaitingApproval` to `Failed`.\nReturns 400 if the run is not in `AwaitingApproval` state.",
+        "operationId": "reject_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Run rejected successfully"
+          },
+          "400": {
+            "description": "Run not awaiting approval"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Reject a run that is awaiting human approval.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/retry": {
+      "post": {
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state.",
+        "operationId": "retry_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Run retry created successfully"
+          },
+          "400": {
+            "description": "Run cannot be retried"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Retry a failed run.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/secrets": {
+      "get": {
+        "description": "Returns key, id, and timestamps. Never returns encrypted or decrypted values.",
+        "operationId": "list_secrets",
+        "parameters": [
+          {
+            "description": "Filter by key prefix (e.g. `workflows/inbox/`).",
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number (1-based, default 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (default 50, max 100).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SecretResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Secrets listed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List secret metadata. Admin only.",
+        "tags": [
+          "secrets"
+        ]
+      },
+      "post": {
+        "description": "If the key already exists, the value is replaced. The response\nnever includes the secret value.",
+        "operationId": "create_secret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSecretRequest"
+              }
+            }
+          },
+          "description": "Secret key and value",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretResponse"
+                }
+              }
+            },
+            "description": "Secret created or updated"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Create or update a secret. Admin only.",
+        "tags": [
+          "secrets"
+        ]
+      }
+    },
+    "/api/v1/secrets/{key}": {
+      "delete": {
+        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 404 if the secret key does not exist",
+        "operationId": "delete_secret",
+        "parameters": [
+          {
+            "description": "Secret key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Secret deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Secret not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Delete a secret by key. Admin only.",
+        "tags": [
+          "secrets"
+        ]
+      },
+      "put": {
+        "description": "The key is taken from the URL path. The response never includes\nthe secret value.\n\n# Errors\n\n- 403 if the caller is not an admin\n- 404 if the secret key does not exist\n- 400 if the value is invalid",
+        "operationId": "update_secret",
+        "parameters": [
+          {
+            "description": "Secret key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSecretRequest"
+              }
+            }
+          },
+          "description": "New secret value",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretResponse"
+                }
+              }
+            },
+            "description": "Secret updated"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Secret not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Update a secret's value. Admin only.",
+        "tags": [
+          "secrets"
+        ]
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.",
+        "operationId": "get_stats",
+        "parameters": [
+          {
+            "description": "Filter by workflow name.",
+            "in": "query",
+            "name": "workflow",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by run status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RunStatus",
+              "nullable": true
+            }
+          },
+          {
+            "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps.",
+            "in": "query",
+            "name": "has_steps",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Filter by labels. Comma-separated `key:value` pairs.",
+            "in": "query",
+            "name": "label",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number (1-based).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page.",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            },
+            "description": "Aggregate statistics"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Get aggregate statistics across runs matching the filter.",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "description": "# Errors\n\n- 403 if the caller is not an admin",
+        "operationId": "list_users",
+        "parameters": [
+          {
+            "description": "Page number (1-based, defaults to 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (defaults to 20, max 100).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "nullable": true,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Paginated list of users"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden (not an admin)"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List all users with pagination. Admin only.",
+        "tags": [
+          "users"
+        ]
+      },
+      "post": {
+        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 400 if input validation fails\n- 409 if email or username is already taken",
+        "operationId": "create_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "description": "User account details",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "User created successfully"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden (not an admin)"
+          },
+          "409": {
+            "description": "Email or username already taken"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Create a new user account. Admin only.",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{id}": {
+      "delete": {
+        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 400 if trying to delete self\n- 404 if the user does not exist",
+        "operationId": "delete_user",
+        "parameters": [
+          {
+            "description": "User ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User deleted successfully"
+          },
+          "400": {
+            "description": "Cannot delete self"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden (not an admin)"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Delete a user account. Admin only.",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{id}/role": {
+      "patch": {
+        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 400 if trying to change own role\n- 404 if the user does not exist",
+        "operationId": "update_role",
+        "parameters": [
+          {
+            "description": "User ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRoleRequest"
+              }
+            }
+          },
+          "description": "New role assignment",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "User role updated successfully"
+          },
+          "400": {
+            "description": "Cannot change own role"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden (not an admin)"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Update a user's admin role. Admin only.",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/workflows": {
+      "get": {
+        "description": "# Query Parameters\n\n- `name` — Case-insensitive partial match on workflow name (optional)\n- `category` — Case-insensitive partial match on category path, or\n  [`UNCATEGORIZED_FILTER`] to filter only uncategorized workflows\n  (optional)",
+        "operationId": "list_workflows",
+        "parameters": [
+          {
+            "description": "Optional case-insensitive partial match on workflow name.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional case-insensitive partial match on the category path\n(e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).\n\nPass `__uncategorized__` to list only workflows without any\ncategory.",
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "List of workflow summaries"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List registered workflows, optionally filtered by name and category.",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{name}": {
+      "get": {
+        "description": "# Errors\n\n- 404 if the workflow is not registered",
+        "operationId": "get_workflow",
+        "parameters": [
+          {
+            "description": "Workflow name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetailResponse"
+                }
+              }
+            },
+            "description": "Workflow details"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Workflow not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Get details about a registered workflow.",
+        "tags": [
+          "workflows"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Health check endpoints",
+      "name": "health"
+    },
+    {
+      "description": "Workflow run management",
+      "name": "runs"
+    },
+    {
+      "description": "Workflow definitions",
+      "name": "workflows"
+    },
+    {
+      "description": "Aggregated statistics",
+      "name": "stats"
+    },
+    {
+      "description": "Authentication and authorization",
+      "name": "auth"
+    },
+    {
+      "description": "API key management",
+      "name": "api-keys"
+    },
+    {
+      "description": "User management (admin only)",
+      "name": "users"
+    },
+    {
+      "description": "Encrypted secret management (admin only)",
+      "name": "secrets"
+    },
+    {
+      "description": "Audit log (admin only)",
+      "name": "audit"
+    }
+  ]
+}

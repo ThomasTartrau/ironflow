@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::{AuditLogFilter, EventKind};
+use ironflow_store::entities::{AuditLogEntry, AuditLogFilter, EventKind};
 
 use crate::error::ApiError;
 use crate::response::ok_paged;
@@ -43,7 +43,7 @@ pub struct ListAuditLogsQuery {
         tags = ["audit"],
         params(ListAuditLogsQuery),
         responses(
-            (status = 200, description = "List of audit log entries with pagination"),
+            (status = 200, description = "List of audit log entries with pagination", body = Vec<AuditLogEntry>),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden - admin only")
         ),

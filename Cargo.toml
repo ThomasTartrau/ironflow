@@ -12,6 +12,8 @@ members = [
     "examples/server",
     "examples/worker",
     "ironflow-mcp",
+    "ironflow-types",
+    "ironflow-sdk",
 ]
 
 [profile.release]
