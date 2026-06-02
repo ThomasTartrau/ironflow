@@ -6,6 +6,15 @@
 ironflow/
 ├── ironflow-core/       # Shell, Agent, AgentProvider trait, providers, tracker, utils
 ├── ironflow-runtime/    # Daemon: webhooks (axum), cron (tokio-cron-scheduler)
+├── ironflow-api/        # REST API (axum), routes, entities, state
+├── ironflow-engine/     # Workflow orchestration, FSM, handlers
+├── ironflow-store/      # Storage trait + implementations (Postgres, in-memory)
+├── ironflow-auth/       # JWT, password hashing, API keys
+├── ironflow-worker/     # Background worker for run execution
+├── ironflow-types/      # Shared API envelope types (ApiResponse, ErrorEnvelope)
+├── ironflow-sdk/        # Type-safe Rust SDK (generated types from OpenAPI + hand-written client)
+├── ironflow-cli/        # CLI tool (clap v4, consumes ironflow-sdk)
+├── ironflow-mcp/        # MCP server (consumes ironflow-sdk)
 ```
 
 ## Build & Test Commands
@@ -133,6 +142,18 @@ Agent and Shell use the builder pattern. Validation happens at build time via `a
 
 Claude Code system cache costs ~$0.04. Set `max_budget_usd` to at least `0.10` in examples and tests to avoid budget-exceeded errors.
 
+## SDK & CLI Propagation
+
+When a change touches the API surface (new route, modified response, new field), it must propagate through the full chain:
+
+1. **`ironflow-api`** -- add/modify the route and response entities
+2. **`openapi.json`** -- regenerate the OpenAPI spec (`cargo test -p ironflow-api` produces it, or extract from `/api/v1/openapi.json`)
+3. **`ironflow-sdk`** -- copy the updated `openapi.json` into `ironflow-sdk/openapi.json`. Types are auto-generated from it at build time via progenitor. If the new route needs an ergonomic client method, add it to `client.rs`.
+4. **`ironflow-cli`** -- if the change adds a new command or modifies output, update the corresponding `commands/*.rs` and `output.rs` (table columns, colors, etc.)
+5. **`ironflow-mcp`** -- if the change adds a new tool or modifies an existing one, update `ironflow-mcp/src/tools.rs`
+
+**Rule:** a PR that adds or changes an API route without updating SDK + CLI is incomplete.
+
 ## When Adding New Features
 
 Checklist for every PR:
@@ -143,3 +164,4 @@ Checklist for every PR:
 4. Run `cargo doc --no-deps` - zero warnings
 5. Run `cargo test` - all tests pass
 6. Update `plan.md` if a roadmap item is completed
+7. Propagate API changes to SDK, CLI, and MCP (see **SDK & CLI Propagation** above)
