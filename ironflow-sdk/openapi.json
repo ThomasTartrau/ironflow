@@ -1615,6 +1615,11 @@
             "description": "Workflow name.",
             "type": "string"
           },
+          "schedule": {
+            "description": "Optional 6-field cron expression for automatic execution.",
+            "nullable": true,
+            "type": "string"
+          },
           "source_code": {
             "description": "Optional Rust source code of the handler.",
             "nullable": true,
@@ -1650,6 +1655,11 @@
           },
           "name": {
             "description": "Workflow name (unique identifier).",
+            "type": "string"
+          },
+          "schedule": {
+            "description": "Optional 6-field cron expression for automatic execution.",
+            "nullable": true,
             "type": "string"
           },
           "version": {
