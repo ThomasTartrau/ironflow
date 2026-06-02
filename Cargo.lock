@@ -2373,9 +2373,15 @@ dependencies = [
 name = "ironflow-sdk"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.9",
  "chrono",
  "eventsource-stream",
  "futures-util",
+ "ironflow-api",
+ "ironflow-auth",
+ "ironflow-core",
+ "ironflow-engine",
+ "ironflow-store",
  "ironflow-types",
  "prettyplease",
  "progenitor",
