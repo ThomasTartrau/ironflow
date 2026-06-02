@@ -1,0 +1,41 @@
+[package]
+name = "ironflow-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "CLI tool to drive the Ironflow workflow engine"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "cli", "ironflow"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ironflow-cli"
+path = "src/main.rs"
+
+[dependencies]
+ironflow-sdk = { version = "0.1.0", path = "../ironflow-sdk" }
+ironflow-types = { version = "0.1.0", path = "../ironflow-types" }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+comfy-table = "7"
+toml = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+futures-util = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+ironflow-api = { path = "../ironflow-api" }
+ironflow-auth = { path = "../ironflow-auth" }
+ironflow-store = { path = "../ironflow-store" }
+ironflow-engine = { path = "../ironflow-engine" }
+ironflow-core = { path = "../ironflow-core" }
+axum = "0.8"

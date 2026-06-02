@@ -59,6 +59,18 @@ name = "ironflow-worker"
 [[package]]
 name = "ironflow-runtime"
 
+[[package]]
+name = "ironflow-types"
+
+[[package]]
+name = "ironflow-sdk"
+
+[[package]]
+name = "ironflow-cli"
+
+[[package]]
+name = "ironflow-mcp"
+
 # --- Excluded packages ---
 
 [[package]]
