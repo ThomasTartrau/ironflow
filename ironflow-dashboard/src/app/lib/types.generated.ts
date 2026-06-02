@@ -1808,7 +1808,9 @@ export interface operations {
 				headers: {
 					[name: string]: unknown;
 				};
-				content?: never;
+				content: {
+					"application/json": components["schemas"]["AuditLogEntry"][];
+				};
 			};
 			/** @description Unauthorized */
 			401: {
@@ -2020,7 +2022,9 @@ export interface operations {
 				headers: {
 					[name: string]: unknown;
 				};
-				content?: never;
+				content: {
+					"application/json": components["schemas"]["RunResponse"][];
+				};
 			};
 			/** @description Unauthorized */
 			401: {

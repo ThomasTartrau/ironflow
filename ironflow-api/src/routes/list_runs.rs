@@ -26,7 +26,7 @@ use crate::state::AppState;
         tags = ["runs"],
         params(ListRunsQuery),
         responses(
-            (status = 200, description = "List of runs with pagination"),
+            (status = 200, description = "List of runs with pagination", body = Vec<RunResponse>),
             (status = 401, description = "Unauthorized")
         ),
         security(("Bearer" = []))

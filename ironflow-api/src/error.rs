@@ -8,23 +8,11 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use ironflow_store::error::StoreError;
-use serde::Serialize;
+use ironflow_types::ErrorEnvelope;
 use serde_json::json;
 use thiserror::Error;
 use tracing::error;
 use uuid::Uuid;
-
-/// API error response envelope.
-///
-/// Serialized to JSON as: `{ "error": { "code": "...", "message": "..." } }`
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Serialize)]
-pub struct ErrorEnvelope {
-    /// Machine-readable error code (e.g., "RUN_NOT_FOUND").
-    pub code: String,
-    /// Human-readable error message.
-    pub message: String,
-}
 
 /// Error type for REST API operations.
 ///

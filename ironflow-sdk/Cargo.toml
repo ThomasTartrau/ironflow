@@ -1,0 +1,48 @@
+[package]
+name = "ironflow-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Type-safe Rust SDK for the Ironflow workflow engine API"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "sdk", "client", "ironflow", "api"]
+categories = ["api-bindings", "web-programming::http-client"]
+readme = "README.md"
+
+[features]
+default = ["rustls"]
+rustls = ["reqwest/rustls"]
+native-tls = ["reqwest/native-tls"]
+
+[dependencies]
+progenitor-client = "0.14"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1", features = ["serde-float"] }
+thiserror = "2"
+futures-util = "0.3"
+tokio = { version = "1", features = ["sync"] }
+ironflow-types = { version = "0.1.0", path = "../ironflow-types" }
+eventsource-stream = "0.2"
+
+[build-dependencies]
+progenitor = "0.14"
+serde_json = "1"
+prettyplease = "0.2"
+syn = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+axum = "0.8"
+ironflow-api = { path = "../ironflow-api" }
+ironflow-auth = { path = "../ironflow-auth" }
+ironflow-store = { path = "../ironflow-store" }
+ironflow-engine = { path = "../ironflow-engine" }
+ironflow-core = { path = "../ironflow-core" }
+uuid = { version = "1", features = ["v7"] }

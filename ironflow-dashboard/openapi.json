@@ -256,7 +256,17 @@
         ],
         "responses": {
           "200": {
-            "description": "List of audit log entries with pagination"
+            "description": "List of audit log entries with pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditLogEntry"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -509,7 +519,17 @@
         ],
         "responses": {
           "200": {
-            "description": "List of runs with pagination"
+            "description": "List of runs with pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunResponse"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -3251,6 +3271,13 @@
             "description": "Current handler version."
           }
         }
+      }
+    },
+    "securitySchemes": {
+      "Bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
       }
     }
   },
