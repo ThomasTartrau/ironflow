@@ -2336,7 +2336,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-api"
-version = "2.20.1"
+version = "2.20.2"
 dependencies = [
  "axum 0.8.9",
  "chrono",
@@ -2586,7 +2586,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-types"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
