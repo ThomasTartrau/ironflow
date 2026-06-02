@@ -7,7 +7,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::{AuditLogEntry, AuditLogFilter, EventKind};
+#[cfg(feature = "openapi")]
+use ironflow_store::entities::AuditLogEntry;
+use ironflow_store::entities::{AuditLogFilter, EventKind};
 
 use crate::error::ApiError;
 use crate::response::ok_paged;
