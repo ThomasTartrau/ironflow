@@ -27,7 +27,7 @@ rust_decimal = { version = "1", features = ["serde-float"] }
 thiserror = "2"
 futures-util = "0.3"
 tokio = { version = "1", features = ["sync"] }
-ironflow-types = { version = "0.1.0", path = "../ironflow-types" }
+ironflow-types = { version = "0.1.1", path = "../ironflow-types" }
 eventsource-stream = "0.2"
 
 [build-dependencies]
