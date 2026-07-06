@@ -387,10 +387,8 @@ impl K8sEphemeralProvider {
                 "prompt too large for CLI args, using ConfigMap + stdin pipe"
             );
 
-            let prompt_file =
-                format!("{PROMPT_MOUNT_PATH}/{PROMPT_CM_KEY}");
-            let claude_cmd =
-                claude_common::build_shell_command(&self.claude_path, &built.args);
+            let prompt_file = format!("{PROMPT_MOUNT_PATH}/{PROMPT_CM_KEY}");
+            let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
             let pipe_prefix = format!(
                 "cat {} | ",
                 claude_common::build_shell_command(&prompt_file, &[])
@@ -405,8 +403,7 @@ impl K8sEphemeralProvider {
                 (None, None) => format!("{creds_prefix}{pipe_prefix}{claude_cmd}"),
             }
         } else {
-            let claude_cmd =
-                claude_common::build_shell_command(&self.claude_path, &built.args);
+            let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
             match (&self.working_dir, &config.working_dir) {
                 (_, Some(dir)) | (Some(dir), None) => {
                     format!(

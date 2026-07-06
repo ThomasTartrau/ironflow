@@ -358,9 +358,7 @@ impl AgentProvider for K8sPersistentProvider {
                 stderr: format!("failed to exec in worker pod: {e}"),
             })?;
 
-            if let (Some(ref prompt), Some(mut stdin)) =
-                (&built.stdin_prompt, attached.stdin())
-            {
+            if let (Some(prompt), Some(mut stdin)) = (&built.stdin_prompt, attached.stdin()) {
                 use tokio::io::AsyncWriteExt;
                 stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
                     AgentError::ProcessFailed {

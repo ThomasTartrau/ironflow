@@ -241,7 +241,12 @@ impl AgentProvider for ClaudeCodeProvider {
                     let exit_code = output.status.code().unwrap_or(-1);
                     let stderr = truncate_output(&output.stderr, "claude stderr");
                     return common::handle_nonzero_exit(
-                        exit_code, &stdout, &stderr, config, duration_ms, "local",
+                        exit_code,
+                        &stdout,
+                        &stderr,
+                        config,
+                        duration_ms,
+                        "local",
                     );
                 }
 

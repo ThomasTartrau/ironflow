@@ -106,7 +106,7 @@ impl RunStore for InMemoryStore {
                 .collect();
 
             // Sort newest first.
-            runs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            runs.sort_by_key(|r| std::cmp::Reverse(r.created_at));
 
             let total = runs.len() as u64;
             let page = page.max(1);

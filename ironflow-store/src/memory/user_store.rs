@@ -69,7 +69,7 @@ impl UserStore for InMemoryStore {
         Box::pin(async move {
             let state = self.state.read().await;
             let mut users: Vec<User> = state.users.values().cloned().collect();
-            users.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            users.sort_by_key(|u| std::cmp::Reverse(u.created_at));
 
             let total = users.len() as u64;
             let offset = ((page.saturating_sub(1)) as usize) * (per_page as usize);

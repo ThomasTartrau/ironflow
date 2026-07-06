@@ -205,19 +205,21 @@ impl AgentProvider for DockerProvider {
                         mut input,
                     } => {
                         if let Some(ref prompt) = built.stdin_prompt {
-                            input
-                                .write_all(prompt.as_bytes())
-                                .await
-                                .map_err(|e| AgentError::ProcessFailed {
+                            input.write_all(prompt.as_bytes()).await.map_err(|e| {
+                                AgentError::ProcessFailed {
                                     exit_code: -1,
                                     stderr: format!(
                                         "failed to write prompt to docker exec stdin: {e}"
                                     ),
-                                })?;
-                            input.shutdown().await.map_err(|e| AgentError::ProcessFailed {
-                                exit_code: -1,
-                                stderr: format!("failed to close docker exec stdin: {e}"),
+                                }
                             })?;
+                            input
+                                .shutdown()
+                                .await
+                                .map_err(|e| AgentError::ProcessFailed {
+                                    exit_code: -1,
+                                    stderr: format!("failed to close docker exec stdin: {e}"),
+                                })?;
                         }
                         drop(input);
                         while let Some(result) = output.next().await {

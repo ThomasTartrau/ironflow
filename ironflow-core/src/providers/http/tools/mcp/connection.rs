@@ -45,7 +45,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum McpConnection {
     /// Stdio transport (subprocess).
     #[doc(hidden)]
-    Stdio(StdioTransport),
+    Stdio(Box<StdioTransport>),
     /// HTTP transport (POST-based JSON-RPC).
     #[doc(hidden)]
     Http(HttpTransport),
@@ -118,12 +118,12 @@ impl McpConnection {
             reason: "failed to capture stdout".to_string(),
         })?;
 
-        Ok(Self::Stdio(StdioTransport {
+        Ok(Self::Stdio(Box::new(StdioTransport {
             child,
             writer: Mutex::new(BufWriter::new(stdin)),
             reader: Mutex::new(BufReader::new(stdout)),
             next_id: AtomicU64::new(1),
-        }))
+        })))
     }
 
     /// Connect to an MCP server via HTTP (POST-based JSON-RPC).

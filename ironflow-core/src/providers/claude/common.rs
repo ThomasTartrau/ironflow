@@ -2076,7 +2076,7 @@ mod tests {
         let config = AgentConfig::new(&big)
             .model("claude-sonnet-4-20250514")
             .max_turns(5);
-        let built = build_command(&config.into()).unwrap();
+        let built = build_command(&config).unwrap();
         assert!(built.stdin_prompt.is_some());
         assert!(built.args.contains(&"--model".to_string()));
         assert!(built.args.contains(&"claude-sonnet-4-20250514".to_string()));

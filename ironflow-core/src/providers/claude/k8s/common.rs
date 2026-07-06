@@ -941,6 +941,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &inputs,
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
 
