@@ -199,6 +199,13 @@ pub struct PodConfig<'a> {
     ///
     /// Defaults to [`DEFAULT_INPUT_INIT_IMAGE`]. Ignored when `inputs` is empty.
     pub input_init_image: &'a str,
+    /// Name of a ConfigMap containing the prompt data, mounted as a volume.
+    ///
+    /// When `Some`, a volume is added that mounts the ConfigMap at
+    /// [`prompt_mount_path`](Self::prompt_mount_path).
+    pub prompt_configmap: Option<&'a str>,
+    /// Mount path for the prompt ConfigMap volume.
+    pub prompt_mount_path: &'a str,
 }
 
 /// Return the directory part of an absolute path (everything before the last `/`).
@@ -394,6 +401,18 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
     volumes_json.extend(input_volumes);
     main_mounts_json.extend(input_mounts);
 
+    if let Some(cm_name) = config.prompt_configmap {
+        volumes_json.push(json!({
+            "name": "ironflow-prompt",
+            "configMap": { "name": cm_name }
+        }));
+        main_mounts_json.push(json!({
+            "name": "ironflow-prompt",
+            "mountPath": config.prompt_mount_path,
+            "readOnly": true
+        }));
+    }
+
     if !volumes_json.is_empty() {
         pod_json["spec"]["volumes"] = json!(volumes_json);
     }
@@ -487,6 +506,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         assert!(pod.spec.unwrap().image_pull_secrets.is_none());
@@ -511,6 +532,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let pull_secrets = pod.spec.unwrap().image_pull_secrets.unwrap();
@@ -537,6 +560,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -565,6 +590,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -597,6 +624,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -631,6 +660,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -660,6 +691,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -690,6 +723,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -738,6 +773,8 @@ mod tests {
             pvc_volumes: &pvcs,
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -779,6 +816,8 @@ mod tests {
             pvc_volumes: &pvcs,
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -845,6 +884,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &inputs,
             input_init_image: "curlimages/curl:8.10.1",
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
 
@@ -900,6 +941,8 @@ mod tests {
             pvc_volumes: &[],
             inputs: &inputs,
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
 
@@ -937,8 +980,76 @@ mod tests {
             pvc_volumes: &[],
             inputs: &[],
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
         })
         .unwrap();
         assert!(pod.spec.unwrap().init_containers.is_none());
+    }
+
+    #[test]
+    fn build_pod_spec_with_prompt_configmap_mounts_volume() {
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &[],
+            pvc_volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: Some("my-pod-prompt"),
+            prompt_mount_path: "/mnt/ironflow-prompt",
+        })
+        .unwrap();
+
+        let spec = pod.spec.unwrap();
+        let volumes = spec.volumes.expect("volumes present");
+        assert!(volumes.iter().any(|v| v.name == "ironflow-prompt"));
+
+        let mounts = spec.containers[0]
+            .volume_mounts
+            .as_ref()
+            .expect("volume mounts present");
+        let prompt_mount = mounts
+            .iter()
+            .find(|m| m.name == "ironflow-prompt")
+            .expect("prompt mount present");
+        assert_eq!(prompt_mount.mount_path, "/mnt/ironflow-prompt");
+        assert_eq!(prompt_mount.read_only, Some(true));
+    }
+
+    #[test]
+    fn build_pod_spec_without_prompt_configmap_no_extra_volume() {
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            volumes: &[],
+            pvc_volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
+        })
+        .unwrap();
+
+        let spec = pod.spec.unwrap();
+        assert!(spec.volumes.is_none());
     }
 }

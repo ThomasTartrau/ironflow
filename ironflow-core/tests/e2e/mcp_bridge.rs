@@ -10,8 +10,8 @@ use std::time::Duration;
 use serde_json::json;
 use tokio::time::timeout;
 
+use ironflow_core::providers::http::tools::ToolRegistry;
 use ironflow_core::providers::http::tools::mcp::{McpConnection, McpError, register_mcp_tools};
-use ironflow_core::providers::http::tools::{Tool, ToolRegistry};
 
 const ECHO_MCP_SERVER: &str = r#"#!/bin/bash
 # Minimal MCP server that responds to initialize, tools/list, and tools/call

@@ -24,7 +24,7 @@ futures-util = "0.3"
 metrics = { version = "0.24", optional = true }
 
 # Transport: SSH
-russh = { version = "0.58", optional = true }
+russh = { version = "0.62", optional = true }
 
 # Transport: Docker
 bollard = { version = "0.20", optional = true }

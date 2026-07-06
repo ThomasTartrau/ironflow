@@ -124,7 +124,7 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
         let is_final = finish_reason == "stop" || finish_reason == "length";
 
         let structured_value = if config.json_schema.is_some() {
-            text.as_deref().and_then(|t| parse_json_content(t))
+            text.as_deref().and_then(parse_json_content)
         } else {
             None
         };
@@ -267,7 +267,7 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
         let is_final = tool_calls.is_empty();
 
         let structured_value = if config.json_schema.is_some() {
-            full_text.as_deref().and_then(|t| parse_json_content(t))
+            full_text.as_deref().and_then(parse_json_content)
         } else {
             None
         };

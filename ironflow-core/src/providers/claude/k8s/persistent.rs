@@ -275,6 +275,8 @@ impl K8sPersistentProvider {
                 pvc_volumes: &[],
                 inputs: &[],
                 input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+                prompt_configmap: None,
+                prompt_mount_path: "",
             })?;
 
             pods.create(&PostParams::default(), &pod_spec)
@@ -307,9 +309,9 @@ impl AgentProvider for K8sPersistentProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             claude_common::validate_prompt_size(config)?;
-            let args = claude_common::build_args(config)?;
+            let built = claude_common::build_command(config)?;
 
-            let claude_cmd = claude_common::build_shell_command(&self.claude_path, &args);
+            let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
             let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
             let full_cmd = match (&self.working_dir, &config.working_dir) {
                 (_, Some(dir)) | (Some(dir), None) => {
@@ -338,8 +340,10 @@ impl AgentProvider for K8sPersistentProvider {
             // Ensure pod is running
             self.ensure_pod_running(&pods).await?;
 
-            // Execute command via K8s exec API
-            let attach_params = AttachParams::default().stderr(true);
+            let mut attach_params = AttachParams::default().stderr(true);
+            if built.stdin_prompt.is_some() {
+                attach_params = attach_params.stdin(true);
+            }
 
             let mut attached = time::timeout(
                 Duration::from_secs(30),
@@ -354,7 +358,23 @@ impl AgentProvider for K8sPersistentProvider {
                 stderr: format!("failed to exec in worker pod: {e}"),
             })?;
 
-            // Take readers before the concurrent read to avoid double borrow
+            if let (Some(prompt), Some(mut stdin)) = (&built.stdin_prompt, attached.stdin()) {
+                use tokio::io::AsyncWriteExt;
+                stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
+                    AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: format!("failed to write prompt to K8s exec stdin: {e}"),
+                    }
+                })?;
+                stdin
+                    .shutdown()
+                    .await
+                    .map_err(|e| AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: format!("failed to close K8s exec stdin: {e}"),
+                    })?;
+            }
+
             let stdout_reader = attached.stdout();
             let stderr_reader = attached.stderr();
 
