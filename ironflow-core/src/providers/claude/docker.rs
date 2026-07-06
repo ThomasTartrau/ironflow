@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 use tokio::time;
 use tracing::{debug, warn};
 
@@ -135,10 +136,10 @@ impl AgentProvider for DockerProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             common::validate_prompt_size(config)?;
-            let args = common::build_args(config)?;
+            let built = common::build_command(config)?;
 
             let mut cmd: Vec<String> = vec![self.claude_path.clone()];
-            cmd.extend(args);
+            cmd.extend(built.args);
 
             let work_dir = config
                 .working_dir
@@ -163,12 +164,13 @@ impl AgentProvider for DockerProvider {
                 .map(|var| format!("{var}="))
                 .collect();
 
-            // Create exec instance
+            let needs_stdin = built.stdin_prompt.is_some();
+
             let exec_config = CreateExecOptions {
                 cmd: Some(cmd.iter().map(|s| s.as_str()).collect()),
                 attach_stdout: Some(true),
                 attach_stderr: Some(true),
-                attach_stdin: Some(false),
+                attach_stdin: Some(needs_stdin),
                 tty: Some(false),
                 working_dir: work_dir,
                 user: self.user.as_deref(),
@@ -198,7 +200,26 @@ impl AgentProvider for DockerProvider {
 
             let collect_result = time::timeout(self.timeout, async {
                 match start_result {
-                    StartExecResults::Attached { mut output, .. } => {
+                    StartExecResults::Attached {
+                        mut output,
+                        mut input,
+                    } => {
+                        if let Some(ref prompt) = built.stdin_prompt {
+                            input
+                                .write_all(prompt.as_bytes())
+                                .await
+                                .map_err(|e| AgentError::ProcessFailed {
+                                    exit_code: -1,
+                                    stderr: format!(
+                                        "failed to write prompt to docker exec stdin: {e}"
+                                    ),
+                                })?;
+                            input.shutdown().await.map_err(|e| AgentError::ProcessFailed {
+                                exit_code: -1,
+                                stderr: format!("failed to close docker exec stdin: {e}"),
+                            })?;
+                        }
+                        drop(input);
                         while let Some(result) = output.next().await {
                             match result {
                                 Ok(bollard::container::LogOutput::StdOut { message }) => {

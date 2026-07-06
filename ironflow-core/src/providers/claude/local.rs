@@ -32,6 +32,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time;
 use tracing::{debug, warn};
@@ -161,7 +162,7 @@ impl AgentProvider for ClaudeCodeProvider {
         Box::pin(async move {
             common::validate_prompt_size(config)?;
             materialize_inputs_local(&config.inputs).await?;
-            let args = common::build_args(config)?;
+            let built = common::build_command(config)?;
 
             debug!(
                 model = %config.model,
@@ -171,20 +172,23 @@ impl AgentProvider for ClaudeCodeProvider {
                 tools = ?config.allowed_tools,
                 permission_mode = ?config.permission_mode,
                 verbose = config.verbose,
-                arg_count = args.len(),
+                arg_count = built.args.len(),
+                prompt_via_stdin = built.stdin_prompt.is_some(),
                 "spawning claude process"
             );
 
             let start = Instant::now();
 
             let mut cmd = Command::new("claude");
-            cmd.args(&args)
+            cmd.args(&built.args)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
 
-            // Remove ALL inherited Claude Code env vars to prevent
-            // sub-agent mode interference (model override, entrypoint detection, etc.)
+            if built.stdin_prompt.is_some() {
+                cmd.stdin(Stdio::piped());
+            }
+
             for var in common::env_vars_to_remove() {
                 cmd.env_remove(&var);
             }
@@ -193,10 +197,57 @@ impl AgentProvider for ClaudeCodeProvider {
                 cmd.current_dir(dir);
             }
 
-            let child = cmd.spawn().map_err(|e| AgentError::ProcessFailed {
+            let mut child = cmd.spawn().map_err(|e| AgentError::ProcessFailed {
                 exit_code: -1,
                 stderr: format!("failed to spawn claude: {e}"),
             })?;
+
+            if let Some(ref prompt) = built.stdin_prompt {
+                let mut stdin = child.stdin.take().expect("stdin was piped");
+                let prompt_bytes = prompt.as_bytes().to_vec();
+                let write_fut = async move {
+                    stdin.write_all(&prompt_bytes).await?;
+                    stdin.shutdown().await?;
+                    Ok::<_, std::io::Error>(())
+                };
+                let wait_fut = child.wait_with_output();
+                let (write_result, wait_result) =
+                    match time::timeout(self.timeout, async { tokio::join!(write_fut, wait_fut) })
+                        .await
+                    {
+                        Ok(pair) => pair,
+                        Err(_) => {
+                            warn!(timeout = ?self.timeout, "claude process timed out");
+                            return Err(AgentError::Timeout {
+                                limit: self.timeout,
+                            });
+                        }
+                    };
+
+                write_result.map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to write prompt to stdin: {e}"),
+                })?;
+
+                let output = wait_result.map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to wait for claude: {e}"),
+                })?;
+
+                let duration_ms = start.elapsed().as_millis() as u64;
+                let stdout = truncate_output(&output.stdout, "claude stdout");
+
+                if !output.status.success() {
+                    let exit_code = output.status.code().unwrap_or(-1);
+                    let stderr = truncate_output(&output.stderr, "claude stderr");
+                    return common::handle_nonzero_exit(
+                        exit_code, &stdout, &stderr, config, duration_ms, "local",
+                    );
+                }
+
+                debug!(stdout_len = stdout.len(), "claude process completed");
+                return common::parse_output(&stdout, config, duration_ms);
+            }
 
             let output = match time::timeout(self.timeout, child.wait_with_output()).await {
                 Ok(result) => result.map_err(|e| AgentError::ProcessFailed {

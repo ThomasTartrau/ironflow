@@ -33,12 +33,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::{AsyncBufReadExt, TryStreamExt};
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{ConfigMap, Pod};
 use kube::api::{Api, DeleteParams, LogParams, PostParams};
 use kube::runtime::wait::await_condition;
+use serde_json::json;
 use tokio::time;
 
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
@@ -318,45 +319,114 @@ impl K8sEphemeralProvider {
     }
 }
 
+/// Path inside the container where the prompt ConfigMap is mounted.
+const PROMPT_MOUNT_PATH: &str = "/mnt/ironflow-prompt";
+
+/// Key used inside the ConfigMap for the prompt data.
+const PROMPT_CM_KEY: &str = "prompt";
+
 /// Shared context after pod creation: the pod API handle, pod name, and start time.
 struct CreatedPod {
     pods: Api<Pod>,
     pod_name: String,
     start: Instant,
+    prompt_configmap: Option<String>,
+    configmaps: Option<Api<ConfigMap>>,
 }
 
 impl K8sEphemeralProvider {
     /// Prepare config, create the K8s pod, and return handles for the wait phase.
     async fn create_pod(&self, config: &AgentConfig) -> Result<CreatedPod, AgentError> {
         claude_common::validate_prompt_size(config)?;
-        let args = claude_common::build_args(config)?;
-
-        let claude_cmd = claude_common::build_shell_command(&self.claude_path, &args);
-        let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
-        let full_cmd = match (&self.working_dir, &config.working_dir) {
-            (_, Some(dir)) | (Some(dir), None) => {
-                format!(
-                    "{creds_prefix}cd {} && {}",
-                    claude_common::build_shell_command(dir, &[]),
-                    claude_cmd
-                )
-            }
-            (None, None) => format!("{creds_prefix}{claude_cmd}"),
-        };
+        let built = claude_common::build_command(config)?;
 
         let pod_name = generate_pod_name("claude-code");
+        let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
+
+        let start = Instant::now();
+        let client = create_client(&self.cluster_config).await?;
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &self.namespace);
+
+        let mut prompt_configmap_name: Option<String> = None;
+        let configmaps: Api<ConfigMap> = Api::namespaced(client, &self.namespace);
+
+        let full_cmd = if let Some(ref prompt) = built.stdin_prompt {
+            let cm_name = format!("{pod_name}-prompt");
+            let cm: ConfigMap = serde_json::from_value(json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": &cm_name,
+                    "namespace": &self.namespace,
+                    "labels": {
+                        "app.kubernetes.io/managed-by": "ironflow",
+                        "app.kubernetes.io/component": "prompt-data"
+                    }
+                },
+                "data": {
+                    PROMPT_CM_KEY: prompt
+                }
+            }))
+            .map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to build prompt ConfigMap: {e}"),
+            })?;
+
+            configmaps
+                .create(&PostParams::default(), &cm)
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to create prompt ConfigMap: {e}"),
+                })?;
+            prompt_configmap_name = Some(cm_name);
+
+            info!(
+                pod = %pod_name,
+                prompt_bytes = prompt.len(),
+                "prompt too large for CLI args, using ConfigMap + stdin pipe"
+            );
+
+            let prompt_file =
+                format!("{PROMPT_MOUNT_PATH}/{PROMPT_CM_KEY}");
+            let claude_cmd =
+                claude_common::build_shell_command(&self.claude_path, &built.args);
+            let pipe_prefix = format!(
+                "cat {} | ",
+                claude_common::build_shell_command(&prompt_file, &[])
+            );
+            match (&self.working_dir, &config.working_dir) {
+                (_, Some(dir)) | (Some(dir), None) => {
+                    format!(
+                        "{creds_prefix}cd {} && {pipe_prefix}{claude_cmd}",
+                        claude_common::build_shell_command(dir, &[]),
+                    )
+                }
+                (None, None) => format!("{creds_prefix}{pipe_prefix}{claude_cmd}"),
+            }
+        } else {
+            let claude_cmd =
+                claude_common::build_shell_command(&self.claude_path, &built.args);
+            match (&self.working_dir, &config.working_dir) {
+                (_, Some(dir)) | (Some(dir), None) => {
+                    format!(
+                        "{creds_prefix}cd {} && {}",
+                        claude_common::build_shell_command(dir, &[]),
+                        claude_cmd
+                    )
+                }
+                (None, None) => format!("{creds_prefix}{claude_cmd}"),
+            }
+        };
 
         debug!(
             pod_name = %pod_name,
             namespace = %self.namespace,
             image = %self.image,
             model = %config.model,
+            prompt_via_configmap = prompt_configmap_name.is_some(),
             "creating ephemeral K8s pod"
         );
-
-        let start = Instant::now();
-        let client = create_client(&self.cluster_config).await?;
-        let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
 
         let mut merged_labels = self.pod_labels.clone();
         merged_labels.extend(config.pod_labels.clone());
@@ -377,6 +447,8 @@ impl K8sEphemeralProvider {
             pvc_volumes: &self.pvc_volumes,
             inputs: &config.inputs,
             input_init_image: &self.input_init_image,
+            prompt_configmap: prompt_configmap_name.as_deref(),
+            prompt_mount_path: PROMPT_MOUNT_PATH,
         })?;
 
         pods.create(&PostParams::default(), &pod_spec)
@@ -390,6 +462,8 @@ impl K8sEphemeralProvider {
             pods,
             pod_name,
             start,
+            prompt_configmap: prompt_configmap_name,
+            configmaps: Some(configmaps),
         })
     }
 
@@ -437,6 +511,8 @@ impl AgentProvider for K8sEphemeralProvider {
                 pods,
                 pod_name,
                 start,
+                prompt_configmap,
+                configmaps,
             } = &created;
 
             // Wait for pod to complete
@@ -469,6 +545,9 @@ impl AgentProvider for K8sEphemeralProvider {
                 .unwrap_or_default();
 
             let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+            }
 
             self.finalize_pod(&logs, &pod_phase, timed_out, pod_name, config, *start)
         })
@@ -494,6 +573,8 @@ impl AgentProvider for K8sEphemeralProvider {
                 pods,
                 pod_name,
                 start,
+                prompt_configmap,
+                configmaps,
             } = &created;
 
             let ready_result = time::timeout(
@@ -504,6 +585,9 @@ impl AgentProvider for K8sEphemeralProvider {
 
             if let Err(_elapsed) = ready_result {
                 let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+                if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+                    let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+                }
                 warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out waiting for Running");
                 return Err(AgentError::Timeout {
                     limit: self.timeout,
@@ -512,6 +596,9 @@ impl AgentProvider for K8sEphemeralProvider {
 
             if let Err(e) = ready_result.expect("timeout already handled") {
                 let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+                if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+                    let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+                }
                 return Err(AgentError::ProcessFailed {
                     exit_code: -1,
                     stderr: format!("failed waiting for pod to start: {e}"),
@@ -650,6 +737,9 @@ impl AgentProvider for K8sEphemeralProvider {
             };
 
             let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+            }
 
             self.finalize_pod(
                 &accumulated,

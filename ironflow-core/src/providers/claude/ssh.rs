@@ -287,12 +287,9 @@ impl AgentProvider for SshProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             common::validate_prompt_size(config)?;
-            let args = common::build_args(config)?;
+            let built = common::build_command(config)?;
 
-            // Build the remote command with shell escaping.
-            // Unset all CLAUDE* and IRONFLOW_ALLOW_BYPASS env vars to prevent
-            // sub-agent mode interference on the remote host.
-            let claude_cmd = common::build_shell_command(&self.claude_path, &args);
+            let claude_cmd = common::build_shell_command(&self.claude_path, &built.args);
             let env_prefix = common::env_unset_shell_prefix();
             let remote_cmd = match (&self.working_dir, &config.working_dir) {
                 (_, Some(dir)) | (Some(dir), None) => {
@@ -359,7 +356,17 @@ impl AgentProvider for SshProvider {
                     stderr: format!("failed to exec remote command: {e}"),
                 })?;
 
-            // Close stdin immediately (non-interactive)
+            if let Some(ref prompt) = built.stdin_prompt {
+                let cursor = std::io::Cursor::new(prompt.as_bytes());
+                channel
+                    .data(cursor)
+                    .await
+                    .map_err(|e| AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: format!("failed to write prompt to SSH stdin: {e}"),
+                    })?;
+            }
+
             channel.eof().await.map_err(|e| AgentError::ProcessFailed {
                 exit_code: -1,
                 stderr: format!("failed to send EOF on SSH channel: {e}"),

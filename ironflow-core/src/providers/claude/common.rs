@@ -20,6 +20,11 @@ use crate::utils::estimate_tokens;
 /// Default timeout for a single Claude CLI invocation (5 minutes).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Byte threshold above which the prompt is piped via stdin instead of
+/// passed as a `-p` CLI argument. This avoids the OS `ARG_MAX` limit
+/// (typically 256 KB on macOS, 2 MB on Linux) when reviewing large diffs.
+pub const PROMPT_STDIN_THRESHOLD: usize = 100_000;
+
 /// Maximum byte length for raw response data included in error diagnostics.
 const RAW_RESPONSE_MAX_LEN: usize = 4000;
 
@@ -252,6 +257,112 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     }
 
     Ok(args)
+}
+
+/// CLI arguments and an optional prompt payload for stdin piping.
+///
+/// When the prompt exceeds [`PROMPT_STDIN_THRESHOLD`], it is excluded from
+/// the argument list and placed in [`stdin_prompt`](Self::stdin_prompt)
+/// instead. Each transport provider is responsible for piping it to the
+/// `claude` process's stdin.
+#[derive(Debug)]
+pub struct BuiltCommand {
+    /// Arguments to pass after the `claude` binary name.
+    pub args: Vec<String>,
+    /// Prompt text that must be written to stdin. `None` when the prompt
+    /// is small enough to fit in the CLI arguments.
+    pub stdin_prompt: Option<String>,
+}
+
+/// Build CLI arguments, splitting the prompt to stdin when it is too large
+/// for the OS argument limit.
+///
+/// Providers should use this instead of [`build_args`] to handle large
+/// prompts gracefully.
+///
+/// # Errors
+///
+/// Returns [`AgentError::ProcessFailed`] if `BypassPermissions` is requested
+/// without the `IRONFLOW_ALLOW_BYPASS=1` environment variable.
+pub fn build_command(config: &AgentConfig) -> Result<BuiltCommand, AgentError> {
+    let prompt_via_stdin = config.prompt.len() > PROMPT_STDIN_THRESHOLD;
+
+    let output_format = if config.verbose {
+        "stream-json"
+    } else {
+        "json"
+    };
+
+    let mut args: Vec<String> = Vec::with_capacity(16);
+    if !prompt_via_stdin {
+        args.push("-p".to_string());
+        args.push(config.prompt.clone());
+    }
+    args.push("--output-format".to_string());
+    args.push(output_format.to_string());
+
+    if config.verbose {
+        args.push("--verbose".to_string());
+    }
+
+    push_opt(&mut args, "--system-prompt", &config.system_prompt);
+    push_flag(&mut args, "--model", &config.model);
+    if !config.allowed_tools.is_empty() {
+        push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
+    }
+    if !config.disallowed_tools.is_empty() {
+        push_flag(
+            &mut args,
+            "--disallowedTools",
+            &config.disallowed_tools.join(","),
+        );
+    }
+    push_opt(&mut args, "--max-turns", &config.max_turns);
+    push_opt(&mut args, "--max-budget-usd", &config.max_budget_usd);
+    push_opt(&mut args, "--mcp-config", &config.mcp_config);
+    if config.strict_mcp_config {
+        args.push("--strict-mcp-config".to_string());
+    }
+    if config.bare {
+        args.push("--bare".to_string());
+    }
+
+    match config.permission_mode {
+        PermissionMode::Default => {}
+        PermissionMode::Auto => push_flag(&mut args, "--permission-mode", "auto"),
+        PermissionMode::DontAsk => push_flag(&mut args, "--permission-mode", "dontAsk"),
+        PermissionMode::BypassPermissions => {
+            if env::var("IRONFLOW_ALLOW_BYPASS").as_deref() != Ok("1") {
+                return Err(AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr:
+                        "BypassPermissions requires IRONFLOW_ALLOW_BYPASS=1 environment variable"
+                            .to_string(),
+                });
+            }
+            warn!(
+                "using BypassPermissions: agent will have unrestricted filesystem and shell access"
+            );
+            args.push("--dangerously-skip-permissions".to_string());
+        }
+    }
+
+    let transformed_schema = config.json_schema.as_ref().map(|s| transform_schema(s));
+    push_opt(&mut args, "--json-schema", &transformed_schema);
+
+    if let Some(ref session_id) = config.resume_session_id {
+        args.push("--resume".to_string());
+        args.push(session_id.clone());
+    }
+
+    Ok(BuiltCommand {
+        args,
+        stdin_prompt: if prompt_via_stdin {
+            Some(config.prompt.clone())
+        } else {
+            None
+        },
+    })
 }
 
 /// Build a single shell command string from the `claude` binary path and arguments.
@@ -1929,5 +2040,47 @@ mod tests {
         let raw = raw.expect("should extract stringified JSON object");
         assert!(raw.contains("partial"));
         assert!(raw.contains("42"));
+    }
+
+    #[test]
+    fn build_command_small_prompt_uses_arg() {
+        let config = AgentConfig::new("hello world");
+        let built = build_command(&config).unwrap();
+        assert!(built.stdin_prompt.is_none());
+        assert_eq!(built.args[0], "-p");
+        assert_eq!(built.args[1], "hello world");
+    }
+
+    #[test]
+    fn build_command_large_prompt_uses_stdin() {
+        let big = "x".repeat(PROMPT_STDIN_THRESHOLD + 1);
+        let config = AgentConfig::new(&big);
+        let built = build_command(&config).unwrap();
+        assert!(built.stdin_prompt.is_some());
+        assert_eq!(built.stdin_prompt.as_ref().unwrap().len(), big.len());
+        assert!(!built.args.contains(&"-p".to_string()));
+    }
+
+    #[test]
+    fn build_command_exact_threshold_uses_arg() {
+        let exact = "y".repeat(PROMPT_STDIN_THRESHOLD);
+        let config = AgentConfig::new(&exact);
+        let built = build_command(&config).unwrap();
+        assert!(built.stdin_prompt.is_none());
+        assert_eq!(built.args[0], "-p");
+    }
+
+    #[test]
+    fn build_command_preserves_other_flags() {
+        let big = "z".repeat(PROMPT_STDIN_THRESHOLD + 1);
+        let config = AgentConfig::new(&big)
+            .model("claude-sonnet-4-20250514")
+            .max_turns(5);
+        let built = build_command(&config.into()).unwrap();
+        assert!(built.stdin_prompt.is_some());
+        assert!(built.args.contains(&"--model".to_string()));
+        assert!(built.args.contains(&"claude-sonnet-4-20250514".to_string()));
+        assert!(built.args.contains(&"--max-turns".to_string()));
+        assert!(built.args.contains(&"5".to_string()));
     }
 }
