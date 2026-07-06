@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.20.3](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.20.2...ironflow-core-v2.20.3) - 2026-07-06
+
+### Fixed
+
+- resolve clippy warnings and missing PodConfig fields
+
+- pipe prompt via stdin when it exceeds ARG_MAX threshold
+
 ## [2.20.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v2.20.1...ironflow-core-v2.20.2) - 2026-06-01
 
 ### Fixed
