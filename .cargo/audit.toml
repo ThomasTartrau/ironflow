@@ -7,7 +7,11 @@ ignore = [
     # No fixed version available
     "RUSTSEC-2026-0074",
 
-    # rsa 0.10.0-rc.12 (via russh) — Marvin Attack timing sidechannel
+    # rsa 0.10.0-rc.12 (via russh) -- Marvin Attack timing sidechannel
     # No fixed version available
     "RUSTSEC-2023-0071",
+
+    # proc-macro-error2 2.0.1 (via validator_derive) -- unmaintained
+    # validator 0.20 is the latest version, no alternative available
+    "RUSTSEC-2026-0173",
 ]
