@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-api"
-version = "2.20.3"
+version = "2.20.4"
 dependencies = [
  "axum 0.8.9",
  "chrono",
@@ -2554,7 +2554,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth"
-version = "2.3.9"
+version = "2.3.10"
 dependencies = [
  "argon2 0.5.3",
  "axum 0.8.9",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.16.1"
+version = "2.16.2"
 dependencies = [
  "axum 0.8.9",
  "chrono",
@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-store"
-version = "2.14.2"
+version = "2.14.3"
 dependencies = [
  "aes-gcm 0.10.3",
  "chrono",
@@ -2779,7 +2779,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.8.24"
+version = "2.8.25"
 dependencies = [
  "axum 0.7.9",
  "chrono",
