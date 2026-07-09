@@ -387,6 +387,7 @@ impl RunStore for PostgresStore {
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
                 WHERE ast.name = 'pending'
+                  AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
                 ORDER BY r.created_at ASC
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
