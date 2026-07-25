@@ -14,7 +14,15 @@ use crate::schema_transform::transform_schema;
 pub struct AnthropicModel;
 
 impl AnthropicModel {
-    /// Claude Opus 4.8 - most capable model, best for complex reasoning and agentic coding (1M context).
+    /// Claude Fable 5 - most capable widely released model (1M context).
+    pub const FABLE_5: &str = "claude-fable-5";
+    /// Claude Mythos 5 - Fable 5 capabilities, limited availability (Project Glasswing, 1M context).
+    pub const MYTHOS_5: &str = "claude-mythos-5";
+    /// Claude Opus 5 - flagship for complex agentic coding and enterprise work (1M context).
+    pub const OPUS_5: &str = "claude-opus-5";
+    /// Claude Sonnet 5 - best combination of speed and intelligence (1M context).
+    pub const SONNET_5: &str = "claude-sonnet-5";
+    /// Claude Opus 4.8 - previous Opus flagship (1M context).
     pub const OPUS_4_8: &str = "claude-opus-4-8";
     /// Claude Opus 4.7 - previous generation flagship (1M context).
     pub const OPUS_4_7: &str = "claude-opus-4-7";
@@ -44,7 +52,7 @@ impl AnthropicApiAdapter {
         Self {
             api_key,
             anthropic_version: "2023-06-01".to_string(),
-            default_model: AnthropicModel::SONNET_4_6.to_string(),
+            default_model: AnthropicModel::SONNET_5.to_string(),
         }
     }
 
@@ -333,8 +341,8 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
 
     fn resolve_model(&self, model: &str) -> String {
         match model {
-            m if m == Model::SONNET => AnthropicModel::SONNET_4_6.to_string(),
-            m if m == Model::OPUS => AnthropicModel::OPUS_4_8.to_string(),
+            m if m == Model::SONNET => AnthropicModel::SONNET_5.to_string(),
+            m if m == Model::OPUS => AnthropicModel::OPUS_5.to_string(),
             m if m == Model::HAIKU => AnthropicModel::HAIKU_4_5.to_string(),
             other => other.to_string(),
         }
@@ -376,7 +384,7 @@ mod tests {
         let config = AgentConfig::new("Hello");
         let body = a.build_request(&config).expect("build_request failed");
 
-        assert_eq!(body["model"], AnthropicModel::SONNET_4_6);
+        assert_eq!(body["model"], AnthropicModel::SONNET_5);
         assert_eq!(body["max_tokens"], 8192);
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["messages"][0]["content"], "Hello");
@@ -461,11 +469,13 @@ mod tests {
     #[test]
     fn resolve_model_aliases() {
         let a = adapter();
-        assert_eq!(a.resolve_model("sonnet"), AnthropicModel::SONNET_4_6);
-        assert_eq!(a.resolve_model("opus"), AnthropicModel::OPUS_4_8);
+        assert_eq!(a.resolve_model("sonnet"), AnthropicModel::SONNET_5);
+        assert_eq!(a.resolve_model("opus"), AnthropicModel::OPUS_5);
         assert_eq!(a.resolve_model("haiku"), AnthropicModel::HAIKU_4_5);
         assert_eq!(a.resolve_model("claude-opus-4-6"), "claude-opus-4-6");
         assert_eq!(a.resolve_model("claude-opus-4-8"), "claude-opus-4-8");
+        assert_eq!(a.resolve_model("claude-opus-5"), "claude-opus-5");
+        assert_eq!(a.resolve_model("claude-fable-5"), "claude-fable-5");
     }
 
     #[test]

@@ -111,10 +111,25 @@ impl Model {
 
     // ── Claude 4.8 - 1M context native ─────────────────────────────
 
-    /// Claude Opus 4.8 - latest flagship, 1M token context native.
+    /// Claude Opus 4.8 - previous Opus flagship, 1M token context native.
     pub const OPUS_48: &str = "claude-opus-4-8";
     /// Claude Opus 4.8 with 1M token context window explicit.
     pub const OPUS_48_1M: &str = "claude-opus-4-8[1m]";
+
+    // ── Claude 5 - 1M context native ───────────────────────────────
+
+    /// Claude Fable 5 - most capable widely released model, 1M token context native.
+    pub const FABLE_5: &str = "claude-fable-5";
+    /// Claude Mythos 5 - Fable 5 capabilities, limited availability (Project Glasswing).
+    pub const MYTHOS_5: &str = "claude-mythos-5";
+    /// Claude Opus 5 - current flagship for agentic coding, 1M token context native.
+    pub const OPUS_5: &str = "claude-opus-5";
+    /// Claude Opus 5 with 1M token context window explicit.
+    pub const OPUS_5_1M: &str = "claude-opus-5[1m]";
+    /// Claude Sonnet 5 - best speed/intelligence balance, 1M token context native.
+    pub const SONNET_5: &str = "claude-sonnet-5";
+    /// Claude Sonnet 5 with 1M token context window explicit.
+    pub const SONNET_5_1M: &str = "claude-sonnet-5[1m]";
 }
 
 /// Controls how the agent handles tool-use permission prompts.
@@ -899,6 +914,12 @@ mod tests {
         assert_eq!(Model::OPUS_47_1M, "claude-opus-4-7[1m]");
         assert_eq!(Model::OPUS_48, "claude-opus-4-8");
         assert_eq!(Model::OPUS_48_1M, "claude-opus-4-8[1m]");
+        assert_eq!(Model::FABLE_5, "claude-fable-5");
+        assert_eq!(Model::MYTHOS_5, "claude-mythos-5");
+        assert_eq!(Model::OPUS_5, "claude-opus-5");
+        assert_eq!(Model::OPUS_5_1M, "claude-opus-5[1m]");
+        assert_eq!(Model::SONNET_5, "claude-sonnet-5");
+        assert_eq!(Model::SONNET_5_1M, "claude-sonnet-5[1m]");
     }
 
     // --- Agent::new() defaults via ConfigCapture ---
