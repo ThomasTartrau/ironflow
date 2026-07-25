@@ -19,6 +19,7 @@ variables:
   IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"
   GIT_DEPTH: 0
   GIT_STRATEGY: clone
+  RELEASE_PLZ_VERSION: "0.3.160"
 
 .rust-cache: &rust-cache
   cache:
@@ -37,6 +38,15 @@ variables:
       - dashboard-${CI_DEFAULT_BRANCH}
     paths:
       - ironflow-dashboard/node_modules/
+
+# release-plz is installed as a prebuilt musl binary, not built from source:
+# its dependency tree (cargo crate) tracks the latest rustc and breaks on the
+# pinned toolchain image. The binary is self-contained and toolchain-independent.
+.install-release-plz: &install-release-plz
+  - mkdir -p "${CI_PROJECT_DIR}/.cargo/bin"
+  - curl -sSfL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C "${CI_PROJECT_DIR}/.cargo/bin" release-plz
+  - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
+  - release-plz --version
 
 .pnpm-install: &pnpm-install
   before_script:
@@ -185,8 +195,7 @@ release-plz-update:
   variables:
     GIT_DEPTH: 0
   before_script:
-    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
-    - cargo install release-plz --locked
+    - *install-release-plz
   script:
     - git config user.name "release-plz[bot]"
     - git config user.email "release-plz@users.noreply.gitlab.com"
@@ -224,8 +233,7 @@ release-plz-release:
   variables:
     GIT_DEPTH: 0
   before_script:
-    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
-    - cargo install release-plz --locked
+    - *install-release-plz
     - mkdir -p ironflow-api/dashboard
     - cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
   script:
