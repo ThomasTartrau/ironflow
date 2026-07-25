@@ -160,6 +160,35 @@ pub static ANTHROPIC_COSTS: LazyLock<CostTable> = LazyLock::new(|| {
 
     let entries = HashMap::from([
         (
+            AnthropicModel::FABLE_5,
+            CostEntry {
+                input_per_mtok: 10.00,
+                output_per_mtok: 50.00,
+            },
+        ),
+        (
+            AnthropicModel::MYTHOS_5,
+            CostEntry {
+                input_per_mtok: 10.00,
+                output_per_mtok: 50.00,
+            },
+        ),
+        (
+            AnthropicModel::OPUS_5,
+            CostEntry {
+                input_per_mtok: 5.00,
+                output_per_mtok: 25.00,
+            },
+        ),
+        // Standard rate; introductory pricing ($2 / $10) applies through 2026-08-31.
+        (
+            AnthropicModel::SONNET_5,
+            CostEntry {
+                input_per_mtok: 3.00,
+                output_per_mtok: 15.00,
+            },
+        ),
+        (
             AnthropicModel::OPUS_4_8,
             CostEntry {
                 input_per_mtok: 5.00,
