@@ -12,27 +12,64 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde_json::Value;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[cfg(feature = "prometheus")]
-use ironflow_core::metric_names::{RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL};
+use ironflow_core::metric_names::{
+    RUN_BUDGET_EXCEEDED_TOTAL, RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL,
+};
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, Run, RunStatus, RunUpdate, StepStatus, StepUpdate, TriggerKind,
+    NewRun, Run, RunFilter, RunStatus, RunUpdate, StepStatus, StepUpdate, TriggerKind,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge, histogram};
 
+use crate::budget::{BudgetConfig, month_start};
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
 use crate::notify::{Event, EventPublisher, EventSubscriber};
 use crate::schedule::CronSchedule;
+
+/// Optional settings for [`Engine::enqueue_handler_with_options`].
+///
+/// All fields fall back to handler or server defaults when left at their
+/// [`Default`] value.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::engine::EnqueueOptions;
+/// use rust_decimal::Decimal;
+///
+/// let options = EnqueueOptions {
+///     max_retries: 3,
+///     max_cost_usd: Some(Decimal::new(50, 2)),
+///     ..Default::default()
+/// };
+/// assert_eq!(options.max_retries, 3);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct EnqueueOptions {
+    /// Number of automatic retries granted to the run.
+    pub max_retries: u32,
+    /// Labels merged on top of the handler's default labels.
+    pub labels: HashMap<String, String>,
+    /// Defer execution until this instant instead of running as soon as a
+    /// worker picks the run up.
+    pub scheduled_at: Option<DateTime<Utc>>,
+    /// Cost cap for the run. Overrides both the handler default and the server
+    /// default. `None` falls back to
+    /// [`BudgetConfig::resolve_run_cap`](crate::budget::BudgetConfig::resolve_run_cap).
+    pub max_cost_usd: Option<Decimal>,
+}
 
 /// The workflow orchestration engine.
 ///
@@ -80,6 +117,7 @@ pub struct Engine {
     handlers: HashMap<String, Arc<dyn WorkflowHandler>>,
     event_publisher: EventPublisher,
     log_sender: Option<LogSender>,
+    budget: BudgetConfig,
 }
 
 /// Validate a workflow category path.
@@ -141,7 +179,38 @@ impl Engine {
             handlers: HashMap::new(),
             event_publisher: EventPublisher::new(),
             log_sender: None,
+            budget: BudgetConfig::new(),
         }
+    }
+
+    /// Apply cost guardrails to this engine.
+    ///
+    /// Without this, both the per-run cap default and the monthly quota are
+    /// disabled and the engine behaves exactly as before.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_engine::budget::BudgetConfig;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// )
+    /// .with_budget_config(BudgetConfig::from_env());
+    /// ```
+    pub fn with_budget_config(mut self, budget: BudgetConfig) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// Returns the cost guardrails applied by this engine.
+    pub fn budget_config(&self) -> &BudgetConfig {
+        &self.budget
     }
 
     /// Attach a log sender for real-time step output streaming.
@@ -164,7 +233,10 @@ impl Engine {
     }
 
     /// Build a [`WorkflowContext`] with access to the handler registry.
-    fn build_context(&self, run_id: Uuid) -> WorkflowContext {
+    ///
+    /// `max_cost_usd` is the run's persisted cost cap; `None` disables the
+    /// per-run budget check for that context.
+    fn build_context(&self, run_id: Uuid, max_cost_usd: Option<Decimal>) -> WorkflowContext {
         let handlers = self.handlers.clone();
         let resolver: crate::context::HandlerResolver =
             Arc::new(move |name: &str| handlers.get(name).cloned());
@@ -174,10 +246,59 @@ impl Engine {
             self.provider.clone(),
             resolver,
         );
+        ctx.set_max_cost_usd(max_cost_usd);
         if let Some(ref sender) = self.log_sender {
             ctx.set_log_sender(sender.clone());
         }
         ctx
+    }
+
+    /// Reject the creation of a new run when the monthly quota is exhausted.
+    ///
+    /// The window is the current calendar month in UTC. Runs already in flight
+    /// are never interrupted -- only creation is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::MonthlyBudgetExceeded`] when the accumulated cost
+    /// of the month has reached the configured quota. Returns
+    /// [`EngineError::Store`] when the aggregate query fails.
+    async fn check_monthly_quota(&self, workflow_name: &str) -> Result<(), EngineError> {
+        let Some(limit) = self.budget.monthly_cost_limit_usd else {
+            return Ok(());
+        };
+
+        let stats = self
+            .store
+            .get_stats(RunFilter {
+                created_after: Some(month_start(Utc::now())),
+                ..RunFilter::default()
+            })
+            .await?;
+
+        if stats.total_cost_usd < limit {
+            return Ok(());
+        }
+
+        warn!(
+            workflow = %workflow_name,
+            limit_usd = %limit,
+            spent_usd = %stats.total_cost_usd,
+            "monthly cost quota exhausted, refusing new run"
+        );
+
+        #[cfg(feature = "prometheus")]
+        counter!(
+            RUN_BUDGET_EXCEEDED_TOTAL,
+            "workflow" => workflow_name.to_string(),
+            "scope" => "monthly",
+        )
+        .increment(1);
+
+        Err(EngineError::MonthlyBudgetExceeded {
+            limit_usd: limit,
+            spent_usd: stats.total_cost_usd,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -388,7 +509,12 @@ impl Engine {
             })?
             .clone();
 
+        self.check_monthly_quota(handler_name).await?;
+
         let handler_version = handler.version().map(str::to_string);
+        let max_cost_usd = self
+            .budget
+            .resolve_run_cap(None, handler.default_max_cost_usd());
         let run = self
             .store
             .create_run(NewRun {
@@ -399,6 +525,7 @@ impl Engine {
                 handler_version,
                 labels: handler.default_labels(),
                 scheduled_at: None,
+                max_cost_usd,
             })
             .await?;
 
@@ -413,7 +540,7 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => handler_name.to_string()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(run_id);
+        let mut ctx = self.build_context(run_id, run.max_cost_usd);
 
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, handler_name, result, &ctx, run_start)
@@ -428,6 +555,8 @@ impl Engine {
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered.
+    /// Returns [`EngineError::MonthlyBudgetExceeded`] if the monthly cost quota
+    /// is exhausted.
     #[tracing::instrument(name = "engine.enqueue_handler", skip_all, fields(workflow = %handler_name))]
     pub async fn enqueue_handler(
         &self,
@@ -440,35 +569,51 @@ impl Engine {
             handler_name,
             trigger,
             payload,
-            max_retries,
-            HashMap::new(),
-            None,
+            EnqueueOptions {
+                max_retries,
+                ..Default::default()
+            },
         )
         .await
     }
 
-    /// Enqueue a handler-based workflow with labels and optional deferred scheduling.
+    /// Enqueue a handler-based workflow with labels, deferred scheduling, and
+    /// an optional cost cap.
+    ///
+    /// See [`EnqueueOptions`] for the individual settings.
     ///
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered.
+    /// Returns [`EngineError::MonthlyBudgetExceeded`] if the monthly cost quota
+    /// is exhausted.
     #[tracing::instrument(name = "engine.enqueue_handler_with_options", skip_all, fields(workflow = %handler_name))]
     pub async fn enqueue_handler_with_options(
         &self,
         handler_name: &str,
         trigger: TriggerKind,
         payload: Value,
-        max_retries: u32,
-        labels: HashMap<String, String>,
-        scheduled_at: Option<DateTime<Utc>>,
+        options: EnqueueOptions,
     ) -> Result<Run, EngineError> {
+        let EnqueueOptions {
+            max_retries,
+            labels,
+            scheduled_at,
+            max_cost_usd,
+        } = options;
+
         let handler = self.handlers.get(handler_name).ok_or_else(|| {
             EngineError::InvalidWorkflow(format!("no handler registered: {handler_name}"))
         })?;
 
+        self.check_monthly_quota(handler_name).await?;
+
         let handler_version = handler.version().map(str::to_string);
         let mut merged_labels = handler.default_labels();
         merged_labels.extend(labels);
+        let resolved_cap = self
+            .budget
+            .resolve_run_cap(max_cost_usd, handler.default_max_cost_usd());
 
         let run = self
             .store
@@ -480,10 +625,16 @@ impl Engine {
                 handler_version,
                 labels: merged_labels,
                 scheduled_at,
+                max_cost_usd: resolved_cap,
             })
             .await?;
 
-        info!(run_id = %run.id, workflow = %handler_name, "handler run enqueued");
+        info!(
+            run_id = %run.id,
+            workflow = %handler_name,
+            max_cost_usd = ?resolved_cap,
+            "handler run enqueued"
+        );
         Ok(run)
     }
 
@@ -518,7 +669,7 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => run.workflow_name.clone()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(run_id);
+        let mut ctx = self.build_context(run_id, run.max_cost_usd);
 
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
@@ -572,7 +723,7 @@ impl Engine {
         info!(run_id = %run_id, workflow = %run.workflow_name, "resuming run after approval");
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(run_id);
+        let mut ctx = self.build_context(run_id, run.max_cost_usd);
         ctx.load_replay_steps().await?;
 
         let result = handler.execute(&mut ctx).await;
@@ -724,13 +875,21 @@ impl Engine {
                 );
             }
             Err(err) => {
-                final_status = RunStatus::Failed;
+                // A budget refusal is a deliberate guardrail stop, not a
+                // breakage: the run is cancelled, never failed.
+                let budget_exceeded = matches!(err, EngineError::RunBudgetExceeded { .. });
+                final_status = if budget_exceeded {
+                    RunStatus::Cancelled
+                } else {
+                    RunStatus::Failed
+                };
+
                 if let Err(store_err) = self
                     .store
                     .update_run(
                         run_id,
                         RunUpdate {
-                            status: Some(RunStatus::Failed),
+                            status: Some(final_status),
                             error: Some(err.to_string()),
                             cost_usd: Some(ctx.total_cost_usd()),
                             duration_ms: Some(total_duration),
@@ -743,7 +902,11 @@ impl Engine {
                     error!(run_id = %run_id, store_error = %store_err, "failed to persist run failure");
                 }
 
-                error!(run_id = %run_id, error = %err, "run failed");
+                if budget_exceeded {
+                    self.on_run_budget_exceeded(workflow_name, run_id, &err);
+                }
+
+                error!(run_id = %run_id, status = %final_status, error = %err, "run stopped");
 
                 self.publish_run_status_changed(
                     workflow_name,
@@ -798,6 +961,40 @@ impl Engine {
                 .unwrap_or(0.0),
         );
         gauge!(RUNS_ACTIVE, "workflow" => wf).decrement(1.0);
+    }
+
+    /// Record the metric and publish the audit event for a run that hit its
+    /// cost cap.
+    ///
+    /// A non-[`RunBudgetExceeded`](EngineError::RunBudgetExceeded) error is
+    /// ignored, so callers can pass the error unconditionally.
+    fn on_run_budget_exceeded(&self, workflow_name: &str, run_id: Uuid, err: &EngineError) {
+        let EngineError::RunBudgetExceeded {
+            limit_usd,
+            spent_usd,
+            step_budget_usd,
+            ..
+        } = err
+        else {
+            return;
+        };
+
+        #[cfg(feature = "prometheus")]
+        counter!(
+            RUN_BUDGET_EXCEEDED_TOTAL,
+            "workflow" => workflow_name.to_string(),
+            "scope" => "run",
+        )
+        .increment(1);
+
+        self.event_publisher.publish(Event::RunBudgetExceeded {
+            run_id,
+            workflow_name: workflow_name.to_string(),
+            limit_usd: *limit_usd,
+            spent_usd: *spent_usd,
+            step_budget_usd: *step_budget_usd,
+            at: Utc::now(),
+        });
     }
 
     /// Publish a run status changed event to all registered subscribers.
@@ -878,6 +1075,7 @@ mod tests {
                 input_schema: None,
                 default_labels: HashMap::new(),
                 schedule: self.schedule().cloned(),
+                default_max_cost_usd: self.default_max_cost_usd(),
             }
         }
 
@@ -1634,6 +1832,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1671,6 +1870,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1708,6 +1908,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1745,6 +1946,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1790,6 +1992,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1844,6 +2047,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1865,6 +2069,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();

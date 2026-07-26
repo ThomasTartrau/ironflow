@@ -80,6 +80,7 @@ impl RunStore for InMemoryStore {
                 handler_version: req.handler_version,
                 labels: req.labels,
                 scheduled_at: req.scheduled_at,
+                max_cost_usd: req.max_cost_usd,
             };
 
             let mut state = self.state.write().await;
@@ -1477,6 +1478,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1492,6 +1494,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1507,6 +1510,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1520,6 +1524,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -1535,6 +1540,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();

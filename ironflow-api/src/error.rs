@@ -7,6 +7,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use ironflow_engine::error::MONTHLY_BUDGET_EXCEEDED_CODE;
 use ironflow_store::error::StoreError;
 use ironflow_types::ErrorEnvelope;
 use serde_json::json;
@@ -81,6 +82,12 @@ pub enum ApiError {
     #[error("insufficient scope")]
     InsufficientScope,
 
+    /// The global monthly cost quota is exhausted (429).
+    ///
+    /// Only blocks the creation of new runs; runs already in flight continue.
+    #[error("{0}")]
+    MonthlyBudgetExceeded(String),
+
     /// Store operation failed (500).
     #[error("database error")]
     Store(#[from] StoreError),
@@ -107,6 +114,7 @@ impl ApiError {
             ApiError::SecretNotFound(_) => "SECRET_NOT_FOUND",
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
+            ApiError::MonthlyBudgetExceeded(_) => MONTHLY_BUDGET_EXCEEDED_CODE,
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
@@ -129,6 +137,7 @@ impl ApiError {
             ApiError::UserNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::InsufficientScope => StatusCode::FORBIDDEN,
+            ApiError::MonthlyBudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -260,5 +269,13 @@ mod tests {
         let err = ApiError::SecretNotFound("demo/api-key".to_string());
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         assert_eq!(err.code(), "SECRET_NOT_FOUND");
+    }
+
+    #[test]
+    fn monthly_budget_exceeded_status_and_code() {
+        let err = ApiError::MonthlyBudgetExceeded("quota exhausted".to_string());
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.code(), "MONTHLY_BUDGET_EXCEEDED");
+        assert_eq!(err.to_string(), "quota exhausted");
     }
 }

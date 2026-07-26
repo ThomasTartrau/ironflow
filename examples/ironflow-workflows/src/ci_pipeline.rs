@@ -29,6 +29,7 @@ impl WorkflowHandler for CiPipeline {
             input_schema: None,
             default_labels: HashMap::new(),
             schedule: None,
+            default_max_cost_usd: None,
         }
     }
 
