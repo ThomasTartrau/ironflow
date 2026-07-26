@@ -1,0 +1,39 @@
+[package]
+name = "ironflow-readme-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+doctest = true
+
+[dependencies]
+ironflow-core = { path = "../../ironflow-core", features = [
+    "prometheus",
+    "transport-ssh",
+    "transport-docker",
+    "transport-k8s",
+    "provider-anthropic-api",
+    "provider-openai",
+    "provider-gemini",
+    "provider-mistral",
+    "provider-nvidia",
+    "tool-bash",
+    "tool-mcp",
+    "tool-read-file",
+    "tool-web-fetch",
+    "tool-web-search",
+] }
+ironflow-runtime = { path = "../../ironflow-runtime" }
+ironflow-engine = { path = "../../ironflow-engine" }
+ironflow-store = { path = "../../ironflow-store", features = [
+    "store-postgres",
+    "secret-store",
+] }
+ironflow-sdk = { path = "../../ironflow-sdk" }
+
+schemars = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4"] }

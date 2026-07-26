@@ -2700,6 +2700,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-readme-tests"
+version = "0.1.0"
+dependencies = [
+ "ironflow-core",
+ "ironflow-engine",
+ "ironflow-runtime",
+ "ironflow-sdk",
+ "ironflow-store",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "ironflow-runtime"
 version = "2.1.32"
 dependencies = [
