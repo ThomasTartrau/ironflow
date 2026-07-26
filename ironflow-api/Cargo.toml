@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.20.5"
+version = "2.20.6"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -19,11 +19,11 @@ prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometh
 openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi", "ironflow-types/openapi"]
 
 [dependencies]
-ironflow-store = { version = "2.14.3", path = "../ironflow-store" }
+ironflow-store = { version = "2.14.4", path = "../ironflow-store" }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
-ironflow-engine = { version = "2.16.3", path = "../ironflow-engine" }
+ironflow-engine = { version = "2.16.4", path = "../ironflow-engine" }
 ironflow-core = { version = "3.0.0", path = "../ironflow-core" }
-ironflow-auth = { version = "2.3.10", path = "../ironflow-auth" }
+ironflow-auth = { version = "2.3.11", path = "../ironflow-auth" }
 ironflow-types = { version = "0.1.2", path = "../ironflow-types" }
 
 axum = { version = "0.8", features = ["json"] }
@@ -52,6 +52,6 @@ metrics-exporter-prometheus = { version = "0.18", optional = true, default-featu
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-ironflow-store = { version = "2.14.3", path = "../ironflow-store", features = ["store-memory", "secret-store"] }
+ironflow-store = { version = "2.14.4", path = "../ironflow-store", features = ["store-memory", "secret-store"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
