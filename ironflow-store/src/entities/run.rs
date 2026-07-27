@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{FsmState, RunStatus, TriggerKind};
+use super::{FsmState, RunActor, RunStatus, TriggerKind};
 
 /// A workflow execution record.
 ///
@@ -62,6 +62,18 @@ pub struct Run {
     /// When the run should start executing. `None` means immediately.
     #[serde(default)]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// The authenticated principal that created this run.
+    ///
+    /// `None` for cron, webhook, and programmatic triggers.
+    #[serde(default)]
+    pub created_by: Option<RunActor>,
+    /// Human-readable label for [`Run::created_by`].
+    ///
+    /// Read-only projection resolved at read time from the referenced user and
+    /// API key — never written by [`crate::store::RunStore::create_run`]. `None`
+    /// when there is no actor, or when the referenced user or key no longer exists.
+    #[serde(default)]
+    pub created_by_label: Option<String>,
     /// Client-supplied idempotency key that produced this run, if any.
     ///
     /// See [`IDEMPOTENCY_WINDOW`] for how long a key stays bound to its run.
@@ -124,6 +136,7 @@ pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 ///     handler_version: None,
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
+///     created_by: None,
 ///     idempotency_key: Some("deploy-2026-07-26".to_string()),
 ///     max_cost_usd: None,
 /// };
@@ -208,6 +221,7 @@ impl RunCreation {
 ///     handler_version: None,
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
+///     created_by: None,
 ///     idempotency_key: None,
 ///     max_cost_usd: None,
 /// };
@@ -230,6 +244,12 @@ pub struct NewRun {
     /// When the run should start executing. `None` means immediately.
     #[serde(default)]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// The authenticated principal creating this run.
+    ///
+    /// Defaults to `None` when absent from the payload, so an older worker that
+    /// does not send the field keeps working against a newer API.
+    #[serde(default)]
+    pub created_by: Option<RunActor>,
     /// Optional idempotency key binding this request to a single run.
     ///
     /// When set and already bound to a run created within [`IDEMPOTENCY_WINDOW`],
@@ -272,6 +292,9 @@ pub struct RunFilter {
     pub has_steps: Option<bool>,
     /// Filter by label key-value pair. Only include runs that have ALL specified labels.
     pub labels: Option<HashMap<String, String>>,
+    /// Filter by author. Matches runs created by this user directly, and runs
+    /// created by one of this user's API keys.
+    pub created_by_user_id: Option<Uuid>,
 }
 
 /// Partial update for a run.
@@ -317,6 +340,7 @@ mod tests {
     #[test]
     fn newrun_serde_roundtrip() {
         let new_run = NewRun {
+            created_by: None,
             workflow_name: "deploy".to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({"key": "value"}),
@@ -338,7 +362,47 @@ mod tests {
         assert_eq!(back.handler_version, new_run.handler_version);
         assert_eq!(back.labels, new_run.labels);
         assert_eq!(back.scheduled_at, new_run.scheduled_at);
+        assert_eq!(back.created_by, new_run.created_by);
         assert_eq!(back.idempotency_key, new_run.idempotency_key);
+    }
+
+    #[test]
+    fn newrun_serde_roundtrip_with_actor() {
+        let actor = RunActor::ApiKey {
+            api_key_id: Uuid::now_v7(),
+            user_id: Uuid::now_v7(),
+        };
+        let new_run = NewRun {
+            workflow_name: "deploy".to_string(),
+            trigger: TriggerKind::Api,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by: Some(actor.clone()),
+            idempotency_key: None,
+            max_cost_usd: None,
+        };
+
+        let json = serde_json::to_string(&new_run).expect("serialize");
+        let back: NewRun = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.created_by, Some(actor));
+    }
+
+    #[test]
+    fn newrun_deserializes_without_created_by() {
+        // An older worker POSTs a payload with no `created_by` field.
+        let raw = json!({
+            "workflow_name": "deploy",
+            "trigger": {"kind": "workflow"},
+            "payload": {},
+            "max_retries": 0,
+            "handler_version": null,
+        });
+
+        let new_run: NewRun = serde_json::from_value(raw).expect("deserialize");
+        assert!(new_run.created_by.is_none());
     }
 
     #[test]
@@ -371,6 +435,10 @@ mod tests {
                 ("team".to_string(), "platform".to_string()),
             ]),
             scheduled_at: Some(now),
+            created_by: Some(RunActor::User {
+                user_id: Uuid::now_v7(),
+            }),
+            created_by_label: Some("alice".to_string()),
             idempotency_key: Some("gh:abc-123".to_string()),
             max_cost_usd: Some(Decimal::new(500, 2)),
         };
@@ -393,6 +461,8 @@ mod tests {
         assert_eq!(back.handler_version, run.handler_version);
         assert_eq!(back.labels, run.labels);
         assert_eq!(back.scheduled_at, run.scheduled_at);
+        assert_eq!(back.created_by, run.created_by);
+        assert_eq!(back.created_by_label, run.created_by_label);
         assert_eq!(back.idempotency_key, run.idempotency_key);
         assert_eq!(back.max_cost_usd, run.max_cost_usd);
     }
@@ -407,6 +477,7 @@ mod tests {
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            created_by: None,
             idempotency_key: None,
             max_cost_usd: None,
         };
@@ -451,6 +522,7 @@ mod tests {
         assert!(filter.status.is_none());
         assert!(filter.created_after.is_none());
         assert!(filter.created_before.is_none());
+        assert!(filter.created_by_user_id.is_none());
     }
 
     #[test]

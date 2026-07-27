@@ -53,6 +53,7 @@ fn engine_with(store: Arc<InMemoryStore>) -> Engine {
 async fn enqueue(store: &InMemoryStore, workflow: &str, max_retries: u32) -> uuid::Uuid {
     store
         .create_run(NewRun {
+            created_by: None,
             workflow_name: workflow.to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),

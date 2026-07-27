@@ -210,6 +210,7 @@ mod tests {
     ) -> ironflow_store::models::Run {
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -268,6 +269,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -355,6 +357,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -465,6 +468,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),

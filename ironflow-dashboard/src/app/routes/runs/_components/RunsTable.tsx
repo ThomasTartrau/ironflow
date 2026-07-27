@@ -2,6 +2,7 @@ import { useNavigate } from "react-router";
 import type { RunResponse } from "@/app/lib/types";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TriggerBadge } from "@/app/components/TriggerBadge";
+import { CreatedByBadge } from "@/app/components/CreatedByBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { RunLabels } from "@/app/components/RunLabels";
 import { formatDuration, formatCost } from "@/app/lib/format";
@@ -51,7 +52,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 						<TableHead className="w-28">Status</TableHead>
 						<TableHead>Workflow</TableHead>
 						{hasVersions && <TableHead className="w-20">Version</TableHead>}
-						<TableHead className="w-32">Trigger</TableHead>
+						<TableHead className="w-40">Triggered by</TableHead>
 						<TableHead className="w-36">Labels</TableHead>
 						<TableHead className="w-24">Duration</TableHead>
 						<TableHead className="w-20">Cost</TableHead>
@@ -86,7 +87,12 @@ export function RunsTable({ runs }: RunsTableProps) {
 								</TableCell>
 							)}
 							<TableCell>
-								<TriggerBadge trigger={run.trigger} />
+								<div className="flex flex-col gap-0.5 min-w-0">
+									<TriggerBadge trigger={run.trigger} />
+									{run.created_by.kind !== "system" && (
+										<CreatedByBadge createdBy={run.created_by} />
+									)}
+								</div>
 							</TableCell>
 							<TableCell>
 								<RunLabels labels={run.labels} />

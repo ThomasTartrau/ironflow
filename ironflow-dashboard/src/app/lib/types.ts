@@ -12,6 +12,7 @@ export type RunStatus = components["schemas"]["RunStatus"];
 export type StepStatus = components["schemas"]["StepStatus"];
 export type ApiKeyScope = components["schemas"]["ApiKeyScope"];
 export type TriggerKind = components["schemas"]["TriggerKind"];
+export type CreatedByKind = components["schemas"]["CreatedByKind"];
 
 // StepKind is a plain string in the OpenAPI spec (built-in + custom values)
 export type StepKind = string;
@@ -24,6 +25,7 @@ export type EventPayload<K extends EventKind> = Extract<Event, { type: K }>;
 
 // -- Run --
 export type RunResponse = components["schemas"]["RunResponse"];
+export type CreatedBy = components["schemas"]["CreatedBy"];
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
 export type CreateRunRequest = components["schemas"]["CreateRunRequest"];
 

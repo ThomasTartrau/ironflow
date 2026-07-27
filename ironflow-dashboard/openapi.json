@@ -433,7 +433,7 @@
           "runs"
         ],
         "summary": "List runs with optional filtering and pagination.",
-        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
+        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
         "operationId": "list_runs",
         "parameters": [
           {
@@ -486,6 +486,19 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "name": "created_by",
+            "in": "query",
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
             }
           },
           {
@@ -1097,7 +1110,7 @@
           "stats"
         ],
         "summary": "Get aggregate statistics across runs matching the filter.",
-        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.",
+        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and\n`per_page` are ignored.",
         "operationId": "get_stats",
         "parameters": [
           {
@@ -1150,6 +1163,19 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "name": "created_by",
+            "in": "query",
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
             }
           },
           {
@@ -1823,6 +1849,41 @@
           }
         }
       },
+      "CreatedBy": {
+        "type": "object",
+        "description": "The author of a run, as exposed by the API.\n\nAlways present on a [`RunResponse`](crate::entities::RunResponse): a run with\nno recorded author (including every run created before authorship tracking)\nreports [`CreatedByKind::System`] with a label derived from its trigger, so\nclients never have to handle a missing value.\n\n# Examples\n\n```\nuse ironflow_api::entities::{CreatedBy, CreatedByKind};\n\n// Built from a Run via `CreatedBy::from(&run)`.\nlet system = CreatedBy {\n    kind: CreatedByKind::System,\n    id: None,\n    label: \"manual\".to_string(),\n};\nassert_eq!(system.id, None);\n```",
+        "required": [
+          "kind",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Identifier of the principal: the user ID, the API key ID, or `None` for\n[`CreatedByKind::System`]."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CreatedByKind",
+            "description": "What kind of principal triggered the run."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable label. Never empty.\n\nThe username for a user, `\"key-name (username)\"` for an API key, and the\ntrigger description for a system run."
+          }
+        }
+      },
+      "CreatedByKind": {
+        "type": "string",
+        "description": "What kind of principal triggered a run.",
+        "enum": [
+          "user",
+          "api_key",
+          "system"
+        ]
+      },
       "Event": {
         "oneOf": [
           {
@@ -2451,6 +2512,14 @@
         "type": "object",
         "description": "Query parameters for listing runs.",
         "properties": {
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys."
+          },
           "has_steps": {
             "type": [
               "boolean",
@@ -2623,7 +2692,8 @@
           "cost_usd",
           "duration_ms",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "created_by"
         ],
         "properties": {
           "completed_at": {
@@ -2643,6 +2713,10 @@
             "type": "string",
             "format": "date-time",
             "description": "When created."
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/CreatedBy",
+            "description": "Who triggered the run. Always present."
           },
           "duration_ms": {
             "type": "integer",

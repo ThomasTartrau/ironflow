@@ -46,6 +46,7 @@ fn new_run(name: &str, key: Option<String>) -> NewRun {
         handler_version: None,
         labels: HashMap::new(),
         scheduled_at: None,
+        created_by: None,
         idempotency_key: key,
         max_cost_usd: None,
     }

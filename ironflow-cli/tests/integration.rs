@@ -202,6 +202,7 @@ async fn run_list_empty_table() {
         command: RunCommands::List {
             status: None,
             workflow: None,
+            created_by: None,
             page: None,
             per_page: None,
         },
@@ -220,6 +221,7 @@ async fn run_list_empty_json() {
         command: RunCommands::List {
             status: None,
             workflow: None,
+            created_by: None,
             page: None,
             per_page: None,
         },
@@ -238,6 +240,7 @@ async fn run_list_with_filters() {
         command: RunCommands::List {
             status: Some("completed".to_string()),
             workflow: Some("deploy".to_string()),
+            created_by: None,
             page: Some(1),
             per_page: Some(10),
         },
