@@ -22,6 +22,9 @@ pub struct CreateRunTool {
     /// Defaults to 0 (no automatic retry). Each retry waits an exponential
     /// backoff (30s, 2min, 8min, capped at 15min).
     pub max_retries: Option<u32>,
+    /// Optional maximum cumulative cost for this run, in USD. Must be zero or
+    /// positive. Overrides the workflow and server defaults; omit to use them.
+    pub max_cost_usd: Option<f64>,
 }
 
 impl CreateRunTool {
@@ -31,11 +34,14 @@ impl CreateRunTool {
             Some(s) => serde_json::from_str(s).unwrap_or(Value::Object(Default::default())),
             None => json!({}),
         };
-        let body = json!({
+        let mut body = json!({
             "workflow": self.workflow,
             "payload": parsed_payload,
             "max_retries": self.max_retries.unwrap_or(0),
         });
+        if let Some(max_cost_usd) = self.max_cost_usd {
+            body["max_cost_usd"] = json!(max_cost_usd);
+        }
 
         let run: Value = client
             .post("/runs", &body)

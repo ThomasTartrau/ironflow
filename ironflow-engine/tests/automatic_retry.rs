@@ -60,6 +60,7 @@ async fn enqueue(store: &InMemoryStore, workflow: &str, max_retries: u32) -> uui
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            max_cost_usd: None,
         })
         .await
         .expect("create run")

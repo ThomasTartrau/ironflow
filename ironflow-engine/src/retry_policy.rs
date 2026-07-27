@@ -63,6 +63,8 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::Serialization`] | the payload or step config is malformed |
 /// | [`EngineError::StepConfig`] | the step config cannot be deserialized |
 /// | [`EngineError::Store`] | if the store is down, persisting the retry fails too |
+/// | [`EngineError::RunBudgetExceeded`] | the cost cap is cumulative; a replay only spends more |
+/// | [`EngineError::MonthlyBudgetExceeded`] | the monthly quota is exhausted for every run |
 /// | [`EngineError::ApprovalRequired`] | not a failure; the run is suspended, not failed |
 ///
 /// [`EngineError::Operation`] delegates to
@@ -88,6 +90,8 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::StepConfig(_)
         | EngineError::Serialization(_)
         | EngineError::Store(_)
+        | EngineError::RunBudgetExceeded { .. }
+        | EngineError::MonthlyBudgetExceeded { .. }
         | EngineError::ApprovalRequired { .. } => false,
     }
 }
@@ -130,6 +134,7 @@ mod tests {
 
     use ironflow_core::error::{AgentError, OperationError};
     use ironflow_store::error::StoreError;
+    use rust_decimal::Decimal;
     use uuid::Uuid;
 
     use super::*;
@@ -157,6 +162,26 @@ mod tests {
     #[test]
     fn store_error_is_not_retryable() {
         let err = EngineError::Store(StoreError::RunNotFound(Uuid::nil()));
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn run_budget_exceeded_is_not_retryable() {
+        let err = EngineError::RunBudgetExceeded {
+            run_id: Uuid::nil(),
+            limit_usd: Decimal::new(100, 2),
+            spent_usd: Decimal::new(95, 2),
+            step_budget_usd: Decimal::new(20, 2),
+        };
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn monthly_budget_exceeded_is_not_retryable() {
+        let err = EngineError::MonthlyBudgetExceeded {
+            limit_usd: Decimal::new(1000, 2),
+            spent_usd: Decimal::new(1000, 2),
+        };
         assert!(!is_run_retryable(&err));
     }
 

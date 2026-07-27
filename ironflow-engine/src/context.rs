@@ -43,6 +43,7 @@ use ironflow_store::models::{
 };
 use ironflow_store::store::Store;
 
+use crate::budget::step_budget_usd;
 use crate::config::{
     AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig,
 };
@@ -86,6 +87,11 @@ pub struct WorkflowContext {
     total_cost_usd: Decimal,
     /// Accumulated duration across all steps.
     total_duration_ms: u64,
+    /// Cumulative cost cap for this run, resolved at creation. `None` = no cap.
+    max_cost_usd: Option<Decimal>,
+    /// Cost already spent by ancestor runs when this context belongs to a
+    /// sub-workflow. Zero for a top-level run.
+    inherited_cost_usd: Decimal,
     /// Steps from a previous execution of the *same* attempt, keyed by position.
     /// Used when resuming after approval to replay completed steps.
     replay_steps: HashMap<u32, Step>,
@@ -117,6 +123,8 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            max_cost_usd: None,
+            inherited_cost_usd: Decimal::ZERO,
             replay_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
             attempt: 1,
@@ -144,6 +152,8 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            max_cost_usd: None,
+            inherited_cost_usd: Decimal::ZERO,
             replay_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
             attempt: 1,
@@ -182,6 +192,74 @@ impl WorkflowContext {
     /// The run attempt this context is executing (1-based).
     pub fn attempt(&self) -> u32 {
         self.attempt
+    }
+
+    /// Set the cumulative cost cap enforced before every agent step.
+    ///
+    /// Called by the [`Engine`](crate::engine::Engine) with the run's persisted
+    /// `max_cost_usd`. `None` disables the check.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use rust_decimal::Decimal;
+    ///
+    /// # fn example(ctx: &mut WorkflowContext) {
+    /// ctx.set_max_cost_usd(Some(Decimal::new(200, 2))); // $2.00
+    /// # }
+    /// ```
+    pub fn set_max_cost_usd(&mut self, cap: Option<Decimal>) {
+        self.max_cost_usd = cap;
+    }
+
+    /// The cumulative cost cap of this run, if any.
+    pub fn max_cost_usd(&self) -> Option<Decimal> {
+        self.max_cost_usd
+    }
+
+    /// Total cost charged against the cap: this run plus every ancestor run.
+    ///
+    /// For a top-level run this equals [`total_cost_usd`](Self::total_cost_usd).
+    /// For a sub-workflow it also includes what the parent chain already spent.
+    pub fn charged_cost_usd(&self) -> Decimal {
+        self.inherited_cost_usd + self.total_cost_usd
+    }
+
+    /// Reject the upcoming agent work when it would cross the run's cost cap.
+    ///
+    /// `step_budget` is the declared budget of the step (or the sum of budgets
+    /// for a parallel wave). Called *before* any step record is created so a
+    /// refused run never launches the work it could not afford.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::RunBudgetExceeded`] when
+    /// `charged_cost + step_budget` exceeds the cap.
+    fn check_run_budget(&self, step_budget: Decimal) -> Result<(), EngineError> {
+        let Some(limit) = self.max_cost_usd else {
+            return Ok(());
+        };
+
+        let spent = self.charged_cost_usd();
+        if spent + step_budget <= limit {
+            return Ok(());
+        }
+
+        error!(
+            run_id = %self.run_id,
+            limit_usd = %limit,
+            spent_usd = %spent,
+            step_budget_usd = %step_budget,
+            "run cost cap reached, refusing agent step"
+        );
+
+        Err(EngineError::RunBudgetExceeded {
+            run_id: self.run_id,
+            limit_usd: limit,
+            spent_usd: spent,
+            step_budget_usd: step_budget,
+        })
     }
 
     /// Load existing steps from the store for replay after approval.
@@ -275,6 +353,18 @@ impl WorkflowContext {
         if steps.is_empty() {
             return Ok(Vec::new());
         }
+
+        // Cost cap: the whole wave is charged at once. Refused before any step
+        // record is created, so nothing in the wave starts.
+        let wave_budget: Decimal = steps
+            .iter()
+            .filter_map(|(_, config)| match config {
+                StepConfig::Agent(agent_config) => Some(agent_config.max_budget_usd),
+                _ => None,
+            })
+            .map(step_budget_usd)
+            .sum();
+        self.check_run_budget(wave_budget)?;
 
         let wave_position = self.position;
         self.position += 1;
@@ -1052,6 +1142,8 @@ impl WorkflowContext {
                 handler_version: None,
                 labels: parent_labels,
                 scheduled_at: None,
+                // The child shares the parent's cap; it does not get its own budget.
+                max_cost_usd: self.max_cost_usd,
             })
             .await?;
 
@@ -1077,6 +1169,10 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            max_cost_usd: self.max_cost_usd,
+            // Everything the parent chain already spent counts against the
+            // shared cap, so the child cannot restart the budget from zero.
+            inherited_cost_usd: self.charged_cost_usd(),
             replay_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
             // A child run is created fresh here; it is never itself retried.
@@ -1191,6 +1287,12 @@ impl WorkflowContext {
         // Replay: if this step already completed in a prior execution, return cached output.
         if let Some(output) = self.try_replay_step(position) {
             return Ok(output);
+        }
+
+        // Cost cap: refuse before creating the step record, so a run that hits
+        // its cap never launches the work it cannot afford.
+        if let StepConfig::Agent(ref agent_config) = config {
+            self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?;
         }
 
         // Create step record in Pending.
@@ -1351,6 +1453,8 @@ impl fmt::Debug for WorkflowContext {
             .field("run_id", &self.run_id)
             .field("position", &self.position)
             .field("total_cost_usd", &self.total_cost_usd)
+            .field("inherited_cost_usd", &self.inherited_cost_usd)
+            .field("max_cost_usd", &self.max_cost_usd)
             .finish_non_exhaustive()
     }
 }
@@ -1521,6 +1625,7 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .expect("failed to create run");
@@ -1576,6 +1681,7 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .expect("failed to create run");
@@ -1626,6 +1732,7 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .expect("failed to create run");
@@ -1710,6 +1817,7 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .expect("failed to create run");
@@ -1797,6 +1905,7 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .expect("failed to create run");
@@ -1856,6 +1965,7 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .expect("failed to create run");

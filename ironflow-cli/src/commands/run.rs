@@ -39,6 +39,10 @@ pub enum RunCommands {
         /// failure. Defaults to 0 (no automatic retry).
         #[arg(long)]
         max_retries: Option<u32>,
+        /// Maximum cumulative cost for this run, in USD. Overrides the
+        /// workflow and server defaults.
+        #[arg(long = "max-cost", value_name = "USD")]
+        max_cost: Option<f64>,
     },
     /// List runs with optional filters.
     List {
@@ -94,6 +98,26 @@ fn resolve_payload(
     }
 }
 
+/// Reject a `--max-cost` value the API would refuse anyway.
+///
+/// Catching it client-side turns a 400 round-trip into an immediate, readable
+/// error.
+///
+/// # Errors
+///
+/// Returns an error when the value is negative or not a finite number.
+fn validate_max_cost(max_cost: Option<f64>) -> Result<()> {
+    match max_cost {
+        Some(value) if !value.is_finite() => {
+            anyhow::bail!("--max-cost must be a finite number, got {value}")
+        }
+        Some(value) if value < 0.0 => {
+            anyhow::bail!("--max-cost must be zero or positive, got {value}")
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Execute a run subcommand.
 ///
 /// # Errors
@@ -111,7 +135,9 @@ pub async fn execute(
             payload,
             payload_file,
             max_retries,
+            max_cost,
         } => {
+            validate_max_cost(*max_cost)?;
             let payload_value = resolve_payload(payload.as_deref(), payload_file.as_ref())?;
             let payload_map = payload_value
                 .as_object()
@@ -123,6 +149,7 @@ pub async fn execute(
                 // The generated SDK models the field as i32; the API rejects
                 // anything negative, and clap already refuses it here.
                 .max_retries(max_retries.map(|n| n as i32))
+                .max_cost_usd(*max_cost)
                 .try_into()
                 .context("failed to build CreateRunRequest")?;
 

@@ -234,7 +234,7 @@ impl PostgresStore {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut store = PostgresStore::new("postgres://localhost/ironflow").await?;
-    /// let key = MasterKey::from_env()?;
+    /// let key = MasterKey::from_hex(&std::env::var("IRONFLOW_SECRET_KEY")?)?;
     /// store.set_master_key(key);
     /// # Ok(())
     /// # }

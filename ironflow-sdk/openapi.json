@@ -192,7 +192,7 @@
         "type": "object"
       },
       "CreateRunRequest": {
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "properties": {
           "labels": {
             "additionalProperties": {
@@ -204,6 +204,12 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "max_cost_usd": {
+            "description": "Optional cumulative cost cap for this run, in USD.\n\nOverrides the workflow default and the server default. `None` falls back\nto those. Must be zero or positive.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
           },
           "max_retries": {
             "description": "How many times the run may be replayed automatically after a transient\nfailure. Defaults to `0`, meaning no automatic retry.\n\nEach retry waits an exponential backoff (30 s, 2 min, 8 min, capped at\n15 min) before the run is replayed from the start. Failures that cannot\nsucceed on replay -- an unknown workflow, an invalid payload, an\nexhausted agent budget, a rejected approval, a manual cancellation --\nconsume no attempt.",
@@ -405,6 +411,56 @@
               "workflow_name",
               "cost_usd",
               "duration_ms",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A run was stopped because it reached its cumulative cost cap.\n\nEmitted when the engine refuses an agent step that would cross the run's\n`max_cost_usd`. The run transitions to\n[`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step\nis never launched, so the reported spend is what the run had already\nconsumed.",
+            "properties": {
+              "at": {
+                "description": "When the refusal occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "limit_usd": {
+                "description": "The configured cost cap in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "spent_usd": {
+                "description": "Cost already consumed when the cap was reached, in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "step_budget_usd": {
+                "description": "Declared budget of the refused step, in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "type": {
+                "enum": [
+                  "run_budget_exceeded"
+                ],
+                "type": "string"
+              },
+              "workflow_name": {
+                "description": "Workflow name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "workflow_name",
+              "limit_usd",
+              "spent_usd",
+              "step_budget_usd",
               "at",
               "type"
             ],
@@ -763,6 +819,7 @@
           "run_created",
           "run_status_changed",
           "run_failed",
+          "run_budget_exceeded",
           "step_completed",
           "step_failed",
           "approval_requested",
@@ -1006,6 +1063,12 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "max_cost_usd": {
+            "description": "Cumulative cost cap for this run, in USD. `None` means no cap.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
           },
           "max_retries": {
             "description": "Maximum allowed retries.",
@@ -1618,6 +1681,12 @@
             },
             "type": "object"
           },
+          "default_max_cost_usd": {
+            "description": "Default cumulative cost cap applied to runs of this workflow, in USD.\n\nOverridden by a cap supplied at run creation. `None` means the workflow\ndeclares no default and falls back to the server default (if any).",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
           "description": {
             "description": "Human-readable description.",
             "type": "string"
@@ -2207,7 +2276,7 @@
         ]
       },
       "post": {
-        "description": "Returns 201 Created with the newly enqueued run.\nReturns 400 Bad Request if the workflow is unknown.",
+        "description": "Returns 201 Created with the newly enqueued run.\nReturns 400 Bad Request if the workflow is unknown or the body is invalid.\nReturns 429 Too Many Requests if the global monthly cost quota is exhausted.",
         "operationId": "create_run",
         "requestBody": {
           "content": {
@@ -2232,13 +2301,16 @@
             "description": "Run created successfully"
           },
           "400": {
-            "description": "Unknown workflow"
+            "description": "Unknown workflow or invalid body"
           },
           "401": {
             "description": "Unauthorized"
           },
           "403": {
             "description": "Forbidden"
+          },
+          "429": {
+            "description": "Monthly cost quota exhausted"
           }
         },
         "security": [

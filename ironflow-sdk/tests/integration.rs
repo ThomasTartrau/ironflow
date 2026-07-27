@@ -219,6 +219,7 @@ async fn create_and_get_run() {
         labels: None,
         scheduled_at: None,
         max_retries: Some(2),
+        max_cost_usd: None,
     };
 
     let created = client.create_run(&request).await.unwrap();
@@ -227,6 +228,42 @@ async fn create_and_get_run() {
 
     let fetched = client.get_run(created.data.id).await.unwrap();
     assert_eq!(fetched.data.run.id, created.data.id);
+}
+
+#[tokio::test]
+async fn create_run_with_max_cost_usd() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let request = ironflow_sdk::types::CreateRunRequest {
+        workflow: "deploy".to_string(),
+        payload: None,
+        labels: None,
+        scheduled_at: None,
+        max_retries: None,
+        max_cost_usd: Some(2.5),
+    };
+
+    let created = client.create_run(&request).await.unwrap();
+    assert_eq!(created.data.max_cost_usd, Some(2.5));
+}
+
+#[tokio::test]
+async fn create_run_rejects_negative_max_cost_usd() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let request = ironflow_sdk::types::CreateRunRequest {
+        workflow: "deploy".to_string(),
+        payload: None,
+        labels: None,
+        scheduled_at: None,
+        max_retries: None,
+        max_cost_usd: Some(-1.0),
+    };
+
+    let err = client.create_run(&request).await.unwrap_err();
+    assert_eq!(err.status(), Some(400));
 }
 
 #[tokio::test]
@@ -240,6 +277,7 @@ async fn create_run_unknown_workflow() {
         labels: None,
         scheduled_at: None,
         max_retries: None,
+        max_cost_usd: None,
     };
 
     let err = client.create_run(&request).await.unwrap_err();

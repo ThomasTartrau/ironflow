@@ -138,6 +138,28 @@ pub enum Event {
         at: DateTime<Utc>,
     },
 
+    /// A run was stopped because it reached its cumulative cost cap.
+    ///
+    /// Emitted when the engine refuses an agent step that would cross the run's
+    /// `max_cost_usd`. The run transitions to
+    /// [`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step
+    /// is never launched, so the reported spend is what the run had already
+    /// consumed.
+    RunBudgetExceeded {
+        /// Run identifier.
+        run_id: Uuid,
+        /// Workflow name.
+        workflow_name: String,
+        /// The configured cost cap in USD.
+        limit_usd: Decimal,
+        /// Cost already consumed when the cap was reached, in USD.
+        spent_usd: Decimal,
+        /// Declared budget of the refused step, in USD.
+        step_budget_usd: Decimal,
+        /// When the refusal occurred.
+        at: DateTime<Utc>,
+    },
+
     // -- Step lifecycle --
     /// A step completed successfully.
     StepCompleted {
@@ -265,6 +287,8 @@ impl Event {
     pub const RUN_STATUS_CHANGED: &'static str = "run_status_changed";
     /// Event type constant for [`RunFailed`](Event::RunFailed).
     pub const RUN_FAILED: &'static str = "run_failed";
+    /// Event type constant for [`RunBudgetExceeded`](Event::RunBudgetExceeded).
+    pub const RUN_BUDGET_EXCEEDED: &'static str = "run_budget_exceeded";
     /// Event type constant for [`StepCompleted`](Event::StepCompleted).
     pub const STEP_COMPLETED: &'static str = "step_completed";
     /// Event type constant for [`StepFailed`](Event::StepFailed).
@@ -303,6 +327,7 @@ impl Event {
         Self::RUN_CREATED,
         Self::RUN_STATUS_CHANGED,
         Self::RUN_FAILED,
+        Self::RUN_BUDGET_EXCEEDED,
         Self::STEP_COMPLETED,
         Self::STEP_FAILED,
         Self::APPROVAL_REQUESTED,
@@ -337,6 +362,7 @@ impl Event {
             Event::RunCreated { .. } => Self::RUN_CREATED,
             Event::RunStatusChanged { .. } => Self::RUN_STATUS_CHANGED,
             Event::RunFailed { .. } => Self::RUN_FAILED,
+            Event::RunBudgetExceeded { .. } => Self::RUN_BUDGET_EXCEEDED,
             Event::StepCompleted { .. } => Self::STEP_COMPLETED,
             Event::StepFailed { .. } => Self::STEP_FAILED,
             Event::ApprovalRequested { .. } => Self::APPROVAL_REQUESTED,
@@ -391,6 +417,31 @@ mod tests {
         assert_eq!(back.event_type(), "run_failed");
         assert!(json.contains("\"type\":\"run_failed\""));
         assert!(json.contains("step crashed"));
+    }
+
+    #[test]
+    fn run_budget_exceeded_serde_roundtrip() {
+        let event = Event::RunBudgetExceeded {
+            run_id: Uuid::now_v7(),
+            workflow_name: "deploy".to_string(),
+            limit_usd: Decimal::new(200, 2),
+            spent_usd: Decimal::new(180, 2),
+            step_budget_usd: Decimal::new(50, 2),
+            at: Utc::now(),
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.event_type(), "run_budget_exceeded");
+        assert!(json.contains("\"type\":\"run_budget_exceeded\""));
+        assert!(json.contains("limit_usd"));
+        assert!(json.contains("step_budget_usd"));
+    }
+
+    #[test]
+    fn all_contains_run_budget_exceeded() {
+        assert!(Event::ALL.contains(&Event::RUN_BUDGET_EXCEEDED));
     }
 
     #[test]

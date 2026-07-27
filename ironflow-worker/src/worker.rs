@@ -490,9 +490,12 @@ impl Worker {
                                 RunOutcome::Success(workflow)
                             }
                             // `execute_handler_run` already routed this failure
-                            // through `fail_or_schedule_retry`, so the run is
-                            // either Failed or waiting for its retry. Writing
-                            // Failed here again would cancel an armed retry.
+                            // through `fail_or_schedule_retry` (or, for a budget
+                            // refusal, straight to Cancelled) and cleaned up the
+                            // orphaned steps, so the run is either terminal or
+                            // waiting for its retry. Writing Failed here again
+                            // would cancel an armed retry and would be rejected
+                            // by the FSM for a cancelled run.
                             Ok(Err(e)) => {
                                 error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
                                 RunOutcome::Failed(workflow)

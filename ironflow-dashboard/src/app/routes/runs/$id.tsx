@@ -25,16 +25,10 @@ import { StepTimeline } from "./_components/StepTimeline";
 import { AttemptSelector } from "./_components/AttemptSelector";
 import { listAttempts, resolveShownAttempt } from "./_components/attempts";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
+import { CostBudgetCard } from "./_components/CostBudgetCard";
 import { BackLink } from "@/app/components/BackLink";
-import { formatDuration, formatCost } from "@/app/lib/format";
-import {
-	Clock,
-	DollarSign,
-	RotateCcw,
-	Calendar,
-	Tag,
-	CalendarClock,
-} from "lucide-react";
+import { formatDuration } from "@/app/lib/format";
+import { Clock, RotateCcw, Calendar, Tag, CalendarClock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 export async function loader({ params }: LoaderFunctionArgs) {
@@ -144,11 +138,7 @@ export function Component() {
 						value={formatDuration(liveDurationMs)}
 						icon={Clock}
 					/>
-					<StatCard
-						label="Cost"
-						value={formatCost(liveCost)}
-						icon={DollarSign}
-					/>
+					<CostBudgetCard cost={liveCost} maxCost={run.max_cost_usd} />
 					<StatCard
 						label="Retries"
 						value={`${run.retry_count} / ${run.max_retries}`}
