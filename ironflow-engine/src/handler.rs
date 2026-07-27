@@ -48,6 +48,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -120,6 +121,12 @@ pub struct WorkflowInfo {
     /// Optional cron schedule for automatic execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<CronSchedule>,
+    /// Default cumulative cost cap applied to runs of this workflow, in USD.
+    ///
+    /// Overridden by a cap supplied at run creation, and takes precedence over
+    /// the server-wide default. `None` means the handler declares no default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_max_cost_usd: Option<Decimal>,
 }
 
 /// A dynamic workflow handler with context-aware step chaining.
@@ -208,6 +215,38 @@ pub trait WorkflowHandler: Send + Sync {
         None
     }
 
+    /// Default cumulative cost cap for runs of this workflow, in USD.
+    ///
+    /// Applied when the run creation request does not supply one. Takes
+    /// precedence over the server-wide
+    /// [`IRONFLOW_DEFAULT_RUN_MAX_COST_USD`](crate::budget::DEFAULT_RUN_MAX_COST_ENV).
+    /// The default is `None` (fall back to the server default, or no cap).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// use rust_decimal::Decimal;
+    ///
+    /// struct ExpensiveAnalysis;
+    ///
+    /// impl WorkflowHandler for ExpensiveAnalysis {
+    ///     fn name(&self) -> &str { "expensive-analysis" }
+    ///     fn default_max_cost_usd(&self) -> Option<Decimal> {
+    ///         Some(Decimal::new(500, 2)) // $5.00
+    ///     }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(ExpensiveAnalysis.default_max_cost_usd(), Some(Decimal::new(500, 2)));
+    /// ```
+    fn default_max_cost_usd(&self) -> Option<Decimal> {
+        None
+    }
+
     /// Return metadata about this workflow (description, source code).
     ///
     /// Override this to provide a description and source code for the
@@ -226,6 +265,7 @@ pub trait WorkflowHandler: Send + Sync {
             input_schema: self.input_schema(),
             default_labels: self.default_labels(),
             schedule: self.schedule().cloned(),
+            default_max_cost_usd: self.default_max_cost_usd(),
         }
     }
 
@@ -292,6 +332,10 @@ mod tests {
             ])
         }
 
+        fn default_max_cost_usd(&self) -> Option<Decimal> {
+            Some(Decimal::new(750, 2))
+        }
+
         fn describe(&self) -> WorkflowInfo {
             WorkflowInfo {
                 description: "Full-featured test handler".to_string(),
@@ -302,6 +346,7 @@ mod tests {
                 input_schema: self.input_schema(),
                 default_labels: self.default_labels(),
                 schedule: self.schedule().cloned(),
+                default_max_cost_usd: self.default_max_cost_usd(),
             }
         }
 
@@ -409,6 +454,26 @@ mod tests {
     }
 
     #[test]
+    fn minimal_handler_defaults_to_no_max_cost() {
+        assert!(MinimalHandler.default_max_cost_usd().is_none());
+        assert!(MinimalHandler.describe().default_max_cost_usd.is_none());
+    }
+
+    #[test]
+    fn describe_propagates_handler_max_cost() {
+        assert_eq!(
+            FullFeaturedHandler.describe().default_max_cost_usd,
+            Some(Decimal::new(750, 2))
+        );
+    }
+
+    #[test]
+    fn workflow_info_omits_absent_max_cost_from_json() {
+        let json = serde_json::to_value(MinimalHandler.describe()).expect("serialize");
+        assert!(json.get("default_max_cost_usd").is_none());
+    }
+
+    #[test]
     fn workflow_info_serializes_with_skip_empty() {
         let info = WorkflowInfo {
             description: "test".to_string(),
@@ -419,6 +484,7 @@ mod tests {
             input_schema: None,
             default_labels: HashMap::new(),
             schedule: None,
+            default_max_cost_usd: None,
         };
 
         let json = serde_json::to_value(&info).expect("serialize");
@@ -439,6 +505,7 @@ mod tests {
             input_schema: Some(serde_json::json!({"type": "object"})),
             default_labels: HashMap::from([("key".to_string(), "value".to_string())]),
             schedule: Some(CronSchedule::new("0 0 * * * *").unwrap()),
+            default_max_cost_usd: Some(Decimal::new(750, 2)),
         };
 
         let json = serde_json::to_value(&info).expect("serialize");

@@ -21,6 +21,7 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
+//! max_cost_usd: None,
 //! }).await?;
 //!
 //! assert_eq!(run.status.state, RunStatus::Pending);
@@ -158,6 +159,7 @@ mod tests {
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            max_cost_usd: None,
         }
     }
 

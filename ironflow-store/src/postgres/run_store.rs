@@ -113,8 +113,8 @@ impl RunStore for PostgresStore {
             // Insert run with FSM reference
             sqlx::query(
                 r#"
-                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, max_cost_usd, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 "#,
             )
             .bind(id)
@@ -126,6 +126,7 @@ impl RunStore for PostgresStore {
             .bind(&req.handler_version)
             .bind(serde_json::to_value(&req.labels).unwrap_or_default())
             .bind(req.scheduled_at)
+            .bind(req.max_cost_usd)
             .bind(now)
             .bind(now)
             .execute(&mut *tx)
