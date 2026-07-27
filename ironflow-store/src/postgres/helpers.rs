@@ -153,6 +153,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         scheduled_at: row.get("scheduled_at"),
         created_by,
         created_by_label,
+        idempotency_key: row.get("idempotency_key"),
         max_cost_usd: row.get("max_cost_usd"),
     })
 }

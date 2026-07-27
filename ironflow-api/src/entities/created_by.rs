@@ -131,10 +131,12 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 created_by,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
             .expect("create run")
+            .into_run()
     }
 
     async fn seed_user(store: &InMemoryStore, username: &str) -> Uuid {

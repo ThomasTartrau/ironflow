@@ -314,6 +314,51 @@ impl IronflowClient {
             .await
     }
 
+    /// `POST /api/v1/runs` with an `Idempotency-Key` header -- trigger a workflow
+    /// exactly once.
+    ///
+    /// Replaying the same key returns the run it already produced instead of
+    /// creating a second one. The key stays bound for 24 hours. Use a value the
+    /// caller can reproduce across retries, such as a webhook delivery id.
+    ///
+    /// The returned envelope is identical whether the run was created or replayed;
+    /// compare `data.idempotency_key` or the run id if the distinction matters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 400 (unknown workflow or malformed key), 401/403,
+    /// or 409 (`IDEMPOTENCY_KEY_CONFLICT`) when the key is already bound to a
+    /// different workflow or payload.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::{IronflowClient, types};
+    ///
+    /// # async fn example(request: &types::CreateRunRequest) -> Result<(), ironflow_sdk::Error> {
+    /// let client = IronflowClient::new("https://ironflow.example.com", "key");
+    ///
+    /// // Derive the key from something the caller can reproduce on retry,
+    /// // such as the provider delivery id of the webhook that triggered this.
+    /// let run = client
+    ///     .create_run_idempotent(request, "github:8f4e2a10")
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_run_idempotent(
+        &self,
+        request: &types::CreateRunRequest,
+        idempotency_key: &str,
+    ) -> Result<ApiResponse<types::RunResponse>, Error> {
+        self.send_envelope(
+            self.post("/api/v1/runs")
+                .header("Idempotency-Key", idempotency_key)
+                .json(request),
+        )
+        .await
+    }
+
     /// `GET /api/v1/runs/:id` -- Get run details.
     ///
     /// # Errors

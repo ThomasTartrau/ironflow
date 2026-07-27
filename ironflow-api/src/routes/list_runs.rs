@@ -156,10 +156,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         state
             .store
             .create_run(NewRun {
@@ -171,10 +173,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let app = Router::new().route("/", get(list_runs)).with_state(state);
 
@@ -207,10 +211,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         state
             .store
@@ -230,10 +236,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let app = Router::new().route("/", get(list_runs)).with_state(state);
 
@@ -267,10 +275,12 @@ mod tests {
                     handler_version: None,
                     labels: HashMap::new(),
                     scheduled_at: None,
+                    idempotency_key: None,
                     max_cost_usd: None,
                 })
                 .await
-                .unwrap();
+                .unwrap()
+                .into_run();
         }
 
         let app = Router::new().route("/", get(list_runs)).with_state(state);
@@ -399,10 +409,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let app = Router::new().route("/", get(list_runs)).with_state(state);
 
@@ -451,6 +463,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 created_by,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await

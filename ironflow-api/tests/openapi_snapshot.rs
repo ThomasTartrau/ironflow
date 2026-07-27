@@ -26,6 +26,34 @@ fn find_single_non_null(arr: &[Value], is_null: impl Fn(&Value) -> bool) -> Opti
     }
 }
 
+/// Drop `nullable` from operation parameter schemas.
+///
+/// In OpenAPI 3.0 a parameter's optionality is carried by `required`, not by a
+/// nullable schema. Leaving `nullable: true` there makes progenitor emit an
+/// `Option<String>` it then calls `to_string()` on, which does not compile.
+fn strip_parameter_nullability(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Array(params)) = map.get_mut("parameters") {
+                for param in params.iter_mut() {
+                    if let Some(schema) = param.get_mut("schema").and_then(|s| s.as_object_mut()) {
+                        schema.remove("nullable");
+                    }
+                }
+            }
+            for val in map.values_mut() {
+                strip_parameter_nullability(val);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                strip_parameter_nullability(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Convert OpenAPI 3.1 patterns to OpenAPI 3.0.3 for progenitor compatibility.
 ///
 /// Handles:
@@ -99,6 +127,7 @@ fn openapi_spec_is_up_to_date() {
 
     let mut spec_30: Value = serde_json::from_str(&spec).expect("failed to parse spec as JSON");
     downgrade_31_to_30(&mut spec_30);
+    strip_parameter_nullability(&mut spec_30);
     if let Some(obj) = spec_30.as_object_mut() {
         obj.insert("openapi".to_string(), Value::String("3.0.3".to_string()));
     }

@@ -134,10 +134,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
@@ -216,10 +218,12 @@ mod tests {
                 labels: Default::default(),
                 scheduled_at: None,
                 created_by: Some(RunActor::User { user_id: user.id }),
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let app = Router::new().route("/{id}", get(get_run)).with_state(state);
 

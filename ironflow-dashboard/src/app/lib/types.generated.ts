@@ -241,8 +241,21 @@ export interface paths {
 		/**
 		 * Trigger a workflow by name.
 		 * @description Returns 201 Created with the newly enqueued run.
-		 *     Returns 400 Bad Request if the workflow is unknown or the body is invalid.
-		 *     Returns 429 Too Many Requests if the global monthly cost quota is exhausted.
+		 *
+		 *     An optional `Idempotency-Key` header makes the call safe to replay: the same
+		 *     key returns the run it already produced with 200 OK instead of enqueueing a
+		 *     second one. A key reused with a different workflow or payload is rejected with
+		 *     409 Conflict. Keys stay bound for 24 hours, after which they are released.
+		 *
+		 *     # Errors
+		 *
+		 *     Returns [`ApiError::Forbidden`] for non-admin callers.
+		 *     Returns [`ApiError::BadRequest`] if the workflow is unknown, the body is
+		 *     invalid, or the `Idempotency-Key` header is malformed.
+		 *     Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
+		 *     different request.
+		 *     Returns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota
+		 *     is exhausted.
 		 */
 		post: operations["create_run"];
 		delete?: never;
@@ -1321,6 +1334,8 @@ export interface components {
 			 * @description Unique run identifier.
 			 */
 			id: string;
+			/** @description Idempotency key that produced this run, when one was supplied. */
+			idempotency_key?: string | null;
 			/** @description User-defined key-value labels. */
 			labels?: {
 				[key: string]: string;
@@ -2155,7 +2170,10 @@ export interface operations {
 	create_run: {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				/** @description Optional key making the call safe to replay. At most 255 printable ASCII characters, valid for 24 hours. */
+				"Idempotency-Key"?: string | null;
+			};
 			path?: never;
 			cookie?: never;
 		};
@@ -2166,6 +2184,15 @@ export interface operations {
 			};
 		};
 		responses: {
+			/** @description Idempotency key replayed: the existing run is returned */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["RunResponse"];
+				};
+			};
 			/** @description Run created successfully */
 			201: {
 				headers: {
@@ -2175,7 +2202,7 @@ export interface operations {
 					"application/json": components["schemas"]["RunResponse"];
 				};
 			};
-			/** @description Unknown workflow or invalid body */
+			/** @description Unknown workflow, invalid body or malformed Idempotency-Key */
 			400: {
 				headers: {
 					[name: string]: unknown;
@@ -2191,6 +2218,13 @@ export interface operations {
 			};
 			/** @description Forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Idempotency key already used with a different request */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

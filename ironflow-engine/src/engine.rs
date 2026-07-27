@@ -24,7 +24,8 @@ use ironflow_core::metric_names::{
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, Run, RunActor, RunFilter, RunStatus, RunUpdate, StepStatus, StepUpdate, TriggerKind,
+    NewRun, Run, RunActor, RunCreation, RunFilter, RunStatus, RunUpdate, StepStatus, StepUpdate,
+    TriggerKind,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -72,6 +73,12 @@ pub struct EnqueueOptions {
     /// Authenticated principal that triggered the run. `None` for cron,
     /// webhook, and programmatic triggers.
     pub created_by: Option<RunActor>,
+    /// Idempotency key binding this enqueue to a single run.
+    ///
+    /// When set and already bound to a run created within
+    /// [`IDEMPOTENCY_WINDOW`](ironflow_store::entities::IDEMPOTENCY_WINDOW),
+    /// nothing is enqueued and the original run is replayed.
+    pub idempotency_key: Option<String>,
 }
 
 /// The workflow orchestration engine.
@@ -529,9 +536,11 @@ impl Engine {
                 handler_version,
                 labels: handler.default_labels(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd,
             })
-            .await?;
+            .await?
+            .into_run();
 
         let run_id = run.id;
         info!(run_id = %run_id, handler_version = run.handler_version.as_deref().unwrap_or(""), "run created");
@@ -579,18 +588,53 @@ impl Engine {
             },
         )
         .await
+        .map(RunCreation::into_run)
     }
 
     /// Enqueue a handler-based workflow with labels, deferred scheduling, an
-    /// optional cost cap, and an optional author.
+    /// optional cost cap, an optional author, and an optional idempotency key.
     ///
     /// See [`EnqueueOptions`] for the individual settings.
+    ///
+    /// When [`EnqueueOptions::idempotency_key`] is set and already bound to a run
+    /// created within
+    /// [`IDEMPOTENCY_WINDOW`](ironflow_store::entities::IDEMPOTENCY_WINDOW), nothing
+    /// is enqueued and the original run is returned as [`RunCreation::Existing`].
     ///
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered.
     /// Returns [`EngineError::MonthlyBudgetExceeded`] if the monthly cost quota
-    /// is exhausted.
+    /// is exhausted. Returns [`EngineError::Store`] if the run cannot be
+    /// persisted.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::{Engine, EnqueueOptions};
+    /// use ironflow_store::models::TriggerKind;
+    /// use serde_json::json;
+    ///
+    /// # async fn example(engine: &Engine) -> Result<(), ironflow_engine::error::EngineError> {
+    /// let creation = engine
+    ///     .enqueue_handler_with_options(
+    ///         "deploy",
+    ///         TriggerKind::Api,
+    ///         json!({"env": "prod"}),
+    ///         EnqueueOptions {
+    ///             max_retries: 3,
+    ///             idempotency_key: Some("github:abc-123".to_string()),
+    ///             ..Default::default()
+    ///         },
+    ///     )
+    ///     .await?;
+    ///
+    /// if creation.is_created() {
+    ///     println!("enqueued {}", creation.run().id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(name = "engine.enqueue_handler_with_options", skip_all, fields(workflow = %handler_name))]
     pub async fn enqueue_handler_with_options(
         &self,
@@ -598,13 +642,14 @@ impl Engine {
         trigger: TriggerKind,
         payload: Value,
         options: EnqueueOptions,
-    ) -> Result<Run, EngineError> {
+    ) -> Result<RunCreation, EngineError> {
         let EnqueueOptions {
             max_retries,
             labels,
             scheduled_at,
             max_cost_usd,
             created_by,
+            idempotency_key,
         } = options;
 
         let handler = self.handlers.get(handler_name).ok_or_else(|| {
@@ -620,7 +665,7 @@ impl Engine {
             .budget
             .resolve_run_cap(max_cost_usd, handler.default_max_cost_usd());
 
-        let run = self
+        let creation = self
             .store
             .create_run(NewRun {
                 workflow_name: handler_name.to_string(),
@@ -631,17 +676,26 @@ impl Engine {
                 labels: merged_labels,
                 scheduled_at,
                 created_by,
+                idempotency_key,
                 max_cost_usd: resolved_cap,
             })
             .await?;
 
-        info!(
-            run_id = %run.id,
-            workflow = %handler_name,
-            max_cost_usd = ?resolved_cap,
-            "handler run enqueued"
-        );
-        Ok(run)
+        match &creation {
+            RunCreation::Created(run) => info!(
+                run_id = %run.id,
+                workflow = %handler_name,
+                max_cost_usd = ?resolved_cap,
+                "handler run enqueued"
+            ),
+            RunCreation::Existing(run) => info!(
+                run_id = %run.id,
+                workflow = %handler_name,
+                "idempotent replay, nothing enqueued"
+            ),
+        }
+
+        Ok(creation)
     }
 
     /// Execute a handler-based run (used by the worker after pick_next_pending).
@@ -1425,7 +1479,8 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         assert_eq!(run.created_by, Some(actor));
     }
@@ -1445,7 +1500,8 @@ mod tests {
                 EnqueueOptions::default(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         assert!(run.created_by.is_none());
     }
@@ -1909,10 +1965,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let step = create_step_with_status(
             engine.store(),
@@ -1948,10 +2006,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let step = create_step_with_status(
             engine.store(),
@@ -1987,10 +2047,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let step = create_step_with_status(
             engine.store(),
@@ -2026,10 +2088,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let completed_step =
             create_step_with_status(engine.store(), run.id, "done", 0, StepStatus::Completed).await;
@@ -2073,10 +2137,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let s_completed =
             create_step_with_status(engine.store(), run.id, "step-1", 0, StepStatus::Completed)
@@ -2129,10 +2195,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let result = engine.fail_orphaned_steps(run.id, "timeout").await;
         assert!(result.is_ok());
@@ -2152,10 +2220,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let step_with_error = create_step_with_status(
             engine.store(),

@@ -13,7 +13,7 @@ mod step;
 mod user;
 
 pub use auth::{MeResponse, SignInRequest, SignUpRequest};
-pub use create_run::CreateRunRequest;
+pub use create_run::{CreateRunRequest, IdempotencyKeyError, validate_idempotency_key};
 pub use created_by::{CreatedBy, CreatedByKind};
 pub use run::{ListRunsQuery, RunDetailResponse, RunResponse};
 pub use secret::{SecretResponse, SetSecretRequest};

@@ -399,6 +399,7 @@ mod tests {
             labels: HashMap::new(),
             scheduled_at: None,
             created_by,
+            idempotency_key: None,
             max_cost_usd: None,
         }
     }

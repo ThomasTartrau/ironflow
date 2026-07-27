@@ -39,6 +39,7 @@ fn new_run(name: &str, created_by: Option<RunActor>) -> NewRun {
         labels: HashMap::new(),
         scheduled_at: None,
         created_by,
+        idempotency_key: None,
         max_cost_usd: None,
     }
 }
@@ -81,7 +82,8 @@ async fn created_by_is_null_without_actor() {
     let created = store
         .create_run(new_run("created-by-none", None))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     let run = store.get_run(created.id).await.unwrap().unwrap();
     assert!(run.created_by.is_none());
@@ -97,7 +99,8 @@ async fn created_by_user_round_trips_with_username_label() {
     let created = store
         .create_run(new_run("created-by-user", Some(RunActor::User { user_id })))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
     assert_eq!(created.created_by, Some(RunActor::User { user_id }));
     assert_eq!(created.created_by_label.as_deref(), Some(username.as_str()));
 
@@ -122,7 +125,8 @@ async fn created_by_api_key_label_combines_key_and_owner() {
             }),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     let run = store.get_run(created.id).await.unwrap().unwrap();
     assert_eq!(
@@ -153,7 +157,8 @@ async fn label_follows_api_key_rename() {
             }),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     store
         .update_api_key(
@@ -184,7 +189,8 @@ async fn authorship_survives_user_deletion() {
             Some(RunActor::User { user_id }),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     store.delete_user(user_id).await.unwrap();
 
@@ -209,11 +215,13 @@ async fn list_runs_filters_by_author() {
             Some(RunActor::User { user_id: alice }),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
     store
         .create_run(new_run("filter-bob", Some(RunActor::User { user_id: bob })))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     let page = store
         .list_runs(
@@ -250,7 +258,8 @@ async fn list_runs_author_filter_matches_runs_from_the_users_api_keys() {
             }),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     let page = store
         .list_runs(
@@ -277,7 +286,8 @@ async fn author_filter_combines_with_other_filters() {
     store
         .create_run(new_run(&workflow, Some(RunActor::User { user_id: alice })))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     let page = store
         .list_runs(
@@ -329,11 +339,13 @@ async fn get_stats_honours_the_author_filter() {
     store
         .create_run(new_run(&workflow, Some(RunActor::User { user_id: alice })))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
     store
         .create_run(new_run(&workflow, Some(RunActor::User { user_id: bob })))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     let stats = store
         .get_stats(RunFilter {
@@ -358,7 +370,8 @@ async fn pick_next_pending_resolves_author_label() {
             Some(RunActor::User { user_id }),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
 
     // The pending queue is shared with every other suite hitting this database,
     // so drain it until our own run comes up instead of assuming it is first.

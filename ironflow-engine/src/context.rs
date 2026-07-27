@@ -1046,10 +1046,12 @@ impl WorkflowContext {
                 labels: parent_labels,
                 scheduled_at: None,
                 created_by: parent_author,
+                idempotency_key: None,
                 // The child shares the parent's cap; it does not get its own budget.
                 max_cost_usd: self.max_cost_usd,
             })
-            .await?;
+            .await?
+            .into_run();
 
         let child_run_id = child_run.id;
         info!(
@@ -1526,10 +1528,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1590,10 +1594,12 @@ mod tests {
                 labels: Default::default(),
                 scheduled_at: None,
                 created_by,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .expect("failed to create parent run");
+            .expect("failed to create parent run")
+            .into_run();
 
         let resolver: HandlerResolver = Arc::new(|name: &str| match name {
             "noop-sub" => Some(Arc::new(NoopSubWorkflow) as Arc<dyn WorkflowHandler>),
@@ -1657,10 +1663,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1709,10 +1717,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1795,10 +1805,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1884,10 +1896,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1945,10 +1959,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store

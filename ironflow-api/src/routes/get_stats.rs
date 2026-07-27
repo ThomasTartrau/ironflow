@@ -154,10 +154,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         // Completed
         let r2 = store
@@ -170,10 +172,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         store
             .update_run_status(r2.id, RunStatus::Running)
             .await
@@ -194,10 +198,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         store
             .update_run_status(r3.id, RunStatus::Running)
             .await
@@ -324,10 +330,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         let r = store
             .create_run(NewRun {
                 created_by: None,
@@ -338,10 +346,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
                 max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         store
             .update_run_status(r.id, RunStatus::Running)
             .await
@@ -401,6 +411,7 @@ mod tests {
                     labels: HashMap::new(),
                     scheduled_at: None,
                     created_by: Some(RunActor::User { user_id }),
+                    idempotency_key: None,
                     max_cost_usd: None,
                 })
                 .await
