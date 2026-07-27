@@ -19,7 +19,7 @@ pub async fn create_run(
     State(state): State<AppState>,
     Json(req): Json<NewRun>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let run = state.store.create_run(req).await?;
+    let run = state.store.create_run(req).await?.into_run();
     state.engine.event_publisher().publish(Event::RunCreated {
         run_id: run.id,
         workflow_name: run.workflow_name.clone(),

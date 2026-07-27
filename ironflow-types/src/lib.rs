@@ -9,6 +9,7 @@
 //! - **`openapi`** -- derive [`utoipa::ToSchema`] for OpenAPI spec generation.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Pagination metadata returned by list endpoints.
 ///
@@ -77,7 +78,11 @@ pub struct ApiResponse<T> {
 /// Error response body.
 ///
 /// The inner part of the API error envelope:
-/// `{ "error": { "code": "...", "message": "..." } }`.
+/// `{ "error": { "code": "...", "message": "...", "details": { ... } } }`.
+///
+/// `details` carries error-specific structured context (for example the run
+/// holding a conflicting idempotency key). It is omitted from the JSON output
+/// when absent.
 ///
 /// # Examples
 ///
@@ -87,6 +92,7 @@ pub struct ApiResponse<T> {
 /// let json = r#"{"code": "RUN_NOT_FOUND", "message": "run not found"}"#;
 /// let err: ErrorEnvelope = serde_json::from_str(json).unwrap();
 /// assert_eq!(err.code, "RUN_NOT_FOUND");
+/// assert!(err.details.is_none());
 /// ```
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,10 +101,16 @@ pub struct ErrorEnvelope {
     pub code: String,
     /// Human-readable error message.
     pub message: String,
+    /// Optional structured context attached to the error.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -134,10 +146,45 @@ mod tests {
         let envelope = ErrorEnvelope {
             code: "BAD_REQUEST".to_string(),
             message: "invalid input".to_string(),
+            details: None,
         };
         let json = serde_json::to_string(&envelope).unwrap();
         let deserialized: ErrorEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.code, "BAD_REQUEST");
         assert_eq!(deserialized.message, "invalid input");
+        assert!(deserialized.details.is_none());
+    }
+
+    #[test]
+    fn error_envelope_omits_absent_details() {
+        let envelope = ErrorEnvelope {
+            code: "BAD_REQUEST".to_string(),
+            message: "invalid input".to_string(),
+            details: None,
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        assert_eq!(json, r#"{"code":"BAD_REQUEST","message":"invalid input"}"#);
+    }
+
+    #[test]
+    fn error_envelope_roundtrip_with_details() {
+        let envelope = ErrorEnvelope {
+            code: "IDEMPOTENCY_KEY_CONFLICT".to_string(),
+            message: "conflict".to_string(),
+            details: Some(json!({ "run_id": "0199-abc" })),
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        let deserialized: ErrorEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deserialized.details.expect("details present")["run_id"],
+            "0199-abc"
+        );
+    }
+
+    #[test]
+    fn error_envelope_deserializes_without_details_field() {
+        let json = r#"{"code": "RUN_NOT_FOUND", "message": "run not found"}"#;
+        let envelope: ErrorEnvelope = serde_json::from_str(json).unwrap();
+        assert!(envelope.details.is_none());
     }
 }

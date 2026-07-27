@@ -39,6 +39,13 @@ pub enum RunCommands {
         /// failure. Defaults to 0 (no automatic retry).
         #[arg(long)]
         max_retries: Option<u32>,
+        /// Idempotency key making the call safe to replay.
+        ///
+        /// Reusing the same key returns the run it already created instead of
+        /// starting a second one. Valid for 24 hours. At most 255 printable
+        /// ASCII characters.
+        #[arg(long)]
+        idempotency_key: Option<String>,
         /// Maximum cumulative cost for this run, in USD. Overrides the
         /// workflow and server defaults.
         #[arg(long = "max-cost", value_name = "USD")]
@@ -135,6 +142,7 @@ pub async fn execute(
             payload,
             payload_file,
             max_retries,
+            idempotency_key,
             max_cost,
         } => {
             validate_max_cost(*max_cost)?;
@@ -153,7 +161,10 @@ pub async fn execute(
                 .try_into()
                 .context("failed to build CreateRunRequest")?;
 
-            let response = client.create_run(&request).await?;
+            let response = match idempotency_key {
+                Some(key) => client.create_run_idempotent(&request, key).await?,
+                None => client.create_run(&request).await?,
+            };
             output::print_output(json_mode, &response, || {
                 output::runs_table(slice::from_ref(&response.data))
             })?;

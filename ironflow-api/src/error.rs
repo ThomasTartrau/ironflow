@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use ironflow_engine::error::MONTHLY_BUDGET_EXCEEDED_CODE;
 use ironflow_store::error::StoreError;
 use ironflow_types::ErrorEnvelope;
-use serde_json::json;
+use serde_json::{Value, json};
 use thiserror::Error;
 use tracing::error;
 use uuid::Uuid;
@@ -86,6 +86,11 @@ pub enum ApiError {
     #[error("insufficient scope")]
     InsufficientScope,
 
+    /// The idempotency key is already bound to a different request (409).
+    ///
+    /// Carries the run holding the key so the client can inspect it.
+    #[error("idempotency key already used with a different request")]
+    IdempotencyKeyConflict(Uuid),
     /// The global monthly cost quota is exhausted (429).
     ///
     /// Only blocks the creation of new runs; runs already in flight continue.
@@ -119,6 +124,7 @@ impl ApiError {
             ApiError::SecretNotFound(_) => "SECRET_NOT_FOUND",
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
+            ApiError::IdempotencyKeyConflict(_) => "IDEMPOTENCY_KEY_CONFLICT",
             ApiError::MonthlyBudgetExceeded(_) => MONTHLY_BUDGET_EXCEEDED_CODE,
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(_) => "DATABASE_ERROR",
@@ -143,10 +149,22 @@ impl ApiError {
             ApiError::UserNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::InsufficientScope => StatusCode::FORBIDDEN,
+            ApiError::IdempotencyKeyConflict(_) => StatusCode::CONFLICT,
             ApiError::MonthlyBudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    /// Structured context attached to the JSON error body, if any.
+    ///
+    /// Never carries internal detail: only identifiers the caller is already
+    /// entitled to see.
+    fn details(&self) -> Option<Value> {
+        match self {
+            ApiError::IdempotencyKeyConflict(run_id) => Some(json!({ "run_id": run_id })),
+            _ => None,
         }
     }
 }
@@ -155,6 +173,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let code = self.code().to_string();
+        let details = self.details();
 
         let message = match &self {
             ApiError::Store(StoreError::Crypto(_)) => {
@@ -171,7 +190,11 @@ impl IntoResponse for ApiError {
             _ => {}
         }
 
-        let envelope = ErrorEnvelope { code, message };
+        let envelope = ErrorEnvelope {
+            code,
+            message,
+            details,
+        };
 
         (status, Json(json!({ "error": envelope }))).into_response()
     }

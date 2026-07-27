@@ -38,7 +38,7 @@ mod tests {
     use std::net::SocketAddr;
 
     use axum::extract::{Path, Query};
-    use axum::http::StatusCode;
+    use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use axum::routing::{get, post};
     use axum::{Json, Router};
@@ -110,13 +110,18 @@ mod tests {
                         }
                     }))
                 })
-                .post(|Json(body): Json<Value>| async move {
+                .post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                    let key = headers
+                        .get("idempotency-key")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
                     let mut data = json!({
                         "id": "new-run",
                         "workflow": body["workflow"],
                         "payload": body["payload"],
                         "max_retries": body["max_retries"],
-                        "status": "pending"
+                        "status": "pending",
+                        "idempotency_key": key
                     });
                     // The real API echoes the cap back and omits it when absent.
                     if let Some(cap) = body.get("max_cost_usd") {
@@ -243,6 +248,7 @@ mod tests {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env":"prod"}"#.to_string()),
             max_retries: Some(2),
+            idempotency_key: None,
             max_cost_usd: None,
         };
 
@@ -263,6 +269,7 @@ mod tests {
             workflow: "backup".to_string(),
             payload: None,
             max_retries: None,
+            idempotency_key: None,
             max_cost_usd: None,
         };
 
@@ -282,6 +289,7 @@ mod tests {
             workflow: "deploy".to_string(),
             payload: Some("not-json".to_string()),
             max_retries: None,
+            idempotency_key: None,
             max_cost_usd: None,
         };
 
@@ -292,6 +300,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_run_forwards_the_idempotency_key() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: Some(r#"{"env":"prod"}"#.to_string()),
+            max_retries: None,
+            idempotency_key: Some("github:abc-123".to_string()),
+            max_cost_usd: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["idempotency_key"], "github:abc-123");
+    }
+
+    #[tokio::test]
+    async fn create_run_without_a_key_sends_no_header() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed["idempotency_key"].is_null());
+    }
+
+    #[tokio::test]
     async fn create_run_forwards_max_cost_usd() {
         let addr = start_server(api_router()).await;
         let client = client_for(addr);
@@ -299,6 +343,7 @@ mod tests {
             workflow: "deploy".to_string(),
             payload: None,
             max_retries: None,
+            idempotency_key: None,
             max_cost_usd: Some(2.5),
         };
 
@@ -316,6 +361,7 @@ mod tests {
             workflow: "deploy".to_string(),
             payload: None,
             max_retries: None,
+            idempotency_key: None,
             max_cost_usd: None,
         };
 

@@ -205,7 +205,8 @@ async fn run_stops_exactly_when_the_next_step_would_cross_the_cap() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -250,7 +251,8 @@ async fn run_without_cap_executes_every_step() {
             EnqueueOptions::default(),
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
     assert!(run.max_cost_usd.is_none());
 
     store
@@ -285,7 +287,8 @@ async fn run_completes_when_the_cap_is_exactly_met() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -316,7 +319,8 @@ async fn zero_cap_refuses_the_first_agent_step() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -351,7 +355,8 @@ async fn zero_cap_does_not_block_non_agent_steps() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -383,7 +388,8 @@ async fn parallel_wave_is_refused_as_a_whole_and_creates_no_step() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -421,7 +427,8 @@ async fn parallel_wave_runs_when_the_summed_budget_fits() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -459,7 +466,8 @@ async fn sub_workflow_cost_counts_against_the_parent_cap() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -496,7 +504,8 @@ async fn sub_workflow_inherits_the_parent_cap_and_stops_inside_the_child() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -543,7 +552,8 @@ async fn sub_workflow_completes_when_the_shared_cap_has_room() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -599,6 +609,7 @@ async fn cap_resolution_prefers_request_then_handler_then_server() {
             )
             .await
             .expect("enqueue")
+            .into_run()
             .max_cost_usd
     };
 
@@ -640,7 +651,8 @@ async fn monthly_quota_blocks_new_runs_without_touching_running_ones() {
             EnqueueOptions::default(),
         )
         .await
-        .expect("first run allowed");
+        .expect("first run allowed")
+        .into_run();
 
     store
         .update_run_status(first.id, RunStatus::Running)
@@ -691,7 +703,8 @@ async fn monthly_quota_allows_runs_while_there_is_room() {
                 EnqueueOptions::default(),
             )
             .await
-            .expect("run allowed while quota has room");
+            .expect("run allowed while quota has room")
+            .into_run();
     }
 }
 
@@ -710,7 +723,8 @@ async fn unconfigured_monthly_quota_never_blocks() {
             EnqueueOptions::default(),
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -735,7 +749,8 @@ async fn unconfigured_monthly_quota_never_blocks() {
             EnqueueOptions::default(),
         )
         .await
-        .expect("no quota configured, creation must succeed");
+        .expect("no quota configured, creation must succeed")
+        .into_run();
 }
 
 // ---------------------------------------------------------------------------
@@ -763,7 +778,8 @@ async fn cap_refusal_cancels_the_run_even_with_retries_left() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
@@ -808,7 +824,8 @@ async fn the_cap_covers_every_attempt_of_a_run() {
             },
         )
         .await
-        .expect("enqueue");
+        .expect("enqueue")
+        .into_run();
 
     store
         .update_run_status(run.id, RunStatus::Running)
