@@ -18,6 +18,10 @@ pub struct CreateRunTool {
     pub workflow: String,
     /// Optional JSON payload to pass to the workflow as a JSON string. Defaults to {}.
     pub payload: Option<String>,
+    /// Optional idempotency key making the call safe to replay. Reusing the same
+    /// key returns the run it already created instead of starting a second one.
+    /// Valid for 24 hours. At most 255 printable ASCII characters.
+    pub idempotency_key: Option<String>,
 }
 
 impl CreateRunTool {
@@ -32,10 +36,11 @@ impl CreateRunTool {
             "payload": parsed_payload,
         });
 
-        let run: Value = client
-            .post("/runs", &body)
-            .await
-            .map_err(CallToolError::new)?;
+        let run: Value = match &self.idempotency_key {
+            Some(key) => client.post_idempotent("/runs", &body, key).await,
+            None => client.post("/runs", &body).await,
+        }
+        .map_err(CallToolError::new)?;
 
         let text = serde_json::to_string_pretty(&run).map_err(CallToolError::new)?;
         Ok(CallToolResult::text_content(vec![text.into()]))

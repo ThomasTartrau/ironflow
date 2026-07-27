@@ -29,7 +29,8 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
-//! }).await?;
+//!     idempotency_key: None,
+//! }).await?.into_run();
 //!
 //! println!("Run {} is {:?}", run.id, run.status);
 //! # Ok(())

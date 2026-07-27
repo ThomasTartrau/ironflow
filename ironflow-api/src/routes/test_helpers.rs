@@ -16,9 +16,11 @@ pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: R
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            idempotency_key: None,
         })
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
     store
         .update_run_status(run.id, RunStatus::Running)
         .await

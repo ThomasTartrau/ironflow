@@ -990,6 +990,11 @@
             "format": "uuid",
             "type": "string"
           },
+          "idempotency_key": {
+            "description": "Idempotency key that produced this run, when one was supplied.",
+            "nullable": true,
+            "type": "string"
+          },
           "labels": {
             "additionalProperties": {
               "type": "string"
@@ -1855,8 +1860,7 @@
             "name": "event_type",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/EventKind",
-              "nullable": true
+              "$ref": "#/components/schemas/EventKind"
             }
           },
           {
@@ -1866,7 +1870,6 @@
             "required": false,
             "schema": {
               "format": "uuid",
-              "nullable": true,
               "type": "string"
             }
           },
@@ -1877,7 +1880,6 @@
             "required": false,
             "schema": {
               "format": "date-time",
-              "nullable": true,
               "type": "string"
             }
           },
@@ -1888,7 +1890,6 @@
             "required": false,
             "schema": {
               "format": "date-time",
-              "nullable": true,
               "type": "string"
             }
           },
@@ -1900,7 +1901,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -1912,7 +1912,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2105,7 +2104,6 @@
             "name": "workflow",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2115,8 +2113,7 @@
             "name": "status",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/RunStatus",
-              "nullable": true
+              "$ref": "#/components/schemas/RunStatus"
             }
           },
           {
@@ -2125,7 +2122,6 @@
             "name": "has_steps",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "boolean"
             }
           },
@@ -2135,7 +2131,6 @@
             "name": "label",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2147,7 +2142,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2159,7 +2153,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2193,8 +2186,19 @@
         ]
       },
       "post": {
-        "description": "Returns 201 Created with the newly enqueued run.\nReturns 400 Bad Request if the workflow is unknown.",
+        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown or the\n`Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.",
         "operationId": "create_run",
+        "parameters": [
+          {
+            "description": "Optional key making the call safe to replay. At most 255 printable ASCII characters, valid for 24 hours.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2207,6 +2211,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Idempotency key replayed: the existing run is returned"
+          },
           "201": {
             "content": {
               "application/json": {
@@ -2218,13 +2232,16 @@
             "description": "Run created successfully"
           },
           "400": {
-            "description": "Unknown workflow"
+            "description": "Unknown workflow or malformed Idempotency-Key"
           },
           "401": {
             "description": "Unauthorized"
           },
           "403": {
             "description": "Forbidden"
+          },
+          "409": {
+            "description": "Idempotency key already used with a different request"
           }
         },
         "security": [
@@ -2498,7 +2515,6 @@
             "name": "prefix",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2510,7 +2526,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2522,7 +2537,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2714,7 +2728,6 @@
             "name": "workflow",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2724,8 +2737,7 @@
             "name": "status",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/RunStatus",
-              "nullable": true
+              "$ref": "#/components/schemas/RunStatus"
             }
           },
           {
@@ -2734,7 +2746,6 @@
             "name": "has_steps",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "boolean"
             }
           },
@@ -2744,7 +2755,6 @@
             "name": "label",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2756,7 +2766,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2768,7 +2777,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2812,7 +2820,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2824,7 +2831,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -3026,7 +3032,6 @@
             "name": "name",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -3036,7 +3041,6 @@
             "name": "category",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           }

@@ -20,6 +20,7 @@ fn new_run(name: &str) -> NewRun {
         handler_version: None,
         labels: HashMap::new(),
         scheduled_at: None,
+        idempotency_key: None,
     }
 }
 
@@ -46,7 +47,11 @@ async fn get_store() -> ironflow_store::postgres::PostgresStore {
 #[ignore]
 async fn cost_usd_zero_on_new_run() {
     let store = get_store().await;
-    let created = store.create_run(new_run("test-workflow")).await.unwrap();
+    let created = store
+        .create_run(new_run("test-workflow"))
+        .await
+        .unwrap()
+        .into_run();
 
     let retrieved = store.get_run(created.id).await.unwrap();
     assert!(retrieved.is_some());
@@ -59,7 +64,11 @@ async fn cost_usd_zero_on_new_run() {
 #[ignore]
 async fn cost_usd_updated_on_run() {
     let store = get_store().await;
-    let created = store.create_run(new_run("test-workflow")).await.unwrap();
+    let created = store
+        .create_run(new_run("test-workflow"))
+        .await
+        .unwrap()
+        .into_run();
 
     // Update run with cost: 12.3456
     let cost_value = Decimal::new(123456, 4);
@@ -89,7 +98,11 @@ async fn cost_usd_updated_on_run() {
 #[ignore]
 async fn cost_usd_max_precision() {
     let store = get_store().await;
-    let created = store.create_run(new_run("test-workflow")).await.unwrap();
+    let created = store
+        .create_run(new_run("test-workflow"))
+        .await
+        .unwrap()
+        .into_run();
 
     // Update run with max NUMERIC(12,6) value: 999999.999999
     let cost_value = Decimal::new(999999999999, 6);
@@ -121,7 +134,11 @@ async fn cost_usd_max_precision() {
 #[ignore]
 async fn cost_usd_zero_on_new_step() {
     let store = get_store().await;
-    let run = store.create_run(new_run("test-workflow")).await.unwrap();
+    let run = store
+        .create_run(new_run("test-workflow"))
+        .await
+        .unwrap()
+        .into_run();
 
     // Transition run to Running state for step operations
     store
@@ -150,7 +167,11 @@ async fn cost_usd_zero_on_new_step() {
 #[ignore]
 async fn cost_usd_updated_on_step() {
     let store = get_store().await;
-    let run = store.create_run(new_run("test-workflow")).await.unwrap();
+    let run = store
+        .create_run(new_run("test-workflow"))
+        .await
+        .unwrap()
+        .into_run();
 
     // Transition run to Running state for step operations
     store
@@ -207,7 +228,11 @@ async fn get_stats_total_cost_with_decimal() {
     let store = get_store().await;
 
     // Create first run with cost
-    let run1 = store.create_run(new_run("workflow-1")).await.unwrap();
+    let run1 = store
+        .create_run(new_run("workflow-1"))
+        .await
+        .unwrap()
+        .into_run();
     let cost1 = Decimal::new(100000, 4); // 10.0000
     store
         .update_run(
@@ -221,7 +246,11 @@ async fn get_stats_total_cost_with_decimal() {
         .unwrap();
 
     // Create second run with different cost
-    let run2 = store.create_run(new_run("workflow-1")).await.unwrap();
+    let run2 = store
+        .create_run(new_run("workflow-1"))
+        .await
+        .unwrap()
+        .into_run();
     let cost2 = Decimal::new(250000, 4); // 25.0000
     store
         .update_run(

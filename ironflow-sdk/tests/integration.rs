@@ -252,3 +252,99 @@ async fn unauthorized_without_token() {
     assert!(err.is_api_error());
     assert_eq!(err.status(), Some(401));
 }
+
+// ── Idempotency-Key ────────────────────────────────────────────
+
+fn deploy_request() -> ironflow_sdk::types::CreateRunRequest {
+    let mut payload = serde_json::Map::new();
+    payload.insert("env".to_string(), serde_json::json!("prod"));
+
+    ironflow_sdk::types::CreateRunRequest {
+        workflow: "deploy".to_string(),
+        payload: Some(payload),
+        labels: None,
+        scheduled_at: None,
+    }
+}
+
+#[tokio::test]
+async fn create_run_idempotent_binds_the_key() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let created = client
+        .create_run_idempotent(&deploy_request(), "github:abc-123")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        created.data.idempotency_key.as_deref(),
+        Some("github:abc-123")
+    );
+}
+
+#[tokio::test]
+async fn create_run_idempotent_replays_the_same_run() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let first = client
+        .create_run_idempotent(&deploy_request(), "github:abc-123")
+        .await
+        .unwrap();
+    let second = client
+        .create_run_idempotent(&deploy_request(), "github:abc-123")
+        .await
+        .unwrap();
+
+    assert_eq!(first.data.id, second.data.id);
+}
+
+#[tokio::test]
+async fn create_run_idempotent_conflicts_on_a_different_payload() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    client
+        .create_run_idempotent(&deploy_request(), "github:abc-123")
+        .await
+        .unwrap();
+
+    let mut other = deploy_request();
+    let mut payload = serde_json::Map::new();
+    payload.insert("env".to_string(), serde_json::json!("staging"));
+    other.payload = Some(payload);
+
+    let err = client
+        .create_run_idempotent(&other, "github:abc-123")
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.status(), Some(409));
+}
+
+#[tokio::test]
+async fn create_run_idempotent_rejects_a_malformed_key() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let err = client
+        .create_run_idempotent(&deploy_request(), "")
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.status(), Some(400));
+}
+
+#[tokio::test]
+async fn create_run_without_a_key_still_duplicates() {
+    // Non-regression: `create_run` must not send an Idempotency-Key header.
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let first = client.create_run(&deploy_request()).await.unwrap();
+    let second = client.create_run(&deploy_request()).await.unwrap();
+
+    assert_ne!(first.data.id, second.data.id);
+    assert!(first.data.idempotency_key.is_none());
+}

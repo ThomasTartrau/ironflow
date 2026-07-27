@@ -66,8 +66,12 @@ pub async fn retry_run(
             handler_version: original.handler_version,
             labels: original.labels,
             scheduled_at: None,
+            // A retry is a deliberate re-execution: it must not inherit the
+            // original key, which is still bound to the run being retried.
+            idempotency_key: None,
         })
-        .await?;
+        .await?
+        .into_run();
 
     state.engine.event_publisher().publish(Event::RunCreated {
         run_id: new_run.id,
@@ -141,9 +145,11 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -192,9 +198,11 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let state = test_state(store);
         let auth_header = make_auth_header(&state);
@@ -226,9 +234,11 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -269,9 +279,11 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -315,5 +327,65 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), HttpStatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn retry_does_not_inherit_the_idempotency_key() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({"key": "value"}),
+                max_retries: 3,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: Some("github:abc-123".to_string()),
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert!(
+            json_val["data"].get("idempotency_key").is_none(),
+            "the retry run must not carry the original key"
+        );
+
+        // The original key still resolves to the original run.
+        let bound = store
+            .find_run_by_idempotency_key("github:abc-123")
+            .await
+            .unwrap()
+            .expect("key still bound");
+        assert_eq!(bound.id, run.id);
     }
 }

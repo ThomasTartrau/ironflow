@@ -27,7 +27,7 @@ use tracing::{error, info, warn};
 
 use crate::cron::CronJob;
 use crate::error::RuntimeError;
-use crate::webhook::WebhookAuth;
+use crate::webhook::{WebhookAuth, extract_delivery_id};
 
 /// Default maximum body size for webhook payloads (2 MiB).
 const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
@@ -35,8 +35,35 @@ const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 /// Default maximum number of concurrently running webhook handlers.
 const DEFAULT_MAX_CONCURRENT_HANDLERS: usize = 64;
 
-type WebhookHandler = Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+type WebhookHandler =
+    Arc<dyn Fn(WebhookContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 type ShutdownSignal = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// What a webhook handler registered via [`Runtime::webhook_with_context`] receives.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_runtime::prelude::*;
+///
+/// let runtime = Runtime::new().webhook_with_context(
+///     "/hooks/github",
+///     WebhookAuth::github("secret"),
+///     |ctx: WebhookContext| async move {
+///         println!("{} from {:?}", ctx.payload, ctx.delivery_id);
+///     },
+/// );
+/// ```
+#[derive(Debug, Clone)]
+pub struct WebhookContext {
+    /// The parsed JSON body.
+    pub payload: Value,
+    /// Provider delivery identifier, already prefixed (`github:…`, `gitlab:…`).
+    ///
+    /// `None` when the provider sent no known delivery header. Suitable as-is
+    /// for the `Idempotency-Key` header of `POST /api/v1/runs`.
+    pub delivery_id: Option<String>,
+}
 
 /// Metric name constants for the runtime (webhook + cron).
 #[cfg(feature = "prometheus")]
@@ -216,9 +243,49 @@ impl Runtime {
     ///         println!("payload: {payload}");
     ///     });
     /// ```
-    pub fn webhook<F, Fut>(mut self, path: &str, auth: WebhookAuth, handler: F) -> Self
+    pub fn webhook<F, Fut>(self, path: &str, auth: WebhookAuth, handler: F) -> Self
     where
         F: Fn(Value) -> Fut + Send + Sync + Clone + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.webhook_with_context(path, auth, move |ctx| handler(ctx.payload))
+    }
+
+    /// Registers a webhook route whose handler also sees the delivery identifier.
+    ///
+    /// Identical to [`Runtime::webhook`], except the handler receives a
+    /// [`WebhookContext`] instead of the bare payload. Use this when the workflow
+    /// should be enqueued idempotently: replaying the same provider delivery then
+    /// resolves to the run it already created rather than a duplicate.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The URL path to listen on (e.g. `"/hooks/github"`).
+    /// * `auth` - The [`WebhookAuth`] strategy for this endpoint.
+    /// * `handler` - An async function receiving the [`WebhookContext`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` does not start with `/`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_runtime::prelude::*;
+    ///
+    /// let runtime = Runtime::new().webhook_with_context(
+    ///     "/hooks/github",
+    ///     WebhookAuth::github("secret"),
+    ///     |ctx| async move {
+    ///         // `ctx.delivery_id` is `Some("github:<X-GitHub-Delivery>")` when
+    ///         // the provider stamped the request.
+    ///         println!("delivery: {:?}", ctx.delivery_id);
+    ///     },
+    /// );
+    /// ```
+    pub fn webhook_with_context<F, Fut>(mut self, path: &str, auth: WebhookAuth, handler: F) -> Self
+    where
+        F: Fn(WebhookContext) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         assert!(
@@ -228,9 +295,9 @@ impl Runtime {
         if matches!(auth, WebhookAuth::None) {
             warn!(path = %path, "webhook registered with WebhookAuth::None - all requests will be accepted without authentication");
         }
-        let handler: WebhookHandler = Arc::new(move |payload| {
+        let handler: WebhookHandler = Arc::new(move |ctx| {
             let handler = handler.clone();
-            Box::pin(async move { handler(payload).await })
+            Box::pin(async move { handler(ctx).await })
         });
         self.webhooks.push(WebhookRoute {
             path: path.to_string(),
@@ -573,7 +640,7 @@ impl HandlerTracker {
     }
 
     /// Spawn a handler task, respecting the concurrency limit.
-    async fn spawn(&self, name: String, handler: WebhookHandler, payload: Value) {
+    async fn spawn(&self, name: String, handler: WebhookHandler, ctx: WebhookContext) {
         let semaphore = self.semaphore.clone();
         let mut js = self.join_set.lock().await;
         // Reap completed tasks to detect panics early.
@@ -591,7 +658,7 @@ impl HandlerTracker {
                     .await
                     .expect("semaphore closed unexpectedly");
                 info!("webhook workflow started");
-                handler(payload).await;
+                handler(ctx).await;
                 info!("webhook workflow completed");
             }
             .instrument(span),
@@ -652,9 +719,14 @@ async fn webhook_handler(
         metrics::counter!(metric_names::WEBHOOK_RECEIVED_TOTAL, "path" => label, "auth" => metric_names::AUTH_ACCEPTED).increment(1);
     }
 
+    let ctx = WebhookContext {
+        payload,
+        delivery_id: extract_delivery_id(&headers),
+    };
+
     state
         .tracker
-        .spawn(name.to_string(), state.handler.clone(), payload)
+        .spawn(name.to_string(), state.handler.clone(), ctx)
         .await;
 
     StatusCode::ACCEPTED

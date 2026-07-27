@@ -13,8 +13,8 @@ use uuid::Uuid;
 use crate::api_key_store::ApiKeyStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
-    NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
-    StepDependency, StepUpdate,
+    NewRun, NewStep, NewStepDependency, Page, Run, RunCreation, RunFilter, RunStats, RunStatus,
+    RunUpdate, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::secret_store::SecretStore;
@@ -47,7 +47,8 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 ///     handler_version: None,
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
-/// }).await?;
+///     idempotency_key: None,
+/// }).await?.into_run();
 ///
 /// let fetched = store.get_run(run.id).await?;
 /// assert!(fetched.is_some());
@@ -56,7 +57,21 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 /// ```
 pub trait RunStore: Send + Sync {
     /// Create a new run in `Pending` status.
-    fn create_run(&self, req: NewRun) -> StoreFuture<'_, Run>;
+    ///
+    /// When [`NewRun::idempotency_key`] is set and already bound to a run created
+    /// within [`IDEMPOTENCY_WINDOW`](crate::entities::IDEMPOTENCY_WINDOW), nothing is
+    /// inserted and that run is returned as [`RunCreation::Existing`]. A key bound to
+    /// an older run is released and reused for the new one.
+    ///
+    /// Concurrent calls sharing the same key resolve to a single run: exactly one
+    /// receives [`RunCreation::Created`], the others [`RunCreation::Existing`].
+    fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation>;
+
+    /// Look up the run bound to an idempotency key.
+    ///
+    /// Returns `None` when the key is unknown, or when the run holding it is older
+    /// than [`IDEMPOTENCY_WINDOW`](crate::entities::IDEMPOTENCY_WINDOW).
+    fn find_run_by_idempotency_key(&self, key: &str) -> StoreFuture<'_, Option<Run>>;
 
     /// Get a run by ID. Returns `None` if not found.
     fn get_run(&self, id: Uuid) -> StoreFuture<'_, Option<Run>>;
@@ -182,7 +197,8 @@ pub trait RunStore: Send + Sync {
 ///     handler_version: None,
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
-/// }).await?;
+///     idempotency_key: None,
+/// }).await?.into_run();
 /// let _users = store.count_users().await?;
 /// # Ok(())
 /// # }

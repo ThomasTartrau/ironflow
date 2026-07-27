@@ -956,8 +956,10 @@ impl WorkflowContext {
                 handler_version: None,
                 labels: parent_labels,
                 scheduled_at: None,
+                idempotency_key: None,
             })
-            .await?;
+            .await?
+            .into_run();
 
         let child_run_id = child_run.id;
         info!(
@@ -1421,9 +1423,11 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1476,9 +1480,11 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1526,9 +1532,11 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1610,9 +1618,11 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1697,9 +1707,11 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1756,9 +1768,11 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store

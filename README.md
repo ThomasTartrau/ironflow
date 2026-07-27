@@ -44,6 +44,7 @@
 | **⏰ Cron scheduling** - Job scheduling via `tokio-cron-scheduler` | **📊 Prometheus metrics** - Shell, HTTP, agent, webhook, and cron counters |
 | **🏃 Dry-run mode** - Skip execution while logging intent | **📈 Workflow tracker** - Cost, tokens, and duration across steps |
 | **🚀 Remote transports** - Run Claude Code via SSH, Docker, or Kubernetes | **🔑 OAuth support** - Inject Claude OAuth credentials into remote pods |
+| **🔁 Idempotent runs** - `Idempotency-Key` on run creation, so replayed webhooks never duplicate | |
 
 ---
 
@@ -447,6 +448,99 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |--------|------|-------------|
 | `GET` | `/health` | Returns `200 OK` with body `"ok"` |
 | `GET` | `/metrics` | Prometheus metrics (requires `prometheus` feature) |
+
+### Webhook Replays
+
+GitHub and GitLab replay a delivery when the receiver times out or answers 5xx.
+Use `webhook_with_context` to get the provider delivery id, already prefixed and
+ready to pass as an `Idempotency-Key`, so a replay does not start a second run.
+
+```rust
+use ironflow_runtime::prelude::*;
+
+Runtime::new().webhook_with_context(
+    "/hooks/github",
+    WebhookAuth::github("my-secret"),
+    move |ctx: WebhookContext| async move {
+        // ctx.delivery_id == Some("github:8f4e2a10-...") when the provider
+        // stamped the request, None otherwise.
+        match ctx.delivery_id {
+            Some(key) => { client.create_run_idempotent(&request, &key).await?; }
+            None => { client.create_run(&request).await?; }
+        }
+    },
+);
+```
+
+| Provider | Header read | Derived key |
+|----------|-------------|-------------|
+| GitHub | `X-GitHub-Delivery` | `github:<id>` |
+| GitLab | `X-Gitlab-Event-UUID` | `gitlab:<id>` |
+
+`webhook()` keeps its original signature and receives only the payload.
+
+---
+
+## 🔁 Idempotency
+
+`POST /api/v1/runs` accepts an optional `Idempotency-Key` header. Replaying the
+same key returns the run it already created instead of starting a second one --
+protection against webhook replays and client retries on network timeouts.
+
+| Situation | Response |
+|-----------|----------|
+| No header | `201 Created`, a new run every time |
+| Key unknown | `201 Created` with the new run |
+| Key known, same workflow and payload | `200 OK` with the original run |
+| Key known, different workflow or payload | `409 IDEMPOTENCY_KEY_CONFLICT` |
+
+Rules:
+
+- A key is at most **255 printable ASCII characters** and must not be empty.
+- A key is **global**, not scoped per workflow: reusing one across two workflows
+  is a conflict. Prefix it (`github:…`) to keep sources apart.
+- A key stays bound for **24 hours**. Past that window it is released and the
+  next call with it creates a new run.
+- The run returned on replay is the original one **whatever its state**, including
+  `failed` or `cancelled`. Use `POST /api/v1/runs/:id/retry` to re-execute
+  deliberately; a retry never inherits the key.
+- Only the workflow and the payload decide replay versus conflict. Labels are
+  merged with the handler defaults server-side and are not compared.
+
+```bash
+# Same key twice: one run, second call answers 200.
+curl -X POST https://ironflow.example.com/api/v1/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: github:8f4e2a10" \
+  -H "Content-Type: application/json" \
+  -d '{"workflow": "deploy", "payload": {"env": "prod"}}'
+```
+
+A conflict names the run holding the key:
+
+```json
+{
+  "error": {
+    "code": "IDEMPOTENCY_KEY_CONFLICT",
+    "message": "idempotency key already used with a different request",
+    "details": { "run_id": "0199c3f0-..." }
+  }
+}
+```
+
+SDK, CLI and MCP all carry the key:
+
+```rust
+client.create_run_idempotent(&request, "github:8f4e2a10").await?;
+```
+
+```bash
+ironflow run create deploy --payload '{"env":"prod"}' \
+  --idempotency-key github:8f4e2a10
+```
+
+With the `prometheus` feature, `ironflow_run_idempotency_total{outcome}` counts
+`created`, `replayed` and `conflict` outcomes.
 
 ---
 

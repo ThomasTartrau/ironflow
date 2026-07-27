@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -62,6 +62,126 @@ pub struct Run {
     /// When the run should start executing. `None` means immediately.
     #[serde(default)]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// Client-supplied idempotency key that produced this run, if any.
+    ///
+    /// See [`IDEMPOTENCY_WINDOW`] for how long a key stays bound to its run.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+/// How long a client-supplied idempotency key stays bound to its run.
+///
+/// Past this window a replayed key no longer resolves to the original run:
+/// the key is released and a fresh run is created.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::IDEMPOTENCY_WINDOW;
+///
+/// assert_eq!(IDEMPOTENCY_WINDOW.num_hours(), 24);
+/// ```
+pub const IDEMPOTENCY_WINDOW: TimeDelta = TimeDelta::hours(24);
+
+/// Maximum accepted length of an idempotency key, in bytes.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::MAX_IDEMPOTENCY_KEY_LEN;
+///
+/// assert_eq!(MAX_IDEMPOTENCY_KEY_LEN, 255);
+/// ```
+pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
+
+/// Outcome of [`RunStore::create_run`](crate::store::RunStore::create_run).
+///
+/// A request carrying an idempotency key already bound to a live run does not
+/// insert anything: the store returns the original run as [`RunCreation::Existing`].
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use ironflow_store::entities::{NewRun, RunCreation, TriggerKind};
+/// use ironflow_store::memory::InMemoryStore;
+/// use ironflow_store::store::RunStore;
+/// use serde_json::json;
+///
+/// # async fn example() -> Result<(), ironflow_store::error::StoreError> {
+/// let store = InMemoryStore::new();
+/// let req = NewRun {
+///     workflow_name: "deploy".to_string(),
+///     trigger: TriggerKind::Manual,
+///     payload: json!({}),
+///     max_retries: 3,
+///     handler_version: None,
+///     labels: HashMap::new(),
+///     scheduled_at: None,
+///     idempotency_key: Some("deploy-2026-07-26".to_string()),
+/// };
+///
+/// assert!(store.create_run(req.clone()).await?.is_created());
+/// assert!(!store.create_run(req).await?.is_created());
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RunCreation {
+    /// A new run was inserted.
+    Created(Run),
+    /// The idempotency key already resolved to this run; nothing was inserted.
+    Existing(Run),
+}
+
+impl RunCreation {
+    /// Return the run, discarding whether it was created or replayed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ironflow_store::entities::RunCreation;
+    /// # fn example(creation: RunCreation) {
+    /// let run = creation.into_run();
+    /// # }
+    /// ```
+    pub fn into_run(self) -> Run {
+        match self {
+            RunCreation::Created(run) | RunCreation::Existing(run) => run,
+        }
+    }
+
+    /// Borrow the run, discarding whether it was created or replayed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ironflow_store::entities::RunCreation;
+    /// # fn example(creation: &RunCreation) {
+    /// let id = creation.run().id;
+    /// # }
+    /// ```
+    pub fn run(&self) -> &Run {
+        match self {
+            RunCreation::Created(run) | RunCreation::Existing(run) => run,
+        }
+    }
+
+    /// Whether a new run was actually inserted.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ironflow_store::entities::RunCreation;
+    /// # fn example(creation: &RunCreation) {
+    /// if creation.is_created() {
+    ///     // publish a RunCreated event
+    /// }
+    /// # }
+    /// ```
+    pub fn is_created(&self) -> bool {
+        matches!(self, RunCreation::Created(_))
+    }
 }
 
 /// Request to create a new run.
@@ -81,6 +201,7 @@ pub struct Run {
 ///     handler_version: None,
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
+///     idempotency_key: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +222,12 @@ pub struct NewRun {
     /// When the run should start executing. `None` means immediately.
     #[serde(default)]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// Optional idempotency key binding this request to a single run.
+    ///
+    /// When set and already bound to a run created within [`IDEMPOTENCY_WINDOW`],
+    /// the store returns that run instead of inserting a new one.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// Filters for listing runs.
@@ -183,6 +310,7 @@ mod tests {
             handler_version: Some("1.2.0".to_string()),
             labels: HashMap::from([("env".to_string(), "prod".to_string())]),
             scheduled_at: None,
+            idempotency_key: None,
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");
@@ -194,6 +322,7 @@ mod tests {
         assert_eq!(back.handler_version, new_run.handler_version);
         assert_eq!(back.labels, new_run.labels);
         assert_eq!(back.scheduled_at, new_run.scheduled_at);
+        assert_eq!(back.idempotency_key, new_run.idempotency_key);
     }
 
     #[test]
@@ -226,6 +355,7 @@ mod tests {
                 ("team".to_string(), "platform".to_string()),
             ]),
             scheduled_at: Some(now),
+            idempotency_key: Some("gh:abc-123".to_string()),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -246,6 +376,7 @@ mod tests {
         assert_eq!(back.handler_version, run.handler_version);
         assert_eq!(back.labels, run.labels);
         assert_eq!(back.scheduled_at, run.scheduled_at);
+        assert_eq!(back.idempotency_key, run.idempotency_key);
     }
 
     #[test]
