@@ -752,3 +752,107 @@ async fn unconfigured_monthly_quota_never_blocks() {
         .expect("no quota configured, creation must succeed")
         .into_run();
 }
+
+// ---------------------------------------------------------------------------
+// Cost cap vs automatic retry
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cap_refusal_cancels_the_run_even_with_retries_left() {
+    let (dir, _guard) = fixtures_dir("cap-vs-retry");
+    let store = Arc::new(InMemoryStore::new());
+    let mut engine = engine_with(store.clone(), &dir);
+    engine.register(SequentialAgents { n: 3 }).unwrap();
+
+    // Cap of $0.20 with $0.10 steps: the third step is refused while the run
+    // still has two retries in the bank.
+    let run = engine
+        .enqueue_handler_with_options(
+            "sequential-agents",
+            TriggerKind::Api,
+            json!({}),
+            EnqueueOptions {
+                max_retries: 2,
+                max_cost_usd: Some(Decimal::new(20, 2)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("enqueue")
+        .into_run();
+
+    store
+        .update_run_status(run.id, RunStatus::Running)
+        .await
+        .unwrap();
+
+    let err = engine
+        .execute_handler_run(run.id)
+        .await
+        .expect_err("third step must be refused");
+    assert!(matches!(err, EngineError::RunBudgetExceeded { .. }));
+
+    let final_run = store.get_run(run.id).await.unwrap().expect("run exists");
+    assert_eq!(
+        final_run.status.state,
+        RunStatus::Cancelled,
+        "a cap refusal must never arm a retry"
+    );
+    assert_eq!(final_run.retry_count, 0, "no attempt may be consumed");
+    assert!(
+        final_run.scheduled_at.is_none(),
+        "no backoff may be scheduled"
+    );
+}
+
+#[tokio::test]
+async fn the_cap_covers_every_attempt_of_a_run() {
+    let (dir, _guard) = fixtures_dir("cap-across-attempts");
+    let store = Arc::new(InMemoryStore::new());
+    let mut engine = engine_with(store.clone(), &dir);
+    engine.register(SequentialAgents { n: 3 }).unwrap();
+
+    let run = engine
+        .enqueue_handler_with_options(
+            "sequential-agents",
+            TriggerKind::Api,
+            json!({}),
+            EnqueueOptions {
+                max_retries: 1,
+                max_cost_usd: Some(Decimal::new(20, 2)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("enqueue")
+        .into_run();
+
+    store
+        .update_run_status(run.id, RunStatus::Running)
+        .await
+        .unwrap();
+    // As if a first attempt had already spent $0.15 of the $0.20 cap.
+    store
+        .update_run(
+            run.id,
+            RunUpdate {
+                cost_usd: Some(Decimal::new(15, 2)),
+                increment_retry: true,
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let err = engine
+        .execute_handler_run(run.id)
+        .await
+        .expect_err("the replay must not get a fresh budget");
+    assert!(matches!(err, EngineError::RunBudgetExceeded { .. }));
+
+    let steps = store.list_steps(run.id).await.unwrap();
+    assert!(
+        steps.is_empty(),
+        "no step of the new attempt may run on an exhausted cap"
+    );
+}

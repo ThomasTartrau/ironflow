@@ -31,6 +31,11 @@ pub struct StepResponse {
     pub position: u32,
     /// Current status.
     pub status: StepStatus,
+    /// Which run attempt produced this step (1-based).
+    ///
+    /// A run retried twice exposes steps with `attempt` 1, 2 and 3. Steps from
+    /// earlier attempts are kept so a failed attempt stays inspectable.
+    pub attempt: u32,
     /// Input configuration.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub input: Option<Value>,
@@ -75,6 +80,7 @@ impl StepResponse {
             kind: step.kind,
             position: step.position,
             status: step.status.state,
+            attempt: step.attempt,
             input: step.input,
             output: step.output,
             error: step.error,

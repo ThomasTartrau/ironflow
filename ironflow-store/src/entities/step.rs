@@ -8,6 +8,12 @@ use uuid::Uuid;
 
 use super::{FsmState, StepKind, StepStatus};
 
+/// Attempt number assigned to steps deserialized from payloads predating the
+/// `attempt` field.
+fn default_attempt() -> u32 {
+    1
+}
+
 /// A single operation within a run.
 ///
 /// Steps are executed sequentially in order of [`position`](Step::position).
@@ -39,6 +45,13 @@ pub struct Step {
     pub position: u32,
     /// Current FSM status — embeds state + state_machine_id for SQL-side transitions.
     pub status: FsmState<StepStatus>,
+    /// Which run attempt produced this step (1-based).
+    ///
+    /// A run retried twice holds steps with `attempt` 1, 2 and 3. Steps from
+    /// earlier attempts are kept for inspection and are never replayed.
+    /// Derived by the store from `Run::retry_count` at creation time.
+    #[serde(default = "default_attempt")]
+    pub attempt: u32,
     /// Serialized operation configuration.
     pub input: Option<Value>,
     /// Serialized operation output.
@@ -174,6 +187,7 @@ mod tests {
             kind: StepKind::Agent,
             position: 1,
             status: FsmState::new(StepStatus::Completed, Uuid::now_v7()),
+            attempt: 2,
             input: Some(json!({"input": "data"})),
             output: Some(json!({"output": "result"})),
             error: None,
@@ -197,6 +211,7 @@ mod tests {
         assert_eq!(back.kind, step.kind);
         assert_eq!(back.position, step.position);
         assert_eq!(back.status.state, step.status.state);
+        assert_eq!(back.attempt, step.attempt);
         assert_eq!(back.input, step.input);
         assert_eq!(back.output, step.output);
         assert_eq!(back.error, step.error);

@@ -325,6 +325,9 @@ pub struct RunUpdate {
     pub started_at: Option<DateTime<Utc>>,
     /// When execution completed.
     pub completed_at: Option<DateTime<Utc>>,
+    /// When the run should next be picked up. Used to arm the retry backoff.
+    #[serde(default)]
+    pub scheduled_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]
@@ -498,6 +501,7 @@ mod tests {
             duration_ms: Some(3000),
             started_at: None,
             completed_at: None,
+            scheduled_at: Some(Utc::now()),
         };
 
         let json = serde_json::to_string(&update).expect("serialize");
@@ -508,6 +512,7 @@ mod tests {
         assert_eq!(back.increment_retry, update.increment_retry);
         assert_eq!(back.cost_usd, update.cost_usd);
         assert_eq!(back.duration_ms, update.duration_ms);
+        assert_eq!(back.scheduled_at, update.scheduled_at);
     }
 
     #[test]

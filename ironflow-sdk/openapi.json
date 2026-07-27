@@ -192,7 +192,7 @@
         "type": "object"
       },
       "CreateRunRequest": {
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "properties": {
           "labels": {
             "additionalProperties": {
@@ -210,6 +210,13 @@
             "format": "double",
             "nullable": true,
             "type": "number"
+          },
+          "max_retries": {
+            "description": "How many times the run may be replayed automatically after a transient\nfailure. Defaults to `0`, meaning no automatic retry.\n\nEach retry waits an exponential backoff (30 s, 2 min, 8 min, capped at\n15 min) before the run is replayed from the start. Failures that cannot\nsucceed on replay -- an unknown workflow, an invalid payload, an\nexhausted agent budget, a rejected approval, a manual cancellation --\nconsume no attempt.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
           },
           "payload": {
             "additionalProperties": {},
@@ -1359,6 +1366,12 @@
       "StepResponse": {
         "description": "Step response DTO — public API representation of a step.\n\n# Examples\n\n```\nuse ironflow_store::models::Step;\nuse ironflow_api::entities::StepResponse;\n```",
         "properties": {
+          "attempt": {
+            "description": "Which run attempt produced this step (1-based).\n\nA run retried twice exposes steps with `attempt` 1, 2 and 3. Steps from\nearlier attempts are kept so a failed attempt stays inspectable.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "completed_at": {
             "description": "When execution completed.",
             "format": "date-time",
@@ -1476,6 +1489,7 @@
           "kind",
           "position",
           "status",
+          "attempt",
           "duration_ms",
           "cost_usd",
           "created_at",
@@ -2581,7 +2595,7 @@
     },
     "/api/v1/runs/{id}/retry": {
       "post": {
-        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state.",
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, and 409 if an\nautomatic retry is already armed for it.",
         "operationId": "retry_run",
         "parameters": [
           {
@@ -2617,6 +2631,9 @@
           },
           "404": {
             "description": "Run not found"
+          },
+          "409": {
+            "description": "Run is already waiting for an automatic retry"
           }
         },
         "security": [

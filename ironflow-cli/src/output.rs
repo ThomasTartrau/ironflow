@@ -254,6 +254,7 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
         "ID",
         "Name",
         "Status",
+        "Attempt",
         "Duration",
         "Cost",
         "Started",
@@ -269,6 +270,7 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
             Cell::new(step.status)
                 .fg(color)
                 .set_alignment(CellAlignment::Center),
+            Cell::new(step.attempt).set_alignment(CellAlignment::Center),
             Cell::new(format_duration_ms(step.duration_ms)),
             Cell::new(format!("${:.4}", step.cost_usd)),
             Cell::new(format_optional_datetime(&step.started_at)),

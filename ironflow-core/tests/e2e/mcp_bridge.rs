@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use serde_json::json;
+use tempfile::TempDir;
 use tokio::time::timeout;
 
 use ironflow_core::providers::http::tools::ToolRegistry;
@@ -48,9 +49,18 @@ while IFS= read -r line; do
 done
 "#;
 
-async fn spawn_echo_server() -> McpConnection {
-    let tmp = std::env::temp_dir().join("ironflow_test_mcp_server.sh");
-    tokio::fs::write(&tmp, ECHO_MCP_SERVER)
+/// Writes the echo server script to a directory of its own and spawns it.
+///
+/// Every test gets its own script path: tests run in parallel and a shared path
+/// means one test rewrites the script while another is executing it, which the
+/// kernel rejects with `ETXTBSY` ("Text file busy").
+///
+/// The returned [`TempDir`] owns the script and must be kept alive for as long
+/// as the connection is used.
+async fn spawn_echo_server() -> (McpConnection, TempDir) {
+    let dir = TempDir::new().expect("failed to create temp dir for test MCP server");
+    let script = dir.path().join("ironflow_test_mcp_server.sh");
+    tokio::fs::write(&script, ECHO_MCP_SERVER)
         .await
         .expect("failed to write test MCP server script");
 
@@ -58,18 +68,20 @@ async fn spawn_echo_server() -> McpConnection {
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(&tmp, perms).expect("failed to set permissions");
+        std::fs::set_permissions(&script, perms).expect("failed to set permissions");
     }
 
-    McpConnection::stdio(tmp.to_str().unwrap(), &[], &[])
+    let conn = McpConnection::stdio(script.to_str().unwrap(), &[], &[])
         .await
-        .expect("failed to spawn echo MCP server")
+        .expect("failed to spawn echo MCP server");
+
+    (conn, dir)
 }
 
 #[tokio::test]
 async fn initialize_and_list_tools() {
     timeout(Duration::from_secs(10), async {
-        let mut conn = spawn_echo_server().await;
+        let (mut conn, _script_dir) = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let tools = conn.list_tools().await.expect("list_tools should succeed");
@@ -85,7 +97,7 @@ async fn initialize_and_list_tools() {
 #[tokio::test]
 async fn call_tool_echo() {
     timeout(Duration::from_secs(10), async {
-        let mut conn = spawn_echo_server().await;
+        let (mut conn, _script_dir) = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let result = conn
@@ -102,7 +114,7 @@ async fn call_tool_echo() {
 #[tokio::test]
 async fn call_tool_add() {
     timeout(Duration::from_secs(10), async {
-        let mut conn = spawn_echo_server().await;
+        let (mut conn, _script_dir) = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let result = conn
@@ -119,7 +131,7 @@ async fn call_tool_add() {
 #[tokio::test]
 async fn call_unknown_tool_returns_error() {
     timeout(Duration::from_secs(10), async {
-        let mut conn = spawn_echo_server().await;
+        let (mut conn, _script_dir) = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let result = conn.call_tool("nonexistent", json!({})).await;
@@ -132,7 +144,7 @@ async fn call_unknown_tool_returns_error() {
 #[tokio::test]
 async fn register_mcp_tools_populates_registry() {
     timeout(Duration::from_secs(10), async {
-        let conn = spawn_echo_server().await;
+        let (conn, _script_dir) = spawn_echo_server().await;
         let registry = ToolRegistry::new();
 
         let registry = register_mcp_tools(registry, conn, "test")
@@ -150,7 +162,7 @@ async fn register_mcp_tools_populates_registry() {
 #[tokio::test]
 async fn bridge_tool_execute_via_registry() {
     timeout(Duration::from_secs(10), async {
-        let conn = spawn_echo_server().await;
+        let (conn, _script_dir) = spawn_echo_server().await;
         let registry = register_mcp_tools(ToolRegistry::new(), conn, "srv")
             .await
             .expect("register should succeed");

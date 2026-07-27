@@ -120,6 +120,7 @@ mod tests {
                         "id": "new-run",
                         "workflow": body["workflow"],
                         "payload": body["payload"],
+                        "max_retries": body["max_retries"],
                         "status": "pending",
                         "idempotency_key": key
                     });
@@ -247,6 +248,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env":"prod"}"#.to_string()),
+            max_retries: Some(2),
             idempotency_key: None,
             max_cost_usd: None,
         };
@@ -256,6 +258,7 @@ mod tests {
 
         assert_eq!(parsed["workflow"], "deploy");
         assert_eq!(parsed["payload"]["env"], "prod");
+        assert_eq!(parsed["max_retries"], 2);
         assert_eq!(parsed["status"], "pending");
     }
 
@@ -266,6 +269,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "backup".to_string(),
             payload: None,
+            max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
         };
@@ -275,6 +279,7 @@ mod tests {
 
         assert_eq!(parsed["workflow"], "backup");
         assert_eq!(parsed["payload"], json!({}));
+        assert_eq!(parsed["max_retries"], 0, "no automatic retry by default");
     }
 
     #[tokio::test]
@@ -284,6 +289,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some("not-json".to_string()),
+            max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
         };
@@ -301,6 +307,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env":"prod"}"#.to_string()),
+            max_retries: None,
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost_usd: None,
         };
@@ -318,6 +325,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: None,
+            max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
         };
@@ -335,6 +343,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: None,
+            max_retries: None,
             idempotency_key: None,
             max_cost_usd: Some(2.5),
         };
@@ -352,6 +361,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: None,
+            max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
         };

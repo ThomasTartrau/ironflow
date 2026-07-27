@@ -51,6 +51,7 @@ pub mod handler;
 pub mod log_sender;
 pub mod notify;
 pub mod operation;
+pub mod retry_policy;
 pub mod schedule;
 
 /// Convenience re-exports.

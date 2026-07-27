@@ -30,7 +30,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::task::{Id, JoinSet};
 use tracing::{error, info};
 use uuid::Uuid;
@@ -92,9 +92,18 @@ pub struct WorkflowContext {
     /// Cost already spent by ancestor runs when this context belongs to a
     /// sub-workflow. Zero for a top-level run.
     inherited_cost_usd: Decimal,
-    /// Steps from a previous execution, keyed by position.
+    /// Steps from a previous execution of the *same* attempt, keyed by position.
     /// Used when resuming after approval to replay completed steps.
     replay_steps: HashMap<u32, Step>,
+    /// Approvals granted in an *earlier* attempt, keyed by position, holding the
+    /// attempt that granted them. An approval is carried by the run, not by the
+    /// attempt, so a retry never asks a human to approve the same gate twice.
+    granted_approvals: HashMap<u32, u32>,
+    /// Which run attempt this context is executing (1-based).
+    attempt: u32,
+    /// Wall-clock duration already recorded on the run by previous attempts.
+    /// Added to this attempt's duration when the run is finalized.
+    carried_duration_ms: u64,
     /// Optional sender for real-time log streaming.
     log_sender: Option<LogSender>,
 }
@@ -117,6 +126,9 @@ impl WorkflowContext {
             max_cost_usd: None,
             inherited_cost_usd: Decimal::ZERO,
             replay_steps: HashMap::new(),
+            granted_approvals: HashMap::new(),
+            attempt: 1,
+            carried_duration_ms: 0,
             log_sender: None,
         }
     }
@@ -143,6 +155,9 @@ impl WorkflowContext {
             max_cost_usd: None,
             inherited_cost_usd: Decimal::ZERO,
             replay_steps: HashMap::new(),
+            granted_approvals: HashMap::new(),
+            attempt: 1,
+            carried_duration_ms: 0,
             log_sender: None,
         }
     }
@@ -150,6 +165,33 @@ impl WorkflowContext {
     /// Attach a log sender for real-time step output streaming.
     pub fn set_log_sender(&mut self, sender: LogSender) {
         self.log_sender = Some(sender);
+    }
+
+    /// Seed the context with the run's attempt number and the totals already
+    /// accumulated by previous attempts.
+    ///
+    /// Called by the engine before executing a handler. Steps created by this
+    /// context belong to `attempt`, and the cost and duration it reports at the
+    /// end cover the whole run, not just this attempt.
+    pub(crate) fn carry_over_run_totals(
+        &mut self,
+        attempt: u32,
+        cost_usd: Decimal,
+        duration_ms: u64,
+    ) {
+        self.attempt = attempt;
+        self.total_cost_usd = cost_usd;
+        self.carried_duration_ms = duration_ms;
+    }
+
+    /// Wall-clock duration already recorded on the run by previous attempts.
+    pub(crate) fn carried_duration_ms(&self) -> u64 {
+        self.carried_duration_ms
+    }
+
+    /// The run attempt this context is executing (1-based).
+    pub fn attempt(&self) -> u32 {
+        self.attempt
     }
 
     /// Set the cumulative cost cap enforced before every agent step.
@@ -225,6 +267,12 @@ impl WorkflowContext {
     /// Called by the engine when resuming a run. All completed steps
     /// and the approved approval step are indexed by position so that
     /// `execute_step` and `approval` can skip them.
+    ///
+    /// Only steps of the current attempt are replayed: positions repeat across
+    /// attempts, so replaying an earlier attempt's steps would skip the whole
+    /// workflow. The one exception is an approval already granted in an earlier
+    /// attempt -- approval is carried by the run, not by the attempt, so a human
+    /// is never asked to approve the same gate twice.
     pub(crate) async fn load_replay_steps(&mut self) -> Result<(), EngineError> {
         let steps = self.store.list_steps(self.run_id).await?;
         for step in steps {
@@ -232,8 +280,15 @@ impl WorkflowContext {
                 step.status.state,
                 StepStatus::Completed | StepStatus::Running | StepStatus::AwaitingApproval
             );
-            if dominated {
+            if !dominated {
+                continue;
+            }
+
+            if step.attempt == self.attempt {
                 self.replay_steps.insert(step.position, step);
+            } else if step.kind == StepKind::Approval && step.status.state == StepStatus::Completed
+            {
+                self.granted_approvals.insert(step.position, step.attempt);
             }
         }
         Ok(())
@@ -673,6 +728,47 @@ impl WorkflowContext {
             return Ok(());
         }
 
+        // Carried over: a human already approved this gate in an earlier
+        // attempt. Record a fresh step in the current attempt so that each
+        // attempt keeps a complete, self-contained DAG, and continue.
+        if let Some(&granted_in) = self.granted_approvals.get(&position) {
+            let step = self
+                .store
+                .create_step(NewStep {
+                    run_id: self.run_id,
+                    name: name.to_string(),
+                    kind: StepKind::Approval,
+                    position,
+                    input: Some(serde_json::to_value(&config)?),
+                })
+                .await?;
+
+            let now = Utc::now();
+            self.start_step(step.id, now).await?;
+            self.store
+                .update_step(
+                    step.id,
+                    StepUpdate {
+                        status: Some(StepStatus::Completed),
+                        output: Some(json!({"approved_in_attempt": granted_in})),
+                        completed_at: Some(now),
+                        ..StepUpdate::default()
+                    },
+                )
+                .await?;
+
+            self.last_step_ids = vec![step.id];
+            info!(
+                run_id = %self.run_id,
+                step = %name,
+                position,
+                granted_in_attempt = granted_in,
+                attempt = self.attempt,
+                "approval carried over from a previous attempt"
+            );
+            return Ok(());
+        }
+
         // First execution: create the approval step and suspend.
         let step = self
             .store
@@ -1080,6 +1176,10 @@ impl WorkflowContext {
             // shared cap, so the child cannot restart the budget from zero.
             inherited_cost_usd: self.charged_cost_usd(),
             replay_steps: HashMap::new(),
+            granted_approvals: HashMap::new(),
+            // A child run is created fresh here; it is never itself retried.
+            attempt: 1,
+            carried_duration_ms: 0,
             log_sender: self.log_sender.clone(),
         };
 

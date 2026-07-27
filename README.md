@@ -501,7 +501,8 @@ let created = client
         payload: Some(payload),
         labels: None,
         scheduled_at: None,
-        max_cost_usd: None,
+        max_retries: Some(2),
+        max_cost_usd: Some(1.0),
     })
     .await?;
 

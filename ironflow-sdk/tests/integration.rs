@@ -218,11 +218,13 @@ async fn create_and_get_run() {
         payload: Some(payload),
         labels: None,
         scheduled_at: None,
+        max_retries: Some(2),
         max_cost_usd: None,
     };
 
     let created = client.create_run(&request).await.unwrap();
     assert_eq!(created.data.workflow_name, "deploy");
+    assert_eq!(created.data.max_retries, 2);
 
     let fetched = client.get_run(created.data.id).await.unwrap();
     assert_eq!(fetched.data.run.id, created.data.id);
@@ -238,6 +240,7 @@ async fn create_run_with_max_cost_usd() {
         payload: None,
         labels: None,
         scheduled_at: None,
+        max_retries: None,
         max_cost_usd: Some(2.5),
     };
 
@@ -255,6 +258,7 @@ async fn create_run_rejects_negative_max_cost_usd() {
         payload: None,
         labels: None,
         scheduled_at: None,
+        max_retries: None,
         max_cost_usd: Some(-1.0),
     };
 
@@ -272,6 +276,7 @@ async fn create_run_unknown_workflow() {
         payload: None,
         labels: None,
         scheduled_at: None,
+        max_retries: None,
         max_cost_usd: None,
     };
 
@@ -300,6 +305,7 @@ fn deploy_request() -> ironflow_sdk::types::CreateRunRequest {
         payload: Some(payload),
         labels: None,
         scheduled_at: None,
+        max_retries: None,
         max_cost_usd: None,
     }
 }

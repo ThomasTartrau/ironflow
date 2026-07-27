@@ -35,6 +35,10 @@ pub enum RunCommands {
         /// Path to a JSON file containing the payload.
         #[arg(long, group = "payload_source")]
         payload_file: Option<PathBuf>,
+        /// How many times to replay the run automatically after a transient
+        /// failure. Defaults to 0 (no automatic retry).
+        #[arg(long)]
+        max_retries: Option<u32>,
         /// Idempotency key making the call safe to replay.
         ///
         /// Reusing the same key returns the run it already created instead of
@@ -142,6 +146,7 @@ pub async fn execute(
             workflow,
             payload,
             payload_file,
+            max_retries,
             idempotency_key,
             max_cost,
         } => {
@@ -154,6 +159,9 @@ pub async fn execute(
             let request: CreateRunRequest = CreateRunRequest::builder()
                 .workflow(workflow.clone())
                 .payload(Some(payload_map))
+                // The generated SDK models the field as i32; the API rejects
+                // anything negative, and clap already refuses it here.
+                .max_retries(max_retries.map(|n| n as i32))
                 .max_cost_usd(*max_cost)
                 .try_into()
                 .context("failed to build CreateRunRequest")?;
