@@ -10,6 +10,7 @@ use ironflow_engine::notify::Event;
 use ironflow_store::models::TriggerKind;
 use serde_json::json;
 
+use crate::actor::run_actor_of;
 use crate::entities::{CreateRunRequest, RunResponse};
 use crate::error::ApiError;
 use crate::response::ok;
@@ -67,6 +68,7 @@ pub async fn create_run(
             3,
             labels,
             req.scheduled_at,
+            Some(run_actor_of(&auth)),
         )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -88,13 +90,16 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
     use http_body_util::BodyExt;
+    use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
     use ironflow_auth::jwt::AccessToken;
+    use ironflow_auth::password;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::models::{ApiKeyScope, NewApiKey, NewUser};
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -217,5 +222,94 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    // ---- created_by ----
+
+    /// Seed an admin user and return `(user_id, username)`.
+    async fn seed_admin(state: &AppState, username: &str) -> (Uuid, String) {
+        let user = state
+            .store
+            .create_user(NewUser {
+                email: format!("{username}@example.com"),
+                username: username.to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .expect("create user");
+        (user.id, user.username)
+    }
+
+    async fn post_create_run(state: AppState, auth_header: &str) -> JsonValue {
+        let app = Router::new().route("/", post(create_run)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/")
+            .method("POST")
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from(
+                serde_json::to_string(&json!({"workflow": "test-workflow"})).unwrap(),
+            ))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_run_records_the_jwt_user_as_author() {
+        let state = test_state();
+        let (user_id, username) = seed_admin(&state, "alice").await;
+        let token = AccessToken::for_user(user_id, &username, true, &state.jwt_config).unwrap();
+
+        let body = post_create_run(state, &format!("Bearer {}", token.0)).await;
+
+        assert_eq!(body["data"]["created_by"]["kind"], "user");
+        assert_eq!(body["data"]["created_by"]["id"], user_id.to_string());
+        assert_eq!(body["data"]["created_by"]["label"], "alice");
+    }
+
+    #[tokio::test]
+    async fn create_run_records_the_api_key_as_author() {
+        let state = test_state();
+        let (user_id, _) = seed_admin(&state, "alice").await;
+
+        let raw_key = format!("{API_KEY_PREFIX}0123456789abcdef");
+        let key = state
+            .store
+            .create_api_key(NewApiKey {
+                user_id,
+                name: "ci-deploy".to_string(),
+                key_hash: password::hash(&raw_key).unwrap(),
+                key_prefix: raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN].to_string(),
+                scopes: vec![ApiKeyScope::RunsWrite],
+                expires_at: None,
+            })
+            .await
+            .expect("create api key");
+
+        let body = post_create_run(state, &format!("Bearer {raw_key}")).await;
+
+        assert_eq!(body["data"]["created_by"]["kind"], "api_key");
+        assert_eq!(body["data"]["created_by"]["id"], key.id.to_string());
+        assert_eq!(body["data"]["created_by"]["label"], "ci-deploy (alice)");
+    }
+
+    #[tokio::test]
+    async fn create_run_author_label_falls_back_when_the_user_is_unknown() {
+        // A valid token for a user that is not in the store (e.g. deleted).
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+
+        let body = post_create_run(state, &auth_header).await;
+
+        assert_eq!(body["data"]["created_by"]["kind"], "user");
+        let label = body["data"]["created_by"]["label"].as_str().unwrap();
+        assert!(label.starts_with("user "), "unexpected label: {label}");
     }
 }

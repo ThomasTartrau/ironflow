@@ -3,8 +3,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::entities::{
-    NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
-    StepDependency, StepUpdate,
+    NewRun, NewStep, NewStepDependency, Page, Run, RunActor, RunFilter, RunStats, RunStatus,
+    RunUpdate, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
@@ -35,6 +35,10 @@ fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
     }
     if filter.labels.is_some() {
         conditions.push(format!("r.labels @> ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if filter.created_by_user_id.is_some() {
+        conditions.push(format!("r.created_by_user_id = ${bind_idx}"));
         bind_idx += 1;
     }
     if let Some(has_steps) = filter.has_steps {
@@ -79,6 +83,9 @@ fn bind_run_filter_params<'q>(
     if let Some(ref labels) = filter.labels {
         query = query.bind(serde_json::to_value(labels).unwrap_or_default());
     }
+    if let Some(created_by_user_id) = filter.created_by_user_id {
+        query = query.bind(created_by_user_id);
+    }
     if filter.has_steps.is_some() {
         query = query.bind(run_status_to_db_str(&RunStatus::Completed));
         query = query.bind(run_status_to_db_str(&RunStatus::Cancelled));
@@ -113,8 +120,8 @@ impl RunStore for PostgresStore {
             // Insert run with FSM reference
             sqlx::query(
                 r#"
-                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 "#,
             )
             .bind(id)
@@ -126,6 +133,8 @@ impl RunStore for PostgresStore {
             .bind(&req.handler_version)
             .bind(serde_json::to_value(&req.labels).unwrap_or_default())
             .bind(req.scheduled_at)
+            .bind(req.created_by.as_ref().map(RunActor::user_id))
+            .bind(req.created_by.as_ref().and_then(RunActor::api_key_id))
             .bind(now)
             .bind(now)
             .execute(&mut *tx)
@@ -135,10 +144,13 @@ impl RunStore for PostgresStore {
             // Fetch the inserted run with FSM state
             let row = sqlx::query(
                 r#"
-                SELECT r.*, ast.name as state_name
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 WHERE r.id = $1
                 "#,
             )
@@ -161,10 +173,13 @@ impl RunStore for PostgresStore {
         Box::pin(async move {
             let row = sqlx::query(
                 r#"
-                SELECT r.*, ast.name as state_name
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 WHERE r.id = $1
                 "#,
             )
@@ -189,10 +204,13 @@ impl RunStore for PostgresStore {
             let offset_idx = bind_idx + 1;
             let data_sql = format!(
                 r#"
-                SELECT r.*, ast.name as state_name, COUNT(*) OVER() as total_count
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name, COUNT(*) OVER() as total_count
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 {where_clause}
                 ORDER BY r.created_at DESC
                 LIMIT ${limit_idx} OFFSET ${offset_idx}
@@ -345,10 +363,13 @@ impl RunStore for PostgresStore {
 
             let row = sqlx::query(
                 r#"
-                SELECT r.*, ast.name as state_name
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 WHERE r.id = $1
                 "#,
             )
@@ -422,10 +443,13 @@ impl RunStore for PostgresStore {
                 // Fetch and return the updated run
                 let updated_row = sqlx::query(
                     r#"
-                    SELECT r.*, ast.name as state_name
+                    SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                     FROM ironflow.runs r
                     JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                     JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                    LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                    LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                     WHERE r.id = $1
                     "#
                 )

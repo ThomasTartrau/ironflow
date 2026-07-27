@@ -16,6 +16,8 @@ use crate::state::AppState;
 ///
 /// - `workflow` — Filter by workflow name (optional)
 /// - `status` — Filter by run status (optional)
+/// - `created_by` — Filter by author user ID (optional). Also matches runs
+///   triggered by one of that user's API keys.
 /// - `page` — Page number, 1-based (default: 1)
 /// - `per_page` — Items per page (default: 20, max: 100)
 #[cfg_attr(
@@ -49,6 +51,7 @@ pub async fn list_runs(
         created_before: None,
         has_steps: params.has_steps,
         labels,
+        created_by_user_id: params.created_by,
     };
 
     let page_result = state.store.list_runs(filter, page, per_page).await?;
@@ -75,11 +78,15 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, TriggerKind};
+    use ironflow_store::models::{
+        ApiKeyScope, NewApiKey, NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind,
+        TriggerKind,
+    };
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     use crate::routes::test_helpers::create_terminal_run;
 
@@ -141,6 +148,7 @@ mod tests {
         state
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "deploy".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -154,6 +162,7 @@ mod tests {
         state
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -188,6 +197,7 @@ mod tests {
         let run = state
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -209,6 +219,7 @@ mod tests {
         state
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "other".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -244,6 +255,7 @@ mod tests {
             state
                 .store
                 .create_run(NewRun {
+                    created_by: None,
                     workflow_name: format!("wf-{i}"),
                     trigger: TriggerKind::Manual,
                     payload: json!({}),
@@ -374,6 +386,7 @@ mod tests {
         state
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "pending-no-steps".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -398,5 +411,160 @@ mod tests {
         let json_val: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json_val["data"].as_array().unwrap().len(), 1);
         assert_eq!(json_val["data"][0]["workflow_name"], "pending-no-steps");
+    }
+
+    // ---- created_by ----
+
+    async fn seed_user(state: &AppState, username: &str) -> Uuid {
+        state
+            .store
+            .create_user(NewUser {
+                email: format!("{username}@example.com"),
+                username: username.to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .expect("create user")
+            .id
+    }
+
+    async fn create_run_authored_by(
+        state: &AppState,
+        workflow: &str,
+        created_by: Option<RunActor>,
+    ) {
+        state
+            .store
+            .create_run(NewRun {
+                workflow_name: workflow.to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by,
+            })
+            .await
+            .expect("create run");
+    }
+
+    async fn list(state: AppState, auth_header: String, query: &str) -> (StatusCode, JsonValue) {
+        let app = Router::new().route("/", get(list_runs)).with_state(state);
+
+        let req = Request::builder()
+            .uri(format!("/?{query}"))
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let status = resp.status();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val = if status == StatusCode::OK {
+            from_slice(&body).unwrap()
+        } else {
+            JsonValue::Null
+        };
+        (status, json_val)
+    }
+
+    #[tokio::test]
+    async fn created_by_filter_keeps_only_the_matching_author() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        let alice = seed_user(&state, "alice").await;
+        let bob = seed_user(&state, "bob").await;
+
+        create_run_authored_by(&state, "by-alice", Some(RunActor::User { user_id: alice })).await;
+        create_run_authored_by(&state, "by-bob", Some(RunActor::User { user_id: bob })).await;
+        create_run_authored_by(&state, "by-system", None).await;
+
+        let (status, body) = list(state, auth_header, &format!("created_by={alice}")).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(body["data"][0]["workflow_name"], "by-alice");
+        assert_eq!(body["data"][0]["created_by"]["label"], "alice");
+        assert_eq!(body["meta"]["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn created_by_filter_also_matches_runs_from_the_users_api_keys() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        let alice = seed_user(&state, "alice").await;
+        let key = state
+            .store
+            .create_api_key(NewApiKey {
+                user_id: alice,
+                name: "ci-deploy".to_string(),
+                key_hash: "hash".to_string(),
+                key_prefix: "irfl_0000".to_string(),
+                scopes: vec![ApiKeyScope::RunsWrite],
+                expires_at: None,
+            })
+            .await
+            .unwrap();
+
+        create_run_authored_by(
+            &state,
+            "by-alice-key",
+            Some(RunActor::ApiKey {
+                api_key_id: key.id,
+                user_id: alice,
+            }),
+        )
+        .await;
+
+        let (_, body) = list(state, auth_header, &format!("created_by={alice}")).await;
+
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(body["data"][0]["created_by"]["kind"], "api_key");
+        assert_eq!(body["data"][0]["created_by"]["id"], key.id.to_string());
+        assert_eq!(body["data"][0]["created_by"]["label"], "ci-deploy (alice)");
+    }
+
+    #[tokio::test]
+    async fn created_by_filter_with_an_unknown_author_returns_an_empty_page() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        create_run_authored_by(&state, "by-system", None).await;
+
+        let (status, body) = list(
+            state,
+            auth_header,
+            &format!("created_by={}", Uuid::now_v7()),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["data"].as_array().unwrap().is_empty());
+        assert_eq!(body["meta"]["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn created_by_filter_rejects_a_non_uuid_value() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+
+        let (status, _) = list(state, auth_header, "created_by=not-a-uuid").await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_run_without_an_author_is_listed_as_system() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        create_run_authored_by(&state, "legacy", None).await;
+
+        let (status, body) = list(state, auth_header, "").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"][0]["created_by"]["kind"], "system");
+        assert!(body["data"][0]["created_by"]["id"].is_null());
+        assert_eq!(body["data"][0]["created_by"]["label"], "api");
     }
 }

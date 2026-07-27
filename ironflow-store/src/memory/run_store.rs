@@ -5,13 +5,45 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::entities::{
-    NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
-    StepDependency, StepStatus, StepUpdate,
+    ApiKey, NewRun, NewStep, NewStepDependency, Page, Run, RunActor, RunFilter, RunStats,
+    RunStatus, RunUpdate, Step, StepDependency, StepStatus, StepUpdate, User,
 };
 use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
 
-use super::InMemoryStore;
+use super::{InMemoryStore, State};
+
+/// Resolve [`Run::created_by_label`] from the current users and API keys.
+///
+/// Mirrors the `LEFT JOIN` the PostgreSQL store performs at read time, so a
+/// renamed API key or a renamed user is reflected immediately.
+fn resolve_created_by_label(
+    actor: Option<&RunActor>,
+    users: &HashMap<Uuid, User>,
+    api_keys: &HashMap<Uuid, ApiKey>,
+) -> Option<String> {
+    let actor = actor?;
+    let username = users.get(&actor.user_id()).map(|u| u.username.clone());
+
+    match actor.api_key_id() {
+        None => username,
+        Some(api_key_id) => {
+            let key_name = api_keys.get(&api_key_id).map(|k| k.name.clone())?;
+            Some(match username {
+                Some(username) => format!("{key_name} ({username})"),
+                None => key_name,
+            })
+        }
+    }
+}
+
+/// Return a clone of `run` with its display label resolved against `state`.
+fn run_with_label(run: &Run, state: &State) -> Run {
+    let mut run = run.clone();
+    run.created_by_label =
+        resolve_created_by_label(run.created_by.as_ref(), &state.users, &state.api_keys);
+    run
+}
 
 fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>) -> bool {
     if let Some(ref wf) = filter.workflow_name
@@ -55,6 +87,11 @@ fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>
             }
         }
     }
+    if let Some(user_id) = filter.created_by_user_id
+        && run.created_by.as_ref().map(RunActor::user_id) != Some(user_id)
+    {
+        return false;
+    }
     true
 }
 
@@ -80,18 +117,20 @@ impl RunStore for InMemoryStore {
                 handler_version: req.handler_version,
                 labels: req.labels,
                 scheduled_at: req.scheduled_at,
+                created_by: req.created_by,
+                created_by_label: None,
             };
 
             let mut state = self.state.write().await;
             state.runs.insert(run.id, run.clone());
-            Ok(run)
+            Ok(run_with_label(&run, &state))
         })
     }
 
     fn get_run(&self, id: Uuid) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let state = self.state.read().await;
-            Ok(state.runs.get(&id).cloned())
+            Ok(state.runs.get(&id).map(|r| run_with_label(r, &state)))
         })
     }
 
@@ -116,7 +155,7 @@ impl RunStore for InMemoryStore {
                 .into_iter()
                 .skip(offset)
                 .take(per_page as usize)
-                .cloned()
+                .map(|r| run_with_label(r, &state))
                 .collect();
 
             Ok(Page {
@@ -234,8 +273,9 @@ impl RunStore for InMemoryStore {
             run.status.state = RunStatus::Running;
             run.started_at = Some(now);
             run.updated_at = now;
+            let run = run.clone();
 
-            Ok(Some(run.clone()))
+            Ok(Some(run_with_label(&run, &state)))
         })
     }
 
@@ -466,7 +506,9 @@ mod tests {
     use tokio::spawn;
 
     use super::*;
-    use crate::entities::TriggerKind;
+    use crate::api_key_store::ApiKeyStore;
+    use crate::entities::{ApiKeyScope, ApiKeyUpdate, NewApiKey, NewUser, TriggerKind};
+    use crate::user_store::UserStore;
 
     use crate::memory::tests::{create_terminal_run, new_run_req};
     use crate::store::RunStore;
@@ -1470,6 +1512,7 @@ mod tests {
 
         let r1 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1483,6 +1526,7 @@ mod tests {
 
         let r2 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Webhook {
                     path: "/hooks/github".to_string(),
@@ -1498,6 +1542,7 @@ mod tests {
 
         let r3 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Cron {
                     schedule: "0 0 * * *".to_string(),
@@ -1513,6 +1558,7 @@ mod tests {
 
         let r4 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Api,
                 payload: json!({}),
@@ -1526,6 +1572,7 @@ mod tests {
 
         let r5 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Retry {
                     parent_run_id: Uuid::nil(),
@@ -1970,5 +2017,259 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(StoreError::InvalidTransition { .. })));
+    }
+
+    // ---- created_by ----
+
+    async fn seed_user(store: &InMemoryStore, username: &str) -> Uuid {
+        store
+            .create_user(NewUser {
+                email: format!("{username}@example.com"),
+                username: username.to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    async fn seed_api_key(store: &InMemoryStore, user_id: Uuid, name: &str) -> Uuid {
+        store
+            .create_api_key(NewApiKey {
+                user_id,
+                name: name.to_string(),
+                key_hash: "hash".to_string(),
+                key_prefix: "irfl_0000".to_string(),
+                scopes: vec![ApiKeyScope::RunsWrite],
+                expires_at: None,
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    fn run_req_by(actor: RunActor) -> NewRun {
+        NewRun {
+            created_by: Some(actor),
+            ..new_run_req("test")
+        }
+    }
+
+    #[tokio::test]
+    async fn create_run_without_actor_has_no_author() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+
+        assert!(run.created_by.is_none());
+        assert!(run.created_by_label.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_by_user_resolves_username_as_label() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+
+        let run = store
+            .create_run(run_req_by(RunActor::User { user_id }))
+            .await
+            .unwrap();
+
+        assert_eq!(run.created_by, Some(RunActor::User { user_id }));
+        assert_eq!(run.created_by_label.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn create_run_by_api_key_resolves_key_and_owner_as_label() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, user_id, "ci-deploy").await;
+
+        let run = store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id,
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(run.created_by_label.as_deref(), Some("ci-deploy (alice)"));
+    }
+
+    #[tokio::test]
+    async fn label_follows_api_key_rename() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, user_id, "ci-deploy").await;
+        let run = store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id,
+            }))
+            .await
+            .unwrap();
+
+        store
+            .update_api_key(
+                api_key_id,
+                ApiKeyUpdate {
+                    name: Some("ci-release".to_string()),
+                    ..ApiKeyUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let reread = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(
+            reread.created_by_label.as_deref(),
+            Some("ci-release (alice)")
+        );
+    }
+
+    #[tokio::test]
+    async fn label_is_none_when_user_is_unknown() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(run_req_by(RunActor::User {
+                user_id: Uuid::now_v7(),
+            }))
+            .await
+            .unwrap();
+
+        assert!(run.created_by.is_some());
+        assert!(run.created_by_label.is_none());
+    }
+
+    #[tokio::test]
+    async fn label_is_key_name_only_when_owner_is_unknown() {
+        let store = InMemoryStore::new();
+        let owner = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, owner, "ci-deploy").await;
+
+        // An actor pointing at a user that was never created.
+        let run = store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id: Uuid::now_v7(),
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(run.created_by_label.as_deref(), Some("ci-deploy"));
+    }
+
+    #[tokio::test]
+    async fn list_runs_filters_by_author() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+        let bob = seed_user(&store, "bob").await;
+
+        store
+            .create_run(run_req_by(RunActor::User { user_id: alice }))
+            .await
+            .unwrap();
+        store
+            .create_run(run_req_by(RunActor::User { user_id: bob }))
+            .await
+            .unwrap();
+        store.create_run(new_run_req("anonymous")).await.unwrap();
+
+        let page = store
+            .list_runs(
+                RunFilter {
+                    created_by_user_id: Some(alice),
+                    ..RunFilter::default()
+                },
+                1,
+                20,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].created_by_label.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn list_runs_author_filter_matches_runs_from_the_users_api_keys() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, alice, "ci-deploy").await;
+
+        store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id: alice,
+            }))
+            .await
+            .unwrap();
+
+        let page = store
+            .list_runs(
+                RunFilter {
+                    created_by_user_id: Some(alice),
+                    ..RunFilter::default()
+                },
+                1,
+                20,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.total, 1);
+    }
+
+    #[tokio::test]
+    async fn list_runs_author_filter_excludes_unrelated_users() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+
+        store
+            .create_run(run_req_by(RunActor::User { user_id: alice }))
+            .await
+            .unwrap();
+
+        let page = store
+            .list_runs(
+                RunFilter {
+                    created_by_user_id: Some(Uuid::now_v7()),
+                    ..RunFilter::default()
+                },
+                1,
+                20,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.total, 0);
+    }
+
+    #[tokio::test]
+    async fn list_runs_without_author_filter_returns_every_run() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+
+        store
+            .create_run(run_req_by(RunActor::User { user_id: alice }))
+            .await
+            .unwrap();
+        store.create_run(new_run_req("anonymous")).await.unwrap();
+
+        let page = store.list_runs(RunFilter::default(), 1, 20).await.unwrap();
+        assert_eq!(page.total, 2);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_resolves_author_label() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+        store
+            .create_run(run_req_by(RunActor::User { user_id }))
+            .await
+            .unwrap();
+
+        let picked = store.pick_next_pending().await.unwrap().unwrap();
+        assert_eq!(picked.created_by_label.as_deref(), Some("alice"));
     }
 }

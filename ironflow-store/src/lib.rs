@@ -29,6 +29,7 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
+//!     created_by: None,
 //! }).await?;
 //!
 //! println!("Run {} is {:?}", run.id, run.status);

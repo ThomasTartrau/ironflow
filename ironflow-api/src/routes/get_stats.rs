@@ -13,7 +13,8 @@ use crate::state::AppState;
 /// Get aggregate statistics across runs matching the filter.
 ///
 /// Accepts the same filtering query parameters as `GET /api/v1/runs`
-/// (`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.
+/// (`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and
+/// `per_page` are ignored.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -42,6 +43,7 @@ pub async fn get_stats(
         created_before: None,
         has_steps: params.has_steps,
         labels,
+        created_by_user_id: params.created_by,
     };
     let stats = state.store.get_stats(filter).await?;
 
@@ -77,8 +79,11 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, TriggerKind};
+    use ironflow_store::models::{
+        NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind, TriggerKind,
+    };
     use ironflow_store::store::RunStore;
+    use ironflow_store::user_store::UserStore;
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -141,6 +146,7 @@ mod tests {
         // Pending
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "a".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -155,6 +161,7 @@ mod tests {
         // Completed
         let r2 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "b".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -177,6 +184,7 @@ mod tests {
         // Failed
         let r3 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "c".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -305,6 +313,7 @@ mod tests {
         // One pending, one completed
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "a".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -317,6 +326,7 @@ mod tests {
             .unwrap();
         let r = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "b".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -351,5 +361,60 @@ mod tests {
         let json_val: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json_val["data"]["total_runs"], 1);
         assert_eq!(json_val["data"]["completed_runs"], 1);
+    }
+
+    #[tokio::test]
+    async fn stats_with_created_by_filter() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = store
+            .create_user(NewUser {
+                email: "alice@example.com".to_string(),
+                username: "alice".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .unwrap();
+        let bob = store
+            .create_user(NewUser {
+                email: "bob@example.com".to_string(),
+                username: "bob".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .unwrap();
+
+        for user_id in [alice.id, bob.id] {
+            store
+                .create_run(NewRun {
+                    workflow_name: "test".to_string(),
+                    trigger: TriggerKind::Api,
+                    payload: json!({}),
+                    max_retries: 0,
+                    handler_version: None,
+                    labels: HashMap::new(),
+                    scheduled_at: None,
+                    created_by: Some(RunActor::User { user_id }),
+                })
+                .await
+                .unwrap();
+        }
+
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", get(get_stats)).with_state(state);
+
+        let req = Request::builder()
+            .uri(format!("/?created_by={}", alice.id))
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["total_runs"], 1);
     }
 }

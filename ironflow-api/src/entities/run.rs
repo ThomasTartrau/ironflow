@@ -8,7 +8,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::StepResponse;
+use super::{CreatedBy, StepResponse};
 
 /// Run response DTO — public API representation of a run.
 ///
@@ -58,10 +58,13 @@ pub struct RunResponse {
     /// Scheduled execution time. `None` means the run executed immediately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// Who triggered the run. Always present.
+    pub created_by: CreatedBy,
 }
 
 impl From<Run> for RunResponse {
     fn from(run: Run) -> Self {
+        let created_by = CreatedBy::from(&run);
         RunResponse {
             id: run.id,
             workflow_name: run.workflow_name,
@@ -79,6 +82,7 @@ impl From<Run> for RunResponse {
             handler_version: run.handler_version,
             labels: run.labels,
             scheduled_at: run.scheduled_at,
+            created_by,
         }
     }
 }
@@ -110,6 +114,10 @@ pub struct ListRunsQuery {
     pub has_steps: Option<bool>,
     /// Filter by labels. Comma-separated `key:value` pairs.
     pub label: Option<String>,
+    /// Filter by author: the user ID that triggered the run.
+    ///
+    /// Also matches runs triggered by one of that user's API keys.
+    pub created_by: Option<Uuid>,
     /// Page number (1-based).
     pub page: Option<u32>,
     /// Items per page.

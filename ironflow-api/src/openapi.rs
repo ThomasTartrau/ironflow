@@ -1,9 +1,9 @@
 //! OpenAPI/Swagger documentation for ironflow-api.
 
 use crate::entities::{
-    CreateRunRequest, CreateUserRequest, ListRunsQuery, MeResponse, RunDetailResponse, RunResponse,
-    SecretResponse, SetSecretRequest, SignInRequest, StatsResponse, UpdateRoleRequest,
-    UserResponse,
+    CreateRunRequest, CreateUserRequest, CreatedBy, CreatedByKind, ListRunsQuery, MeResponse,
+    RunDetailResponse, RunResponse, SecretResponse, SetSecretRequest, SignInRequest, StatsResponse,
+    UpdateRoleRequest, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -90,6 +90,8 @@ mod with_signup {
             schemas(
                 RunResponse,
                 RunDetailResponse,
+                CreatedBy,
+                CreatedByKind,
                 CreateRunRequest,
                 StatsResponse,
                 MeResponse,
@@ -179,6 +181,8 @@ mod without_signup {
             schemas(
                 RunResponse,
                 RunDetailResponse,
+                CreatedBy,
+                CreatedByKind,
                 CreateRunRequest,
                 StatsResponse,
                 MeResponse,

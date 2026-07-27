@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 fn new_run(name: &str) -> NewRun {
     NewRun {
+        created_by: None,
         workflow_name: name.to_string(),
         trigger: TriggerKind::Manual,
         payload: json!({}),
@@ -949,6 +950,7 @@ async fn large_payload_preserved_in_roundtrip() {
     });
 
     let req = NewRun {
+        created_by: None,
         workflow_name: "test".to_string(),
         trigger: TriggerKind::Manual,
         payload: large_payload.clone(),

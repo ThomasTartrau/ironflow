@@ -258,6 +258,39 @@
         ],
         "type": "object"
       },
+      "CreatedBy": {
+        "description": "The author of a run, as exposed by the API.\n\nAlways present on a [`RunResponse`](crate::entities::RunResponse): a run with\nno recorded author (including every run created before authorship tracking)\nreports [`CreatedByKind::System`] with a label derived from its trigger, so\nclients never have to handle a missing value.\n\n# Examples\n\n```\nuse ironflow_api::entities::{CreatedBy, CreatedByKind};\n\n// Built from a Run via `CreatedBy::from(&run)`.\nlet system = CreatedBy {\n    kind: CreatedByKind::System,\n    id: None,\n    label: \"manual\".to_string(),\n};\nassert_eq!(system.id, None);\n```",
+        "properties": {
+          "id": {
+            "description": "Identifier of the principal: the user ID, the API key ID, or `None` for\n[`CreatedByKind::System`].",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CreatedByKind",
+            "description": "What kind of principal triggered the run."
+          },
+          "label": {
+            "description": "Human-readable label. Never empty.\n\nThe username for a user, `\"key-name (username)\"` for an API key, and the\ntrigger description for a system run.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ],
+        "type": "object"
+      },
+      "CreatedByKind": {
+        "description": "What kind of principal triggered a run.",
+        "enum": [
+          "user",
+          "api_key",
+          "system"
+        ],
+        "type": "string"
+      },
       "Event": {
         "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\n# Examples\n\n```\nuse ironflow_engine::notify::Event;\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    at: chrono::Utc::now(),\n};\n```",
         "oneOf": [
@@ -814,6 +847,12 @@
       "ListRunsQuery": {
         "description": "Query parameters for listing runs.",
         "properties": {
+          "created_by": {
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
           "has_steps": {
             "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps.",
             "nullable": true,
@@ -969,6 +1008,10 @@
             "format": "date-time",
             "type": "string"
           },
+          "created_by": {
+            "$ref": "#/components/schemas/CreatedBy",
+            "description": "Who triggered the run. Always present."
+          },
           "duration_ms": {
             "description": "Total duration in milliseconds.",
             "format": "int64",
@@ -1052,7 +1095,8 @@
           "cost_usd",
           "duration_ms",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "created_by"
         ],
         "type": "object"
       },
@@ -2096,7 +2140,7 @@
     },
     "/api/v1/runs": {
       "get": {
-        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
+        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
         "operationId": "list_runs",
         "parameters": [
           {
@@ -2135,6 +2179,17 @@
             "name": "label",
             "required": false,
             "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "in": "query",
+            "name": "created_by",
+            "required": false,
+            "schema": {
+              "format": "uuid",
               "nullable": true,
               "type": "string"
             }
@@ -2705,7 +2760,7 @@
     },
     "/api/v1/stats": {
       "get": {
-        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.",
+        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and\n`per_page` are ignored.",
         "operationId": "get_stats",
         "parameters": [
           {
@@ -2744,6 +2799,17 @@
             "name": "label",
             "required": false,
             "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "in": "query",
+            "name": "created_by",
+            "required": false,
+            "schema": {
+              "format": "uuid",
               "nullable": true,
               "type": "string"
             }

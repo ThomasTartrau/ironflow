@@ -106,7 +106,8 @@ mod tests {
                             "page": params.get("page").cloned().unwrap_or("1".to_string()),
                             "per_page": params.get("per_page").cloned().unwrap_or("20".to_string()),
                             "workflow": params.get("workflow").cloned(),
-                            "status": params.get("status").cloned()
+                            "status": params.get("status").cloned(),
+                            "created_by": params.get("created_by").cloned()
                         }
                     }))
                 })
@@ -293,6 +294,7 @@ mod tests {
         let tool = ListRunsTool {
             workflow: Some("deploy".to_string()),
             status: Some("running".to_string()),
+            created_by: Some("019a3f2b-0000-7000-8000-000000000000".to_string()),
             page: Some(2),
             per_page: Some(10),
         };
@@ -304,6 +306,10 @@ mod tests {
         assert_eq!(parsed["meta"]["per_page"], "10");
         assert_eq!(parsed["meta"]["workflow"], "deploy");
         assert_eq!(parsed["meta"]["status"], "running");
+        assert_eq!(
+            parsed["meta"]["created_by"],
+            "019a3f2b-0000-7000-8000-000000000000"
+        );
         assert_eq!(parsed["data"][0]["id"], "r1");
     }
 
@@ -314,6 +320,7 @@ mod tests {
         let tool = ListRunsTool {
             workflow: None,
             status: None,
+            created_by: None,
             page: None,
             per_page: None,
         };
@@ -325,6 +332,7 @@ mod tests {
         assert_eq!(parsed["meta"]["per_page"], "20");
         assert!(parsed["meta"]["workflow"].is_null());
         assert!(parsed["meta"]["status"].is_null());
+        assert!(parsed["meta"]["created_by"].is_null());
     }
 
     // ---------------------------------------------------------------

@@ -18,6 +18,8 @@ pub struct ListRunsTool {
     pub workflow: Option<String>,
     /// Filter by status: pending, running, completed, failed, retrying, cancelled, awaiting_approval.
     pub status: Option<String>,
+    /// Filter by author: the UUID of the user that triggered the run. Also matches runs triggered by one of that user's API keys.
+    pub created_by: Option<String>,
     /// Page number (1-based, default: 1).
     pub page: Option<u32>,
     /// Items per page (default: 20, max: 100).
@@ -33,6 +35,9 @@ impl ListRunsTool {
         }
         if let Some(ref s) = self.status {
             query.push(("status", s.clone()));
+        }
+        if let Some(ref c) = self.created_by {
+            query.push(("created_by", c.clone()));
         }
         if let Some(p) = self.page {
             query.push(("page", p.to_string()));

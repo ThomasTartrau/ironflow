@@ -1,6 +1,7 @@
 import { useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import type {
+	CreatedByKind,
 	RunDetailResponse,
 	RunResponse,
 	RunStatus,
@@ -24,14 +25,24 @@ import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
 import {
+	Bot,
 	Clock,
 	DollarSign,
+	KeyRound,
 	RotateCcw,
 	Calendar,
 	Tag,
 	CalendarClock,
+	User,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+
+const CREATED_BY_ICONS = {
+	user: User,
+	api_key: KeyRound,
+	system: Bot,
+} as const satisfies Record<CreatedByKind, LucideIcon>;
 
 export async function loader({ params }: LoaderFunctionArgs) {
 	const res = await api.get<RunDetailResponse>(`/runs/${params.id}`);
@@ -142,6 +153,15 @@ export function Component() {
 					{run.handler_version && (
 						<StatCard label="Version" value={run.handler_version} icon={Tag} />
 					)}
+					<StatCard
+						label="Triggered by"
+						value={
+							<span className="text-base font-normal">
+								{run.created_by.label}
+							</span>
+						}
+						icon={CREATED_BY_ICONS[run.created_by.kind]}
+					/>
 				</div>
 
 				{run.labels && Object.keys(run.labels).length > 0 && (

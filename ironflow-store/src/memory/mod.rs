@@ -21,6 +21,7 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
+//!     created_by: None,
 //! }).await?;
 //!
 //! assert_eq!(run.status.state, RunStatus::Pending);
@@ -151,6 +152,7 @@ mod tests {
 
     pub(crate) fn new_run_req(name: &str) -> NewRun {
         NewRun {
+            created_by: None,
             workflow_name: name.to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),

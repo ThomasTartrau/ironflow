@@ -5,7 +5,7 @@
 use rust_decimal::Decimal;
 use sqlx::Row;
 
-use crate::entities::{FsmState, Run, RunStatus, Step, StepKind, StepStatus};
+use crate::entities::{FsmState, Run, RunActor, RunStatus, Step, StepKind, StepStatus};
 use crate::error::StoreError;
 
 // ---------------------------------------------------------------------------
@@ -89,15 +89,49 @@ pub(crate) fn step_kind_to_str(kind: &StepKind) -> std::borrow::Cow<'static, str
 // Row → entity conversions
 // ---------------------------------------------------------------------------
 
+/// Compose the display label for a run author.
+///
+/// Uses the API key name plus its owner's username when the run was triggered
+/// by a key (`"ci-deploy (alice)"`), falling back to the key name alone when the
+/// owner no longer exists, and to the username alone for a direct user run.
+/// Returns `None` when neither name could be resolved.
+fn created_by_label(
+    actor: Option<&RunActor>,
+    username: Option<String>,
+    api_key_name: Option<String>,
+) -> Option<String> {
+    match actor?.api_key_id() {
+        None => username,
+        Some(_) => {
+            let key_name = api_key_name?;
+            Some(match username {
+                Some(username) => format!("{key_name} ({username})"),
+                None => key_name,
+            })
+        }
+    }
+}
+
 /// Convert a row with JOIN to lib_fsm.abstract_state into a Run entity.
 ///
-/// Expected columns: all from ironflow.runs + `ast.name` aliased as `state_name`.
+/// Expected columns: all from ironflow.runs + `ast.name` aliased as
+/// `state_name`, plus `created_by_username` and `created_by_api_key_name` from
+/// the LEFT JOINs on `iam.users` and `iam.api_keys`.
 pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError> {
     let state_name: &str = row.get("state_name");
     let trigger_json: serde_json::Value = row.get("trigger");
     let cost_usd: Decimal = row.get("cost_usd");
     let state_machine_id = row.get("state_machine__id");
     let labels_json: serde_json::Value = row.get("labels");
+    let created_by = RunActor::from_columns(
+        row.get("created_by_user_id"),
+        row.get("created_by_api_key_id"),
+    );
+    let created_by_label = created_by_label(
+        created_by.as_ref(),
+        row.get("created_by_username"),
+        row.get("created_by_api_key_name"),
+    );
 
     Ok(Run {
         id: row.get("id"),
@@ -117,6 +151,8 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         handler_version: row.get("handler_version"),
         labels: serde_json::from_value(labels_json).unwrap_or_default(),
         scheduled_at: row.get("scheduled_at"),
+        created_by,
+        created_by_label,
     })
 }
 
@@ -149,4 +185,68 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
         completed_at: row.get("completed_at"),
         debug_messages: row.get("debug_messages"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn user_actor() -> RunActor {
+        RunActor::User {
+            user_id: Uuid::now_v7(),
+        }
+    }
+
+    fn api_key_actor() -> RunActor {
+        RunActor::ApiKey {
+            api_key_id: Uuid::now_v7(),
+            user_id: Uuid::now_v7(),
+        }
+    }
+
+    #[test]
+    fn label_is_none_without_actor() {
+        assert!(created_by_label(None, Some("alice".into()), None).is_none());
+    }
+
+    #[test]
+    fn label_is_username_for_user_actor() {
+        let actor = user_actor();
+        assert_eq!(
+            created_by_label(Some(&actor), Some("alice".into()), None),
+            Some("alice".to_string())
+        );
+    }
+
+    #[test]
+    fn label_is_none_for_deleted_user() {
+        let actor = user_actor();
+        assert!(created_by_label(Some(&actor), None, None).is_none());
+    }
+
+    #[test]
+    fn label_combines_key_and_owner() {
+        let actor = api_key_actor();
+        assert_eq!(
+            created_by_label(Some(&actor), Some("alice".into()), Some("ci-deploy".into())),
+            Some("ci-deploy (alice)".to_string())
+        );
+    }
+
+    #[test]
+    fn label_is_key_name_when_owner_deleted() {
+        let actor = api_key_actor();
+        assert_eq!(
+            created_by_label(Some(&actor), None, Some("ci-deploy".into())),
+            Some("ci-deploy".to_string())
+        );
+    }
+
+    #[test]
+    fn label_is_none_when_key_deleted() {
+        let actor = api_key_actor();
+        assert!(created_by_label(Some(&actor), Some("alice".into()), None).is_none());
+    }
 }

@@ -1,8 +1,8 @@
 //! Deserialization tests for progenitor-generated types against JSON fixtures.
 
 use ironflow_sdk::types::{
-    CreateRunRequest, MeResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse,
-    StatsResponse, WorkflowSummary,
+    CreateRunRequest, CreatedByKind, MeResponse, RunResponse, RunStatus, ScopeEntry,
+    SecretResponse, StatsResponse, WorkflowSummary,
 };
 
 #[test]
@@ -24,11 +24,50 @@ fn deserialize_run_response() {
         "payload": {},
         "scheduled_at": null,
         "completed_at": null,
-        "started_at": null
+        "started_at": null,
+        "created_by": {
+            "kind": "user",
+            "id": "01936f5a-0000-7000-8000-0000000000aa",
+            "label": "alice"
+        }
     }"#;
     let run: RunResponse = serde_json::from_str(json).unwrap();
     assert_eq!(run.workflow_name, "deploy");
     assert_eq!(run.duration_ms, 12345);
+    assert_eq!(run.created_by.kind, CreatedByKind::User);
+    assert_eq!(run.created_by.label, "alice");
+    assert!(run.created_by.id.is_some());
+}
+
+#[test]
+fn deserialize_run_response_with_api_key_author() {
+    let json = r#"{
+        "id": "01936f5a-0000-7000-8000-000000000001",
+        "workflow_name": "deploy",
+        "status": "completed",
+        "trigger": {"kind": "api"},
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:01:00Z",
+        "cost_usd": 0.05,
+        "duration_ms": 1,
+        "handler_version": null,
+        "labels": {},
+        "error": null,
+        "max_retries": 0,
+        "retry_count": 0,
+        "payload": {},
+        "scheduled_at": null,
+        "completed_at": null,
+        "started_at": null,
+        "created_by": {
+            "kind": "api_key",
+            "id": "01936f5a-0000-7000-8000-0000000000bb",
+            "label": "ci-deploy (alice)"
+        }
+    }"#;
+    let run: RunResponse = serde_json::from_str(json).unwrap();
+    assert_eq!(run.created_by.kind, CreatedByKind::ApiKey);
+    assert_eq!(run.created_by.label, "ci-deploy (alice)");
 }
 
 #[test]
@@ -50,12 +89,20 @@ fn deserialize_run_response_with_nullable_fields() {
         "payload": {"key": "value"},
         "scheduled_at": null,
         "completed_at": null,
-        "started_at": null
+        "started_at": null,
+        "created_by": {
+            "kind": "system",
+            "id": null,
+            "label": "/hooks/deploy"
+        }
     }"#;
     let run: RunResponse = serde_json::from_str(json).unwrap();
     assert_eq!(run.status, RunStatus::Failed);
     assert!(run.handler_version.is_none());
     assert_eq!(run.error.as_deref(), Some("step 2 failed"));
+    assert_eq!(run.created_by.kind, CreatedByKind::System);
+    assert!(run.created_by.id.is_none());
+    assert_eq!(run.created_by.label, "/hooks/deploy");
 }
 
 #[test]
