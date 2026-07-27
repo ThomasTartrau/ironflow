@@ -118,6 +118,7 @@ mod tests {
                                 "id": "new-run",
                                 "workflow": body["workflow"],
                                 "payload": body["payload"],
+                                "max_retries": body["max_retries"],
                                 "status": "pending"
                             }
                         })),
@@ -241,6 +242,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env":"prod"}"#.to_string()),
+            max_retries: Some(2),
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -248,6 +250,7 @@ mod tests {
 
         assert_eq!(parsed["workflow"], "deploy");
         assert_eq!(parsed["payload"]["env"], "prod");
+        assert_eq!(parsed["max_retries"], 2);
         assert_eq!(parsed["status"], "pending");
     }
 
@@ -258,6 +261,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "backup".to_string(),
             payload: None,
+            max_retries: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -265,6 +269,7 @@ mod tests {
 
         assert_eq!(parsed["workflow"], "backup");
         assert_eq!(parsed["payload"], json!({}));
+        assert_eq!(parsed["max_retries"], 0, "no automatic retry by default");
     }
 
     #[tokio::test]
@@ -274,6 +279,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some("not-json".to_string()),
+            max_retries: None,
         };
 
         let result = tool.run(&client).await.unwrap();

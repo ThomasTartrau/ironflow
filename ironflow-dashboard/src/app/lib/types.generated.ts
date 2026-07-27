@@ -343,7 +343,8 @@ export interface paths {
 		/**
 		 * Retry a failed run.
 		 * @description Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
-		 *     original. Returns 400 if the run is not in a retryable state.
+		 *     original. Returns 400 if the run is not in a retryable state, and 409 if an
+		 *     automatic retry is already armed for it.
 		 */
 		post: operations["retry_run"];
 		delete?: never;
@@ -718,6 +719,7 @@ export interface components {
 		 *         payload: Some(json!({"env": "prod"})),
 		 *         labels: None,
 		 *         scheduled_at: None,
+		 *         max_retries: Some(2),
 		 *     };
 		 *     assert_eq!(req.workflow, "deploy");
 		 *     ```
@@ -727,6 +729,18 @@ export interface components {
 			labels?: {
 				[key: string]: string;
 			} | null;
+			/**
+			 * Format: int32
+			 * @description How many times the run may be replayed automatically after a transient
+			 *     failure. Defaults to `0`, meaning no automatic retry.
+			 *
+			 *     Each retry waits an exponential backoff (30 s, 2 min, 8 min, capped at
+			 *     15 min) before the run is replayed from the start. Failures that cannot
+			 *     succeed on replay -- an unknown workflow, an invalid payload, an
+			 *     exhausted agent budget, a rejected approval, a manual cancellation --
+			 *     consume no attempt.
+			 */
+			max_retries?: number | null;
 			/** @description Optional input payload for the workflow. */
 			payload?: {
 				[key: string]: unknown;
@@ -1412,6 +1426,14 @@ export interface components {
 		 *     ```
 		 */
 		StepResponse: {
+			/**
+			 * Format: int32
+			 * @description Which run attempt produced this step (1-based).
+			 *
+			 *     A run retried twice exposes steps with `attempt` 1, 2 and 3. Steps from
+			 *     earlier attempts are kept so a failed attempt stays inspectable.
+			 */
+			attempt: number;
 			/**
 			 * Format: date-time
 			 * @description When execution completed.
@@ -2315,6 +2337,13 @@ export interface operations {
 			};
 			/** @description Run not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run is already waiting for an automatic retry */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

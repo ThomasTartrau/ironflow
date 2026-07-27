@@ -45,6 +45,10 @@ pub enum ApiError {
     #[error("{0}")]
     BadRequest(String),
 
+    /// The request conflicts with the current state of the resource (409).
+    #[error("{0}")]
+    Conflict(String),
+
     /// Authentication required (401).
     #[error("authentication required")]
     Unauthorized,
@@ -98,6 +102,7 @@ impl ApiError {
             ApiError::StepNotFound(_) => "STEP_NOT_FOUND",
             ApiError::WorkflowNotFound(_) => "WORKFLOW_NOT_FOUND",
             ApiError::BadRequest(_) => "BAD_REQUEST",
+            ApiError::Conflict(_) => "CONFLICT",
             ApiError::Unauthorized => "UNAUTHORIZED",
             ApiError::InvalidCredentials => "INVALID_CREDENTIALS",
             ApiError::DuplicateEmail => "DUPLICATE_EMAIL",
@@ -121,6 +126,7 @@ impl ApiError {
             ApiError::WorkflowNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::SecretNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::Conflict(_) => StatusCode::CONFLICT,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::InvalidCredentials => StatusCode::UNAUTHORIZED,
             ApiError::DuplicateEmail => StatusCode::CONFLICT,
@@ -183,6 +189,13 @@ mod tests {
         let err = ApiError::BadRequest("invalid field".to_string());
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
         assert_eq!(err.code(), "BAD_REQUEST");
+    }
+
+    #[test]
+    fn conflict_status() {
+        let err = ApiError::Conflict("run is already waiting for a retry".to_string());
+        assert_eq!(err.status(), StatusCode::CONFLICT);
+        assert_eq!(err.code(), "CONFLICT");
     }
 
     #[test]

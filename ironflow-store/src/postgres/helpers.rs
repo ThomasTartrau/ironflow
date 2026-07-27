@@ -136,6 +136,7 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
         kind: parse_step_kind(kind_str)?,
         position: row.get::<i32, _>("position") as u32,
         status: FsmState::new(parse_step_status(state_name)?, state_machine_id),
+        attempt: row.get::<i32, _>("attempt") as u32,
         input: row.get("input"),
         output: row.get("output"),
         error: row.get("error"),

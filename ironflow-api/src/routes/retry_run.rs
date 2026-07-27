@@ -17,7 +17,8 @@ use crate::state::AppState;
 /// Retry a failed run.
 ///
 /// Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
-/// original. Returns 400 if the run is not in a retryable state.
+/// original. Returns 400 if the run is not in a retryable state, and 409 if an
+/// automatic retry is already armed for it.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -30,7 +31,8 @@ use crate::state::AppState;
             (status = 400, description = "Run cannot be retried"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
-            (status = 404, description = "Run not found")
+            (status = 404, description = "Run not found"),
+            (status = 409, description = "Run is already waiting for an automatic retry")
         ),
         security(("Bearer" = []))
     )
@@ -46,9 +48,18 @@ pub async fn retry_run(
 
     let original = state.get_run_or_404(id).await?;
 
+    // A `Retrying` run already has an automatic retry armed: creating a second
+    // run here would execute the same work twice, concurrently.
+    if original.status.state == RunStatus::Retrying {
+        return Err(ApiError::Conflict(
+            "run is already waiting for an automatic retry; cancel it first to retry manually"
+                .to_string(),
+        ));
+    }
+
     if !matches!(
         original.status.state,
-        RunStatus::Failed | RunStatus::Retrying | RunStatus::Cancelled
+        RunStatus::Failed | RunStatus::Cancelled
     ) {
         return Err(ApiError::BadRequest(format!(
             "cannot retry run in {} state",
@@ -294,6 +305,95 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), HttpStatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn retry_run_awaiting_automatic_retry_returns_409() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 3,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Retrying)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CONFLICT);
+
+        // No duplicate run was created.
+        let runs = store
+            .list_runs(ironflow_store::models::RunFilter::default(), 1, 50)
+            .await
+            .unwrap();
+        assert_eq!(runs.total, 1);
+    }
+
+    #[tokio::test]
+    async fn retry_cancelled_run_is_allowed() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+
+        store
+            .update_run_status(run.id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
     }
 
     #[tokio::test]

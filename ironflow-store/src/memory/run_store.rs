@@ -202,6 +202,9 @@ impl RunStore for InMemoryStore {
             if let Some(completed) = update.completed_at {
                 run.completed_at = Some(completed);
             }
+            if let Some(scheduled) = update.scheduled_at {
+                run.scheduled_at = Some(scheduled);
+            }
 
             run.updated_at = now;
             Ok(())
@@ -213,12 +216,15 @@ impl RunStore for InMemoryStore {
             let mut state = self.state.write().await;
             let now = Utc::now();
 
-            // Find the oldest pending run whose scheduled_at has passed (or is None).
+            // Find the oldest run waiting for execution whose scheduled_at has
+            // passed (or is None). `Retrying` runs are runs whose automatic retry
+            // backoff has been armed: they become eligible again once
+            // `scheduled_at` has passed.
             let oldest_id = state
                 .runs
                 .values()
                 .filter(|r| {
-                    r.status.state == RunStatus::Pending
+                    matches!(r.status.state, RunStatus::Pending | RunStatus::Retrying)
                         && r.scheduled_at.is_none_or(|at| at <= now)
                 })
                 .min_by_key(|r| r.created_at)
@@ -243,9 +249,12 @@ impl RunStore for InMemoryStore {
         Box::pin(async move {
             let mut state = self.state.write().await;
 
-            if !state.runs.contains_key(&req.run_id) {
-                return Err(StoreError::RunNotFound(req.run_id));
-            }
+            let attempt = state
+                .runs
+                .get(&req.run_id)
+                .ok_or(StoreError::RunNotFound(req.run_id))?
+                .retry_count
+                + 1;
 
             let now = Utc::now();
             let step = Step {
@@ -255,6 +264,7 @@ impl RunStore for InMemoryStore {
                 kind: req.kind,
                 position: req.position,
                 status: crate::entities::FsmState::new(StepStatus::Pending, Uuid::now_v7()),
+                attempt,
                 input: req.input,
                 output: None,
                 error: None,
@@ -470,6 +480,20 @@ mod tests {
 
     use crate::memory::tests::{create_terminal_run, new_run_req};
     use crate::store::RunStore;
+
+    use chrono::TimeDelta;
+
+    use crate::entities::StepKind;
+
+    fn new_step_req(run_id: Uuid, name: &str, position: u32) -> NewStep {
+        NewStep {
+            run_id,
+            name: name.to_string(),
+            kind: StepKind::Shell,
+            position,
+            input: None,
+        }
+    }
 
     // ---- create_run ----
 
@@ -1970,5 +1994,115 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(StoreError::InvalidTransition { .. })));
+    }
+
+    // ---- retry scheduling ----
+
+    #[tokio::test]
+    async fn create_step_stamps_the_current_attempt() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("retry-wf")).await.unwrap();
+
+        let first = store
+            .create_step(new_step_req(run.id, "build", 0))
+            .await
+            .unwrap();
+        assert_eq!(first.attempt, 1);
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let second = store
+            .create_step(new_step_req(run.id, "build", 0))
+            .await
+            .unwrap();
+        assert_eq!(second.attempt, 2);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_ignores_retrying_run_before_its_backoff() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("retry-wf")).await.unwrap();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    scheduled_at: Some(Utc::now() + TimeDelta::seconds(60)),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(store.pick_next_pending().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_resumes_retrying_run_after_its_backoff() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("retry-wf")).await.unwrap();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    scheduled_at: Some(Utc::now() - TimeDelta::seconds(1)),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let picked = store.pick_next_pending().await.unwrap().unwrap();
+        assert_eq!(picked.id, run.id);
+        assert_eq!(picked.status.state, RunStatus::Running);
+        assert_eq!(picked.retry_count, 1);
+    }
+
+    #[tokio::test]
+    async fn update_run_persists_scheduled_at() {
+        let store = InMemoryStore::new();
+        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let when = Utc::now() + TimeDelta::seconds(30);
+
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    scheduled_at: Some(when),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let fetched = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.scheduled_at, Some(when));
     }
 }

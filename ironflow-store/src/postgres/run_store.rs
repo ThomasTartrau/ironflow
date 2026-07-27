@@ -10,7 +10,7 @@ use crate::error::StoreError;
 use crate::store::{RunStore, StoreFuture};
 
 use super::PostgresStore;
-use super::helpers::{row_to_run, row_to_step, run_status_to_db_str};
+use super::helpers::{parse_run_status, row_to_run, row_to_step, run_status_to_db_str};
 
 /// Build SQL WHERE conditions from a [`RunFilter`], returning `(where_clause, next_bind_idx)`.
 fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
@@ -371,7 +371,6 @@ impl RunStore for PostgresStore {
     fn pick_next_pending(&self) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let now = Utc::now();
-            let event = "picked_up";
 
             let mut tx = self
                 .pool
@@ -379,14 +378,16 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            // Find a pending run and transition it
+            // Find a run waiting for execution and transition it. `retrying` runs
+            // are runs whose automatic retry backoff has been armed: they become
+            // eligible again once `scheduled_at` has passed.
             let run_row = sqlx::query(
                 r#"
-                SELECT r.id, r.state_machine__id
+                SELECT r.id, r.state_machine__id, ast.name as state_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
-                WHERE ast.name = 'pending'
+                WHERE ast.name IN ('pending', 'retrying')
                   AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
                 ORDER BY r.created_at ASC
                 LIMIT 1
@@ -400,6 +401,11 @@ impl RunStore for PostgresStore {
             if let Some(run_row) = run_row {
                 let run_id: Uuid = run_row.get("id");
                 let state_machine_id: Uuid = run_row.get("state_machine__id");
+                let state_name: &str = run_row.get("state_name");
+                let event = PostgresStore::run_status_to_event(
+                    parse_run_status(state_name)?,
+                    RunStatus::Running,
+                )?;
 
                 // Perform FSM transition
                 sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
@@ -472,8 +478,9 @@ impl RunStore for PostgresStore {
             let kind_str = super::helpers::step_kind_to_str(&req.kind);
             sqlx::query(
                 r#"
-                INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                        (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $2))
                 "#,
             )
             .bind(id)

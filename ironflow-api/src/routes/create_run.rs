@@ -64,7 +64,7 @@ pub async fn create_run(
             &req.workflow,
             TriggerKind::Api,
             payload,
-            3,
+            req.max_retries.unwrap_or(0),
             labels,
             req.scheduled_at,
         )
@@ -170,6 +170,58 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert_eq!(json_val["data"]["workflow_name"], "test-workflow");
+    }
+
+    #[tokio::test]
+    async fn create_run_defaults_to_no_automatic_retry() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", post(create_run)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/")
+            .method("POST")
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from(
+                serde_json::to_string(&json!({"workflow": "test-workflow"})).unwrap(),
+            ))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["max_retries"], 0);
+    }
+
+    #[tokio::test]
+    async fn create_run_honours_max_retries() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", post(create_run)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/")
+            .method("POST")
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from(
+                serde_json::to_string(&json!({
+                    "workflow": "test-workflow",
+                    "max_retries": 2
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["max_retries"], 2);
     }
 
     #[tokio::test]

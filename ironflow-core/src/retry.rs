@@ -186,7 +186,9 @@ impl RetryPolicy {
 /// # Non-retryable errors
 ///
 /// - [`OperationError::Http`] with 4xx status (except 429)
-/// - [`OperationError::Agent`] wrapping [`AgentError::PromptTooLarge`]
+/// - [`OperationError::Agent`] wrapping [`AgentError::PromptTooLarge`] or
+///   [`AgentError::BudgetExceeded`] (the budget is already spent, replaying it
+///   costs money and cannot succeed)
 /// - [`OperationError::Shell`]
 /// - [`OperationError::Deserialize`]
 pub fn is_retryable(error: &OperationError) -> bool {
@@ -203,7 +205,7 @@ pub fn is_retryable(error: &OperationError) -> bool {
             AgentError::HttpProvider { status_code, .. } => {
                 *status_code == 0 || *status_code >= 500
             }
-            AgentError::PromptTooLarge { .. } => false,
+            AgentError::PromptTooLarge { .. } | AgentError::BudgetExceeded { .. } => false,
         },
         OperationError::Timeout { .. } => true,
         OperationError::Shell { .. } | OperationError::Deserialize { .. } => false,
@@ -424,6 +426,17 @@ mod tests {
             chars: 1_000_000,
             estimated_tokens: 250_000,
             model_limit: 200_000,
+        });
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn agent_budget_exceeded_is_not_retryable() {
+        let err = OperationError::Agent(AgentError::BudgetExceeded {
+            spent_usd: 0.30,
+            limit_usd: 0.25,
+            debug_messages: Vec::new(),
+            partial_usage: Box::default(),
         });
         assert!(!is_retryable(&err));
     }

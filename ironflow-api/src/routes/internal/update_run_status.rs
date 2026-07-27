@@ -70,6 +70,7 @@ pub async fn update_run_status(
         started_at,
         completed_at,
         increment_retry: false,
+        scheduled_at: None,
     };
     state.store.update_run(id, update).await?;
 
@@ -213,6 +214,7 @@ mod tests {
                     started_at: Some(Utc::now()),
                     completed_at: None,
                     increment_retry: false,
+                    scheduled_at: None,
                 },
             )
             .await

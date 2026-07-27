@@ -218,10 +218,12 @@ async fn create_and_get_run() {
         payload: Some(payload),
         labels: None,
         scheduled_at: None,
+        max_retries: Some(2),
     };
 
     let created = client.create_run(&request).await.unwrap();
     assert_eq!(created.data.workflow_name, "deploy");
+    assert_eq!(created.data.max_retries, 2);
 
     let fetched = client.get_run(created.data.id).await.unwrap();
     assert_eq!(fetched.data.run.id, created.data.id);
@@ -237,6 +239,7 @@ async fn create_run_unknown_workflow() {
         payload: None,
         labels: None,
         scheduled_at: None,
+        max_retries: None,
     };
 
     let err = client.create_run(&request).await.unwrap_err();

@@ -137,6 +137,25 @@ pub enum AgentError {
         raw_response: Option<String>,
     },
 
+    /// The agent stopped because it exhausted its configured USD budget.
+    ///
+    /// Distinct from [`SchemaValidation`](AgentError::SchemaValidation): retrying
+    /// costs money and cannot succeed, since the budget is already spent. Treated
+    /// as non-retryable by [`is_retryable`](crate::retry::is_retryable) at the
+    /// operation level and by the engine at the run level.
+    #[error("agent budget exceeded: spent ${spent_usd:.4} of ${limit_usd:.4} limit")]
+    BudgetExceeded {
+        /// Total cost reported by the provider before it stopped, in USD.
+        spent_usd: f64,
+        /// The configured `max_budget_usd` limit, in USD.
+        limit_usd: f64,
+        /// Verbose conversation trace captured before the budget ran out.
+        debug_messages: Vec<DebugMessage>,
+        /// Usage data reported alongside the budget error. Boxed to keep
+        /// `AgentError` small on the stack.
+        partial_usage: Box<PartialUsage>,
+    },
+
     /// The prompt exceeds the model's context window.
     ///
     /// Returned before spawning the process when the estimated token count

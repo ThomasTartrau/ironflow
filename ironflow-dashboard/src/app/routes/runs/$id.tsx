@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import { useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
+import { useQueryStates, parseAsInteger } from "nuqs";
 import type {
 	RunDetailResponse,
 	RunResponse,
@@ -20,6 +22,8 @@ import { RunActions } from "./_components/RunActions";
 import { StepList } from "./_components/StepList";
 import { StepFlow } from "./_components/StepFlow";
 import { StepTimeline } from "./_components/StepTimeline";
+import { AttemptSelector } from "./_components/AttemptSelector";
+import { listAttempts, resolveShownAttempt } from "./_components/attempts";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { BackLink } from "@/app/components/BackLink";
 import { formatDuration, formatCost } from "@/app/lib/format";
@@ -80,6 +84,17 @@ export function Component() {
 	const nowMs = useLiveClock({ enabled: active, intervalMs: 500 });
 	const liveDurationMs = computeLiveDurationMs(run, nowMs);
 	const liveCost = computeLiveCost(run, steps);
+
+	const attempts = useMemo(() => listAttempts(steps), [steps]);
+	const latestAttempt = attempts.at(-1) ?? 1;
+	const [{ attempt: selectedAttempt }, setQuery] = useQueryStates({
+		attempt: parseAsInteger,
+	});
+	const shownAttempt = resolveShownAttempt(selectedAttempt, attempts);
+	const shownSteps = useMemo(
+		() => steps.filter((s) => s.attempt === shownAttempt),
+		[steps, shownAttempt],
+	);
 
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
@@ -183,16 +198,26 @@ export function Component() {
 				)}
 
 				<div className="space-y-3">
-					<h2 className="text-base font-semibold tracking-tight">
-						Steps ({steps.length})
-					</h2>
+					<div className="flex items-center justify-between gap-4">
+						<h2 className="text-base font-semibold tracking-tight">
+							Steps ({shownSteps.length})
+						</h2>
+						{attempts.length > 1 && (
+							<AttemptSelector
+								attempts={attempts}
+								value={shownAttempt}
+								latest={latestAttempt}
+								onChange={(attempt) => setQuery({ attempt })}
+							/>
+						)}
+					</div>
 					<CollapsibleSection
 						storageKey="steps-timeline"
 						title="Timeline"
 						defaultOpen
 					>
 						<StepTimeline
-							steps={steps}
+							steps={shownSteps}
 							runStartedAt={run.started_at ?? null}
 							runId={run.id}
 							nowMs={nowMs}
@@ -201,7 +226,7 @@ export function Component() {
 					</CollapsibleSection>
 					<CollapsibleSection storageKey="steps-flow" title="Flow">
 						<StepFlow
-							steps={steps}
+							steps={shownSteps}
 							workflowName={run.workflow_name}
 							runId={run.id}
 						/>
@@ -215,7 +240,7 @@ export function Component() {
 							<LogStreamPanel runId={run.id} enabled />
 						</CollapsibleSection>
 					)}
-					<StepList steps={steps} />
+					<StepList steps={shownSteps} />
 				</div>
 			</div>
 		</HeaderApp>

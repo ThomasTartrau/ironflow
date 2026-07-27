@@ -19,6 +19,7 @@ use serde_json::Value;
 ///     payload: Some(json!({"env": "prod"})),
 ///     labels: None,
 ///     scheduled_at: None,
+///     max_retries: Some(2),
 /// };
 /// assert_eq!(req.workflow, "deploy");
 /// ```
@@ -36,4 +37,14 @@ pub struct CreateRunRequest {
     /// Optional deferred execution time. `None` means run immediately.
     #[serde(default)]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// How many times the run may be replayed automatically after a transient
+    /// failure. Defaults to `0`, meaning no automatic retry.
+    ///
+    /// Each retry waits an exponential backoff (30 s, 2 min, 8 min, capped at
+    /// 15 min) before the run is replayed from the start. Failures that cannot
+    /// succeed on replay -- an unknown workflow, an invalid payload, an
+    /// exhausted agent budget, a rejected approval, a manual cancellation --
+    /// consume no attempt.
+    #[serde(default)]
+    pub max_retries: Option<u32>,
 }

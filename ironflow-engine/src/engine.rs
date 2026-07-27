@@ -11,7 +11,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
+use rust_decimal::Decimal;
 use serde_json::Value;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -32,6 +33,7 @@ use crate::error::EngineError;
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
 use crate::notify::{Event, EventPublisher, EventSubscriber};
+use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
 
 /// The workflow orchestration engine.
@@ -164,16 +166,22 @@ impl Engine {
     }
 
     /// Build a [`WorkflowContext`] with access to the handler registry.
-    fn build_context(&self, run_id: Uuid) -> WorkflowContext {
+    /// Build the execution context for a run.
+    ///
+    /// The context is seeded with the run's attempt number and the cost and
+    /// duration already accumulated by previous attempts, so a retried run
+    /// reports the total it really consumed rather than only its last attempt.
+    fn build_context(&self, run: &Run) -> WorkflowContext {
         let handlers = self.handlers.clone();
         let resolver: crate::context::HandlerResolver =
             Arc::new(move |name: &str| handlers.get(name).cloned());
         let mut ctx = WorkflowContext::with_handler_resolver(
-            run_id,
+            run.id,
             self.store.clone(),
             self.provider.clone(),
             resolver,
         );
+        ctx.carry_over_run_totals(run.retry_count + 1, run.cost_usd, run.duration_ms);
         if let Some(ref sender) = self.log_sender {
             ctx.set_log_sender(sender.clone());
         }
@@ -413,7 +421,7 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => handler_name.to_string()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(run_id);
+        let mut ctx = self.build_context(&run);
 
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, handler_name, result, &ctx, run_start)
@@ -518,7 +526,13 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => run.workflow_name.clone()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(run_id);
+        let mut ctx = self.build_context(&run);
+
+        // On a retry the whole run is replayed from the start, but an approval a
+        // human already granted must not be asked again.
+        if run.retry_count > 0 {
+            ctx.load_replay_steps().await?;
+        }
 
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
@@ -572,12 +586,112 @@ impl Engine {
         info!(run_id = %run_id, workflow = %run.workflow_name, "resuming run after approval");
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(run_id);
+        let mut ctx = self.build_context(&run);
         ctx.load_replay_steps().await?;
 
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
             .await
+    }
+
+    /// Record a run failure, replaying the run later when retries remain.
+    ///
+    /// This is the single place where a failed run's fate is decided. When
+    /// `retryable` is true and the run has not exhausted `max_retries`, the run
+    /// moves to [`RunStatus::Retrying`] with `scheduled_at` set to
+    /// `now + backoff` -- [`pick_next_pending`](ironflow_store::store::RunStore::pick_next_pending)
+    /// picks it up again once that time has passed. Otherwise the run moves to
+    /// [`RunStatus::Failed`].
+    ///
+    /// Either way, steps left non-terminal by the failed attempt are closed via
+    /// [`fail_orphaned_steps`](Self::fail_orphaned_steps) so they are never
+    /// confused with the next attempt's steps.
+    ///
+    /// Callers pass `retryable` explicitly rather than an error value, because
+    /// the worker classifies failures it observes from the outside (a timeout, a
+    /// panicked task) that never produce an [`EngineError`]. Use
+    /// [`is_run_retryable`] to classify an
+    /// [`EngineError`].
+    ///
+    /// `cost_usd` and `duration_ms` are `None` when the caller does not know the
+    /// totals (a timeout or a panic observed from outside the handler); the
+    /// values already stored on the run are then left untouched.
+    ///
+    /// Returns the status the run was moved to.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Store`] if the run does not exist or the update
+    /// cannot be persisted.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example(engine: &Engine, run_id: Uuid) -> Result<(), EngineError> {
+    /// let status = engine
+    ///     .fail_or_schedule_retry(run_id, "run timed out after 300s", true, None, None)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn fail_or_schedule_retry(
+        &self,
+        run_id: Uuid,
+        error: &str,
+        retryable: bool,
+        cost_usd: Option<Decimal>,
+        duration_ms: Option<u64>,
+    ) -> Result<RunStatus, EngineError> {
+        let run = self
+            .store
+            .get_run(run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+
+        let has_attempts_left = run.retry_count < run.max_retries;
+        let update = if retryable && has_attempts_left {
+            let backoff = backoff_for_retry(run.retry_count);
+            let scheduled_at = Utc::now() + TimeDelta::milliseconds(backoff.as_millis() as i64);
+
+            info!(
+                run_id = %run_id,
+                workflow = %run.workflow_name,
+                attempt = run.retry_count + 1,
+                max_retries = run.max_retries,
+                backoff_secs = backoff.as_secs(),
+                scheduled_at = %scheduled_at,
+                "run failed, scheduling retry"
+            );
+
+            RunUpdate {
+                status: Some(RunStatus::Retrying),
+                error: Some(error.to_string()),
+                increment_retry: true,
+                cost_usd,
+                duration_ms,
+                scheduled_at: Some(scheduled_at),
+                ..RunUpdate::default()
+            }
+        } else {
+            RunUpdate {
+                status: Some(RunStatus::Failed),
+                error: Some(error.to_string()),
+                cost_usd,
+                duration_ms,
+                completed_at: Some(Utc::now()),
+                ..RunUpdate::default()
+            }
+        };
+
+        let status = update.status.unwrap_or(RunStatus::Failed);
+        self.store.update_run(run_id, update).await?;
+        self.fail_orphaned_steps(run_id, error).await?;
+
+        Ok(status)
     }
 
     /// Fail all non-terminal steps for a run.
@@ -667,7 +781,9 @@ impl Engine {
         ctx: &WorkflowContext,
         run_start: Instant,
     ) -> Result<Run, EngineError> {
-        let total_duration = run_start.elapsed().as_millis() as u64;
+        // Covers the whole run: previous attempts plus this one, so a retried
+        // run reports the time it really consumed.
+        let total_duration = ctx.carried_duration_ms() + run_start.elapsed().as_millis() as u64;
         let completed_at = Utc::now();
 
         let final_status;
@@ -724,26 +840,21 @@ impl Engine {
                 );
             }
             Err(err) => {
-                final_status = RunStatus::Failed;
-                if let Err(store_err) = self
-                    .store
-                    .update_run(
+                final_status = self
+                    .fail_or_schedule_retry(
                         run_id,
-                        RunUpdate {
-                            status: Some(RunStatus::Failed),
-                            error: Some(err.to_string()),
-                            cost_usd: Some(ctx.total_cost_usd()),
-                            duration_ms: Some(total_duration),
-                            completed_at: Some(completed_at),
-                            ..RunUpdate::default()
-                        },
+                        &err.to_string(),
+                        is_run_retryable(&err),
+                        Some(ctx.total_cost_usd()),
+                        Some(total_duration),
                     )
                     .await
-                {
-                    error!(run_id = %run_id, store_error = %store_err, "failed to persist run failure");
-                }
+                    .unwrap_or_else(|store_err| {
+                        error!(run_id = %run_id, store_error = %store_err, "failed to persist run failure");
+                        RunStatus::Failed
+                    });
 
-                error!(run_id = %run_id, error = %err, "run failed");
+                error!(run_id = %run_id, error = %err, status = %final_status, "run failed");
 
                 self.publish_run_status_changed(
                     workflow_name,

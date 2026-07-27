@@ -259,6 +259,7 @@ async fn run_create_and_get() {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env": "staging"}"#.to_string()),
             payload_file: None,
+            max_retries: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -290,6 +291,7 @@ async fn run_create_unknown_workflow() {
             workflow: "nonexistent".to_string(),
             payload: None,
             payload_file: None,
+            max_retries: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -306,6 +308,7 @@ async fn run_create_invalid_payload() {
             workflow: "deploy".to_string(),
             payload: Some("not valid json".to_string()),
             payload_file: None,
+            max_retries: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -323,6 +326,7 @@ async fn run_create_non_object_payload() {
             workflow: "deploy".to_string(),
             payload: Some(r#""just a string""#.to_string()),
             payload_file: None,
+            max_retries: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -412,6 +416,7 @@ async fn run_create_from_payload_file() {
             workflow: "deploy".to_string(),
             payload: None,
             payload_file: Some(tmp.path().to_path_buf()),
+            max_retries: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -429,6 +434,7 @@ async fn run_create_from_missing_file() {
             workflow: "deploy".to_string(),
             payload: None,
             payload_file: Some("/nonexistent/payload.json".into()),
+            max_retries: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
