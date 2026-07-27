@@ -14,6 +14,7 @@ use tracing::{error, info, warn};
 use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
+use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
 use ironflow_store::entities::{RunStatus, RunUpdate};
@@ -491,23 +492,37 @@ impl Worker {
                             }
                             Ok(Err(e)) => {
                                 error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
-                                if let Err(store_err) = engine
-                                    .store()
-                                    .update_run(
-                                        run_id,
-                                        RunUpdate {
-                                            status: Some(RunStatus::Failed),
-                                            error: Some(e.to_string()),
-                                            ..RunUpdate::default()
-                                        },
-                                    )
-                                    .await
+
+                                // A budget refusal has already moved the run to
+                                // Cancelled inside the engine. Forcing Failed
+                                // here would be rejected by the FSM and would
+                                // erase the reason it stopped.
+                                let budget_exceeded =
+                                    matches!(e, EngineError::RunBudgetExceeded { .. });
+
+                                if !budget_exceeded
+                                    && let Err(store_err) = engine
+                                        .store()
+                                        .update_run(
+                                            run_id,
+                                            RunUpdate {
+                                                status: Some(RunStatus::Failed),
+                                                error: Some(e.to_string()),
+                                                ..RunUpdate::default()
+                                            },
+                                        )
+                                        .await
                                 {
                                     error!(run_id = %run_id, error = %store_err, "failed to mark run as failed");
                                 }
-                                if let Err(cleanup_err) = engine
-                                    .fail_orphaned_steps(run_id, "parent run failed")
-                                    .await
+
+                                let cleanup_reason = if budget_exceeded {
+                                    "parent run stopped: cost cap reached"
+                                } else {
+                                    "parent run failed"
+                                };
+                                if let Err(cleanup_err) =
+                                    engine.fail_orphaned_steps(run_id, cleanup_reason).await
                                 {
                                     error!(run_id = %run_id, error = %cleanup_err, "failed to cleanup orphaned steps");
                                 }

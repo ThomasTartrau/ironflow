@@ -61,6 +61,10 @@ pub struct RunResponse {
     /// Idempotency key that produced this run, when one was supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    /// Cumulative cost cap for this run, in USD. `None` means no cap.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<Decimal>,
 }
 
 impl From<Run> for RunResponse {
@@ -83,6 +87,7 @@ impl From<Run> for RunResponse {
             labels: run.labels,
             scheduled_at: run.scheduled_at,
             idempotency_key: run.idempotency_key,
+            max_cost_usd: run.max_cost_usd,
         }
     }
 }

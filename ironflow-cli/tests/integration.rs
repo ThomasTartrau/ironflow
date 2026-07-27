@@ -260,6 +260,7 @@ async fn run_create_and_get() {
             payload: Some(r#"{"env": "staging"}"#.to_string()),
             payload_file: None,
             idempotency_key: None,
+            max_cost: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -292,6 +293,7 @@ async fn run_create_unknown_workflow() {
             payload: None,
             payload_file: None,
             idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -309,6 +311,7 @@ async fn run_create_invalid_payload() {
             payload: Some("not valid json".to_string()),
             payload_file: None,
             idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -327,6 +330,7 @@ async fn run_create_non_object_payload() {
             payload: Some(r#""just a string""#.to_string()),
             payload_file: None,
             idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -417,6 +421,7 @@ async fn run_create_from_payload_file() {
             payload: None,
             payload_file: Some(tmp.path().to_path_buf()),
             idempotency_key: None,
+            max_cost: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -435,6 +440,7 @@ async fn run_create_from_missing_file() {
             payload: None,
             payload_file: Some("/nonexistent/payload.json".into()),
             idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -455,6 +461,7 @@ async fn run_create_with_idempotency_key_creates_one_run() {
             payload: Some(r#"{"env": "prod"}"#.to_string()),
             payload_file: None,
             idempotency_key: Some("github:abc-123".to_string()),
+            max_cost: None,
         },
     };
 
@@ -483,6 +490,7 @@ async fn run_create_without_idempotency_key_creates_several_runs() {
             payload: Some(r#"{"env": "prod"}"#.to_string()),
             payload_file: None,
             idempotency_key: None,
+            max_cost: None,
         },
     };
 
@@ -507,6 +515,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             payload: Some(r#"{"env": "prod"}"#.to_string()),
             payload_file: None,
             idempotency_key: Some("github:abc-123".to_string()),
+            max_cost: None,
         },
     };
     commands::run::execute(&client, &first, false, false)
@@ -519,6 +528,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             payload: Some(r#"{"env": "staging"}"#.to_string()),
             payload_file: None,
             idempotency_key: Some("github:abc-123".to_string()),
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &conflicting, false, false).await;
@@ -537,6 +547,7 @@ async fn run_create_with_an_empty_idempotency_key_errors() {
             payload: None,
             payload_file: None,
             idempotency_key: Some(String::new()),
+            max_cost: None,
         },
     };
 
@@ -545,4 +556,91 @@ async fn run_create_with_an_empty_idempotency_key_errors() {
             .await
             .is_err()
     );
+}
+
+// ── Cost cap ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn run_create_with_max_cost_reaches_the_api() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            idempotency_key: None,
+            max_cost: Some(2.5),
+        },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(runs.data[0].max_cost_usd, Some(2.5));
+}
+
+#[tokio::test]
+async fn run_create_rejects_negative_max_cost_before_calling_the_api() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            idempotency_key: None,
+            max_cost: Some(-1.0),
+        },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("zero or positive"));
+
+    // Nothing reached the server.
+    assert!(client.list_runs().await.unwrap().data.is_empty());
+}
+
+#[tokio::test]
+async fn run_create_rejects_non_finite_max_cost() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            idempotency_key: None,
+            max_cost: Some(f64::NAN),
+        },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("finite"));
+}
+
+#[tokio::test]
+async fn run_create_accepts_zero_max_cost() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            idempotency_key: None,
+            max_cost: Some(0.0),
+        },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(runs.data[0].max_cost_usd, Some(0.0));
 }

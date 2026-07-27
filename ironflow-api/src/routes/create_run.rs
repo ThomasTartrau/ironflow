@@ -6,6 +6,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_engine::engine::EnqueueOptions;
+use ironflow_engine::error::EngineError;
 use ironflow_engine::notify::Event;
 use ironflow_store::models::{Run, RunCreation, TriggerKind};
 use serde_json::{Value, json};
@@ -57,10 +59,12 @@ fn record_outcome(_outcome: &'static str) {}
 /// # Errors
 ///
 /// Returns [`ApiError::Forbidden`] for non-admin callers.
-/// Returns [`ApiError::BadRequest`] if the workflow is unknown or the
-/// `Idempotency-Key` header is malformed.
+/// Returns [`ApiError::BadRequest`] if the workflow is unknown, the body is
+/// invalid, or the `Idempotency-Key` header is malformed.
 /// Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
 /// different request.
+/// Returns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota
+/// is exhausted.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -74,10 +78,11 @@ fn record_outcome(_outcome: &'static str) {}
         responses(
             (status = 201, description = "Run created successfully", body = RunResponse),
             (status = 200, description = "Idempotency key replayed: the existing run is returned", body = RunResponse),
-            (status = 400, description = "Unknown workflow or malformed Idempotency-Key"),
+            (status = 400, description = "Unknown workflow, invalid body or malformed Idempotency-Key"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
-            (status = 409, description = "Idempotency key already used with a different request")
+            (status = 409, description = "Idempotency key already used with a different request"),
+            (status = 429, description = "Monthly cost quota exhausted")
         ),
         security(("Bearer" = []))
     )
@@ -117,6 +122,8 @@ pub async fn create_run(
         )));
     }
 
+    req.validate().map_err(ApiError::BadRequest)?;
+
     let payload = req.payload.unwrap_or_else(|| json!({}));
     let labels = req.labels.unwrap_or_default();
 
@@ -126,13 +133,21 @@ pub async fn create_run(
             &req.workflow,
             TriggerKind::Api,
             payload.clone(),
-            3,
-            labels,
-            req.scheduled_at,
-            idempotency_key.clone(),
+            EnqueueOptions {
+                max_retries: 3,
+                labels,
+                scheduled_at: req.scheduled_at,
+                max_cost_usd: req.max_cost_usd,
+                idempotency_key: idempotency_key.clone(),
+            },
         )
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| match e {
+            EngineError::MonthlyBudgetExceeded { .. } => {
+                ApiError::MonthlyBudgetExceeded(e.to_string())
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?;
 
     match creation {
         RunCreation::Existing(existing) => {
@@ -176,17 +191,19 @@ pub async fn create_run(
 mod tests {
     use axum::Router;
     use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::http::{Request, Response, StatusCode};
     use axum::routing::post;
     use http_body_util::BodyExt;
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::budget::BudgetConfig;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::{Event, EventSubscriber, SubscriberFuture};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::RunStatus;
+    use rust_decimal::Decimal;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -240,10 +257,10 @@ mod tests {
         }
     }
 
-    fn build_state(counter: Option<Arc<AtomicUsize>>) -> AppState {
+    fn build_state(counter: Option<Arc<AtomicUsize>>, budget: BudgetConfig) -> AppState {
         let store = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
-        let mut engine = Engine::new(store.clone(), provider);
+        let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
         engine.register(TestWorkflow).unwrap();
         engine.register(OtherWorkflow).unwrap();
         if let Some(counter) = counter {
@@ -268,11 +285,18 @@ mod tests {
 
     fn test_state_counting_created() -> (AppState, Arc<AtomicUsize>) {
         let counter = Arc::new(AtomicUsize::new(0));
-        (build_state(Some(counter.clone())), counter)
+        (
+            build_state(Some(counter.clone()), BudgetConfig::new()),
+            counter,
+        )
     }
 
     fn test_state() -> AppState {
-        build_state(None)
+        build_state(None, BudgetConfig::new())
+    }
+
+    fn state_with_budget(budget: BudgetConfig) -> AppState {
+        build_state(None, budget)
     }
 
     /// Build a `POST /` request, optionally carrying an `Idempotency-Key`.
@@ -349,6 +373,108 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Send a `POST /` with the given JSON body against a router built on `state`.
+    async fn send_run(state: AppState, body: JsonValue) -> Response<Body> {
+        let auth_header = make_auth_header(&state);
+        let app = Router::new().route("/", post(create_run)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/")
+            .method("POST")
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        app.oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_run_persists_and_returns_max_cost_usd() {
+        let resp = send_run(
+            test_state(),
+            json!({"workflow": "test-workflow", "max_cost_usd": 2.5}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["max_cost_usd"], 2.5);
+    }
+
+    #[tokio::test]
+    async fn create_run_without_max_cost_omits_the_field() {
+        let resp = send_run(test_state(), json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert!(json_val["data"].get("max_cost_usd").is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_applies_server_default_max_cost() {
+        let state =
+            state_with_budget(BudgetConfig::new().default_run_max_cost_usd(Decimal::new(125, 2)));
+        let resp = send_run(state, json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["max_cost_usd"], 1.25);
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_negative_max_cost() {
+        let resp = send_run(
+            test_state(),
+            json!({"workflow": "test-workflow", "max_cost_usd": -1.0}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "BAD_REQUEST");
+        assert!(
+            json_val["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("max_cost_usd")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_run_accepts_zero_max_cost() {
+        let resp = send_run(
+            test_state(),
+            json!({"workflow": "test-workflow", "max_cost_usd": 0}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_run_returns_429_when_monthly_quota_exhausted() {
+        // Quota of $0: any accumulated cost (including zero) meets the limit.
+        let state = state_with_budget(BudgetConfig::new().monthly_cost_limit_usd(Decimal::ZERO));
+        let resp = send_run(state, json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "MONTHLY_BUDGET_EXCEEDED");
+    }
+
+    #[tokio::test]
+    async fn create_run_succeeds_when_monthly_quota_has_room() {
+        let state =
+            state_with_budget(BudgetConfig::new().monthly_cost_limit_usd(Decimal::new(10000, 2)));
+        let resp = send_run(state, json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]

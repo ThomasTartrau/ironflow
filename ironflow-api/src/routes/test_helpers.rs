@@ -17,6 +17,7 @@ pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: R
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            max_cost_usd: None,
         })
         .await
         .unwrap()

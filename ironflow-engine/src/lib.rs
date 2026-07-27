@@ -40,6 +40,7 @@
 //! }
 //! ```
 
+pub mod budget;
 pub mod config;
 pub mod context;
 pub mod engine;
@@ -54,9 +55,10 @@ pub mod schedule;
 
 /// Convenience re-exports.
 pub mod prelude {
+    pub use crate::budget::BudgetConfig;
     pub use crate::config::{AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig};
     pub use crate::context::WorkflowContext;
-    pub use crate::engine::Engine;
+    pub use crate::engine::{Engine, EnqueueOptions};
     pub use crate::error::EngineError;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};

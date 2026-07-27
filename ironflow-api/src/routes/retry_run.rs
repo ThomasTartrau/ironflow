@@ -69,6 +69,9 @@ pub async fn retry_run(
             // A retry is a deliberate re-execution: it must not inherit the
             // original key, which is still bound to the run being retried.
             idempotency_key: None,
+            // The retry inherits the original cap, so a run cancelled for
+            // reaching it does not silently come back unbounded.
+            max_cost_usd: original.max_cost_usd,
         })
         .await?
         .into_run();
@@ -98,6 +101,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
+    use rust_decimal::Decimal;
     use serde_json::{Value as JsonValue, from_slice, from_value, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -146,6 +150,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -187,6 +192,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_inherits_the_original_cost_cap() {
+        let store = Arc::new(InMemoryStore::new());
+        let cap = Decimal::new(250, 2);
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 1,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: Some(cap),
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        // A run cancelled for reaching its cap is retryable.
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
+
+        let new_run = store.get_run(new_id).await.unwrap().unwrap();
+        assert_eq!(new_run.max_cost_usd, Some(cap));
+    }
+
+    #[tokio::test]
     async fn retry_pending_run_returns_400() {
         let store = Arc::new(InMemoryStore::new());
         let run = store
@@ -199,6 +259,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -235,6 +296,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -280,6 +342,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -342,6 +405,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: Some("github:abc-123".to_string()),
+                max_cost_usd: None,
             })
             .await
             .unwrap()

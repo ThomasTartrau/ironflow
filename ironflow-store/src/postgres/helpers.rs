@@ -118,6 +118,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         labels: serde_json::from_value(labels_json).unwrap_or_default(),
         scheduled_at: row.get("scheduled_at"),
         idempotency_key: row.get("idempotency_key"),
+        max_cost_usd: row.get("max_cost_usd"),
     })
 }
 

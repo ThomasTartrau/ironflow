@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
+use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -49,6 +50,13 @@ pub struct WorkflowDetailResponse {
     /// Optional 6-field cron expression for automatic execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    /// Default cumulative cost cap applied to runs of this workflow, in USD.
+    ///
+    /// Overridden by a cap supplied at run creation. `None` means the workflow
+    /// declares no default and falls back to the server default (if any).
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_max_cost_usd: Option<Decimal>,
 }
 
 /// Get details about a registered workflow.
@@ -102,6 +110,7 @@ pub async fn get_workflow(
         input_schema: info.input_schema,
         default_labels: info.default_labels,
         schedule: info.schedule.map(|s| s.as_str().to_string()),
+        default_max_cost_usd: info.default_max_cost_usd,
     }))
 }
 
@@ -266,6 +275,74 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert!(json_val["data"]["category"].is_null());
+    }
+
+    struct CappedWorkflow;
+
+    impl WorkflowHandler for CappedWorkflow {
+        fn name(&self) -> &str {
+            "capped-workflow"
+        }
+        fn default_max_cost_usd(&self) -> Option<Decimal> {
+            Some(Decimal::new(325, 2))
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn get_workflow_returns_handler_default_max_cost() {
+        let state = {
+            let store = Arc::new(InMemoryStore::new());
+            let provider = Arc::new(ClaudeCodeProvider::new());
+            let mut engine = Engine::new(store.clone(), provider);
+            engine.register(DescribedWorkflow).unwrap();
+            engine.register(CappedWorkflow).unwrap();
+            let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
+                secret: "test-secret".to_string(),
+                access_token_ttl_secs: 900,
+                refresh_token_ttl_secs: 604800,
+                cookie_domain: None,
+                cookie_secure: false,
+            });
+            let (event_sender, _) = broadcast::channel::<Event>(1);
+            AppState::new(
+                store,
+                Arc::new(engine),
+                jwt_config,
+                "test-worker-token".to_string(),
+                event_sender,
+            )
+        };
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{name}", get(get_workflow))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/capped-workflow")
+            .header("authorization", auth_header.clone())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["default_max_cost_usd"], 3.25);
+
+        // A handler without a declared cap omits the field entirely.
+        let req = Request::builder()
+            .uri("/my-workflow")
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert!(json_val["data"].get("default_max_cost_usd").is_none());
     }
 
     struct ScheduledWorkflow {

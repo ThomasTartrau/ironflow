@@ -87,3 +87,8 @@ publish = false
 name = "ironflow-example-worker"
 release = false
 publish = false
+
+[[package]]
+name = "ironflow-readme-tests"
+release = false
+publish = false

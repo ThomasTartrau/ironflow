@@ -546,7 +546,7 @@
           "runs"
         ],
         "summary": "Trigger a workflow by name.",
-        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown or the\n`Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.",
+        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid, or the `Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
         "operationId": "create_run",
         "parameters": [
           {
@@ -595,7 +595,7 @@
             }
           },
           "400": {
-            "description": "Unknown workflow or malformed Idempotency-Key"
+            "description": "Unknown workflow, invalid body or malformed Idempotency-Key"
           },
           "401": {
             "description": "Unauthorized"
@@ -605,6 +605,9 @@
           },
           "409": {
             "description": "Idempotency key already used with a different request"
+          },
+          "429": {
+            "description": "Monthly cost quota exhausted"
           }
         },
         "security": [
@@ -1729,7 +1732,7 @@
       },
       "CreateRunRequest": {
         "type": "object",
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "required": [
           "workflow"
         ],
@@ -1746,6 +1749,14 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "max_cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Optional cumulative cost cap for this run, in USD.\n\nOverrides the workflow default and the server default. `None` falls back\nto those. Must be zero or positive."
           },
           "payload": {
             "type": [
@@ -1940,6 +1951,56 @@
                 "type": "string",
                 "enum": [
                   "run_failed"
+                ]
+              },
+              "workflow_name": {
+                "type": "string",
+                "description": "Workflow name."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A run was stopped because it reached its cumulative cost cap.\n\nEmitted when the engine refuses an agent step that would cross the run's\n`max_cost_usd`. The run transitions to\n[`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step\nis never launched, so the reported spend is what the run had already\nconsumed.",
+            "required": [
+              "run_id",
+              "workflow_name",
+              "limit_usd",
+              "spent_usd",
+              "step_budget_usd",
+              "at",
+              "type"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the refusal occurred."
+              },
+              "limit_usd": {
+                "type": "number",
+                "format": "double",
+                "description": "The configured cost cap in USD."
+              },
+              "run_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Run identifier."
+              },
+              "spent_usd": {
+                "type": "number",
+                "format": "double",
+                "description": "Cost already consumed when the cap was reached, in USD."
+              },
+              "step_budget_usd": {
+                "type": "number",
+                "format": "double",
+                "description": "Declared budget of the refused step, in USD."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "run_budget_exceeded"
                 ]
               },
               "workflow_name": {
@@ -2303,6 +2364,7 @@
           "run_created",
           "run_status_changed",
           "run_failed",
+          "run_budget_exceeded",
           "step_completed",
           "step_failed",
           "approval_requested",
@@ -2611,6 +2673,14 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "max_cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Cumulative cost cap for this run, in USD. `None` means no cap."
           },
           "max_retries": {
             "type": "integer",
@@ -3230,6 +3300,14 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "default_max_cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Default cumulative cost cap applied to runs of this workflow, in USD.\n\nOverridden by a cap supplied at run creation. `None` means the workflow\ndeclares no default and falls back to the server default (if any)."
           },
           "description": {
             "type": "string",

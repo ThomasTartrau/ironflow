@@ -122,6 +122,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()

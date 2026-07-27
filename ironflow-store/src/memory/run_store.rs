@@ -103,6 +103,7 @@ impl RunStore for InMemoryStore {
                 labels: req.labels,
                 scheduled_at: req.scheduled_at,
                 idempotency_key: req.idempotency_key.clone(),
+                max_cost_usd: req.max_cost_usd,
             };
 
             if let Some(key) = req.idempotency_key {
@@ -1667,6 +1668,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -1684,6 +1686,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -1701,6 +1704,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -1716,6 +1720,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()
@@ -1733,6 +1738,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap()

@@ -17,6 +17,7 @@ fn new_run(name: &str) -> NewRun {
         labels: HashMap::new(),
         scheduled_at: None,
         idempotency_key: None,
+        max_cost_usd: None,
     }
 }
 
@@ -984,6 +985,7 @@ async fn large_payload_preserved_in_roundtrip() {
         labels: HashMap::new(),
         scheduled_at: None,
         idempotency_key: None,
+        max_cost_usd: None,
     };
 
     let run = store.create_run(req).await.unwrap().into_run();

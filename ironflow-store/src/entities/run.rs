@@ -67,6 +67,12 @@ pub struct Run {
     /// See [`IDEMPOTENCY_WINDOW`] for how long a key stays bound to its run.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Maximum cumulative cost allowed for this run, in USD.
+    ///
+    /// Resolved once at run creation and frozen for the lifetime of the run.
+    /// `None` means no cap.
+    #[serde(default)]
+    pub max_cost_usd: Option<Decimal>,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -119,6 +125,7 @@ pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
 ///     idempotency_key: Some("deploy-2026-07-26".to_string()),
+///     max_cost_usd: None,
 /// };
 ///
 /// assert!(store.create_run(req.clone()).await?.is_created());
@@ -202,6 +209,7 @@ impl RunCreation {
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
 ///     idempotency_key: None,
+///     max_cost_usd: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +236,9 @@ pub struct NewRun {
     /// the store returns that run instead of inserting a new one.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Maximum cumulative cost allowed for this run, in USD. `None` means no cap.
+    #[serde(default)]
+    pub max_cost_usd: Option<Decimal>,
 }
 
 /// Filters for listing runs.
@@ -311,10 +322,12 @@ mod tests {
             labels: HashMap::from([("env".to_string(), "prod".to_string())]),
             scheduled_at: None,
             idempotency_key: None,
+            max_cost_usd: Some(Decimal::new(250, 2)),
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");
         let back: NewRun = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.max_cost_usd, new_run.max_cost_usd);
         assert_eq!(back.workflow_name, new_run.workflow_name);
         assert_eq!(back.trigger, new_run.trigger);
         assert_eq!(back.payload, new_run.payload);
@@ -356,6 +369,7 @@ mod tests {
             ]),
             scheduled_at: Some(now),
             idempotency_key: Some("gh:abc-123".to_string()),
+            max_cost_usd: Some(Decimal::new(500, 2)),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -377,6 +391,30 @@ mod tests {
         assert_eq!(back.labels, run.labels);
         assert_eq!(back.scheduled_at, run.scheduled_at);
         assert_eq!(back.idempotency_key, run.idempotency_key);
+        assert_eq!(back.max_cost_usd, run.max_cost_usd);
+    }
+
+    #[test]
+    fn newrun_max_cost_usd_defaults_to_none_when_absent() {
+        let without_cap = NewRun {
+            workflow_name: "deploy".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        };
+        let mut value = serde_json::to_value(&without_cap).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("object")
+            .remove("max_cost_usd");
+
+        let parsed: NewRun = serde_json::from_value(value).expect("deserialize");
+        assert!(parsed.max_cost_usd.is_none());
     }
 
     #[test]

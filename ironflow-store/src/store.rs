@@ -48,6 +48,7 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
 ///     idempotency_key: None,
+///     max_cost_usd: None,
 /// }).await?.into_run();
 ///
 /// let fetched = store.get_run(run.id).await?;
@@ -198,6 +199,7 @@ pub trait RunStore: Send + Sync {
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
 ///     idempotency_key: None,
+///     max_cost_usd: None,
 /// }).await?.into_run();
 /// let _users = store.count_users().await?;
 /// # Ok(())

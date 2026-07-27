@@ -12,6 +12,7 @@ export const ALL_EVENT_KINDS = [
 	"run_created",
 	"run_status_changed",
 	"run_failed",
+	"run_budget_exceeded",
 	"step_completed",
 	"step_failed",
 	"approval_requested",

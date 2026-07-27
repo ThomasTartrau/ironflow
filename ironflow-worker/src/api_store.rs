@@ -518,6 +518,7 @@ mod tests {
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            max_cost_usd: None,
         };
         let result = store.create_run(req).await;
         assert!(result.is_err());

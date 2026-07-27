@@ -22,6 +22,9 @@ pub struct CreateRunTool {
     /// key returns the run it already created instead of starting a second one.
     /// Valid for 24 hours. At most 255 printable ASCII characters.
     pub idempotency_key: Option<String>,
+    /// Optional maximum cumulative cost for this run, in USD. Must be zero or
+    /// positive. Overrides the workflow and server defaults; omit to use them.
+    pub max_cost_usd: Option<f64>,
 }
 
 impl CreateRunTool {
@@ -31,10 +34,13 @@ impl CreateRunTool {
             Some(s) => serde_json::from_str(s).unwrap_or(Value::Object(Default::default())),
             None => serde_json::json!({}),
         };
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "workflow": self.workflow,
             "payload": parsed_payload,
         });
+        if let Some(max_cost_usd) = self.max_cost_usd {
+            body["max_cost_usd"] = serde_json::json!(max_cost_usd);
+        }
 
         let run: Value = match &self.idempotency_key {
             Some(key) => client.post_idempotent("/runs", &body, key).await,
