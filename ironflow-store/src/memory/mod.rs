@@ -21,6 +21,7 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
+//!     created_by: None,
 //!     idempotency_key: None,
 //!     max_cost_usd: None,
 //! }).await?.into_run();
@@ -156,6 +157,7 @@ mod tests {
 
     pub(crate) fn new_run_req(name: &str) -> NewRun {
         NewRun {
+            created_by: None,
             workflow_name: name.to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),

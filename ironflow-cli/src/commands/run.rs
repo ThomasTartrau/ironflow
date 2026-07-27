@@ -55,6 +55,11 @@ pub enum RunCommands {
         /// Filter by workflow name.
         #[arg(long)]
         workflow: Option<String>,
+        /// Filter by author: the user ID that triggered the run.
+        ///
+        /// Also matches runs triggered by one of that user's API keys.
+        #[arg(long)]
+        created_by: Option<Uuid>,
         /// Page number (1-based).
         #[arg(long)]
         page: Option<u32>,
@@ -164,12 +169,14 @@ pub async fn execute(
         RunCommands::List {
             status,
             workflow,
+            created_by,
             page,
             per_page,
         } => {
             let filter = ListRunsFilter {
                 status: status.as_deref(),
                 workflow: workflow.as_deref(),
+                created_by: *created_by,
                 page: *page,
                 per_page: *per_page,
                 ..Default::default()

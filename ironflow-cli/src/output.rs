@@ -159,7 +159,14 @@ fn cost_cell(cost_usd: f64, max_cost_usd: Option<f64>) -> Cell {
 pub fn runs_table(runs: &[RunResponse]) -> Table {
     let mut table = base_table();
     table.set_header(vec![
-        "ID", "Workflow", "Status", "Duration", "Cost", "Created", "Started",
+        "ID",
+        "Workflow",
+        "Status",
+        "Triggered by",
+        "Duration",
+        "Cost",
+        "Created",
+        "Started",
     ]);
 
     for run in runs {
@@ -171,6 +178,7 @@ pub fn runs_table(runs: &[RunResponse]) -> Table {
             Cell::new(run.id.to_string().split('-').next().unwrap_or("")),
             Cell::new(&run.workflow_name),
             status_cell,
+            Cell::new(&run.created_by.label),
             Cell::new(format_duration_ms(run.duration_ms)),
             cost_cell(run.cost_usd, run.max_cost_usd),
             Cell::new(format_datetime(&run.created_at)),
@@ -195,6 +203,10 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
     table.add_row(vec![
         Cell::new("Trigger"),
         Cell::new(format!("{:?}", run.trigger)),
+    ]);
+    table.add_row(vec![
+        Cell::new("Triggered by"),
+        Cell::new(&run.created_by.label),
     ]);
     table.add_row(vec![
         Cell::new("Duration"),
@@ -357,7 +369,40 @@ pub fn stats_table(stats: &StatsResponse) -> Table {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::slice;
+
+    use ironflow_sdk::types::{CreatedBy, CreatedByKind, TriggerKind};
+    use serde_json::{Map, Value};
+    use uuid::Uuid;
+
     use super::*;
+
+    /// Minimal run whose only meaningful field is its author.
+    fn run_fixture(created_by: CreatedBy) -> RunResponse {
+        let now = Utc::now();
+        RunResponse {
+            id: Uuid::now_v7(),
+            workflow_name: "deploy".to_string(),
+            status: RunStatus::Completed,
+            trigger: TriggerKind::Api,
+            error: None,
+            retry_count: 0,
+            max_retries: 0,
+            cost_usd: 0.0,
+            duration_ms: 0,
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            completed_at: None,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by,
+            idempotency_key: None,
+            max_cost_usd: None,
+        }
+    }
 
     #[test]
     fn format_cost_without_cap_shows_amount_only() {
@@ -453,6 +498,42 @@ mod tests {
         assert!(output.contains("ID"));
         assert!(output.contains("Workflow"));
         assert!(output.contains("Status"));
+        assert!(output.contains("Triggered by"));
+    }
+
+    #[test]
+    fn runs_table_renders_the_author_label() {
+        let run = run_fixture(CreatedBy {
+            kind: CreatedByKind::ApiKey,
+            id: Some(Uuid::now_v7()),
+            label: "ci-deploy (alice)".to_string(),
+        });
+
+        let output = runs_table(slice::from_ref(&run)).to_string();
+        assert!(
+            output.contains("ci-deploy (alice)"),
+            "author missing from:\n{output}"
+        );
+    }
+
+    #[test]
+    fn run_detail_table_renders_the_author_label() {
+        let detail = RunDetailResponse {
+            run: run_fixture(CreatedBy {
+                kind: CreatedByKind::System,
+                id: None,
+                label: "/hooks/github".to_string(),
+            }),
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+        };
+
+        let output = run_detail_table(&detail).to_string();
+        assert!(output.contains("Triggered by"));
+        assert!(
+            output.contains("/hooks/github"),
+            "author missing from:\n{output}"
+        );
     }
 
     #[test]

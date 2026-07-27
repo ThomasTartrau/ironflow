@@ -72,6 +72,11 @@ pub struct ListRunsFilter<'a> {
     /// Filter by label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<&'a str>,
+    /// Filter by author: the user ID that triggered the run.
+    ///
+    /// Also matches runs triggered by one of that user's API keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
 }
 
 /// Type-safe client for the Ironflow REST API.

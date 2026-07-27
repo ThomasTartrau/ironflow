@@ -510,6 +510,7 @@ mod tests {
     async fn create_run_returns_error_on_unreachable_server() {
         let store = ApiRunStore::new("http://127.0.0.1:1", "token");
         let req = NewRun {
+            created_by: None,
             workflow_name: "test".to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),

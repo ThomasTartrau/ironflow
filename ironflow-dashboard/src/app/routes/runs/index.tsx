@@ -27,6 +27,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	const status = url.searchParams.get("status") ?? "";
 	const hasSteps = url.searchParams.get("has_steps") ?? "true";
 	const label = url.searchParams.get("label") ?? "";
+	const createdBy = url.searchParams.get("created_by") ?? "";
 
 	const params = new URLSearchParams();
 	params.set("page", page);
@@ -35,6 +36,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	if (status) params.set("status", status);
 	if (hasSteps === "true") params.set("has_steps", "true");
 	if (label) params.set("label", label);
+	if (createdBy) params.set("created_by", createdBy);
 
 	const res = await api.get<RunResponse[]>(`/runs?${params}`);
 	return { runs: res.data, meta: res.meta };

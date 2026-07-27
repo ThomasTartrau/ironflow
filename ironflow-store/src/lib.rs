@@ -29,6 +29,7 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
+//!     created_by: None,
 //!     idempotency_key: None,
 //!     max_cost_usd: None,
 //! }).await?.into_run();

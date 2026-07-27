@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 fn new_run(name: &str) -> NewRun {
     NewRun {
+        created_by: None,
         workflow_name: name.to_string(),
         trigger: TriggerKind::Manual,
         payload: json!({}),

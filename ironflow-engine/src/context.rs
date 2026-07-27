@@ -1029,12 +1029,11 @@ impl WorkflowContext {
             EngineError::InvalidWorkflow(format!("no handler registered: {}", config.workflow_name))
         })?;
 
-        let parent_labels = self
-            .store
-            .get_run(self.run_id)
-            .await?
-            .map(|r| r.labels)
-            .unwrap_or_default();
+        // A child run inherits both the parent labels and the parent author:
+        // whoever triggered the parent workflow is accountable for its children.
+        let parent = self.store.get_run(self.run_id).await?;
+        let (parent_labels, parent_author) =
+            parent.map(|r| (r.labels, r.created_by)).unwrap_or_default();
 
         let child_run = self
             .store
@@ -1046,6 +1045,7 @@ impl WorkflowContext {
                 handler_version: None,
                 labels: parent_labels,
                 scheduled_at: None,
+                created_by: parent_author,
                 idempotency_key: None,
                 // The child shares the parent's cap; it does not get its own budget.
                 max_cost_usd: self.max_cost_usd,
@@ -1428,7 +1428,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::RunFilter;
+    use ironflow_store::models::{Run, RunActor, RunFilter};
     use ironflow_store::store::RunStore;
     use serde_json::json;
     use std::sync::Arc;
@@ -1520,6 +1520,7 @@ mod tests {
         // Create the run first using RunStore trait
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1560,6 +1561,82 @@ mod tests {
         assert_eq!(steps[0].status.state, StepStatus::Skipped);
     }
 
+    /// Sub-workflow handler that records no steps, so the child run reaches a
+    /// terminal state without touching the filesystem or the network.
+    struct NoopSubWorkflow;
+
+    impl WorkflowHandler for NoopSubWorkflow {
+        fn name(&self) -> &str {
+            "noop-sub"
+        }
+
+        fn execute<'a>(
+            &'a self,
+            _ctx: &'a mut WorkflowContext,
+        ) -> crate::handler::HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    /// Run a parent workflow authored by `created_by` and return the child run
+    /// created by its sub-workflow step.
+    async fn child_run_of_parent_authored_by(created_by: Option<RunActor>) -> Run {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+
+        let parent = store
+            .create_run(NewRun {
+                workflow_name: "parent".to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+                created_by,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .expect("failed to create parent run")
+            .into_run();
+
+        let resolver: HandlerResolver = Arc::new(|name: &str| match name {
+            "noop-sub" => Some(Arc::new(NoopSubWorkflow) as Arc<dyn WorkflowHandler>),
+            _ => None,
+        });
+
+        let mut ctx =
+            WorkflowContext::with_handler_resolver(parent.id, store.clone(), provider, resolver);
+        ctx.workflow(&NoopSubWorkflow, json!({}))
+            .await
+            .expect("sub-workflow failed");
+
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        runs.items
+            .into_iter()
+            .find(|r| r.workflow_name == "noop-sub")
+            .expect("child run was created")
+    }
+
+    #[tokio::test]
+    async fn child_run_inherits_the_parent_author() {
+        let user_id = Uuid::now_v7();
+        let child = child_run_of_parent_authored_by(Some(RunActor::User { user_id })).await;
+
+        assert_eq!(child.created_by, Some(RunActor::User { user_id }));
+    }
+
+    #[tokio::test]
+    async fn child_run_of_an_unattributed_parent_has_no_author() {
+        let child = child_run_of_parent_authored_by(None).await;
+
+        assert!(child.created_by.is_none());
+    }
+
     #[tokio::test]
     async fn context_parallel_empty_steps_returns_empty_vec() {
         let mut ctx = create_test_context();
@@ -1578,6 +1655,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1631,6 +1709,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1718,6 +1797,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1808,6 +1888,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: test_payload.clone(),
@@ -1870,6 +1951,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),

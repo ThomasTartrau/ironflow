@@ -24,7 +24,8 @@ use ironflow_core::metric_names::{
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, Run, RunCreation, RunFilter, RunStatus, RunUpdate, StepStatus, StepUpdate, TriggerKind,
+    NewRun, Run, RunActor, RunCreation, RunFilter, RunStatus, RunUpdate, StepStatus, StepUpdate,
+    TriggerKind,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -69,6 +70,9 @@ pub struct EnqueueOptions {
     /// default. `None` falls back to
     /// [`BudgetConfig::resolve_run_cap`](crate::budget::BudgetConfig::resolve_run_cap).
     pub max_cost_usd: Option<Decimal>,
+    /// Authenticated principal that triggered the run. `None` for cron,
+    /// webhook, and programmatic triggers.
+    pub created_by: Option<RunActor>,
     /// Idempotency key binding this enqueue to a single run.
     ///
     /// When set and already bound to a run created within
@@ -524,6 +528,7 @@ impl Engine {
         let run = self
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: handler_name.to_string(),
                 trigger,
                 payload,
@@ -587,7 +592,7 @@ impl Engine {
     }
 
     /// Enqueue a handler-based workflow with labels, deferred scheduling, an
-    /// optional cost cap and an optional idempotency key.
+    /// optional cost cap, an optional author, and an optional idempotency key.
     ///
     /// See [`EnqueueOptions`] for the individual settings.
     ///
@@ -643,6 +648,7 @@ impl Engine {
             labels,
             scheduled_at,
             max_cost_usd,
+            created_by,
             idempotency_key,
         } = options;
 
@@ -669,6 +675,7 @@ impl Engine {
                 handler_version,
                 labels: merged_labels,
                 scheduled_at,
+                created_by,
                 idempotency_key,
                 max_cost_usd: resolved_cap,
             })
@@ -1441,6 +1448,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enqueue_handler_leaves_the_run_unattributed() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        let run = engine
+            .enqueue_handler("echo-workflow", TriggerKind::Manual, json!({}), 0)
+            .await
+            .unwrap();
+
+        assert!(run.created_by.is_none());
+    }
+
+    #[tokio::test]
+    async fn enqueue_handler_with_options_records_the_author() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        let actor = RunActor::User {
+            user_id: Uuid::now_v7(),
+        };
+
+        let run = engine
+            .enqueue_handler_with_options(
+                "echo-workflow",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions {
+                    created_by: Some(actor.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .into_run();
+
+        assert_eq!(run.created_by, Some(actor));
+    }
+
+    #[tokio::test]
+    async fn enqueue_handler_with_options_accepts_no_author() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        let run = engine
+            .enqueue_handler_with_options(
+                "echo-workflow",
+                TriggerKind::Cron {
+                    schedule: "0 * * * * *".to_string(),
+                },
+                json!({}),
+                EnqueueOptions::default(),
+            )
+            .await
+            .unwrap()
+            .into_run();
+
+        assert!(run.created_by.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_handler_leaves_the_run_unattributed() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        let run = engine
+            .run_handler("echo-workflow", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap();
+
+        assert!(run.created_by.is_none());
+    }
+
+    #[tokio::test]
     async fn engine_register_boxed() {
         let mut engine = create_test_engine();
         let handler: Box<dyn WorkflowHandler> = Box::new(EchoWorkflow);
@@ -1878,6 +1957,7 @@ mod tests {
         let run = engine
             .store()
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1918,6 +1998,7 @@ mod tests {
         let run = engine
             .store()
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1958,6 +2039,7 @@ mod tests {
         let run = engine
             .store()
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1998,6 +2080,7 @@ mod tests {
         let run = engine
             .store()
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -2046,6 +2129,7 @@ mod tests {
         let run = engine
             .store()
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -2103,6 +2187,7 @@ mod tests {
         let run = engine
             .store()
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -2127,6 +2212,7 @@ mod tests {
         let run = engine
             .store()
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),

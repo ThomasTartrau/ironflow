@@ -231,6 +231,8 @@ export interface paths {
 		 *
 		 *     - `workflow` — Filter by workflow name (optional)
 		 *     - `status` — Filter by run status (optional)
+		 *     - `created_by` — Filter by author user ID (optional). Also matches runs
+		 *       triggered by one of that user's API keys.
 		 *     - `page` — Page number, 1-based (default: 1)
 		 *     - `per_page` — Items per page (default: 20, max: 100)
 		 */
@@ -435,7 +437,8 @@ export interface paths {
 		/**
 		 * Get aggregate statistics across runs matching the filter.
 		 * @description Accepts the same filtering query parameters as `GET /api/v1/runs`
-		 *     (`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.
+		 *     (`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and
+		 *     `per_page` are ignored.
 		 */
 		get: operations["get_stats"];
 		put?: never;
@@ -773,6 +776,50 @@ export interface components {
 			/** @description Display username. */
 			username: string;
 		};
+		/**
+		 * @description The author of a run, as exposed by the API.
+		 *
+		 *     Always present on a [`RunResponse`](crate::entities::RunResponse): a run with
+		 *     no recorded author (including every run created before authorship tracking)
+		 *     reports [`CreatedByKind::System`] with a label derived from its trigger, so
+		 *     clients never have to handle a missing value.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::{CreatedBy, CreatedByKind};
+		 *
+		 *     // Built from a Run via `CreatedBy::from(&run)`.
+		 *     let system = CreatedBy {
+		 *         kind: CreatedByKind::System,
+		 *         id: None,
+		 *         label: "manual".to_string(),
+		 *     };
+		 *     assert_eq!(system.id, None);
+		 *     ```
+		 */
+		CreatedBy: {
+			/**
+			 * Format: uuid
+			 * @description Identifier of the principal: the user ID, the API key ID, or `None` for
+			 *     [`CreatedByKind::System`].
+			 */
+			id?: string | null;
+			/** @description What kind of principal triggered the run. */
+			kind: components["schemas"]["CreatedByKind"];
+			/**
+			 * @description Human-readable label. Never empty.
+			 *
+			 *     The username for a user, `"key-name (username)"` for an API key, and the
+			 *     trigger description for a system run.
+			 */
+			label: string;
+		};
+		/**
+		 * @description What kind of principal triggered a run.
+		 * @enum {string}
+		 */
+		CreatedByKind: "user" | "api_key" | "system";
 		/**
 		 * @description A domain event emitted by the ironflow system.
 		 *
@@ -1151,6 +1198,13 @@ export interface components {
 		/** @description Query parameters for listing runs. */
 		ListRunsQuery: {
 			/**
+			 * Format: uuid
+			 * @description Filter by author: the user ID that triggered the run.
+			 *
+			 *     Also matches runs triggered by one of that user's API keys.
+			 */
+			created_by?: string | null;
+			/**
 			 * @description Filter by step presence (only applies to completed/cancelled runs).
 			 *     Non-terminal runs (pending, running, etc.) are always included.
 			 *     When `true`, only return completed/cancelled runs that have steps.
@@ -1264,6 +1318,8 @@ export interface components {
 			 * @description When created.
 			 */
 			created_at: string;
+			/** @description Who triggered the run. Always present. */
+			created_by: components["schemas"]["CreatedBy"];
 			/**
 			 * Format: int64
 			 * @description Total duration in milliseconds.
@@ -2076,6 +2132,12 @@ export interface operations {
 				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
 				label?: string | null;
+				/**
+				 * @description Filter by author: the user ID that triggered the run.
+				 *
+				 *     Also matches runs triggered by one of that user's API keys.
+				 */
+				created_by?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */
@@ -2619,6 +2681,12 @@ export interface operations {
 				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
 				label?: string | null;
+				/**
+				 * @description Filter by author: the user ID that triggered the run.
+				 *
+				 *     Also matches runs triggered by one of that user's API keys.
+				 */
+				created_by?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */
