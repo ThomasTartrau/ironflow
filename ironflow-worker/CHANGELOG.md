@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.9.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.8.29...ironflow-worker-v2.9.0) - 2026-07-27
+
+### Added
+
+- #17 trace run authorship (created_by)
+
 ## [2.8.29](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.8.28...ironflow-worker-v2.8.29) - 2026-07-27
 ## [2.8.28](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.8.27...ironflow-worker-v2.8.28) - 2026-07-27
 ## [2.8.12](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.8.11...ironflow-worker-v2.8.12) - 2026-05-01
