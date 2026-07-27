@@ -112,6 +112,50 @@ pub fn print_output<T: Serialize>(
 }
 
 /// Render a list of runs as a table.
+/// Fraction of the cost cap above which the spend is highlighted.
+const COST_WARNING_RATIO: f64 = 0.8;
+
+/// Render a run's spend, with its cap when one is configured.
+///
+/// Without a cap this is the plain amount; with one it reads `$0.1800 / $2.00`.
+fn format_cost(cost_usd: f64, max_cost_usd: Option<f64>) -> String {
+    match max_cost_usd {
+        Some(cap) => format!("${cost_usd:.4} / ${cap:.2}"),
+        None => format!("${cost_usd:.4}"),
+    }
+}
+
+/// Highlight colour for a run's spend relative to its cap.
+///
+/// `None` means no highlight: either the run has no cap, or it is comfortably
+/// below it. Yellow past [`COST_WARNING_RATIO`] of the cap, red once the cap is
+/// reached. A zero cap has no meaningful ratio, so any spend counts as reached.
+fn cost_color(cost_usd: f64, max_cost_usd: Option<f64>) -> Option<Color> {
+    let cap = max_cost_usd?;
+
+    if cap <= 0.0 {
+        return (cost_usd > 0.0).then_some(Color::Red);
+    }
+
+    let ratio = cost_usd / cap;
+    if ratio >= 1.0 {
+        Some(Color::Red)
+    } else if ratio >= COST_WARNING_RATIO {
+        Some(Color::Yellow)
+    } else {
+        None
+    }
+}
+
+/// Build the table cell for a run's spend, highlighted when close to its cap.
+fn cost_cell(cost_usd: f64, max_cost_usd: Option<f64>) -> Cell {
+    let cell = Cell::new(format_cost(cost_usd, max_cost_usd));
+    match cost_color(cost_usd, max_cost_usd) {
+        Some(color) => cell.fg(color),
+        None => cell,
+    }
+}
+
 pub fn runs_table(runs: &[RunResponse]) -> Table {
     let mut table = base_table();
     table.set_header(vec![
@@ -136,7 +180,7 @@ pub fn runs_table(runs: &[RunResponse]) -> Table {
             status_cell,
             Cell::new(&run.created_by.label),
             Cell::new(format_duration_ms(run.duration_ms)),
-            Cell::new(format!("${:.4}", run.cost_usd)),
+            cost_cell(run.cost_usd, run.max_cost_usd),
             Cell::new(format_datetime(&run.created_at)),
             Cell::new(format_optional_datetime(&run.started_at)),
         ]);
@@ -170,7 +214,7 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
     ]);
     table.add_row(vec![
         Cell::new("Cost"),
-        Cell::new(format!("${:.4}", run.cost_usd)),
+        cost_cell(run.cost_usd, run.max_cost_usd),
     ]);
     table.add_row(vec![
         Cell::new("Created"),
@@ -355,7 +399,38 @@ mod tests {
             labels: HashMap::new(),
             scheduled_at: None,
             created_by,
+            max_cost_usd: None,
         }
+    }
+
+    #[test]
+    fn format_cost_without_cap_shows_amount_only() {
+        assert_eq!(format_cost(0.1234, None), "$0.1234");
+    }
+
+    #[test]
+    fn format_cost_with_cap_shows_both_amounts() {
+        assert_eq!(format_cost(0.18, Some(2.0)), "$0.1800 / $2.00");
+    }
+
+    #[test]
+    fn cost_color_is_absent_without_a_cap() {
+        assert_eq!(cost_color(999.0, None), None);
+    }
+
+    #[test]
+    fn cost_color_warns_past_the_threshold_and_alerts_at_the_cap() {
+        assert_eq!(cost_color(1.0, Some(2.0)), None); // 50%
+        assert_eq!(cost_color(1.6, Some(2.0)), Some(Color::Yellow)); // 80%
+        assert_eq!(cost_color(1.99, Some(2.0)), Some(Color::Yellow));
+        assert_eq!(cost_color(2.0, Some(2.0)), Some(Color::Red)); // at cap
+        assert_eq!(cost_color(2.5, Some(2.0)), Some(Color::Red)); // over cap
+    }
+
+    #[test]
+    fn cost_color_handles_a_zero_cap() {
+        assert_eq!(cost_color(0.0, Some(0.0)), None);
+        assert_eq!(cost_color(0.01, Some(0.0)), Some(Color::Red));
     }
 
     #[test]

@@ -21,6 +21,7 @@ fn new_run(name: &str) -> NewRun {
         handler_version: None,
         labels: HashMap::new(),
         scheduled_at: None,
+        max_cost_usd: None,
     }
 }
 

@@ -74,6 +74,12 @@ pub struct Run {
     /// when there is no actor, or when the referenced user or key no longer exists.
     #[serde(default)]
     pub created_by_label: Option<String>,
+    /// Maximum cumulative cost allowed for this run, in USD.
+    ///
+    /// Resolved once at run creation and frozen for the lifetime of the run.
+    /// `None` means no cap.
+    #[serde(default)]
+    pub max_cost_usd: Option<Decimal>,
 }
 
 /// Request to create a new run.
@@ -94,6 +100,7 @@ pub struct Run {
 ///     labels: HashMap::new(),
 ///     scheduled_at: None,
 ///     created_by: None,
+///     max_cost_usd: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +127,9 @@ pub struct NewRun {
     /// does not send the field keeps working against a newer API.
     #[serde(default)]
     pub created_by: Option<RunActor>,
+    /// Maximum cumulative cost allowed for this run, in USD. `None` means no cap.
+    #[serde(default)]
+    pub max_cost_usd: Option<Decimal>,
 }
 
 /// Filters for listing runs.
@@ -206,10 +216,12 @@ mod tests {
             handler_version: Some("1.2.0".to_string()),
             labels: HashMap::from([("env".to_string(), "prod".to_string())]),
             scheduled_at: None,
+            max_cost_usd: Some(Decimal::new(250, 2)),
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");
         let back: NewRun = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.max_cost_usd, new_run.max_cost_usd);
         assert_eq!(back.workflow_name, new_run.workflow_name);
         assert_eq!(back.trigger, new_run.trigger);
         assert_eq!(back.payload, new_run.payload);
@@ -235,6 +247,7 @@ mod tests {
             labels: HashMap::new(),
             scheduled_at: None,
             created_by: Some(actor.clone()),
+            max_cost_usd: None,
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");
@@ -291,6 +304,7 @@ mod tests {
                 user_id: Uuid::now_v7(),
             }),
             created_by_label: Some("alice".to_string()),
+            max_cost_usd: Some(Decimal::new(500, 2)),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -313,6 +327,30 @@ mod tests {
         assert_eq!(back.scheduled_at, run.scheduled_at);
         assert_eq!(back.created_by, run.created_by);
         assert_eq!(back.created_by_label, run.created_by_label);
+        assert_eq!(back.max_cost_usd, run.max_cost_usd);
+    }
+
+    #[test]
+    fn newrun_max_cost_usd_defaults_to_none_when_absent() {
+        let without_cap = NewRun {
+            workflow_name: "deploy".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by: None,
+            max_cost_usd: None,
+        };
+        let mut value = serde_json::to_value(&without_cap).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("object")
+            .remove("max_cost_usd");
+
+        let parsed: NewRun = serde_json::from_value(value).expect("deserialize");
+        assert!(parsed.max_cost_usd.is_none());
     }
 
     #[test]

@@ -11,6 +11,7 @@ members = [
     "examples/ironflow-workflows",
     "examples/server",
     "examples/worker",
+    "examples/readme-tests",
     "ironflow-mcp",
     "ironflow-types",
     "ironflow-sdk",

@@ -1,0 +1,6 @@
+# pnpm 11 no longer reads `pnpm.onlyBuiltDependencies` from package.json.
+# Without this, `pnpm install` reports ERR_PNPM_IGNORED_BUILDS and every
+# subsequent `pnpm <script>` fails its dependency check. `true` preserves the
+# intent previously declared as `onlyBuiltDependencies: ["msw"]`.
+allowBuilds:
+  msw: true

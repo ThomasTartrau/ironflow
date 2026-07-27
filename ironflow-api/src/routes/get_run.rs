@@ -134,6 +134,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -215,6 +216,7 @@ mod tests {
                 labels: Default::default(),
                 scheduled_at: None,
                 created_by: Some(RunActor::User { user_id: user.id }),
+                max_cost_usd: None,
             })
             .await
             .unwrap();

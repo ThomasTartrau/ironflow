@@ -36,6 +36,8 @@ pub const RUNS_ACTIVE: &str = "ironflow_runs_active";
 pub const RUN_DURATION_SECONDS: &str = "ironflow_run_duration_seconds";
 /// Histogram: run total cost in USD (label: workflow).
 pub const RUN_COST_USD: &str = "ironflow_run_cost_usd";
+/// Counter: total budget refusals (labels: workflow, scope = `run` | `monthly`).
+pub const RUN_BUDGET_EXCEEDED_TOTAL: &str = "ironflow_run_budget_exceeded_total";
 
 // ── Step metrics ───────────────────────────────────────────────────
 /// Counter: total steps executed (labels: kind, status).

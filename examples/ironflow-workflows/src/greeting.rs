@@ -64,6 +64,7 @@ impl WorkflowHandler for Greeting {
             input_schema: self.input_schema(),
             default_labels: self.default_labels(),
             schedule: None,
+            default_max_cost_usd: None,
         }
     }
 

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.14.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.14.4...ironflow-store-v2.14.5) - 2026-07-27
+## [2.14.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.14.3...ironflow-store-v2.14.4) - 2026-07-26
+
+### Documentation
+
+- #19 rewrite README for the v2 platform architecture
+
 ## [2.14.3](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.14.2...ironflow-store-v2.14.3) - 2026-07-09
 
 ### Fixed

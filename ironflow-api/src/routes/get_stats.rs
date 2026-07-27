@@ -154,6 +154,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -169,6 +170,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -192,6 +194,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -321,6 +324,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -334,6 +338,7 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -396,6 +401,7 @@ mod tests {
                     labels: HashMap::new(),
                     scheduled_at: None,
                     created_by: Some(RunActor::User { user_id }),
+                    max_cost_usd: None,
                 })
                 .await
                 .unwrap();

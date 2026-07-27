@@ -39,6 +39,7 @@ fn new_run(name: &str, created_by: Option<RunActor>) -> NewRun {
         labels: HashMap::new(),
         scheduled_at: None,
         created_by,
+        max_cost_usd: None,
     }
 }
 

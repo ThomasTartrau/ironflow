@@ -131,6 +131,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 created_by,
+                max_cost_usd: None,
             })
             .await
             .expect("create run")

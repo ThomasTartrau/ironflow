@@ -22,12 +22,12 @@ import { StepList } from "./_components/StepList";
 import { StepFlow } from "./_components/StepFlow";
 import { StepTimeline } from "./_components/StepTimeline";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
+import { CostBudgetCard } from "./_components/CostBudgetCard";
 import { BackLink } from "@/app/components/BackLink";
-import { formatDuration, formatCost } from "@/app/lib/format";
+import { formatDuration } from "@/app/lib/format";
 import {
 	Bot,
 	Clock,
-	DollarSign,
 	KeyRound,
 	RotateCcw,
 	Calendar,
@@ -140,11 +140,7 @@ export function Component() {
 						value={formatDuration(liveDurationMs)}
 						icon={Clock}
 					/>
-					<StatCard
-						label="Cost"
-						value={formatCost(liveCost)}
-						icon={DollarSign}
-					/>
+					<CostBudgetCard cost={liveCost} maxCost={run.max_cost_usd} />
 					<StatCard
 						label="Retries"
 						value={`${run.retry_count} / ${run.max_retries}`}

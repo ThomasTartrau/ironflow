@@ -112,17 +112,17 @@ mod tests {
                     }))
                 })
                 .post(|Json(body): Json<Value>| async move {
-                    (
-                        StatusCode::CREATED,
-                        Json(json!({
-                            "data": {
-                                "id": "new-run",
-                                "workflow": body["workflow"],
-                                "payload": body["payload"],
-                                "status": "pending"
-                            }
-                        })),
-                    )
+                    let mut data = json!({
+                        "id": "new-run",
+                        "workflow": body["workflow"],
+                        "payload": body["payload"],
+                        "status": "pending"
+                    });
+                    // The real API echoes the cap back and omits it when absent.
+                    if let Some(cap) = body.get("max_cost_usd") {
+                        data["max_cost_usd"] = cap.clone();
+                    }
+                    (StatusCode::CREATED, Json(json!({ "data": data })))
                 }),
             )
             .route(
@@ -242,6 +242,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env":"prod"}"#.to_string()),
+            max_cost_usd: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -259,6 +260,7 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "backup".to_string(),
             payload: None,
+            max_cost_usd: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -275,12 +277,45 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some("not-json".to_string()),
+            max_cost_usd: None,
         };
 
         let result = tool.run(&client).await.unwrap();
         let parsed = extract_json(&result);
 
         assert_eq!(parsed["payload"], json!({}));
+    }
+
+    #[tokio::test]
+    async fn create_run_forwards_max_cost_usd() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_cost_usd: Some(2.5),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["max_cost_usd"], 2.5);
+    }
+
+    #[tokio::test]
+    async fn create_run_omits_max_cost_usd_when_absent() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_cost_usd: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed.get("max_cost_usd").is_none());
     }
 
     // ---------------------------------------------------------------

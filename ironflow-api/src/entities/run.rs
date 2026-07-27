@@ -60,6 +60,10 @@ pub struct RunResponse {
     pub scheduled_at: Option<DateTime<Utc>>,
     /// Who triggered the run. Always present.
     pub created_by: CreatedBy,
+    /// Cumulative cost cap for this run, in USD. `None` means no cap.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<Decimal>,
 }
 
 impl From<Run> for RunResponse {
@@ -83,6 +87,7 @@ impl From<Run> for RunResponse {
             labels: run.labels,
             scheduled_at: run.scheduled_at,
             created_by,
+            max_cost_usd: run.max_cost_usd,
         }
     }
 }

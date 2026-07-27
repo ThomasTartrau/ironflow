@@ -30,6 +30,7 @@
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
 //!     created_by: None,
+//!     max_cost_usd: None,
 //! }).await?;
 //!
 //! println!("Run {} is {:?}", run.id, run.status);
