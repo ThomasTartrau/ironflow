@@ -20,6 +20,9 @@ variables:
   GIT_DEPTH: 0
   GIT_STRATEGY: clone
   RELEASE_PLZ_VERSION: "0.3.160"
+  # Cached with node_modules so corepack downloads the pinned pnpm once per
+  # branch instead of hitting the npm registry in every dashboard job.
+  COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
 
 .rust-cache: &rust-cache
   cache:
@@ -38,6 +41,7 @@ variables:
       - dashboard-${CI_DEFAULT_BRANCH}
     paths:
       - ironflow-dashboard/node_modules/
+      - .corepack/
 
 # release-plz is installed as a prebuilt musl binary, not built from source:
 # its dependency tree (cargo crate) tracks the latest rustc and breaks on the
@@ -51,7 +55,12 @@ variables:
 .pnpm-install: &pnpm-install
   before_script:
     - corepack enable
-    - cd ironflow-dashboard && pnpm install || { pnpm approve-builds msw && pnpm install --frozen-lockfile; }
+    - cd ironflow-dashboard
+    # The runner reaches registry.npmjs.org through a 10s connect timeout that
+    # fires often enough to redden pipelines. Retry the download instead of
+    # failing the job on the first miss; a warm COREPACK_HOME skips it entirely.
+    - for attempt in 1 2 3; do corepack prepare --activate && break || sleep 10; done
+    - pnpm install || { pnpm approve-builds msw && pnpm install --frozen-lockfile; }
 
 # Validation jobs run only on MR pipelines.
 # Code is already validated before reaching main -- no need to re-check.
