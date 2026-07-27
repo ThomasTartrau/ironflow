@@ -49,6 +49,6 @@ pub mod webhook;
 /// - [`WebhookAuth`](crate::webhook::WebhookAuth) - Webhook authentication configuration.
 pub mod prelude {
     pub use crate::error::RuntimeError;
-    pub use crate::runtime::Runtime;
+    pub use crate::runtime::{Runtime, WebhookContext};
     pub use crate::webhook::WebhookAuth;
 }

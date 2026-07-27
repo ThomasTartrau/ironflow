@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hmac::{Hmac, Mac};
@@ -491,4 +491,154 @@ async fn runtime_default_works_same_as_new() {
     let resp = send_with_timeout(reqwest::get(format!("{base}/health"))).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.text().await.unwrap(), "ok");
+}
+
+// ── webhook_with_context / delivery id ─────────────────────────
+
+/// Collects the delivery ids seen by a webhook handler.
+#[derive(Clone, Default)]
+struct DeliveryLog(Arc<Mutex<Vec<Option<String>>>>);
+
+impl DeliveryLog {
+    fn record(&self, delivery_id: Option<String>) {
+        self.0.lock().unwrap().push(delivery_id);
+    }
+
+    fn seen(&self) -> Vec<Option<String>> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[tokio::test]
+async fn webhook_with_context_exposes_the_github_delivery_id() {
+    let log = DeliveryLog::default();
+    let handler_log = log.clone();
+    let rt = Runtime::new().webhook_with_context("/hook", WebhookAuth::none(), move |ctx| {
+        let log = handler_log.clone();
+        async move { log.record(ctx.delivery_id) }
+    });
+    let base = spawn_server(rt).await;
+
+    let client = reqwest::Client::new();
+    let resp = send_with_timeout(
+        client
+            .post(format!("{base}/hook"))
+            .header("x-github-delivery", "abc-123")
+            .json(&serde_json::json!({"action": "opened"}))
+            .send(),
+    )
+    .await;
+    assert_eq!(resp.status(), 202);
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(log.seen(), vec![Some("github:abc-123".to_string())]);
+}
+
+#[tokio::test]
+async fn webhook_with_context_exposes_the_gitlab_event_uuid() {
+    let log = DeliveryLog::default();
+    let handler_log = log.clone();
+    let rt = Runtime::new().webhook_with_context("/hook", WebhookAuth::none(), move |ctx| {
+        let log = handler_log.clone();
+        async move { log.record(ctx.delivery_id) }
+    });
+    let base = spawn_server(rt).await;
+
+    let client = reqwest::Client::new();
+    send_with_timeout(
+        client
+            .post(format!("{base}/hook"))
+            .header("x-gitlab-event-uuid", "def-456")
+            .json(&serde_json::json!({"object_kind": "push"}))
+            .send(),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(log.seen(), vec![Some("gitlab:def-456".to_string())]);
+}
+
+#[tokio::test]
+async fn webhook_with_context_without_a_delivery_header_yields_none() {
+    let log = DeliveryLog::default();
+    let handler_log = log.clone();
+    let rt = Runtime::new().webhook_with_context("/hook", WebhookAuth::none(), move |ctx| {
+        let log = handler_log.clone();
+        async move { log.record(ctx.delivery_id) }
+    });
+    let base = spawn_server(rt).await;
+
+    let client = reqwest::Client::new();
+    send_with_timeout(
+        client
+            .post(format!("{base}/hook"))
+            .json(&serde_json::json!({}))
+            .send(),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(log.seen(), vec![None]);
+}
+
+#[tokio::test]
+async fn replayed_github_delivery_yields_the_same_key_every_time() {
+    let log = DeliveryLog::default();
+    let handler_log = log.clone();
+    let rt = Runtime::new().webhook_with_context("/hook", WebhookAuth::none(), move |ctx| {
+        let log = handler_log.clone();
+        async move { log.record(ctx.delivery_id) }
+    });
+    let base = spawn_server(rt).await;
+
+    let client = reqwest::Client::new();
+    for _ in 0..3 {
+        send_with_timeout(
+            client
+                .post(format!("{base}/hook"))
+                .header("x-github-delivery", "replayed-delivery")
+                .json(&serde_json::json!({"action": "opened"}))
+                .send(),
+        )
+        .await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let seen = log.seen();
+    assert_eq!(seen.len(), 3);
+    assert!(
+        seen.iter()
+            .all(|id| id.as_deref() == Some("github:replayed-delivery")),
+        "a replayed delivery must always derive the same idempotency key: {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn webhook_still_receives_the_payload_only() {
+    // Non-regression: the original `webhook()` signature is unchanged.
+    let received = Arc::new(Mutex::new(None::<serde_json::Value>));
+    let handler_received = received.clone();
+    let rt = Runtime::new().webhook("/hook", WebhookAuth::none(), move |payload| {
+        let received = handler_received.clone();
+        async move {
+            *received.lock().unwrap() = Some(payload);
+        }
+    });
+    let base = spawn_server(rt).await;
+
+    let client = reqwest::Client::new();
+    send_with_timeout(
+        client
+            .post(format!("{base}/hook"))
+            .header("x-github-delivery", "abc-123")
+            .json(&serde_json::json!({"action": "opened"}))
+            .send(),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        received.lock().unwrap().clone(),
+        Some(serde_json::json!({"action": "opened"}))
+    );
 }

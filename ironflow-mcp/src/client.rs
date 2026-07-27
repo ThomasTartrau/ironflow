@@ -87,6 +87,36 @@ impl ApiClient {
         self.handle_response(resp).await
     }
 
+    /// Send a POST request with a JSON body and an `Idempotency-Key` header.
+    ///
+    /// Replaying the same key returns the resource it already created instead of
+    /// creating a second one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError::Http`] on transport failure, or the API error carried
+    /// by a non-2xx response (including 409 on a key reused with a different
+    /// request).
+    pub async fn post_idempotent<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+        idempotency_key: &str,
+    ) -> Result<T, McpError> {
+        debug!(path, idempotency_key, "POST idempotent");
+        let resp = self
+            .client
+            .post(self.url(path))
+            .bearer_auth(&self.token)
+            .header("Idempotency-Key", idempotency_key)
+            .json(body)
+            .send()
+            .await
+            .map_err(McpError::Http)?;
+
+        self.handle_response(resp).await
+    }
+
     /// Send a POST request without a body, returning raw JSON.
     pub async fn post_action(&self, path: &str) -> Result<Value, McpError> {
         debug!(path, "POST action");
