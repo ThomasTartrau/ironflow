@@ -132,6 +132,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -139,9 +140,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let state = test_state(store.clone());
         let auth_header = make_auth_header(&state);
@@ -173,6 +177,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -180,9 +185,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -216,6 +224,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -223,9 +232,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -255,10 +267,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancel_run_waiting_for_a_retry_stops_it_for_good() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 3,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                ironflow_store::models::RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    scheduled_at: Some(Utc::now() - chrono::TimeDelta::seconds(1)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/cancel", post(cancel_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/cancel", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::OK);
+
+        // Its backoff had already elapsed, yet it must never be picked up again.
+        assert!(store.pick_next_pending(None).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn cancel_failed_run_returns_400() {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -266,9 +337,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)

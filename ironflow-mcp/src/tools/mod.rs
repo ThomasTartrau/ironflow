@@ -38,7 +38,7 @@ mod tests {
     use std::net::SocketAddr;
 
     use axum::extract::{Path, Query};
-    use axum::http::StatusCode;
+    use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use axum::routing::{get, post};
     use axum::{Json, Router};
@@ -106,22 +106,29 @@ mod tests {
                             "page": params.get("page").cloned().unwrap_or("1".to_string()),
                             "per_page": params.get("per_page").cloned().unwrap_or("20".to_string()),
                             "workflow": params.get("workflow").cloned(),
-                            "status": params.get("status").cloned()
+                            "status": params.get("status").cloned(),
+                            "created_by": params.get("created_by").cloned()
                         }
                     }))
                 })
-                .post(|Json(body): Json<Value>| async move {
-                    (
-                        StatusCode::CREATED,
-                        Json(json!({
-                            "data": {
-                                "id": "new-run",
-                                "workflow": body["workflow"],
-                                "payload": body["payload"],
-                                "status": "pending"
-                            }
-                        })),
-                    )
+                .post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                    let key = headers
+                        .get("idempotency-key")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    let mut data = json!({
+                        "id": "new-run",
+                        "workflow": body["workflow"],
+                        "payload": body["payload"],
+                        "max_retries": body["max_retries"],
+                        "status": "pending",
+                        "idempotency_key": key
+                    });
+                    // The real API echoes the cap back and omits it when absent.
+                    if let Some(cap) = body.get("max_cost_usd") {
+                        data["max_cost_usd"] = cap.clone();
+                    }
+                    (StatusCode::CREATED, Json(json!({ "data": data })))
                 }),
             )
             .route(
@@ -241,6 +248,9 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env":"prod"}"#.to_string()),
+            max_retries: Some(2),
+            idempotency_key: None,
+            max_cost_usd: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -248,6 +258,7 @@ mod tests {
 
         assert_eq!(parsed["workflow"], "deploy");
         assert_eq!(parsed["payload"]["env"], "prod");
+        assert_eq!(parsed["max_retries"], 2);
         assert_eq!(parsed["status"], "pending");
     }
 
@@ -258,6 +269,9 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "backup".to_string(),
             payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -265,6 +279,7 @@ mod tests {
 
         assert_eq!(parsed["workflow"], "backup");
         assert_eq!(parsed["payload"], json!({}));
+        assert_eq!(parsed["max_retries"], 0, "no automatic retry by default");
     }
 
     #[tokio::test]
@@ -274,12 +289,87 @@ mod tests {
         let tool = CreateRunTool {
             workflow: "deploy".to_string(),
             payload: Some("not-json".to_string()),
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
         };
 
         let result = tool.run(&client).await.unwrap();
         let parsed = extract_json(&result);
 
         assert_eq!(parsed["payload"], json!({}));
+    }
+
+    #[tokio::test]
+    async fn create_run_forwards_the_idempotency_key() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: Some(r#"{"env":"prod"}"#.to_string()),
+            max_retries: None,
+            idempotency_key: Some("github:abc-123".to_string()),
+            max_cost_usd: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["idempotency_key"], "github:abc-123");
+    }
+
+    #[tokio::test]
+    async fn create_run_without_a_key_sends_no_header() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed["idempotency_key"].is_null());
+    }
+
+    #[tokio::test]
+    async fn create_run_forwards_max_cost_usd() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: Some(2.5),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["max_cost_usd"], 2.5);
+    }
+
+    #[tokio::test]
+    async fn create_run_omits_max_cost_usd_when_absent() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed.get("max_cost_usd").is_none());
     }
 
     // ---------------------------------------------------------------
@@ -293,6 +383,7 @@ mod tests {
         let tool = ListRunsTool {
             workflow: Some("deploy".to_string()),
             status: Some("running".to_string()),
+            created_by: Some("019a3f2b-0000-7000-8000-000000000000".to_string()),
             page: Some(2),
             per_page: Some(10),
         };
@@ -304,6 +395,10 @@ mod tests {
         assert_eq!(parsed["meta"]["per_page"], "10");
         assert_eq!(parsed["meta"]["workflow"], "deploy");
         assert_eq!(parsed["meta"]["status"], "running");
+        assert_eq!(
+            parsed["meta"]["created_by"],
+            "019a3f2b-0000-7000-8000-000000000000"
+        );
         assert_eq!(parsed["data"][0]["id"], "r1");
     }
 
@@ -314,6 +409,7 @@ mod tests {
         let tool = ListRunsTool {
             workflow: None,
             status: None,
+            created_by: None,
             page: None,
             per_page: None,
         };
@@ -325,6 +421,7 @@ mod tests {
         assert_eq!(parsed["meta"]["per_page"], "20");
         assert!(parsed["meta"]["workflow"].is_null());
         assert!(parsed["meta"]["status"].is_null());
+        assert!(parsed["meta"]["created_by"].is_null());
     }
 
     // ---------------------------------------------------------------

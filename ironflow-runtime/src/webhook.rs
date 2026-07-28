@@ -222,6 +222,67 @@ impl WebhookAuth {
 
 /// Compute an HMAC-SHA256 signature string (prefixed with `sha256=`).
 ///
+/// Providers that stamp each delivery with a unique identifier, and the header
+/// carrying it. The prefix disambiguates identifiers across providers, since
+/// idempotency keys are global.
+const DELIVERY_ID_HEADERS: &[(&str, &str)] = &[
+    ("x-github-delivery", "github"),
+    ("x-gitlab-event-uuid", "gitlab"),
+];
+
+/// Maximum length of a derived idempotency key, in bytes.
+///
+/// Mirrors the `Idempotency-Key` limit enforced by `POST /api/v1/runs`. Kept
+/// local so the runtime does not depend on the storage crate.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_runtime::webhook::MAX_IDEMPOTENCY_KEY_LEN;
+///
+/// assert_eq!(MAX_IDEMPOTENCY_KEY_LEN, 255);
+/// ```
+pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
+
+/// Extract a provider delivery identifier from request headers.
+///
+/// Returns a prefixed key such as `github:8f4e2a10-...` suitable for use as an
+/// `Idempotency-Key`. Returns `None` when no known provider header is present,
+/// when its value is not printable ASCII, or when it exceeds
+/// [`MAX_IDEMPOTENCY_KEY_LEN`] once prefixed.
+///
+/// # Examples
+///
+/// ```
+/// use axum::http::HeaderMap;
+/// use ironflow_runtime::webhook::extract_delivery_id;
+///
+/// let mut headers = HeaderMap::new();
+/// headers.insert("x-github-delivery", "abc-123".parse().unwrap());
+/// assert_eq!(extract_delivery_id(&headers), Some("github:abc-123".to_string()));
+///
+/// assert_eq!(extract_delivery_id(&HeaderMap::new()), None);
+/// ```
+pub fn extract_delivery_id(headers: &axum::http::HeaderMap) -> Option<String> {
+    for (header, provider) in DELIVERY_ID_HEADERS {
+        let Some(raw) = headers.get(*header).and_then(|v| v.to_str().ok()) else {
+            continue;
+        };
+        if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_graphic()) {
+            warn!(header = %header, "delivery id is not printable ASCII, ignoring");
+            continue;
+        }
+
+        let key = format!("{provider}:{raw}");
+        if key.len() > MAX_IDEMPOTENCY_KEY_LEN {
+            warn!(header = %header, "delivery id is too long for an idempotency key, ignoring");
+            continue;
+        }
+        return Some(key);
+    }
+    None
+}
+
 /// Shared helper for tests and integration test suites.
 #[cfg(test)]
 pub(crate) fn compute_test_hmac(secret: &[u8], body: &[u8]) -> String {
@@ -544,5 +605,91 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-signature", sig.parse().unwrap());
         assert!(auth.verify(&headers, body));
+    }
+
+    // ── extract_delivery_id ────────────────────────────────────────
+
+    #[test]
+    fn github_delivery_id_is_prefixed() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-github-delivery", "abc-123".parse().unwrap());
+        assert_eq!(
+            extract_delivery_id(&headers),
+            Some("github:abc-123".to_string())
+        );
+    }
+
+    #[test]
+    fn gitlab_event_uuid_is_prefixed() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-gitlab-event-uuid", "def-456".parse().unwrap());
+        assert_eq!(
+            extract_delivery_id(&headers),
+            Some("gitlab:def-456".to_string())
+        );
+    }
+
+    #[test]
+    fn no_provider_header_yields_none() {
+        let headers = HeaderMap::new();
+        assert_eq!(extract_delivery_id(&headers), None);
+    }
+
+    #[test]
+    fn unrelated_headers_yield_none() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", "abc".parse().unwrap());
+        assert_eq!(extract_delivery_id(&headers), None);
+    }
+
+    #[test]
+    fn github_wins_over_gitlab_when_both_are_present() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-github-delivery", "gh".parse().unwrap());
+        headers.insert("x-gitlab-event-uuid", "gl".parse().unwrap());
+        assert_eq!(extract_delivery_id(&headers), Some("github:gh".to_string()));
+    }
+
+    #[test]
+    fn empty_delivery_id_is_ignored() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-github-delivery", "".parse().unwrap());
+        assert_eq!(extract_delivery_id(&headers), None);
+    }
+
+    #[test]
+    fn delivery_id_with_a_space_is_ignored() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-github-delivery", "abc 123".parse().unwrap());
+        assert_eq!(extract_delivery_id(&headers), None);
+    }
+
+    #[test]
+    fn overlong_delivery_id_is_ignored() {
+        let mut headers = HeaderMap::new();
+        let raw = "a".repeat(MAX_IDEMPOTENCY_KEY_LEN);
+        headers.insert("x-github-delivery", raw.parse().unwrap());
+        assert_eq!(extract_delivery_id(&headers), None);
+    }
+
+    #[test]
+    fn delivery_id_at_the_length_limit_is_accepted() {
+        let mut headers = HeaderMap::new();
+        // "github:" is 7 bytes.
+        let raw = "a".repeat(MAX_IDEMPOTENCY_KEY_LEN - 7);
+        headers.insert("x-github-delivery", raw.parse().unwrap());
+        let key = extract_delivery_id(&headers).expect("key accepted");
+        assert_eq!(key.len(), MAX_IDEMPOTENCY_KEY_LEN);
+    }
+
+    #[test]
+    fn gitlab_is_used_when_github_header_is_invalid() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-github-delivery", "".parse().unwrap());
+        headers.insert("x-gitlab-event-uuid", "def".parse().unwrap());
+        assert_eq!(
+            extract_delivery_id(&headers),
+            Some("gitlab:def".to_string())
+        );
     }
 }

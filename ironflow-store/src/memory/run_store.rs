@@ -5,13 +5,46 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::entities::{
-    LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run, RunFilter, RunStats,
-    RunStatus, RunUpdate, Step, StepDependency, StepStatus, StepUpdate,
+    ApiKey, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun,
+    Run, RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency,
+    StepStatus, StepUpdate, User,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
 
-use super::InMemoryStore;
+use super::{InMemoryStore, State};
+
+/// Resolve [`Run::created_by_label`] from the current users and API keys.
+///
+/// Mirrors the `LEFT JOIN` the PostgreSQL store performs at read time, so a
+/// renamed API key or a renamed user is reflected immediately.
+fn resolve_created_by_label(
+    actor: Option<&RunActor>,
+    users: &HashMap<Uuid, User>,
+    api_keys: &HashMap<Uuid, ApiKey>,
+) -> Option<String> {
+    let actor = actor?;
+    let username = users.get(&actor.user_id()).map(|u| u.username.clone());
+
+    match actor.api_key_id() {
+        None => username,
+        Some(api_key_id) => {
+            let key_name = api_keys.get(&api_key_id).map(|k| k.name.clone())?;
+            Some(match username {
+                Some(username) => format!("{key_name} ({username})"),
+                None => key_name,
+            })
+        }
+    }
+}
+
+/// Return a clone of `run` with its display label resolved against `state`.
+fn run_with_label(run: &Run, state: &State) -> Run {
+    let mut run = run.clone();
+    run.created_by_label =
+        resolve_created_by_label(run.created_by.as_ref(), &state.users, &state.api_keys);
+    run
+}
 
 /// Drop the worker lease held on a run.
 fn clear_lease(run: &mut Run) {
@@ -61,13 +94,40 @@ fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>
             }
         }
     }
+    if let Some(user_id) = filter.created_by_user_id
+        && run.created_by.as_ref().map(RunActor::user_id) != Some(user_id)
+    {
+        return false;
+    }
     true
 }
 
 impl RunStore for InMemoryStore {
-    fn create_run(&self, req: NewRun) -> StoreFuture<'_, Run> {
+    fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
         Box::pin(async move {
             let now = Utc::now();
+
+            // Single critical section: the key lookup and the insert cannot be
+            // interleaved by a concurrent call sharing the same key.
+            let mut state = self.state.write().await;
+
+            if let Some(ref key) = req.idempotency_key
+                && let Some(existing) = state
+                    .idempotency_keys
+                    .get(key)
+                    .and_then(|id| state.runs.get(id))
+            {
+                if now - existing.created_at < IDEMPOTENCY_WINDOW {
+                    return Ok(RunCreation::Existing(run_with_label(existing, &state)));
+                }
+                // The key outlived its window: release it from the stale run.
+                let stale_id = existing.id;
+                state.idempotency_keys.remove(key);
+                if let Some(stale) = state.runs.get_mut(&stale_id) {
+                    stale.idempotency_key = None;
+                }
+            }
+
             let run = Run {
                 id: Uuid::now_v7(),
                 workflow_name: req.workflow_name,
@@ -86,20 +146,40 @@ impl RunStore for InMemoryStore {
                 handler_version: req.handler_version,
                 labels: req.labels,
                 scheduled_at: req.scheduled_at,
+                created_by: req.created_by,
+                created_by_label: None,
+                idempotency_key: req.idempotency_key.clone(),
+                max_cost_usd: req.max_cost_usd,
                 worker_id: None,
                 lease_expires_at: None,
             };
 
-            let mut state = self.state.write().await;
+            if let Some(key) = req.idempotency_key {
+                state.idempotency_keys.insert(key, run.id);
+            }
             state.runs.insert(run.id, run.clone());
-            Ok(run)
+            Ok(RunCreation::Created(run_with_label(&run, &state)))
+        })
+    }
+
+    fn find_run_by_idempotency_key(&self, key: &str) -> StoreFuture<'_, Option<Run>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let now = Utc::now();
+            let state = self.state.read().await;
+            Ok(state
+                .idempotency_keys
+                .get(&key)
+                .and_then(|id| state.runs.get(id))
+                .filter(|run| now - run.created_at < IDEMPOTENCY_WINDOW)
+                .map(|run| run_with_label(run, &state)))
         })
     }
 
     fn get_run(&self, id: Uuid) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let state = self.state.read().await;
-            Ok(state.runs.get(&id).cloned())
+            Ok(state.runs.get(&id).map(|r| run_with_label(r, &state)))
         })
     }
 
@@ -124,7 +204,7 @@ impl RunStore for InMemoryStore {
                 .into_iter()
                 .skip(offset)
                 .take(per_page as usize)
-                .cloned()
+                .map(|r| run_with_label(r, &state))
                 .collect();
 
             Ok(Page {
@@ -216,6 +296,9 @@ impl RunStore for InMemoryStore {
             if let Some(completed) = update.completed_at {
                 run.completed_at = Some(completed);
             }
+            if let Some(scheduled) = update.scheduled_at {
+                run.scheduled_at = Some(scheduled);
+            }
 
             run.updated_at = now;
             Ok(())
@@ -227,12 +310,15 @@ impl RunStore for InMemoryStore {
             let mut state = self.state.write().await;
             let now = Utc::now();
 
-            // Find the oldest pending run whose scheduled_at has passed (or is None).
+            // Find the oldest run waiting for execution whose scheduled_at has
+            // passed (or is None). `Retrying` runs are runs whose automatic retry
+            // backoff has been armed: they become eligible again once
+            // `scheduled_at` has passed.
             let oldest_id = state
                 .runs
                 .values()
                 .filter(|r| {
-                    r.status.state == RunStatus::Pending
+                    matches!(r.status.state, RunStatus::Pending | RunStatus::Retrying)
                         && r.scheduled_at.is_none_or(|at| at <= now)
                 })
                 .min_by_key(|r| r.created_at)
@@ -255,8 +341,9 @@ impl RunStore for InMemoryStore {
                 }
                 None => clear_lease(run),
             }
+            let run = run.clone();
 
-            Ok(Some(run.clone()))
+            Ok(Some(run_with_label(&run, &state)))
         })
     }
 
@@ -332,9 +419,12 @@ impl RunStore for InMemoryStore {
         Box::pin(async move {
             let mut state = self.state.write().await;
 
-            if !state.runs.contains_key(&req.run_id) {
-                return Err(StoreError::RunNotFound(req.run_id));
-            }
+            let attempt = state
+                .runs
+                .get(&req.run_id)
+                .ok_or(StoreError::RunNotFound(req.run_id))?
+                .retry_count
+                + 1;
 
             let now = Utc::now();
             let step = Step {
@@ -344,6 +434,7 @@ impl RunStore for InMemoryStore {
                 kind: req.kind,
                 position: req.position,
                 status: crate::entities::FsmState::new(StepStatus::Pending, Uuid::now_v7()),
+                attempt,
                 input: req.input,
                 output: None,
                 error: None,
@@ -558,17 +649,35 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::entities::TriggerKind;
+    use crate::api_key_store::ApiKeyStore;
+    use crate::entities::{ApiKeyScope, ApiKeyUpdate, NewApiKey, NewUser, TriggerKind};
+    use crate::user_store::UserStore;
 
     use crate::memory::tests::{create_terminal_run, new_run_req};
     use crate::store::RunStore;
+
+    use crate::entities::StepKind;
+
+    fn new_step_req(run_id: Uuid, name: &str, position: u32) -> NewStep {
+        NewStep {
+            run_id,
+            name: name.to_string(),
+            kind: StepKind::Shell,
+            position,
+            input: None,
+        }
+    }
 
     // ---- create_run ----
 
     #[tokio::test]
     async fn create_run_returns_pending_status() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
         assert_eq!(run.status.state, RunStatus::Pending);
         assert_eq!(run.workflow_name, "test");
         assert_eq!(run.retry_count, 0);
@@ -578,8 +687,8 @@ mod tests {
     #[tokio::test]
     async fn create_run_generates_unique_ids() {
         let store = InMemoryStore::new();
-        let r1 = store.create_run(new_run_req("a")).await.unwrap();
-        let r2 = store.create_run(new_run_req("b")).await.unwrap();
+        let r1 = store.create_run(new_run_req("a")).await.unwrap().into_run();
+        let r2 = store.create_run(new_run_req("b")).await.unwrap().into_run();
         assert_ne!(r1.id, r2.id);
     }
 
@@ -588,7 +697,11 @@ mod tests {
     #[tokio::test]
     async fn get_run_returns_created_run() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
         let fetched = store.get_run(run.id).await.unwrap();
         assert!(fetched.is_some());
         assert_eq!(fetched.unwrap().id, run.id);
@@ -606,7 +719,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_status_valid_transition() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -621,7 +738,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_status_invalid_transition_returns_error() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let result = store.update_run_status(run.id, RunStatus::Completed).await;
         assert!(result.is_err());
@@ -642,7 +763,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_status_terminal_sets_completed_at() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -661,7 +786,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_status_terminal_to_same_is_idempotent() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -688,7 +817,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_terminal_to_same_via_update_run_is_idempotent() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -738,9 +871,21 @@ mod tests {
     #[tokio::test]
     async fn list_runs_with_workflow_filter() {
         let store = InMemoryStore::new();
-        store.create_run(new_run_req("deploy")).await.unwrap();
-        store.create_run(new_run_req("test")).await.unwrap();
-        store.create_run(new_run_req("deploy")).await.unwrap();
+        store
+            .create_run(new_run_req("deploy"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .create_run(new_run_req("deploy"))
+            .await
+            .unwrap()
+            .into_run();
 
         let filter = RunFilter {
             workflow_name: Some("deploy".to_string()),
@@ -754,8 +899,8 @@ mod tests {
     #[tokio::test]
     async fn list_runs_with_status_filter() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("a")).await.unwrap();
-        store.create_run(new_run_req("b")).await.unwrap();
+        let run = store.create_run(new_run_req("a")).await.unwrap().into_run();
+        store.create_run(new_run_req("b")).await.unwrap().into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -778,7 +923,8 @@ mod tests {
             store
                 .create_run(new_run_req(&format!("wf-{i}")))
                 .await
-                .unwrap();
+                .unwrap()
+                .into_run();
         }
 
         let page1 = store.list_runs(RunFilter::default(), 1, 2).await.unwrap();
@@ -1114,8 +1260,16 @@ mod tests {
     #[tokio::test]
     async fn pick_next_pending_returns_oldest_and_transitions_to_running() {
         let store = InMemoryStore::new();
-        let r1 = store.create_run(new_run_req("first")).await.unwrap();
-        let _r2 = store.create_run(new_run_req("second")).await.unwrap();
+        let r1 = store
+            .create_run(new_run_req("first"))
+            .await
+            .unwrap()
+            .into_run();
+        let _r2 = store
+            .create_run(new_run_req("second"))
+            .await
+            .unwrap()
+            .into_run();
 
         let picked = store.pick_next_pending(None).await.unwrap().unwrap();
         assert_eq!(picked.id, r1.id);
@@ -1130,8 +1284,8 @@ mod tests {
     #[tokio::test]
     async fn pick_next_pending_skips_non_pending() {
         let store = InMemoryStore::new();
-        let r1 = store.create_run(new_run_req("a")).await.unwrap();
-        let r2 = store.create_run(new_run_req("b")).await.unwrap();
+        let r1 = store.create_run(new_run_req("a")).await.unwrap().into_run();
+        let r2 = store.create_run(new_run_req("b")).await.unwrap().into_run();
 
         // Transition r1 to Running.
         store
@@ -1148,7 +1302,11 @@ mod tests {
     #[tokio::test]
     async fn create_step_returns_pending() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step = store
             .create_step(NewStep {
@@ -1187,7 +1345,11 @@ mod tests {
     #[tokio::test]
     async fn update_step_applies_partial_update() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step = store
             .create_step(NewStep {
@@ -1245,7 +1407,11 @@ mod tests {
     #[tokio::test]
     async fn list_steps_ordered_by_position() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         // Insert out of order.
         store
@@ -1289,7 +1455,11 @@ mod tests {
     #[tokio::test]
     async fn list_steps_empty_for_run_without_steps() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
         let steps = store.list_steps(run.id).await.unwrap();
         assert!(steps.is_empty());
     }
@@ -1299,7 +1469,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_applies_cost_and_duration() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run(
@@ -1321,7 +1495,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_increment_retry() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
         assert_eq!(run.retry_count, 0);
 
         store
@@ -1357,7 +1535,8 @@ mod tests {
             store
                 .create_run(new_run_req(&format!("wf-{i}")))
                 .await
-                .unwrap();
+                .unwrap()
+                .into_run();
         }
 
         // Concurrently pick from multiple tasks.
@@ -1399,10 +1578,26 @@ mod tests {
         let store = InMemoryStore::new();
 
         // Create runs in various states.
-        let r1 = store.create_run(new_run_req("wf1")).await.unwrap();
-        let r2 = store.create_run(new_run_req("wf2")).await.unwrap();
-        let r3 = store.create_run(new_run_req("wf3")).await.unwrap();
-        let _r4 = store.create_run(new_run_req("wf4")).await.unwrap();
+        let r1 = store
+            .create_run(new_run_req("wf1"))
+            .await
+            .unwrap()
+            .into_run();
+        let r2 = store
+            .create_run(new_run_req("wf2"))
+            .await
+            .unwrap()
+            .into_run();
+        let r3 = store
+            .create_run(new_run_req("wf3"))
+            .await
+            .unwrap()
+            .into_run();
+        let _r4 = store
+            .create_run(new_run_req("wf4"))
+            .await
+            .unwrap()
+            .into_run();
 
         // Transition r1 to Running, then Completed.
         store
@@ -1470,7 +1665,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_status_running_to_retrying() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -1491,7 +1690,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_status_retrying_to_running_allowed() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -1515,7 +1718,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_with_invalid_status_transition_errors() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         // Try to apply invalid status transition via update_run
         let result = store
@@ -1534,7 +1741,11 @@ mod tests {
     #[tokio::test]
     async fn create_step_with_complex_input() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let complex_input = json!({
             "command": "cargo build",
@@ -1566,7 +1777,11 @@ mod tests {
     #[tokio::test]
     async fn update_step_with_error_message() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step = store
             .create_step(NewStep {
@@ -1622,7 +1837,11 @@ mod tests {
     #[tokio::test]
     async fn update_step_pending_to_skipped() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step = store
             .create_step(NewStep {
@@ -1655,9 +1874,21 @@ mod tests {
     async fn list_runs_with_combined_filters() {
         let store = InMemoryStore::new();
 
-        let r1 = store.create_run(new_run_req("deploy")).await.unwrap();
-        let r2 = store.create_run(new_run_req("deploy")).await.unwrap();
-        let _r3 = store.create_run(new_run_req("test")).await.unwrap();
+        let r1 = store
+            .create_run(new_run_req("deploy"))
+            .await
+            .unwrap()
+            .into_run();
+        let r2 = store
+            .create_run(new_run_req("deploy"))
+            .await
+            .unwrap()
+            .into_run();
+        let _r3 = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         // r1: Pending → Running → Completed
         store
@@ -1693,8 +1924,13 @@ mod tests {
         store
             .create_run(new_run_req("weather-report"))
             .await
-            .unwrap();
-        store.create_run(new_run_req("deploy-prod")).await.unwrap();
+            .unwrap()
+            .into_run();
+        store
+            .create_run(new_run_req("deploy-prod"))
+            .await
+            .unwrap()
+            .into_run();
 
         // Partial match
         let filter = RunFilter {
@@ -1787,11 +2023,16 @@ mod tests {
     #[tokio::test]
     async fn list_runs_has_steps_none_returns_all() {
         let store = InMemoryStore::new();
-        let run_with = store.create_run(new_run_req("with-steps")).await.unwrap();
+        let run_with = store
+            .create_run(new_run_req("with-steps"))
+            .await
+            .unwrap()
+            .into_run();
         let _run_without = store
             .create_run(new_run_req("without-steps"))
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .create_step(NewStep {
@@ -1818,11 +2059,13 @@ mod tests {
         let pending_run = store
             .create_run(new_run_req("pending-empty"))
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         let running_run = store
             .create_run(new_run_req("running-empty"))
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         store
             .update_run_status(running_run.id, RunStatus::Running)
             .await
@@ -1843,9 +2086,21 @@ mod tests {
     async fn get_stats_with_mixed_active_statuses() {
         let store = InMemoryStore::new();
 
-        let _r1 = store.create_run(new_run_req("wf")).await.unwrap(); // Pending
-        let r2 = store.create_run(new_run_req("wf")).await.unwrap();
-        let r3 = store.create_run(new_run_req("wf")).await.unwrap();
+        let _r1 = store
+            .create_run(new_run_req("wf"))
+            .await
+            .unwrap()
+            .into_run(); // Pending
+        let r2 = store
+            .create_run(new_run_req("wf"))
+            .await
+            .unwrap()
+            .into_run();
+        let r3 = store
+            .create_run(new_run_req("wf"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(r2.id, RunStatus::Running)
@@ -1870,6 +2125,7 @@ mod tests {
 
         let r1 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1877,12 +2133,16 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let r2 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Webhook {
                     path: "/hooks/github".to_string(),
@@ -1892,12 +2152,16 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let r3 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Cron {
                     schedule: "0 0 * * *".to_string(),
@@ -1907,12 +2171,16 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let r4 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Api,
                 payload: json!({}),
@@ -1920,12 +2188,16 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let r5 = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Retry {
                     parent_run_id: Uuid::nil(),
@@ -1935,9 +2207,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         assert_eq!(r1.trigger, TriggerKind::Manual);
         assert!(matches!(r2.trigger, TriggerKind::Webhook { .. }));
@@ -1951,7 +2226,11 @@ mod tests {
     #[tokio::test]
     async fn create_step_dependencies_stores_dependencies() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step1 = store
             .create_step(NewStep {
@@ -1993,7 +2272,11 @@ mod tests {
     #[tokio::test]
     async fn create_step_dependencies_duplicate_dependencies_are_idempotent() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step1 = store
             .create_step(NewStep {
@@ -2035,7 +2318,11 @@ mod tests {
     #[tokio::test]
     async fn create_step_dependencies_missing_step_id_returns_error() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step1 = store
             .create_step(NewStep {
@@ -2061,7 +2348,11 @@ mod tests {
     #[tokio::test]
     async fn create_step_dependencies_missing_depends_on_returns_error() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step1 = store
             .create_step(NewStep {
@@ -2087,7 +2378,11 @@ mod tests {
     #[tokio::test]
     async fn create_step_dependencies_multiple_dependencies() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step1 = store
             .create_step(NewStep {
@@ -2146,7 +2441,11 @@ mod tests {
     #[tokio::test]
     async fn list_step_dependencies_empty_for_run_with_no_dependencies() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         store
             .create_step(NewStep {
@@ -2166,8 +2465,16 @@ mod tests {
     #[tokio::test]
     async fn list_step_dependencies_returns_only_deps_for_given_run() {
         let store = InMemoryStore::new();
-        let run1 = store.create_run(new_run_req("test1")).await.unwrap();
-        let run2 = store.create_run(new_run_req("test2")).await.unwrap();
+        let run1 = store
+            .create_run(new_run_req("test1"))
+            .await
+            .unwrap()
+            .into_run();
+        let run2 = store
+            .create_run(new_run_req("test2"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step1_run1 = store
             .create_step(NewStep {
@@ -2249,7 +2556,11 @@ mod tests {
     #[tokio::test]
     async fn list_step_dependencies_sorted_by_created_at() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let step1 = store
             .create_step(NewStep {
@@ -2310,7 +2621,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_returning_applies_and_returns() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         // Transition Pending -> Running first
         store
@@ -2357,7 +2672,11 @@ mod tests {
     #[tokio::test]
     async fn update_run_returning_invalid_transition() {
         let store = InMemoryStore::new();
-        let run = store.create_run(new_run_req("test")).await.unwrap();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
 
         let result = store
             .update_run_returning(
@@ -2370,5 +2689,400 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(StoreError::InvalidTransition { .. })));
+    }
+
+    // ---- retry scheduling ----
+
+    #[tokio::test]
+    async fn create_step_stamps_the_current_attempt() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("retry-wf"))
+            .await
+            .unwrap()
+            .into_run();
+
+        let first = store
+            .create_step(new_step_req(run.id, "build", 0))
+            .await
+            .unwrap();
+        assert_eq!(first.attempt, 1);
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let second = store
+            .create_step(new_step_req(run.id, "build", 0))
+            .await
+            .unwrap();
+        assert_eq!(second.attempt, 2);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_ignores_retrying_run_before_its_backoff() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("retry-wf"))
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    scheduled_at: Some(Utc::now() + TimeDelta::seconds(60)),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(store.pick_next_pending(None).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_resumes_retrying_run_after_its_backoff() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("retry-wf"))
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    scheduled_at: Some(Utc::now() - TimeDelta::seconds(1)),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(picked.id, run.id);
+        assert_eq!(picked.status.state, RunStatus::Running);
+        assert_eq!(picked.retry_count, 1);
+    }
+
+    #[tokio::test]
+    async fn update_run_persists_scheduled_at() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+        let when = Utc::now() + TimeDelta::seconds(30);
+
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    scheduled_at: Some(when),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let fetched = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.scheduled_at, Some(when));
+    }
+
+    // ---- created_by ----
+
+    async fn seed_user(store: &InMemoryStore, username: &str) -> Uuid {
+        store
+            .create_user(NewUser {
+                email: format!("{username}@example.com"),
+                username: username.to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    async fn seed_api_key(store: &InMemoryStore, user_id: Uuid, name: &str) -> Uuid {
+        store
+            .create_api_key(NewApiKey {
+                user_id,
+                name: name.to_string(),
+                key_hash: "hash".to_string(),
+                key_prefix: "irfl_0000".to_string(),
+                scopes: vec![ApiKeyScope::RunsWrite],
+                expires_at: None,
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    fn run_req_by(actor: RunActor) -> NewRun {
+        NewRun {
+            created_by: Some(actor),
+            ..new_run_req("test")
+        }
+    }
+
+    #[tokio::test]
+    async fn create_run_without_actor_has_no_author() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+
+        assert!(run.created_by.is_none());
+        assert!(run.created_by_label.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_by_user_resolves_username_as_label() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+
+        let run = store
+            .create_run(run_req_by(RunActor::User { user_id }))
+            .await
+            .unwrap()
+            .into_run();
+
+        assert_eq!(run.created_by, Some(RunActor::User { user_id }));
+        assert_eq!(run.created_by_label.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn create_run_by_api_key_resolves_key_and_owner_as_label() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, user_id, "ci-deploy").await;
+
+        let run = store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id,
+            }))
+            .await
+            .unwrap()
+            .into_run();
+
+        assert_eq!(run.created_by_label.as_deref(), Some("ci-deploy (alice)"));
+    }
+
+    #[tokio::test]
+    async fn label_follows_api_key_rename() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, user_id, "ci-deploy").await;
+        let run = store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id,
+            }))
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_api_key(
+                api_key_id,
+                ApiKeyUpdate {
+                    name: Some("ci-release".to_string()),
+                    ..ApiKeyUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let reread = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(
+            reread.created_by_label.as_deref(),
+            Some("ci-release (alice)")
+        );
+    }
+
+    #[tokio::test]
+    async fn label_is_none_when_user_is_unknown() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(run_req_by(RunActor::User {
+                user_id: Uuid::now_v7(),
+            }))
+            .await
+            .unwrap()
+            .into_run();
+
+        assert!(run.created_by.is_some());
+        assert!(run.created_by_label.is_none());
+    }
+
+    #[tokio::test]
+    async fn label_is_key_name_only_when_owner_is_unknown() {
+        let store = InMemoryStore::new();
+        let owner = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, owner, "ci-deploy").await;
+
+        // An actor pointing at a user that was never created.
+        let run = store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id: Uuid::now_v7(),
+            }))
+            .await
+            .unwrap()
+            .into_run();
+
+        assert_eq!(run.created_by_label.as_deref(), Some("ci-deploy"));
+    }
+
+    #[tokio::test]
+    async fn list_runs_filters_by_author() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+        let bob = seed_user(&store, "bob").await;
+
+        store
+            .create_run(run_req_by(RunActor::User { user_id: alice }))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .create_run(run_req_by(RunActor::User { user_id: bob }))
+            .await
+            .unwrap()
+            .into_run();
+        store.create_run(new_run_req("anonymous")).await.unwrap();
+
+        let page = store
+            .list_runs(
+                RunFilter {
+                    created_by_user_id: Some(alice),
+                    ..RunFilter::default()
+                },
+                1,
+                20,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].created_by_label.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn list_runs_author_filter_matches_runs_from_the_users_api_keys() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+        let api_key_id = seed_api_key(&store, alice, "ci-deploy").await;
+
+        store
+            .create_run(run_req_by(RunActor::ApiKey {
+                api_key_id,
+                user_id: alice,
+            }))
+            .await
+            .unwrap()
+            .into_run();
+
+        let page = store
+            .list_runs(
+                RunFilter {
+                    created_by_user_id: Some(alice),
+                    ..RunFilter::default()
+                },
+                1,
+                20,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.total, 1);
+    }
+
+    #[tokio::test]
+    async fn list_runs_author_filter_excludes_unrelated_users() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+
+        store
+            .create_run(run_req_by(RunActor::User { user_id: alice }))
+            .await
+            .unwrap()
+            .into_run();
+
+        let page = store
+            .list_runs(
+                RunFilter {
+                    created_by_user_id: Some(Uuid::now_v7()),
+                    ..RunFilter::default()
+                },
+                1,
+                20,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.total, 0);
+    }
+
+    #[tokio::test]
+    async fn list_runs_without_author_filter_returns_every_run() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+
+        store
+            .create_run(run_req_by(RunActor::User { user_id: alice }))
+            .await
+            .unwrap()
+            .into_run();
+        store.create_run(new_run_req("anonymous")).await.unwrap();
+
+        let page = store.list_runs(RunFilter::default(), 1, 20).await.unwrap();
+        assert_eq!(page.total, 2);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_resolves_author_label() {
+        let store = InMemoryStore::new();
+        let user_id = seed_user(&store, "alice").await;
+        store
+            .create_run(run_req_by(RunActor::User { user_id }))
+            .await
+            .unwrap()
+            .into_run();
+
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(picked.created_by_label.as_deref(), Some("alice"));
     }
 }

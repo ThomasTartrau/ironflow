@@ -83,7 +83,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, TriggerKind};
+    use ironflow_store::models::{NewRun, NewUser, RunActor, TriggerKind};
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
@@ -126,6 +126,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -133,9 +134,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
@@ -186,5 +190,59 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn detail_exposes_the_run_author() {
+        let state = test_state();
+        let auth_header = make_auth_header(&state);
+        let user = state
+            .store
+            .create_user(NewUser {
+                email: "alice@example.com".to_string(),
+                username: "alice".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .unwrap();
+
+        let run = state
+            .store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+                created_by: Some(RunActor::User { user_id: user.id }),
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        let app = Router::new().route("/{id}", get(get_run)).with_state(state);
+
+        let req = Request::builder()
+            .uri(format!("/{}", run.id))
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["run"]["created_by"]["kind"], "user");
+        assert_eq!(
+            json_val["data"]["run"]["created_by"]["id"],
+            user.id.to_string()
+        );
+        assert_eq!(json_val["data"]["run"]["created_by"]["label"], "alice");
     }
 }

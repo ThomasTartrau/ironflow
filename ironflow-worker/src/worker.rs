@@ -17,7 +17,7 @@ use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
-use ironflow_store::entities::{LeaseRequest, RunStatus, RunUpdate};
+use ironflow_store::entities::{LeaseRequest, RunStatus};
 use ironflow_store::error::StoreError;
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -616,28 +616,15 @@ impl Worker {
                                 info!(run_id = %run_id, workflow = %workflow, "run completed");
                                 RunOutcome::Success(workflow)
                             }
+                            // `execute_handler_run` already routed this failure
+                            // through `fail_or_schedule_retry` (or, for a budget
+                            // refusal, straight to Cancelled) and cleaned up the
+                            // orphaned steps, so the run is either terminal or
+                            // waiting for its retry. Writing Failed here again
+                            // would cancel an armed retry and would be rejected
+                            // by the FSM for a cancelled run.
                             Ok(Err(e)) => {
                                 error!(run_id = %run_id, workflow = %workflow, error = %e, "run failed");
-                                if let Err(store_err) = engine
-                                    .store()
-                                    .update_run(
-                                        run_id,
-                                        RunUpdate {
-                                            status: Some(RunStatus::Failed),
-                                            error: Some(e.to_string()),
-                                            ..RunUpdate::default()
-                                        },
-                                    )
-                                    .await
-                                {
-                                    error!(run_id = %run_id, error = %store_err, "failed to mark run as failed");
-                                }
-                                if let Err(cleanup_err) = engine
-                                    .fail_orphaned_steps(run_id, "parent run failed")
-                                    .await
-                                {
-                                    error!(run_id = %run_id, error = %cleanup_err, "failed to cleanup orphaned steps");
-                                }
                                 RunOutcome::Failed(workflow)
                             }
                             Err(_) => {
@@ -649,25 +636,12 @@ impl Worker {
                                 );
                                 let timeout_msg =
                                     format!("run timed out after {}s", run_timeout.as_secs());
+                                // A timeout is transient by nature: worth replaying.
                                 if let Err(e) = engine
-                                    .store()
-                                    .update_run(
-                                        run_id,
-                                        RunUpdate {
-                                            status: Some(RunStatus::Failed),
-                                            error: Some(timeout_msg),
-                                            ..RunUpdate::default()
-                                        },
-                                    )
+                                    .fail_or_schedule_retry(run_id, &timeout_msg, true, None, None)
                                     .await
                                 {
-                                    error!(run_id = %run_id, error = %e, "failed to mark timed-out run as failed");
-                                }
-                                if let Err(e) = engine
-                                    .fail_orphaned_steps(run_id, "parent run timed out")
-                                    .await
-                                {
-                                    error!(run_id = %run_id, error = %e, "failed to cleanup orphaned steps after timeout");
+                                    error!(run_id = %run_id, error = %e, "failed to record timed-out run");
                                 }
                                 RunOutcome::Timeout(workflow)
                             }
@@ -684,18 +658,20 @@ impl Worker {
                             }
                             Err(e) => {
                                 error!(run_id = %run_id, "spawned task panicked: {e}");
+                                // Retryable: a panic can be transient, and the
+                                // poison pill tracker stops a workflow that keeps
+                                // panicking across runs.
                                 if let Err(store_err) = watcher_engine
-                                    .store()
-                                    .update_run_status(run_id, RunStatus::Failed)
+                                    .fail_or_schedule_retry(
+                                        run_id,
+                                        "parent run panicked",
+                                        true,
+                                        None,
+                                        None,
+                                    )
                                     .await
                                 {
-                                    error!(run_id = %run_id, error = %store_err, "failed to mark panicked run as failed");
-                                }
-                                if let Err(cleanup_err) = watcher_engine
-                                    .fail_orphaned_steps(run_id, "parent run panicked")
-                                    .await
-                                {
-                                    error!(run_id = %run_id, error = %cleanup_err, "failed to cleanup orphaned steps after panic");
+                                    error!(run_id = %run_id, error = %store_err, "failed to record panicked run");
                                 }
                                 let _ = tx.send(RunOutcome::Panicked(workflow_for_watcher));
                             }

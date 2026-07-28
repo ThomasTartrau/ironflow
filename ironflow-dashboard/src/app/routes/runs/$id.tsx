@@ -1,6 +1,9 @@
+import { useMemo } from "react";
 import { useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
+import { useQueryStates, parseAsInteger } from "nuqs";
 import type {
+	CreatedByKind,
 	RunDetailResponse,
 	RunResponse,
 	RunStatus,
@@ -20,18 +23,30 @@ import { RunActions } from "./_components/RunActions";
 import { StepList } from "./_components/StepList";
 import { StepFlow } from "./_components/StepFlow";
 import { StepTimeline } from "./_components/StepTimeline";
+import { AttemptSelector } from "./_components/AttemptSelector";
+import { listAttempts, resolveShownAttempt } from "./_components/attempts";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
+import { CostBudgetCard } from "./_components/CostBudgetCard";
 import { BackLink } from "@/app/components/BackLink";
-import { formatDuration, formatCost } from "@/app/lib/format";
+import { formatDuration } from "@/app/lib/format";
 import {
+	Bot,
 	Clock,
-	DollarSign,
+	KeyRound,
 	RotateCcw,
 	Calendar,
 	Tag,
 	CalendarClock,
+	User,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+
+const CREATED_BY_ICONS = {
+	user: User,
+	api_key: KeyRound,
+	system: Bot,
+} as const satisfies Record<CreatedByKind, LucideIcon>;
 
 export async function loader({ params }: LoaderFunctionArgs) {
 	const res = await api.get<RunDetailResponse>(`/runs/${params.id}`);
@@ -81,6 +96,17 @@ export function Component() {
 	const liveDurationMs = computeLiveDurationMs(run, nowMs);
 	const liveCost = computeLiveCost(run, steps);
 
+	const attempts = useMemo(() => listAttempts(steps), [steps]);
+	const latestAttempt = attempts.at(-1) ?? 1;
+	const [{ attempt: selectedAttempt }, setQuery] = useQueryStates({
+		attempt: parseAsInteger,
+	});
+	const shownAttempt = resolveShownAttempt(selectedAttempt, attempts);
+	const shownSteps = useMemo(
+		() => steps.filter((s) => s.attempt === shownAttempt),
+		[steps, shownAttempt],
+	);
+
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
 		description: `Run ${run.id} of workflow ${run.workflow_name}.`,
@@ -129,11 +155,7 @@ export function Component() {
 						value={formatDuration(liveDurationMs)}
 						icon={Clock}
 					/>
-					<StatCard
-						label="Cost"
-						value={formatCost(liveCost)}
-						icon={DollarSign}
-					/>
+					<CostBudgetCard cost={liveCost} maxCost={run.max_cost_usd} />
 					<StatCard
 						label="Retries"
 						value={`${run.retry_count} / ${run.max_retries}`}
@@ -142,6 +164,15 @@ export function Component() {
 					{run.handler_version && (
 						<StatCard label="Version" value={run.handler_version} icon={Tag} />
 					)}
+					<StatCard
+						label="Triggered by"
+						value={
+							<span className="text-base font-normal">
+								{run.created_by.label}
+							</span>
+						}
+						icon={CREATED_BY_ICONS[run.created_by.kind]}
+					/>
 				</div>
 
 				{run.labels && Object.keys(run.labels).length > 0 && (
@@ -183,16 +214,26 @@ export function Component() {
 				)}
 
 				<div className="space-y-3">
-					<h2 className="text-base font-semibold tracking-tight">
-						Steps ({steps.length})
-					</h2>
+					<div className="flex items-center justify-between gap-4">
+						<h2 className="text-base font-semibold tracking-tight">
+							Steps ({shownSteps.length})
+						</h2>
+						{attempts.length > 1 && (
+							<AttemptSelector
+								attempts={attempts}
+								value={shownAttempt}
+								latest={latestAttempt}
+								onChange={(attempt) => setQuery({ attempt })}
+							/>
+						)}
+					</div>
 					<CollapsibleSection
 						storageKey="steps-timeline"
 						title="Timeline"
 						defaultOpen
 					>
 						<StepTimeline
-							steps={steps}
+							steps={shownSteps}
 							runStartedAt={run.started_at ?? null}
 							runId={run.id}
 							nowMs={nowMs}
@@ -201,7 +242,7 @@ export function Component() {
 					</CollapsibleSection>
 					<CollapsibleSection storageKey="steps-flow" title="Flow">
 						<StepFlow
-							steps={steps}
+							steps={shownSteps}
 							workflowName={run.workflow_name}
 							runId={run.id}
 						/>
@@ -215,7 +256,7 @@ export function Component() {
 							<LogStreamPanel runId={run.id} enabled />
 						</CollapsibleSection>
 					)}
-					<StepList steps={steps} />
+					<StepList steps={shownSteps} />
 				</div>
 			</div>
 		</HeaderApp>

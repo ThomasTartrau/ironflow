@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-types"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -16,7 +16,5 @@ openapi = ["utoipa"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-utoipa = { version = "5", optional = true }
-
-[dev-dependencies]
 serde_json = "1"
+utoipa = { version = "5", optional = true }

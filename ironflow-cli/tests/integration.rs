@@ -202,6 +202,7 @@ async fn run_list_empty_table() {
         command: RunCommands::List {
             status: None,
             workflow: None,
+            created_by: None,
             page: None,
             per_page: None,
         },
@@ -220,6 +221,7 @@ async fn run_list_empty_json() {
         command: RunCommands::List {
             status: None,
             workflow: None,
+            created_by: None,
             page: None,
             per_page: None,
         },
@@ -238,6 +240,7 @@ async fn run_list_with_filters() {
         command: RunCommands::List {
             status: Some("completed".to_string()),
             workflow: Some("deploy".to_string()),
+            created_by: None,
             page: Some(1),
             per_page: Some(10),
         },
@@ -259,6 +262,9 @@ async fn run_create_and_get() {
             workflow: "deploy".to_string(),
             payload: Some(r#"{"env": "staging"}"#.to_string()),
             payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -290,6 +296,9 @@ async fn run_create_unknown_workflow() {
             workflow: "nonexistent".to_string(),
             payload: None,
             payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -306,6 +315,9 @@ async fn run_create_invalid_payload() {
             workflow: "deploy".to_string(),
             payload: Some("not valid json".to_string()),
             payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -323,6 +335,9 @@ async fn run_create_non_object_payload() {
             workflow: "deploy".to_string(),
             payload: Some(r#""just a string""#.to_string()),
             payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -412,6 +427,9 @@ async fn run_create_from_payload_file() {
             workflow: "deploy".to_string(),
             payload: None,
             payload_file: Some(tmp.path().to_path_buf()),
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -429,9 +447,218 @@ async fn run_create_from_missing_file() {
             workflow: "deploy".to_string(),
             payload: None,
             payload_file: Some("/nonexistent/payload.json".into()),
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("cannot read"));
+}
+
+// ── Run create with --idempotency-key ─────────────────────────
+
+#[tokio::test]
+async fn run_create_with_idempotency_key_creates_one_run() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: Some(r#"{"env": "prod"}"#.to_string()),
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: Some("github:abc-123".to_string()),
+            max_cost: None,
+        },
+    };
+
+    for _ in 0..3 {
+        commands::run::execute(&client, &args, false, false)
+            .await
+            .unwrap();
+    }
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(runs.data.len(), 1, "the key must collapse the three calls");
+    assert_eq!(
+        runs.data[0].idempotency_key.as_deref(),
+        Some("github:abc-123")
+    );
+}
+
+#[tokio::test]
+async fn run_create_without_idempotency_key_creates_several_runs() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: Some(r#"{"env": "prod"}"#.to_string()),
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
+        },
+    };
+
+    for _ in 0..3 {
+        commands::run::execute(&client, &args, false, false)
+            .await
+            .unwrap();
+    }
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(runs.data.len(), 3);
+}
+
+#[tokio::test]
+async fn run_create_with_a_conflicting_idempotency_key_errors() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let first = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: Some(r#"{"env": "prod"}"#.to_string()),
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: Some("github:abc-123".to_string()),
+            max_cost: None,
+        },
+    };
+    commands::run::execute(&client, &first, false, false)
+        .await
+        .unwrap();
+
+    let conflicting = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: Some(r#"{"env": "staging"}"#.to_string()),
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: Some("github:abc-123".to_string()),
+            max_cost: None,
+        },
+    };
+    let result = commands::run::execute(&client, &conflicting, false, false).await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn run_create_with_an_empty_idempotency_key_errors() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: Some(String::new()),
+            max_cost: None,
+        },
+    };
+
+    assert!(
+        commands::run::execute(&client, &args, false, false)
+            .await
+            .is_err()
+    );
+}
+
+// ── Cost cap ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn run_create_with_max_cost_reaches_the_api() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: Some(2.5),
+        },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(runs.data[0].max_cost_usd, Some(2.5));
+}
+
+#[tokio::test]
+async fn run_create_rejects_negative_max_cost_before_calling_the_api() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: Some(-1.0),
+        },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("zero or positive"));
+
+    // Nothing reached the server.
+    assert!(client.list_runs().await.unwrap().data.is_empty());
+}
+
+#[tokio::test]
+async fn run_create_rejects_non_finite_max_cost() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: Some(f64::NAN),
+        },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("finite"));
+}
+
+#[tokio::test]
+async fn run_create_accepts_zero_max_cost() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: Some(0.0),
+        },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(runs.data[0].max_cost_usd, Some(0.0));
 }

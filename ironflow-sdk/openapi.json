@@ -192,7 +192,7 @@
         "type": "object"
       },
       "CreateRunRequest": {
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "properties": {
           "labels": {
             "additionalProperties": {
@@ -204,6 +204,19 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "max_cost_usd": {
+            "description": "Optional cumulative cost cap for this run, in USD.\n\nOverrides the workflow default and the server default. `None` falls back\nto those. Must be zero or positive.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "max_retries": {
+            "description": "How many times the run may be replayed automatically after a transient\nfailure. Defaults to `0`, meaning no automatic retry.\n\nEach retry waits an exponential backoff (30 s, 2 min, 8 min, capped at\n15 min) before the run is replayed from the start. Failures that cannot\nsucceed on replay -- an unknown workflow, an invalid payload, an\nexhausted agent budget, a rejected approval, a manual cancellation --\nconsume no attempt.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
           },
           "payload": {
             "additionalProperties": {},
@@ -257,6 +270,39 @@
           "is_admin"
         ],
         "type": "object"
+      },
+      "CreatedBy": {
+        "description": "The author of a run, as exposed by the API.\n\nAlways present on a [`RunResponse`](crate::entities::RunResponse): a run with\nno recorded author (including every run created before authorship tracking)\nreports [`CreatedByKind::System`] with a label derived from its trigger, so\nclients never have to handle a missing value.\n\n# Examples\n\n```\nuse ironflow_api::entities::{CreatedBy, CreatedByKind};\n\n// Built from a Run via `CreatedBy::from(&run)`.\nlet system = CreatedBy {\n    kind: CreatedByKind::System,\n    id: None,\n    label: \"manual\".to_string(),\n};\nassert_eq!(system.id, None);\n```",
+        "properties": {
+          "id": {
+            "description": "Identifier of the principal: the user ID, the API key ID, or `None` for\n[`CreatedByKind::System`].",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CreatedByKind",
+            "description": "What kind of principal triggered the run."
+          },
+          "label": {
+            "description": "Human-readable label. Never empty.\n\nThe username for a user, `\"key-name (username)\"` for an API key, and the\ntrigger description for a system run.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ],
+        "type": "object"
+      },
+      "CreatedByKind": {
+        "description": "What kind of principal triggered a run.",
+        "enum": [
+          "user",
+          "api_key",
+          "system"
+        ],
+        "type": "string"
       },
       "Event": {
         "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\n# Examples\n\n```\nuse ironflow_engine::notify::Event;\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    at: chrono::Utc::now(),\n};\n```",
@@ -398,6 +444,56 @@
               "workflow_name",
               "cost_usd",
               "duration_ms",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A run was stopped because it reached its cumulative cost cap.\n\nEmitted when the engine refuses an agent step that would cross the run's\n`max_cost_usd`. The run transitions to\n[`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step\nis never launched, so the reported spend is what the run had already\nconsumed.",
+            "properties": {
+              "at": {
+                "description": "When the refusal occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "limit_usd": {
+                "description": "The configured cost cap in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "run_id": {
+                "description": "Run identifier.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "spent_usd": {
+                "description": "Cost already consumed when the cap was reached, in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "step_budget_usd": {
+                "description": "Declared budget of the refused step, in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "type": {
+                "enum": [
+                  "run_budget_exceeded"
+                ],
+                "type": "string"
+              },
+              "workflow_name": {
+                "description": "Workflow name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "workflow_name",
+              "limit_usd",
+              "spent_usd",
+              "step_budget_usd",
               "at",
               "type"
             ],
@@ -756,6 +852,7 @@
           "run_created",
           "run_status_changed",
           "run_failed",
+          "run_budget_exceeded",
           "step_completed",
           "step_failed",
           "approval_requested",
@@ -814,6 +911,12 @@
       "ListRunsQuery": {
         "description": "Query parameters for listing runs.",
         "properties": {
+          "created_by": {
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
           "has_steps": {
             "description": "Filter by step presence (only applies to completed/cancelled runs).\nNon-terminal runs (pending, running, etc.) are always included.\nWhen `true`, only return completed/cancelled runs that have steps.\nWhen `false`, only return completed/cancelled runs without steps.",
             "nullable": true,
@@ -969,6 +1072,10 @@
             "format": "date-time",
             "type": "string"
           },
+          "created_by": {
+            "$ref": "#/components/schemas/CreatedBy",
+            "description": "Who triggered the run. Always present."
+          },
           "duration_ms": {
             "description": "Total duration in milliseconds.",
             "format": "int64",
@@ -990,6 +1097,11 @@
             "format": "uuid",
             "type": "string"
           },
+          "idempotency_key": {
+            "description": "Idempotency key that produced this run, when one was supplied.",
+            "nullable": true,
+            "type": "string"
+          },
           "labels": {
             "additionalProperties": {
               "type": "string"
@@ -999,6 +1111,12 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "max_cost_usd": {
+            "description": "Cumulative cost cap for this run, in USD. `None` means no cap.",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
           },
           "max_retries": {
             "description": "Maximum allowed retries.",
@@ -1052,7 +1170,8 @@
           "cost_usd",
           "duration_ms",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "created_by"
         ],
         "type": "object"
       },
@@ -1247,6 +1366,12 @@
       "StepResponse": {
         "description": "Step response DTO — public API representation of a step.\n\n# Examples\n\n```\nuse ironflow_store::models::Step;\nuse ironflow_api::entities::StepResponse;\n```",
         "properties": {
+          "attempt": {
+            "description": "Which run attempt produced this step (1-based).\n\nA run retried twice exposes steps with `attempt` 1, 2 and 3. Steps from\nearlier attempts are kept so a failed attempt stays inspectable.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "completed_at": {
             "description": "When execution completed.",
             "format": "date-time",
@@ -1364,6 +1489,7 @@
           "kind",
           "position",
           "status",
+          "attempt",
           "duration_ms",
           "cost_usd",
           "created_at",
@@ -1603,6 +1729,12 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "default_max_cost_usd": {
+            "description": "Default cumulative cost cap applied to runs of this workflow, in USD.\n\nOverridden by a cap supplied at run creation. `None` means the workflow\ndeclares no default and falls back to the server default (if any).",
+            "format": "double",
+            "nullable": true,
+            "type": "number"
           },
           "description": {
             "description": "Human-readable description.",
@@ -1855,8 +1987,7 @@
             "name": "event_type",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/EventKind",
-              "nullable": true
+              "$ref": "#/components/schemas/EventKind"
             }
           },
           {
@@ -1866,7 +1997,6 @@
             "required": false,
             "schema": {
               "format": "uuid",
-              "nullable": true,
               "type": "string"
             }
           },
@@ -1877,7 +2007,6 @@
             "required": false,
             "schema": {
               "format": "date-time",
-              "nullable": true,
               "type": "string"
             }
           },
@@ -1888,7 +2017,6 @@
             "required": false,
             "schema": {
               "format": "date-time",
-              "nullable": true,
               "type": "string"
             }
           },
@@ -1900,7 +2028,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -1912,7 +2039,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2096,7 +2222,7 @@
     },
     "/api/v1/runs": {
       "get": {
-        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
+        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
         "operationId": "list_runs",
         "parameters": [
           {
@@ -2105,7 +2231,6 @@
             "name": "workflow",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2115,8 +2240,7 @@
             "name": "status",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/RunStatus",
-              "nullable": true
+              "$ref": "#/components/schemas/RunStatus"
             }
           },
           {
@@ -2125,7 +2249,6 @@
             "name": "has_steps",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "boolean"
             }
           },
@@ -2135,7 +2258,16 @@
             "name": "label",
             "required": false,
             "schema": {
-              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "in": "query",
+            "name": "created_by",
+            "required": false,
+            "schema": {
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -2147,7 +2279,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2159,7 +2290,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2193,8 +2323,19 @@
         ]
       },
       "post": {
-        "description": "Returns 201 Created with the newly enqueued run.\nReturns 400 Bad Request if the workflow is unknown.",
+        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid, or the `Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
         "operationId": "create_run",
+        "parameters": [
+          {
+            "description": "Optional key making the call safe to replay. At most 255 printable ASCII characters, valid for 24 hours.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2207,6 +2348,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Idempotency key replayed: the existing run is returned"
+          },
           "201": {
             "content": {
               "application/json": {
@@ -2218,13 +2369,19 @@
             "description": "Run created successfully"
           },
           "400": {
-            "description": "Unknown workflow"
+            "description": "Unknown workflow, invalid body or malformed Idempotency-Key"
           },
           "401": {
             "description": "Unauthorized"
           },
           "403": {
             "description": "Forbidden"
+          },
+          "409": {
+            "description": "Idempotency key already used with a different request"
+          },
+          "429": {
+            "description": "Monthly cost quota exhausted"
           }
         },
         "security": [
@@ -2438,7 +2595,7 @@
     },
     "/api/v1/runs/{id}/retry": {
       "post": {
-        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state.",
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, and 409 if an\nautomatic retry is already armed for it.",
         "operationId": "retry_run",
         "parameters": [
           {
@@ -2474,6 +2631,9 @@
           },
           "404": {
             "description": "Run not found"
+          },
+          "409": {
+            "description": "Run is already waiting for an automatic retry"
           }
         },
         "security": [
@@ -2498,7 +2658,6 @@
             "name": "prefix",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2510,7 +2669,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2522,7 +2680,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2705,7 +2862,7 @@
     },
     "/api/v1/stats": {
       "get": {
-        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.",
+        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and\n`per_page` are ignored.",
         "operationId": "get_stats",
         "parameters": [
           {
@@ -2714,7 +2871,6 @@
             "name": "workflow",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -2724,8 +2880,7 @@
             "name": "status",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/RunStatus",
-              "nullable": true
+              "$ref": "#/components/schemas/RunStatus"
             }
           },
           {
@@ -2734,7 +2889,6 @@
             "name": "has_steps",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "boolean"
             }
           },
@@ -2744,7 +2898,16 @@
             "name": "label",
             "required": false,
             "schema": {
-              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "in": "query",
+            "name": "created_by",
+            "required": false,
+            "schema": {
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -2756,7 +2919,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2768,7 +2930,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -2812,7 +2973,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           },
@@ -2824,7 +2984,6 @@
             "schema": {
               "format": "int32",
               "minimum": 0,
-              "nullable": true,
               "type": "integer"
             }
           }
@@ -3026,7 +3185,6 @@
             "name": "name",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           },
@@ -3036,7 +3194,6 @@
             "name": "category",
             "required": false,
             "schema": {
-              "nullable": true,
               "type": "string"
             }
           }

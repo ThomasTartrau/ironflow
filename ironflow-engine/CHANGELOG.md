@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.17.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.16.6...ironflow-engine-v2.17.0) - 2026-07-27
+
+### Added
+
+- #17 trace run authorship (created_by)
+
+## [2.16.6](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.16.5...ironflow-engine-v2.16.6) - 2026-07-27
+## [2.16.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.16.4...ironflow-engine-v2.16.5) - 2026-07-27
 ## [2.16.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.15.13...ironflow-engine-v2.16.0) - 2026-06-01
 
 ### Added

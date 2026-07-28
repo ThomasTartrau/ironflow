@@ -39,6 +39,8 @@ pub enum EventKind {
     RunStatusChanged,
     /// A run failed.
     RunFailed,
+    /// A run was stopped because it reached its cumulative cost cap.
+    RunBudgetExceeded,
     /// A step completed successfully.
     StepCompleted,
     /// A step failed.
@@ -65,6 +67,7 @@ impl EventKind {
         Self::RunCreated,
         Self::RunStatusChanged,
         Self::RunFailed,
+        Self::RunBudgetExceeded,
         Self::StepCompleted,
         Self::StepFailed,
         Self::ApprovalRequested,
@@ -106,7 +109,16 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 12);
+        assert_eq!(EventKind::ALL.len(), 13);
+    }
+
+    #[test]
+    fn run_budget_exceeded_uses_snake_case_wire_format() {
+        assert_eq!(EventKind::RunBudgetExceeded.as_str(), "run_budget_exceeded");
+        assert_eq!(
+            "run_budget_exceeded".parse::<EventKind>().unwrap(),
+            EventKind::RunBudgetExceeded
+        );
     }
 
     #[test]

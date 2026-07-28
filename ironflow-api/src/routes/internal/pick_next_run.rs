@@ -112,6 +112,7 @@ mod tests {
         let run = state
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -119,9 +120,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let app = create_router(state, RouterConfig::default());
 
@@ -171,6 +175,9 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -205,6 +212,9 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
             .unwrap();
@@ -262,6 +272,7 @@ mod tests {
         let _run = state
             .store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -269,9 +280,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let app = create_router(state.clone(), RouterConfig::default());
 

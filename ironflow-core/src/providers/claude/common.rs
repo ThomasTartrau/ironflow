@@ -493,10 +493,26 @@ pub fn parse_response(
                 let truncated = &preview[..preview.len().min(2000)];
                 warn!(result_preview = truncated, "result field content (truncated to 2000 chars)");
             }
+            let usage = Box::new(PartialUsage {
+                cost_usd: parsed.total_cost_usd,
+                duration_ms: parsed.duration_ms,
+                input_tokens: parsed.usage.as_ref().map(|u| u.total_input_tokens()),
+                output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
+            });
+
+            // The budget running out is not a schema problem: retrying spends
+            // more money and cannot succeed. Report it as its own error so the
+            // retry layers can refuse to replay it.
+            if parsed.subtype.as_deref() == Some("error_max_budget_usd") {
+                return AgentError::BudgetExceeded {
+                    spent_usd: parsed.total_cost_usd.unwrap_or(0.0),
+                    limit_usd: config.max_budget_usd.unwrap_or(0.0),
+                    debug_messages: Vec::new(),
+                    partial_usage: usage,
+                };
+            }
+
             let hint = match parsed.subtype.as_deref() {
-                Some("error_max_budget_usd") => {
-                    " (budget exceeded before structured output was generated)"
-                }
                 Some("error_max_turns") => {
                     " (max turns reached before structured output was generated - use max_turns >= 2 with structured output)"
                 }
@@ -512,12 +528,7 @@ pub fn parse_response(
                 expected: "structured_output field".to_string(),
                 got: format!("null{hint}"),
                 debug_messages: Vec::new(),
-                partial_usage: Box::new(PartialUsage {
-                    cost_usd: parsed.total_cost_usd,
-                    duration_ms: parsed.duration_ms,
-                    input_tokens: parsed.usage.as_ref().map(|u| u.total_input_tokens()),
-                    output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
-                }),
+                partial_usage: usage,
                 raw_response,
             }
         })?
@@ -817,6 +828,17 @@ pub fn parse_stream_response(
             partial_usage,
             raw_response,
         }),
+        Err(AgentError::BudgetExceeded {
+            spent_usd,
+            limit_usd,
+            partial_usage,
+            ..
+        }) => Err(AgentError::BudgetExceeded {
+            spent_usd,
+            limit_usd,
+            debug_messages,
+            partial_usage,
+        }),
         Err(other) => Err(other),
     }
 }
@@ -858,6 +880,7 @@ fn has_usage_data(err: &AgentError) -> bool {
 /// parse that output so cost, duration, and tokens are preserved in the error.
 ///
 /// Returns `Ok` if the JSON is a valid successful response (rare but possible),
+/// `Err(BudgetExceeded)` when the CLI reported `error_max_budget_usd`,
 /// `Err(SchemaValidation)` with partial usage when structured output was
 /// requested but missing, or `Err(ProcessFailed)` as a fallback.
 pub fn handle_nonzero_exit(
@@ -873,6 +896,8 @@ pub fn handle_nonzero_exit(
     if !json_source.is_empty() {
         match parse_output(json_source, config, duration_ms) {
             ok @ Ok(_) => return ok,
+            // Always carries the usage the CLI reported before stopping.
+            Err(err @ AgentError::BudgetExceeded { .. }) => return Err(err),
             Err(err @ AgentError::SchemaValidation { .. }) => {
                 if has_usage_data(&err) {
                     return Err(err);
@@ -1659,7 +1684,7 @@ mod tests {
 
     #[test]
     fn parse_response_schema_validation_preserves_usage_data() {
-        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":50,"cache_read_input_tokens":30},"total_cost_usd":0.30,"duration_ms":4500}"#;
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_turns","result":null,"structured_output":null,"usage":{"input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":50,"cache_read_input_tokens":30},"total_cost_usd":0.30,"duration_ms":4500}"#;
 
         let config: AgentConfig = AgentConfig::new("test")
             .output_schema_raw(r#"{"type":"object"}"#)
@@ -1700,7 +1725,7 @@ mod tests {
     #[test]
     fn stream_response_schema_validation_preserves_usage_and_debug() {
         let assistant_line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Working..."}],"stop_reason":"end_turn"}}"#;
-        let result_line = r#"{"type":"result","session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":300,"output_tokens":100},"total_cost_usd":0.15,"duration_ms":3000}"#;
+        let result_line = r#"{"type":"result","session_id":"s1","subtype":"error_max_turns","result":null,"structured_output":null,"usage":{"input_tokens":300,"output_tokens":100},"total_cost_usd":0.15,"duration_ms":3000}"#;
 
         let stdout = format!("{assistant_line}\n{result_line}");
 
@@ -1729,8 +1754,8 @@ mod tests {
     }
 
     #[test]
-    fn handle_nonzero_exit_parses_budget_error_with_schema() {
-        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.10,"duration_ms":2000}"#;
+    fn handle_nonzero_exit_parses_schema_error_with_usage() {
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_turns","result":null,"structured_output":null,"usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.10,"duration_ms":2000}"#;
         let config: AgentConfig = AgentConfig::new("test")
             .output_schema_raw(r#"{"type":"object"}"#)
             .into();
@@ -1743,6 +1768,84 @@ mod tests {
                 assert_eq!(partial_usage.duration_ms, Some(2000));
             }
             other => panic!("expected Err(SchemaValidation), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_budget_exceeded_is_its_own_error() {
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":50,"cache_read_input_tokens":30},"total_cost_usd":0.30,"duration_ms":4500}"#;
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .max_budget_usd(0.25)
+            .into();
+
+        let err = parse_response(stdout, &config, 0).unwrap_err();
+
+        match err {
+            AgentError::BudgetExceeded {
+                spent_usd,
+                limit_usd,
+                partial_usage,
+                debug_messages,
+            } => {
+                assert!((spent_usd - 0.30).abs() < f64::EPSILON);
+                assert!((limit_usd - 0.25).abs() < f64::EPSILON);
+                assert_eq!(partial_usage.cost_usd, Some(0.30));
+                assert_eq!(partial_usage.duration_ms, Some(4500));
+                assert_eq!(partial_usage.input_tokens, Some(580)); // 500 + 50 + 30
+                assert_eq!(partial_usage.output_tokens, Some(200));
+                assert!(debug_messages.is_empty());
+            }
+            other => panic!("expected BudgetExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_response_budget_exceeded_keeps_debug_messages() {
+        let assistant_line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Working..."}],"stop_reason":"end_turn"}}"#;
+        let result_line = r#"{"type":"result","session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":300,"output_tokens":100},"total_cost_usd":0.15,"duration_ms":3000}"#;
+
+        let stdout = format!("{assistant_line}\n{result_line}");
+
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .max_budget_usd(0.10)
+            .into();
+        let config = config.verbose(true);
+
+        let err = parse_stream_response(&stdout, &config, 0).unwrap_err();
+
+        match err {
+            AgentError::BudgetExceeded {
+                debug_messages,
+                partial_usage,
+                ..
+            } => {
+                assert_eq!(debug_messages.len(), 1);
+                assert_eq!(debug_messages[0].text.as_deref(), Some("Working..."));
+                assert_eq!(partial_usage.cost_usd, Some(0.15));
+            }
+            other => panic!("expected BudgetExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_nonzero_exit_propagates_budget_exceeded() {
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.10,"duration_ms":2000}"#;
+        let config: AgentConfig = AgentConfig::new("test")
+            .output_schema_raw(r#"{"type":"object"}"#)
+            .max_budget_usd(0.05)
+            .into();
+
+        let result = handle_nonzero_exit(1, stdout, "", &config, 2000, "test");
+
+        match result {
+            Err(AgentError::BudgetExceeded { partial_usage, .. }) => {
+                assert_eq!(partial_usage.cost_usd, Some(0.10));
+                assert_eq!(partial_usage.duration_ms, Some(2000));
+            }
+            other => panic!("expected Err(BudgetExceeded), got {other:?}"),
         }
     }
 
@@ -1874,7 +1977,7 @@ mod tests {
 
     #[test]
     fn schema_validation_raw_response_from_stdout_when_result_null() {
-        let stdout = r#"{"session_id":"s1","subtype":"error_max_budget_usd","result":null,"structured_output":null,"usage":{"input_tokens":500,"output_tokens":200},"total_cost_usd":0.30,"duration_ms":4500}"#;
+        let stdout = r#"{"session_id":"s1","subtype":"error_max_turns","result":null,"structured_output":null,"usage":{"input_tokens":500,"output_tokens":200},"total_cost_usd":0.30,"duration_ms":4500}"#;
 
         let config: AgentConfig = AgentConfig::new("test")
             .output_schema_raw(r#"{"type":"object"}"#)
@@ -1887,7 +1990,7 @@ mod tests {
                 let raw = raw_response
                     .expect("raw_response should fall back to stdout when result is null");
                 assert!(
-                    raw.contains("error_max_budget_usd"),
+                    raw.contains("error_max_turns"),
                     "raw_response should contain stdout content, got: {raw}"
                 );
             }

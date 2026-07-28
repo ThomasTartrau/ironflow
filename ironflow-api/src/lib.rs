@@ -5,6 +5,7 @@
 //!
 //! # Architecture
 //!
+//! - `actor.rs` — Maps an authenticated caller to a persisted run author
 //! - `entities/` — DTOs and query parameter types (public API contract)
 //! - `routes/` — One file per route handler
 //! - `error.rs` — Typed API errors mapped to HTTP status codes
@@ -65,6 +66,7 @@
 //! # }
 //! ```
 
+pub mod actor;
 pub mod config;
 #[cfg(feature = "dashboard")]
 pub mod dashboard;

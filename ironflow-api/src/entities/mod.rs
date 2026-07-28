@@ -5,6 +5,7 @@
 
 mod auth;
 mod create_run;
+mod created_by;
 pub mod lease;
 mod run;
 mod secret;
@@ -13,7 +14,8 @@ mod step;
 mod user;
 
 pub use auth::{MeResponse, SignInRequest, SignUpRequest};
-pub use create_run::CreateRunRequest;
+pub use create_run::{CreateRunRequest, IdempotencyKeyError, validate_idempotency_key};
+pub use created_by::{CreatedBy, CreatedByKind};
 pub use lease::{
     DEFAULT_LEASE_TTL_SECS, MAX_LEASE_TTL_SECS, RenewLeaseRequest, RenewLeaseResponse,
     validate_lease_ttl,

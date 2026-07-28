@@ -433,7 +433,7 @@
           "runs"
         ],
         "summary": "List runs with optional filtering and pagination.",
-        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
+        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
         "operationId": "list_runs",
         "parameters": [
           {
@@ -486,6 +486,19 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "name": "created_by",
+            "in": "query",
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
             }
           },
           {
@@ -546,8 +559,22 @@
           "runs"
         ],
         "summary": "Trigger a workflow by name.",
-        "description": "Returns 201 Created with the newly enqueued run.\nReturns 400 Bad Request if the workflow is unknown.",
+        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid, or the `Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
         "operationId": "create_run",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional key making the call safe to replay. At most 255 printable ASCII characters, valid for 24 hours.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "description": "Workflow to trigger",
           "content": {
@@ -560,6 +587,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "description": "Idempotency key replayed: the existing run is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Run created successfully",
             "content": {
@@ -571,13 +608,19 @@
             }
           },
           "400": {
-            "description": "Unknown workflow"
+            "description": "Unknown workflow, invalid body or malformed Idempotency-Key"
           },
           "401": {
             "description": "Unauthorized"
           },
           "403": {
             "description": "Forbidden"
+          },
+          "409": {
+            "description": "Idempotency key already used with a different request"
+          },
+          "429": {
+            "description": "Monthly cost quota exhausted"
           }
         },
         "security": [
@@ -791,7 +834,7 @@
           "runs"
         ],
         "summary": "Retry a failed run.",
-        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state.",
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, and 409 if an\nautomatic retry is already armed for it.",
         "operationId": "retry_run",
         "parameters": [
           {
@@ -827,6 +870,9 @@
           },
           "404": {
             "description": "Run not found"
+          },
+          "409": {
+            "description": "Run is already waiting for an automatic retry"
           }
         },
         "security": [
@@ -1064,7 +1110,7 @@
           "stats"
         ],
         "summary": "Get aggregate statistics across runs matching the filter.",
-        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.",
+        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and\n`per_page` are ignored.",
         "operationId": "get_stats",
         "parameters": [
           {
@@ -1117,6 +1163,19 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "name": "created_by",
+            "in": "query",
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
             }
           },
           {
@@ -1702,7 +1761,7 @@
       },
       "CreateRunRequest": {
         "type": "object",
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "required": [
           "workflow"
         ],
@@ -1719,6 +1778,23 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "max_cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Optional cumulative cost cap for this run, in USD.\n\nOverrides the workflow default and the server default. `None` falls back\nto those. Must be zero or positive."
+          },
+          "max_retries": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many times the run may be replayed automatically after a transient\nfailure. Defaults to `0`, meaning no automatic retry.\n\nEach retry waits an exponential backoff (30 s, 2 min, 8 min, capped at\n15 min) before the run is replayed from the start. Failures that cannot\nsucceed on replay -- an unknown workflow, an invalid payload, an\nexhausted agent budget, a rejected approval, a manual cancellation --\nconsume no attempt.",
+            "minimum": 0
           },
           "payload": {
             "type": [
@@ -1772,6 +1848,41 @@
             "description": "Display username."
           }
         }
+      },
+      "CreatedBy": {
+        "type": "object",
+        "description": "The author of a run, as exposed by the API.\n\nAlways present on a [`RunResponse`](crate::entities::RunResponse): a run with\nno recorded author (including every run created before authorship tracking)\nreports [`CreatedByKind::System`] with a label derived from its trigger, so\nclients never have to handle a missing value.\n\n# Examples\n\n```\nuse ironflow_api::entities::{CreatedBy, CreatedByKind};\n\n// Built from a Run via `CreatedBy::from(&run)`.\nlet system = CreatedBy {\n    kind: CreatedByKind::System,\n    id: None,\n    label: \"manual\".to_string(),\n};\nassert_eq!(system.id, None);\n```",
+        "required": [
+          "kind",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Identifier of the principal: the user ID, the API key ID, or `None` for\n[`CreatedByKind::System`]."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CreatedByKind",
+            "description": "What kind of principal triggered the run."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable label. Never empty.\n\nThe username for a user, `\"key-name (username)\"` for an API key, and the\ntrigger description for a system run."
+          }
+        }
+      },
+      "CreatedByKind": {
+        "type": "string",
+        "description": "What kind of principal triggered a run.",
+        "enum": [
+          "user",
+          "api_key",
+          "system"
+        ]
       },
       "Event": {
         "oneOf": [
@@ -1913,6 +2024,56 @@
                 "type": "string",
                 "enum": [
                   "run_failed"
+                ]
+              },
+              "workflow_name": {
+                "type": "string",
+                "description": "Workflow name."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A run was stopped because it reached its cumulative cost cap.\n\nEmitted when the engine refuses an agent step that would cross the run's\n`max_cost_usd`. The run transitions to\n[`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step\nis never launched, so the reported spend is what the run had already\nconsumed.",
+            "required": [
+              "run_id",
+              "workflow_name",
+              "limit_usd",
+              "spent_usd",
+              "step_budget_usd",
+              "at",
+              "type"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the refusal occurred."
+              },
+              "limit_usd": {
+                "type": "number",
+                "format": "double",
+                "description": "The configured cost cap in USD."
+              },
+              "run_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Run identifier."
+              },
+              "spent_usd": {
+                "type": "number",
+                "format": "double",
+                "description": "Cost already consumed when the cap was reached, in USD."
+              },
+              "step_budget_usd": {
+                "type": "number",
+                "format": "double",
+                "description": "Declared budget of the refused step, in USD."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "run_budget_exceeded"
                 ]
               },
               "workflow_name": {
@@ -2276,6 +2437,7 @@
           "run_created",
           "run_status_changed",
           "run_failed",
+          "run_budget_exceeded",
           "step_completed",
           "step_failed",
           "approval_requested",
@@ -2350,6 +2512,14 @@
         "type": "object",
         "description": "Query parameters for listing runs.",
         "properties": {
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys."
+          },
           "has_steps": {
             "type": [
               "boolean",
@@ -2522,7 +2692,8 @@
           "cost_usd",
           "duration_ms",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "created_by"
         ],
         "properties": {
           "completed_at": {
@@ -2542,6 +2713,10 @@
             "type": "string",
             "format": "date-time",
             "description": "When created."
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/CreatedBy",
+            "description": "Who triggered the run. Always present."
           },
           "duration_ms": {
             "type": "integer",
@@ -2568,6 +2743,13 @@
             "format": "uuid",
             "description": "Unique run identifier."
           },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Idempotency key that produced this run, when one was supplied."
+          },
           "labels": {
             "type": "object",
             "description": "User-defined key-value labels.",
@@ -2577,6 +2759,14 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "max_cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Cumulative cost cap for this run, in USD. `None` means no cap."
           },
           "max_retries": {
             "type": "integer",
@@ -2823,6 +3013,7 @@
           "kind",
           "position",
           "status",
+          "attempt",
           "duration_ms",
           "cost_usd",
           "created_at",
@@ -2830,6 +3021,12 @@
           "dependencies"
         ],
         "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which run attempt produced this step (1-based).\n\nA run retried twice exposes steps with `attempt` 1, 2 and 3. Steps from\nearlier attempts are kept so a failed attempt stays inspectable.",
+            "minimum": 0
+          },
           "completed_at": {
             "type": [
               "string",
@@ -3196,6 +3393,14 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "default_max_cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Default cumulative cost cap applied to runs of this workflow, in USD.\n\nOverridden by a cap supplied at run creation. `None` means the workflow\ndeclares no default and falls back to the server default (if any)."
           },
           "description": {
             "type": "string",

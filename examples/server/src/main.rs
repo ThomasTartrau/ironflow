@@ -15,6 +15,12 @@
 //! - `DASHBOARD_DIR` (optional: overrides the embedded dashboard with a filesystem path)
 //! - `ALLOWED_ORIGINS` (comma-separated list; omit to allow same-origin only)
 //! - `WEBHOOK_URL` (optional: outbound webhook for run events)
+//! - `IRONFLOW_DEFAULT_RUN_MAX_COST_USD` (optional: default per-run cost cap in
+//!   USD, applied when neither the run creation request nor the workflow
+//!   handler declares one; unset means no cap)
+//! - `IRONFLOW_MONTHLY_COST_LIMIT_USD` (optional: global cost quota for the
+//!   current calendar month in UTC; beyond it, creating a run returns
+//!   `429 MONTHLY_BUDGET_EXCEEDED` while in-flight runs continue)
 
 use std::process;
 use std::sync::Arc;
@@ -35,6 +41,7 @@ use ironflow_api::sse::SseBroadcaster;
 use ironflow_api::state::AppState;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
+use ironflow_engine::budget::BudgetConfig;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::{Event, WebhookSubscriber};
 use ironflow_store::crypto::MasterKey;
@@ -82,7 +89,14 @@ async fn main() {
         cookie_secure: config.is_production,
     });
 
-    let mut engine = Engine::new(store.clone(), provider);
+    let budget = BudgetConfig::from_env();
+    info!(
+        default_run_max_cost_usd = ?budget.default_run_max_cost_usd,
+        monthly_cost_limit_usd = ?budget.monthly_cost_limit_usd,
+        "cost guardrails loaded"
+    );
+
+    let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
     ironflow_workflows::register_all(&mut engine).expect("failed to register workflows");
 
     if let Some(ref webhook_url) = config.webhook_url {

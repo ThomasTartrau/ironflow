@@ -234,7 +234,7 @@ impl PostgresStore {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut store = PostgresStore::new("postgres://localhost/ironflow").await?;
-    /// let key = MasterKey::from_env()?;
+    /// let key = MasterKey::from_hex(&std::env::var("IRONFLOW_SECRET_KEY")?)?;
     /// store.set_master_key(key);
     /// # Ok(())
     /// # }
@@ -385,6 +385,7 @@ impl PostgresStore {
         push_set!("duration_ms", update.duration_ms);
         push_set!("started_at", update.started_at);
         push_set!("completed_at", update.completed_at);
+        push_set!("scheduled_at", update.scheduled_at);
 
         if update.increment_retry {
             sets.push("retry_count = retry_count + 1".to_string());
@@ -418,6 +419,9 @@ impl PostgresStore {
         }
         if let Some(completed) = update.completed_at {
             query = query.bind(completed);
+        }
+        if let Some(scheduled) = update.scheduled_at {
+            query = query.bind(scheduled);
         }
 
         query = query.bind(id);

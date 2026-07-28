@@ -29,7 +29,10 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
-//! }).await?;
+//!     created_by: None,
+//!     idempotency_key: None,
+//!     max_cost_usd: None,
+//! }).await?.into_run();
 //!
 //! println!("Run {} is {:?}", run.id, run.status);
 //! # Ok(())

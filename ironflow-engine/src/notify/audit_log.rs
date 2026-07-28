@@ -58,6 +58,7 @@ fn extract_run_id(event: &Event) -> Option<Uuid> {
         Event::RunCreated { run_id, .. }
         | Event::RunStatusChanged { run_id, .. }
         | Event::RunFailed { run_id, .. }
+        | Event::RunBudgetExceeded { run_id, .. }
         | Event::StepCompleted { run_id, .. }
         | Event::StepFailed { run_id, .. }
         | Event::ApprovalRequested { run_id, .. }

@@ -21,7 +21,10 @@
 //!     handler_version: None,
 //!     labels: HashMap::new(),
 //!     scheduled_at: None,
-//! }).await?;
+//!     created_by: None,
+//!     idempotency_key: None,
+//!     max_cost_usd: None,
+//! }).await?.into_run();
 //!
 //! assert_eq!(run.status.state, RunStatus::Pending);
 //! # Ok(())
@@ -45,6 +48,9 @@ mod user_store;
 #[derive(Debug, Default)]
 pub(super) struct State {
     pub(super) runs: HashMap<Uuid, crate::entities::Run>,
+    /// Idempotency key -> run holding it. Guarded by the same lock as `runs`,
+    /// so check-then-insert is atomic.
+    pub(super) idempotency_keys: HashMap<String, Uuid>,
     pub(super) steps: HashMap<Uuid, crate::entities::Step>,
     pub(super) step_dependencies: Vec<crate::entities::StepDependency>,
     pub(super) users: HashMap<Uuid, User>,
@@ -151,6 +157,7 @@ mod tests {
 
     pub(crate) fn new_run_req(name: &str) -> NewRun {
         NewRun {
+            created_by: None,
             workflow_name: name.to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),
@@ -158,6 +165,8 @@ mod tests {
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
         }
     }
 
@@ -168,7 +177,11 @@ mod tests {
     ) -> crate::entities::Run {
         use crate::store::RunStore;
 
-        let run = store.create_run(new_run_req(name)).await.unwrap();
+        let run = store
+            .create_run(new_run_req(name))
+            .await
+            .unwrap()
+            .into_run();
         store
             .update_run_status(run.id, crate::entities::RunStatus::Running)
             .await

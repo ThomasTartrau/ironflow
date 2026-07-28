@@ -3,14 +3,29 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::entities::{
-    LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run, RunFilter, RunStats,
-    RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
+    IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run,
+    RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency,
+    StepUpdate,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
 
 use super::PostgresStore;
 use super::helpers::{parse_run_status, row_to_run, row_to_step, run_status_to_db_str};
+
+/// Fetch the run bound to an idempotency key, restricted to the retention window.
+///
+/// Binds: `$1` the key, `$2` the oldest `created_at` still inside the window.
+const RUN_BY_IDEMPOTENCY_KEY_SQL: &str = r#"
+    SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+           ck.name as created_by_api_key_name
+    FROM ironflow.runs r
+    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+    LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+    LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
+    WHERE r.idempotency_key = $1 AND r.created_at > $2
+"#;
 
 /// Build SQL WHERE conditions from a [`RunFilter`], returning `(where_clause, next_bind_idx)`.
 fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
@@ -35,6 +50,10 @@ fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
     }
     if filter.labels.is_some() {
         conditions.push(format!("r.labels @> ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if filter.created_by_user_id.is_some() {
+        conditions.push(format!("r.created_by_user_id = ${bind_idx}"));
         bind_idx += 1;
     }
     if let Some(has_steps) = filter.has_steps {
@@ -79,6 +98,9 @@ fn bind_run_filter_params<'q>(
     if let Some(ref labels) = filter.labels {
         query = query.bind(serde_json::to_value(labels).unwrap_or_default());
     }
+    if let Some(created_by_user_id) = filter.created_by_user_id {
+        query = query.bind(created_by_user_id);
+    }
     if filter.has_steps.is_some() {
         query = query.bind(run_status_to_db_str(&RunStatus::Completed));
         query = query.bind(run_status_to_db_str(&RunStatus::Cancelled));
@@ -87,11 +109,12 @@ fn bind_run_filter_params<'q>(
 }
 
 impl RunStore for PostgresStore {
-    fn create_run(&self, req: NewRun) -> StoreFuture<'_, Run> {
+    fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
         Box::pin(async move {
             let id = Uuid::now_v7();
             let now = Utc::now();
             let trigger_json = serde_json::to_value(&req.trigger)?;
+            let window_start = now - IDEMPOTENCY_WINDOW;
 
             // Get cached run_lifecycle FSM abstract machine ID
             let fsm_machine_id = self.get_run_lifecycle_machine_id();
@@ -102,6 +125,25 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
+            // Release the key from a run that outlived the idempotency window, so
+            // the unique index does not reject a legitimate reuse. No-op when the
+            // key is absent or still within its window.
+            if let Some(ref key) = req.idempotency_key {
+                sqlx::query(
+                    r#"
+                    UPDATE ironflow.runs
+                    SET idempotency_key = NULL, updated_at = $3
+                    WHERE idempotency_key = $1 AND created_at <= $2
+                    "#,
+                )
+                .bind(key)
+                .bind(window_start)
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+
             // Create FSM instance at initial state (pending)
             let row = sqlx::query("SELECT lib_fsm.state_machine_create($1) as state_machine__id")
                 .bind(fsm_machine_id)
@@ -110,11 +152,13 @@ impl RunStore for PostgresStore {
                 .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
             let state_machine_id: Uuid = row.get("state_machine__id");
 
-            // Insert run with FSM reference
-            sqlx::query(
+            // Insert run with FSM reference. A concurrent insert holding the same
+            // key wins the unique index and this one becomes a no-op.
+            let inserted = sqlx::query(
                 r#"
-                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
                 "#,
             )
             .bind(id)
@@ -126,19 +170,55 @@ impl RunStore for PostgresStore {
             .bind(&req.handler_version)
             .bind(serde_json::to_value(&req.labels).unwrap_or_default())
             .bind(req.scheduled_at)
+            .bind(req.created_by.as_ref().map(RunActor::user_id))
+            .bind(req.created_by.as_ref().and_then(RunActor::api_key_id))
+            .bind(&req.idempotency_key)
+            .bind(req.max_cost_usd)
             .bind(now)
             .bind(now)
             .execute(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
+            if inserted.rows_affected() == 0 {
+                // Lost the race: another transaction already bound this key.
+                let key = req.idempotency_key.as_deref().ok_or_else(|| {
+                    StoreError::Database(
+                        "insert affected no row without an idempotency key".to_string(),
+                    )
+                })?;
+
+                let row = sqlx::query(RUN_BY_IDEMPOTENCY_KEY_SQL)
+                    .bind(key)
+                    .bind(window_start)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?
+                    .ok_or_else(|| {
+                        StoreError::Database(
+                            "idempotency key conflict resolved to no run".to_string(),
+                        )
+                    })?;
+
+                let run = row_to_run(&row)?;
+
+                tx.commit()
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                return Ok(RunCreation::Existing(run));
+            }
+
             // Fetch the inserted run with FSM state
             let row = sqlx::query(
                 r#"
-                SELECT r.*, ast.name as state_name
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 WHERE r.id = $1
                 "#,
             )
@@ -153,7 +233,23 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            Ok(run)
+            Ok(RunCreation::Created(run))
+        })
+    }
+
+    fn find_run_by_idempotency_key(&self, key: &str) -> StoreFuture<'_, Option<Run>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let window_start = Utc::now() - IDEMPOTENCY_WINDOW;
+
+            let row = sqlx::query(RUN_BY_IDEMPOTENCY_KEY_SQL)
+                .bind(&key)
+                .bind(window_start)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            row.map(|r| row_to_run(&r)).transpose()
         })
     }
 
@@ -161,10 +257,13 @@ impl RunStore for PostgresStore {
         Box::pin(async move {
             let row = sqlx::query(
                 r#"
-                SELECT r.*, ast.name as state_name
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 WHERE r.id = $1
                 "#,
             )
@@ -189,10 +288,13 @@ impl RunStore for PostgresStore {
             let offset_idx = bind_idx + 1;
             let data_sql = format!(
                 r#"
-                SELECT r.*, ast.name as state_name, COUNT(*) OVER() as total_count
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name, COUNT(*) OVER() as total_count
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 {where_clause}
                 ORDER BY r.created_at DESC
                 LIMIT ${limit_idx} OFFSET ${offset_idx}
@@ -348,10 +450,13 @@ impl RunStore for PostgresStore {
 
             let row = sqlx::query(
                 r#"
-                SELECT r.*, ast.name as state_name
+                SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 WHERE r.id = $1
                 "#,
             )
@@ -374,7 +479,6 @@ impl RunStore for PostgresStore {
     fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let now = Utc::now();
-            let event = "picked_up";
 
             let mut tx = self
                 .pool
@@ -382,14 +486,16 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            // Find a pending run and transition it
+            // Find a run waiting for execution and transition it. `retrying` runs
+            // are runs whose automatic retry backoff has been armed: they become
+            // eligible again once `scheduled_at` has passed.
             let run_row = sqlx::query(
                 r#"
-                SELECT r.id, r.state_machine__id
+                SELECT r.id, r.state_machine__id, ast.name as state_name
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
-                WHERE ast.name = 'pending'
+                WHERE ast.name IN ('pending', 'retrying')
                   AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
                 ORDER BY r.created_at ASC
                 LIMIT 1
@@ -408,6 +514,11 @@ impl RunStore for PostgresStore {
             if let Some(run_row) = run_row {
                 let run_id: Uuid = run_row.get("id");
                 let state_machine_id: Uuid = run_row.get("state_machine__id");
+                let state_name: &str = run_row.get("state_name");
+                let event = PostgresStore::run_status_to_event(
+                    parse_run_status(state_name)?,
+                    RunStatus::Running,
+                )?;
 
                 // Perform FSM transition
                 sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
@@ -462,10 +573,13 @@ impl RunStore for PostgresStore {
                 // Fetch and return the updated run
                 let updated_row = sqlx::query(
                     r#"
-                    SELECT r.*, ast.name as state_name
+                    SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                       ck.name as created_by_api_key_name
                     FROM ironflow.runs r
                     JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                     JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                    LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                    LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                     WHERE r.id = $1
                     "#
                 )
@@ -645,10 +759,13 @@ impl RunStore for PostgresStore {
 
                 let updated_row = sqlx::query(
                     r#"
-                    SELECT r.*, ast.name as state_name
+                    SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                           ck.name as created_by_api_key_name
                     FROM ironflow.runs r
                     JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                     JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                    LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                    LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                     WHERE r.id = $1
                     "#,
                 )
@@ -697,8 +814,9 @@ impl RunStore for PostgresStore {
             let kind_str = super::helpers::step_kind_to_str(&req.kind);
             sqlx::query(
                 r#"
-                INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                        (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $2))
                 "#,
             )
             .bind(id)

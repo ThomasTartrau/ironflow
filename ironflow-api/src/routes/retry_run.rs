@@ -9,6 +9,7 @@ use ironflow_engine::notify::Event;
 use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
 use uuid::Uuid;
 
+use crate::actor::run_actor_of;
 use crate::entities::RunResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -17,7 +18,8 @@ use crate::state::AppState;
 /// Retry a failed run.
 ///
 /// Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
-/// original. Returns 400 if the run is not in a retryable state.
+/// original. Returns 400 if the run is not in a retryable state, and 409 if an
+/// automatic retry is already armed for it.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -30,7 +32,8 @@ use crate::state::AppState;
             (status = 400, description = "Run cannot be retried"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
-            (status = 404, description = "Run not found")
+            (status = 404, description = "Run not found"),
+            (status = 409, description = "Run is already waiting for an automatic retry")
         ),
         security(("Bearer" = []))
     )
@@ -46,9 +49,18 @@ pub async fn retry_run(
 
     let original = state.get_run_or_404(id).await?;
 
+    // A `Retrying` run already has an automatic retry armed: creating a second
+    // run here would execute the same work twice, concurrently.
+    if original.status.state == RunStatus::Retrying {
+        return Err(ApiError::Conflict(
+            "run is already waiting for an automatic retry; cancel it first to retry manually"
+                .to_string(),
+        ));
+    }
+
     if !matches!(
         original.status.state,
-        RunStatus::Failed | RunStatus::Retrying | RunStatus::Cancelled
+        RunStatus::Failed | RunStatus::Cancelled
     ) {
         return Err(ApiError::BadRequest(format!(
             "cannot retry run in {} state",
@@ -66,8 +78,18 @@ pub async fn retry_run(
             handler_version: original.handler_version,
             labels: original.labels,
             scheduled_at: None,
+            // A retry is a new, accountable action: the author is whoever
+            // triggered it, not the author of the original run.
+            created_by: Some(run_actor_of(&auth)),
+            // A retry is a deliberate re-execution: it must not inherit the
+            // original key, which is still bound to the run being retried.
+            idempotency_key: None,
+            // The retry inherits the original cap, so a run cancelled for
+            // reaching it does not silently come back unbounded.
+            max_cost_usd: original.max_cost_usd,
         })
-        .await?;
+        .await?
+        .into_run();
 
     state.engine.event_publisher().publish(Event::RunCreated {
         run_id: new_run.id,
@@ -92,8 +114,10 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
+    use ironflow_store::models::{NewRun, NewUser, RunActor, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
+    use ironflow_store::user_store::UserStore;
+    use rust_decimal::Decimal;
     use serde_json::{Value as JsonValue, from_slice, from_value, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -134,6 +158,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({"key": "value"}),
@@ -141,9 +166,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -181,10 +209,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_inherits_the_original_cost_cap() {
+        let store = Arc::new(InMemoryStore::new());
+        let cap = Decimal::new(250, 2);
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 1,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                max_cost_usd: Some(cap),
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        // A run cancelled for reaching its cap is retryable.
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
+
+        let new_run = store.get_run(new_id).await.unwrap().unwrap();
+        assert_eq!(new_run.max_cost_usd, Some(cap));
+    }
+
+    #[tokio::test]
     async fn retry_pending_run_returns_400() {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -192,9 +277,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let state = test_state(store);
         let auth_header = make_auth_header(&state);
@@ -219,6 +307,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -226,9 +315,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -262,6 +354,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -269,9 +362,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         store
             .update_run_status(run.id, RunStatus::Running)
@@ -297,6 +393,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_run_awaiting_automatic_retry_returns_409() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 3,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Retrying)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CONFLICT);
+
+        // No duplicate run was created.
+        let runs = store
+            .list_runs(ironflow_store::models::RunFilter::default(), 1, 50)
+            .await
+            .unwrap();
+        assert_eq!(runs.total, 1);
+    }
+
+    #[tokio::test]
+    async fn retry_cancelled_run_is_allowed() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+    }
+
+    #[tokio::test]
     async fn retry_nonexistent_run_returns_404() {
         let store = Arc::new(InMemoryStore::new());
         let state = test_state(store);
@@ -315,5 +508,149 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), HttpStatusCode::NOT_FOUND);
+    }
+
+    // ---- created_by ----
+
+    #[tokio::test]
+    async fn retry_attributes_the_new_run_to_the_caller_not_the_original_author() {
+        let store = Arc::new(InMemoryStore::new());
+        let original_author = store
+            .create_user(NewUser {
+                email: "alice@example.com".to_string(),
+                username: "alice".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+        let retrying_user = store
+            .create_user(NewUser {
+                email: "bob@example.com".to_string(),
+                username: "bob".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({}),
+                max_retries: 3,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: Some(RunActor::User {
+                    user_id: original_author.id,
+                }),
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let token =
+            AccessToken::for_user(retrying_user.id, "bob", true, &state.jwt_config).unwrap();
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token.0))
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["created_by"]["kind"], "user");
+        assert_eq!(
+            json_val["data"]["created_by"]["id"],
+            retrying_user.id.to_string()
+        );
+        assert_eq!(json_val["data"]["created_by"]["label"], "bob");
+    }
+
+    // ---- Idempotency-Key ----
+
+    #[tokio::test]
+    async fn retry_does_not_inherit_the_idempotency_key() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({"key": "value"}),
+                max_retries: 3,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: Some("github:abc-123".to_string()),
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert!(
+            json_val["data"].get("idempotency_key").is_none(),
+            "the retry run must not carry the original key"
+        );
+
+        // The original key still resolves to the original run.
+        let bound = store
+            .find_run_by_idempotency_key("github:abc-123")
+            .await
+            .unwrap()
+            .expect("key still bound");
+        assert_eq!(bound.id, run.id);
     }
 }

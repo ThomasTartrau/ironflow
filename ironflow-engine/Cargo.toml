@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-engine"
-version = "2.16.3"
+version = "2.17.1"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -11,8 +11,8 @@ keywords = ["workflow", "engine", "orchestration", "fsm"]
 categories = ["asynchronous", "development-tools"]
 
 [dependencies]
-ironflow-core = { version = "3.0.0", path = "../ironflow-core" }
-ironflow-store = { version = "2.14.3", path = "../ironflow-store" }
+ironflow-core = { version = "3.2.0", path = "../ironflow-core" }
+ironflow-store = { version = "2.15.1", path = "../ironflow-store" }
 
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -29,6 +29,7 @@ sha2 = "0.10"
 hex = "0.4"
 schemars = "1"
 croner = { version = "3", features = ["serde"] }
+rand = "0.9"
 metrics = { version = "0.24", optional = true }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], optional = true }
 

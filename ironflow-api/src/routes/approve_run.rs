@@ -210,6 +210,7 @@ mod tests {
     ) -> ironflow_store::models::Run {
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -217,9 +218,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
         store
             .update_run_status(run.id, RunStatus::Running)
             .await
@@ -265,6 +269,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -272,9 +277,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let state = test_state(store);
         let auth_header = make_auth_header(&state);
@@ -345,6 +353,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reject_never_consumes_a_retry_attempt() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 3,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::AwaitingApproval)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/reject", post(reject_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/reject", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::OK);
+
+        // A human said no: the run is terminal, whatever max_retries says.
+        let rejected = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(rejected.status.state, RunStatus::Failed);
+        assert_eq!(rejected.retry_count, 0);
+        assert!(rejected.scheduled_at.is_none());
+        assert!(store.pick_next_pending(None).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn reject_transitions_approval_step_to_failed() {
         let store = Arc::new(InMemoryStore::new());
         let run = create_awaiting_approval_run(&store).await;
@@ -407,6 +468,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -414,9 +476,12 @@ mod tests {
                 handler_version: None,
                 labels: HashMap::new(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .into_run();
 
         let state = test_state(store);
         let auth_header = make_auth_header(&state);

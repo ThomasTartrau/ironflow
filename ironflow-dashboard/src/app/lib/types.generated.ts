@@ -231,6 +231,8 @@ export interface paths {
 		 *
 		 *     - `workflow` — Filter by workflow name (optional)
 		 *     - `status` — Filter by run status (optional)
+		 *     - `created_by` — Filter by author user ID (optional). Also matches runs
+		 *       triggered by one of that user's API keys.
 		 *     - `page` — Page number, 1-based (default: 1)
 		 *     - `per_page` — Items per page (default: 20, max: 100)
 		 */
@@ -239,7 +241,21 @@ export interface paths {
 		/**
 		 * Trigger a workflow by name.
 		 * @description Returns 201 Created with the newly enqueued run.
-		 *     Returns 400 Bad Request if the workflow is unknown.
+		 *
+		 *     An optional `Idempotency-Key` header makes the call safe to replay: the same
+		 *     key returns the run it already produced with 200 OK instead of enqueueing a
+		 *     second one. A key reused with a different workflow or payload is rejected with
+		 *     409 Conflict. Keys stay bound for 24 hours, after which they are released.
+		 *
+		 *     # Errors
+		 *
+		 *     Returns [`ApiError::Forbidden`] for non-admin callers.
+		 *     Returns [`ApiError::BadRequest`] if the workflow is unknown, the body is
+		 *     invalid, or the `Idempotency-Key` header is malformed.
+		 *     Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
+		 *     different request.
+		 *     Returns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota
+		 *     is exhausted.
 		 */
 		post: operations["create_run"];
 		delete?: never;
@@ -343,7 +359,8 @@ export interface paths {
 		/**
 		 * Retry a failed run.
 		 * @description Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
-		 *     original. Returns 400 if the run is not in a retryable state.
+		 *     original. Returns 400 if the run is not in a retryable state, and 409 if an
+		 *     automatic retry is already armed for it.
 		 */
 		post: operations["retry_run"];
 		delete?: never;
@@ -421,7 +438,8 @@ export interface paths {
 		/**
 		 * Get aggregate statistics across runs matching the filter.
 		 * @description Accepts the same filtering query parameters as `GET /api/v1/runs`
-		 *     (`workflow`, `status`, `has_steps`). `page` and `per_page` are ignored.
+		 *     (`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and
+		 *     `per_page` are ignored.
 		 */
 		get: operations["get_stats"];
 		put?: never;
@@ -718,6 +736,8 @@ export interface components {
 		 *         payload: Some(json!({"env": "prod"})),
 		 *         labels: None,
 		 *         scheduled_at: None,
+		 *         max_retries: Some(2),
+		 *         max_cost_usd: None,
 		 *     };
 		 *     assert_eq!(req.workflow, "deploy");
 		 *     ```
@@ -727,6 +747,26 @@ export interface components {
 			labels?: {
 				[key: string]: string;
 			} | null;
+			/**
+			 * Format: double
+			 * @description Optional cumulative cost cap for this run, in USD.
+			 *
+			 *     Overrides the workflow default and the server default. `None` falls back
+			 *     to those. Must be zero or positive.
+			 */
+			max_cost_usd?: number | null;
+			/**
+			 * Format: int32
+			 * @description How many times the run may be replayed automatically after a transient
+			 *     failure. Defaults to `0`, meaning no automatic retry.
+			 *
+			 *     Each retry waits an exponential backoff (30 s, 2 min, 8 min, capped at
+			 *     15 min) before the run is replayed from the start. Failures that cannot
+			 *     succeed on replay -- an unknown workflow, an invalid payload, an
+			 *     exhausted agent budget, a rejected approval, a manual cancellation --
+			 *     consume no attempt.
+			 */
+			max_retries?: number | null;
 			/** @description Optional input payload for the workflow. */
 			payload?: {
 				[key: string]: unknown;
@@ -750,6 +790,50 @@ export interface components {
 			/** @description Display username. */
 			username: string;
 		};
+		/**
+		 * @description The author of a run, as exposed by the API.
+		 *
+		 *     Always present on a [`RunResponse`](crate::entities::RunResponse): a run with
+		 *     no recorded author (including every run created before authorship tracking)
+		 *     reports [`CreatedByKind::System`] with a label derived from its trigger, so
+		 *     clients never have to handle a missing value.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::{CreatedBy, CreatedByKind};
+		 *
+		 *     // Built from a Run via `CreatedBy::from(&run)`.
+		 *     let system = CreatedBy {
+		 *         kind: CreatedByKind::System,
+		 *         id: None,
+		 *         label: "manual".to_string(),
+		 *     };
+		 *     assert_eq!(system.id, None);
+		 *     ```
+		 */
+		CreatedBy: {
+			/**
+			 * Format: uuid
+			 * @description Identifier of the principal: the user ID, the API key ID, or `None` for
+			 *     [`CreatedByKind::System`].
+			 */
+			id?: string | null;
+			/** @description What kind of principal triggered the run. */
+			kind: components["schemas"]["CreatedByKind"];
+			/**
+			 * @description Human-readable label. Never empty.
+			 *
+			 *     The username for a user, `"key-name (username)"` for an API key, and the
+			 *     trigger description for a system run.
+			 */
+			label: string;
+		};
+		/**
+		 * @description What kind of principal triggered a run.
+		 * @enum {string}
+		 */
+		CreatedByKind: "user" | "api_key" | "system";
 		/**
 		 * @description A domain event emitted by the ironflow system.
 		 *
@@ -850,6 +934,37 @@ export interface components {
 					run_id: string;
 					/** @enum {string} */
 					type: "run_failed";
+					/** @description Workflow name. */
+					workflow_name: string;
+			  }
+			| {
+					/**
+					 * Format: date-time
+					 * @description When the refusal occurred.
+					 */
+					at: string;
+					/**
+					 * Format: double
+					 * @description The configured cost cap in USD.
+					 */
+					limit_usd: number;
+					/**
+					 * Format: uuid
+					 * @description Run identifier.
+					 */
+					run_id: string;
+					/**
+					 * Format: double
+					 * @description Cost already consumed when the cap was reached, in USD.
+					 */
+					spent_usd: number;
+					/**
+					 * Format: double
+					 * @description Declared budget of the refused step, in USD.
+					 */
+					step_budget_usd: number;
+					/** @enum {string} */
+					type: "run_budget_exceeded";
 					/** @description Workflow name. */
 					workflow_name: string;
 			  }
@@ -1055,6 +1170,7 @@ export interface components {
 			| "run_created"
 			| "run_status_changed"
 			| "run_failed"
+			| "run_budget_exceeded"
 			| "step_completed"
 			| "step_failed"
 			| "approval_requested"
@@ -1095,6 +1211,13 @@ export interface components {
 		};
 		/** @description Query parameters for listing runs. */
 		ListRunsQuery: {
+			/**
+			 * Format: uuid
+			 * @description Filter by author: the user ID that triggered the run.
+			 *
+			 *     Also matches runs triggered by one of that user's API keys.
+			 */
+			created_by?: string | null;
 			/**
 			 * @description Filter by step presence (only applies to completed/cancelled runs).
 			 *     Non-terminal runs (pending, running, etc.) are always included.
@@ -1209,6 +1332,8 @@ export interface components {
 			 * @description When created.
 			 */
 			created_at: string;
+			/** @description Who triggered the run. Always present. */
+			created_by: components["schemas"]["CreatedBy"];
 			/**
 			 * Format: int64
 			 * @description Total duration in milliseconds.
@@ -1223,10 +1348,17 @@ export interface components {
 			 * @description Unique run identifier.
 			 */
 			id: string;
+			/** @description Idempotency key that produced this run, when one was supplied. */
+			idempotency_key?: string | null;
 			/** @description User-defined key-value labels. */
 			labels?: {
 				[key: string]: string;
 			};
+			/**
+			 * Format: double
+			 * @description Cumulative cost cap for this run, in USD. `None` means no cap.
+			 */
+			max_cost_usd?: number | null;
 			/**
 			 * Format: int32
 			 * @description Maximum allowed retries.
@@ -1412,6 +1544,14 @@ export interface components {
 		 *     ```
 		 */
 		StepResponse: {
+			/**
+			 * Format: int32
+			 * @description Which run attempt produced this step (1-based).
+			 *
+			 *     A run retried twice exposes steps with `attempt` 1, 2 and 3. Steps from
+			 *     earlier attempts are kept so a failed attempt stays inspectable.
+			 */
+			attempt: number;
 			/**
 			 * Format: date-time
 			 * @description When execution completed.
@@ -1611,6 +1751,14 @@ export interface components {
 			default_labels?: {
 				[key: string]: string;
 			};
+			/**
+			 * Format: double
+			 * @description Default cumulative cost cap applied to runs of this workflow, in USD.
+			 *
+			 *     Overridden by a cap supplied at run creation. `None` means the workflow
+			 *     declares no default and falls back to the server default (if any).
+			 */
+			default_max_cost_usd?: number | null;
 			/** @description Human-readable description. */
 			description: string;
 			/** @description JSON Schema describing the expected input payload. */
@@ -2006,6 +2154,12 @@ export interface operations {
 				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
 				label?: string | null;
+				/**
+				 * @description Filter by author: the user ID that triggered the run.
+				 *
+				 *     Also matches runs triggered by one of that user's API keys.
+				 */
+				created_by?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */
@@ -2038,7 +2192,10 @@ export interface operations {
 	create_run: {
 		parameters: {
 			query?: never;
-			header?: never;
+			header?: {
+				/** @description Optional key making the call safe to replay. At most 255 printable ASCII characters, valid for 24 hours. */
+				"Idempotency-Key"?: string | null;
+			};
 			path?: never;
 			cookie?: never;
 		};
@@ -2049,6 +2206,15 @@ export interface operations {
 			};
 		};
 		responses: {
+			/** @description Idempotency key replayed: the existing run is returned */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["RunResponse"];
+				};
+			};
 			/** @description Run created successfully */
 			201: {
 				headers: {
@@ -2058,7 +2224,7 @@ export interface operations {
 					"application/json": components["schemas"]["RunResponse"];
 				};
 			};
-			/** @description Unknown workflow */
+			/** @description Unknown workflow, invalid body or malformed Idempotency-Key */
 			400: {
 				headers: {
 					[name: string]: unknown;
@@ -2074,6 +2240,20 @@ export interface operations {
 			};
 			/** @description Forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Idempotency key already used with a different request */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Monthly cost quota exhausted */
+			429: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -2320,6 +2500,13 @@ export interface operations {
 				};
 				content?: never;
 			};
+			/** @description Run is already waiting for an automatic retry */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
 		};
 	};
 	list_secrets: {
@@ -2523,6 +2710,12 @@ export interface operations {
 				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
 				label?: string | null;
+				/**
+				 * @description Filter by author: the user ID that triggered the run.
+				 *
+				 *     Also matches runs triggered by one of that user's API keys.
+				 */
+				created_by?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */

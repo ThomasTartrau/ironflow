@@ -36,6 +36,21 @@ pub const RUNS_ACTIVE: &str = "ironflow_runs_active";
 pub const RUN_DURATION_SECONDS: &str = "ironflow_run_duration_seconds";
 /// Histogram: run total cost in USD (label: workflow).
 pub const RUN_COST_USD: &str = "ironflow_run_cost_usd";
+/// Counter: total budget refusals (labels: workflow, scope = `run` | `monthly`).
+pub const RUN_BUDGET_EXCEEDED_TOTAL: &str = "ironflow_run_budget_exceeded_total";
+/// Counter: run creations carrying an `Idempotency-Key` (label: outcome).
+///
+/// See [`IDEMPOTENCY_CREATED`], [`IDEMPOTENCY_REPLAYED`] and
+/// [`IDEMPOTENCY_CONFLICT`] for the `outcome` label values.
+pub const RUN_IDEMPOTENCY_TOTAL: &str = "ironflow_run_idempotency_total";
+
+// ── Idempotency outcome labels ─────────────────────────────────────
+/// Label value: the key was unknown and a new run was created.
+pub const IDEMPOTENCY_CREATED: &str = "created";
+/// Label value: the key resolved to an existing run, which was returned as-is.
+pub const IDEMPOTENCY_REPLAYED: &str = "replayed";
+/// Label value: the key was reused with a different request and was rejected.
+pub const IDEMPOTENCY_CONFLICT: &str = "conflict";
 
 // ── Step metrics ───────────────────────────────────────────────────
 /// Counter: total steps executed (labels: kind, status).

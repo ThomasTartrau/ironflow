@@ -9,6 +9,7 @@ use ironflow_store::store::Store;
 pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: RunStatus) -> Run {
     let run = store
         .create_run(NewRun {
+            created_by: None,
             workflow_name: name.to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),
@@ -16,9 +17,12 @@ pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: R
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
         })
         .await
-        .unwrap();
+        .unwrap()
+        .into_run();
     store
         .update_run_status(run.id, RunStatus::Running)
         .await

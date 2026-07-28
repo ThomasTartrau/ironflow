@@ -30,7 +30,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::task::{Id, JoinSet};
 use tracing::{error, info};
 use uuid::Uuid;
@@ -43,6 +43,7 @@ use ironflow_store::models::{
 };
 use ironflow_store::store::Store;
 
+use crate::budget::step_budget_usd;
 use crate::config::{
     AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig,
 };
@@ -86,9 +87,23 @@ pub struct WorkflowContext {
     total_cost_usd: Decimal,
     /// Accumulated duration across all steps.
     total_duration_ms: u64,
-    /// Steps from a previous execution, keyed by position.
+    /// Cumulative cost cap for this run, resolved at creation. `None` = no cap.
+    max_cost_usd: Option<Decimal>,
+    /// Cost already spent by ancestor runs when this context belongs to a
+    /// sub-workflow. Zero for a top-level run.
+    inherited_cost_usd: Decimal,
+    /// Steps from a previous execution of the *same* attempt, keyed by position.
     /// Used when resuming after approval to replay completed steps.
     replay_steps: HashMap<u32, Step>,
+    /// Approvals granted in an *earlier* attempt, keyed by position, holding the
+    /// attempt that granted them. An approval is carried by the run, not by the
+    /// attempt, so a retry never asks a human to approve the same gate twice.
+    granted_approvals: HashMap<u32, u32>,
+    /// Which run attempt this context is executing (1-based).
+    attempt: u32,
+    /// Wall-clock duration already recorded on the run by previous attempts.
+    /// Added to this attempt's duration when the run is finalized.
+    carried_duration_ms: u64,
     /// Optional sender for real-time log streaming.
     log_sender: Option<LogSender>,
 }
@@ -108,7 +123,12 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            max_cost_usd: None,
+            inherited_cost_usd: Decimal::ZERO,
             replay_steps: HashMap::new(),
+            granted_approvals: HashMap::new(),
+            attempt: 1,
+            carried_duration_ms: 0,
             log_sender: None,
         }
     }
@@ -132,7 +152,12 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            max_cost_usd: None,
+            inherited_cost_usd: Decimal::ZERO,
             replay_steps: HashMap::new(),
+            granted_approvals: HashMap::new(),
+            attempt: 1,
+            carried_duration_ms: 0,
             log_sender: None,
         }
     }
@@ -142,11 +167,112 @@ impl WorkflowContext {
         self.log_sender = Some(sender);
     }
 
+    /// Seed the context with the run's attempt number and the totals already
+    /// accumulated by previous attempts.
+    ///
+    /// Called by the engine before executing a handler. Steps created by this
+    /// context belong to `attempt`, and the cost and duration it reports at the
+    /// end cover the whole run, not just this attempt.
+    pub(crate) fn carry_over_run_totals(
+        &mut self,
+        attempt: u32,
+        cost_usd: Decimal,
+        duration_ms: u64,
+    ) {
+        self.attempt = attempt;
+        self.total_cost_usd = cost_usd;
+        self.carried_duration_ms = duration_ms;
+    }
+
+    /// Wall-clock duration already recorded on the run by previous attempts.
+    pub(crate) fn carried_duration_ms(&self) -> u64 {
+        self.carried_duration_ms
+    }
+
+    /// The run attempt this context is executing (1-based).
+    pub fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    /// Set the cumulative cost cap enforced before every agent step.
+    ///
+    /// Called by the [`Engine`](crate::engine::Engine) with the run's persisted
+    /// `max_cost_usd`. `None` disables the check.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use rust_decimal::Decimal;
+    ///
+    /// # fn example(ctx: &mut WorkflowContext) {
+    /// ctx.set_max_cost_usd(Some(Decimal::new(200, 2))); // $2.00
+    /// # }
+    /// ```
+    pub fn set_max_cost_usd(&mut self, cap: Option<Decimal>) {
+        self.max_cost_usd = cap;
+    }
+
+    /// The cumulative cost cap of this run, if any.
+    pub fn max_cost_usd(&self) -> Option<Decimal> {
+        self.max_cost_usd
+    }
+
+    /// Total cost charged against the cap: this run plus every ancestor run.
+    ///
+    /// For a top-level run this equals [`total_cost_usd`](Self::total_cost_usd).
+    /// For a sub-workflow it also includes what the parent chain already spent.
+    pub fn charged_cost_usd(&self) -> Decimal {
+        self.inherited_cost_usd + self.total_cost_usd
+    }
+
+    /// Reject the upcoming agent work when it would cross the run's cost cap.
+    ///
+    /// `step_budget` is the declared budget of the step (or the sum of budgets
+    /// for a parallel wave). Called *before* any step record is created so a
+    /// refused run never launches the work it could not afford.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::RunBudgetExceeded`] when
+    /// `charged_cost + step_budget` exceeds the cap.
+    fn check_run_budget(&self, step_budget: Decimal) -> Result<(), EngineError> {
+        let Some(limit) = self.max_cost_usd else {
+            return Ok(());
+        };
+
+        let spent = self.charged_cost_usd();
+        if spent + step_budget <= limit {
+            return Ok(());
+        }
+
+        error!(
+            run_id = %self.run_id,
+            limit_usd = %limit,
+            spent_usd = %spent,
+            step_budget_usd = %step_budget,
+            "run cost cap reached, refusing agent step"
+        );
+
+        Err(EngineError::RunBudgetExceeded {
+            run_id: self.run_id,
+            limit_usd: limit,
+            spent_usd: spent,
+            step_budget_usd: step_budget,
+        })
+    }
+
     /// Load existing steps from the store for replay after approval.
     ///
     /// Called by the engine when resuming a run. All completed steps
     /// and the approved approval step are indexed by position so that
     /// `execute_step` and `approval` can skip them.
+    ///
+    /// Only steps of the current attempt are replayed: positions repeat across
+    /// attempts, so replaying an earlier attempt's steps would skip the whole
+    /// workflow. The one exception is an approval already granted in an earlier
+    /// attempt -- approval is carried by the run, not by the attempt, so a human
+    /// is never asked to approve the same gate twice.
     pub(crate) async fn load_replay_steps(&mut self) -> Result<(), EngineError> {
         let steps = self.store.list_steps(self.run_id).await?;
         for step in steps {
@@ -154,8 +280,15 @@ impl WorkflowContext {
                 step.status.state,
                 StepStatus::Completed | StepStatus::Running | StepStatus::AwaitingApproval
             );
-            if dominated {
+            if !dominated {
+                continue;
+            }
+
+            if step.attempt == self.attempt {
                 self.replay_steps.insert(step.position, step);
+            } else if step.kind == StepKind::Approval && step.status.state == StepStatus::Completed
+            {
+                self.granted_approvals.insert(step.position, step.attempt);
             }
         }
         Ok(())
@@ -220,6 +353,18 @@ impl WorkflowContext {
         if steps.is_empty() {
             return Ok(Vec::new());
         }
+
+        // Cost cap: the whole wave is charged at once. Refused before any step
+        // record is created, so nothing in the wave starts.
+        let wave_budget: Decimal = steps
+            .iter()
+            .filter_map(|(_, config)| match config {
+                StepConfig::Agent(agent_config) => Some(agent_config.max_budget_usd),
+                _ => None,
+            })
+            .map(step_budget_usd)
+            .sum();
+        self.check_run_budget(wave_budget)?;
 
         let wave_position = self.position;
         self.position += 1;
@@ -583,6 +728,47 @@ impl WorkflowContext {
             return Ok(());
         }
 
+        // Carried over: a human already approved this gate in an earlier
+        // attempt. Record a fresh step in the current attempt so that each
+        // attempt keeps a complete, self-contained DAG, and continue.
+        if let Some(&granted_in) = self.granted_approvals.get(&position) {
+            let step = self
+                .store
+                .create_step(NewStep {
+                    run_id: self.run_id,
+                    name: name.to_string(),
+                    kind: StepKind::Approval,
+                    position,
+                    input: Some(serde_json::to_value(&config)?),
+                })
+                .await?;
+
+            let now = Utc::now();
+            self.start_step(step.id, now).await?;
+            self.store
+                .update_step(
+                    step.id,
+                    StepUpdate {
+                        status: Some(StepStatus::Completed),
+                        output: Some(json!({"approved_in_attempt": granted_in})),
+                        completed_at: Some(now),
+                        ..StepUpdate::default()
+                    },
+                )
+                .await?;
+
+            self.last_step_ids = vec![step.id];
+            info!(
+                run_id = %self.run_id,
+                step = %name,
+                position,
+                granted_in_attempt = granted_in,
+                attempt = self.attempt,
+                "approval carried over from a previous attempt"
+            );
+            return Ok(());
+        }
+
         // First execution: create the approval step and suspend.
         let step = self
             .store
@@ -939,12 +1125,11 @@ impl WorkflowContext {
             EngineError::InvalidWorkflow(format!("no handler registered: {}", config.workflow_name))
         })?;
 
-        let parent_labels = self
-            .store
-            .get_run(self.run_id)
-            .await?
-            .map(|r| r.labels)
-            .unwrap_or_default();
+        // A child run inherits both the parent labels and the parent author:
+        // whoever triggered the parent workflow is accountable for its children.
+        let parent = self.store.get_run(self.run_id).await?;
+        let (parent_labels, parent_author) =
+            parent.map(|r| (r.labels, r.created_by)).unwrap_or_default();
 
         let child_run = self
             .store
@@ -956,8 +1141,13 @@ impl WorkflowContext {
                 handler_version: None,
                 labels: parent_labels,
                 scheduled_at: None,
+                created_by: parent_author,
+                idempotency_key: None,
+                // The child shares the parent's cap; it does not get its own budget.
+                max_cost_usd: self.max_cost_usd,
             })
-            .await?;
+            .await?
+            .into_run();
 
         let child_run_id = child_run.id;
         info!(
@@ -981,7 +1171,15 @@ impl WorkflowContext {
             last_step_ids: Vec::new(),
             total_cost_usd: Decimal::ZERO,
             total_duration_ms: 0,
+            max_cost_usd: self.max_cost_usd,
+            // Everything the parent chain already spent counts against the
+            // shared cap, so the child cannot restart the budget from zero.
+            inherited_cost_usd: self.charged_cost_usd(),
             replay_steps: HashMap::new(),
+            granted_approvals: HashMap::new(),
+            // A child run is created fresh here; it is never itself retried.
+            attempt: 1,
+            carried_duration_ms: 0,
             log_sender: self.log_sender.clone(),
         };
 
@@ -1091,6 +1289,12 @@ impl WorkflowContext {
         // Replay: if this step already completed in a prior execution, return cached output.
         if let Some(output) = self.try_replay_step(position) {
             return Ok(output);
+        }
+
+        // Cost cap: refuse before creating the step record, so a run that hits
+        // its cap never launches the work it cannot afford.
+        if let StepConfig::Agent(ref agent_config) = config {
+            self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?;
         }
 
         // Create step record in Pending.
@@ -1251,6 +1455,8 @@ impl fmt::Debug for WorkflowContext {
             .field("run_id", &self.run_id)
             .field("position", &self.position)
             .field("total_cost_usd", &self.total_cost_usd)
+            .field("inherited_cost_usd", &self.inherited_cost_usd)
+            .field("max_cost_usd", &self.max_cost_usd)
             .finish_non_exhaustive()
     }
 }
@@ -1322,7 +1528,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::RunFilter;
+    use ironflow_store::models::{Run, RunActor, RunFilter};
     use ironflow_store::store::RunStore;
     use serde_json::json;
     use std::sync::Arc;
@@ -1414,6 +1620,7 @@ mod tests {
         // Create the run first using RunStore trait
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1421,9 +1628,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1451,6 +1661,82 @@ mod tests {
         assert_eq!(steps[0].status.state, StepStatus::Skipped);
     }
 
+    /// Sub-workflow handler that records no steps, so the child run reaches a
+    /// terminal state without touching the filesystem or the network.
+    struct NoopSubWorkflow;
+
+    impl WorkflowHandler for NoopSubWorkflow {
+        fn name(&self) -> &str {
+            "noop-sub"
+        }
+
+        fn execute<'a>(
+            &'a self,
+            _ctx: &'a mut WorkflowContext,
+        ) -> crate::handler::HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    /// Run a parent workflow authored by `created_by` and return the child run
+    /// created by its sub-workflow step.
+    async fn child_run_of_parent_authored_by(created_by: Option<RunActor>) -> Run {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = create_test_provider();
+
+        let parent = store
+            .create_run(NewRun {
+                workflow_name: "parent".to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+                created_by,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .expect("failed to create parent run")
+            .into_run();
+
+        let resolver: HandlerResolver = Arc::new(|name: &str| match name {
+            "noop-sub" => Some(Arc::new(NoopSubWorkflow) as Arc<dyn WorkflowHandler>),
+            _ => None,
+        });
+
+        let mut ctx =
+            WorkflowContext::with_handler_resolver(parent.id, store.clone(), provider, resolver);
+        ctx.workflow(&NoopSubWorkflow, json!({}))
+            .await
+            .expect("sub-workflow failed");
+
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .expect("failed to list runs");
+        runs.items
+            .into_iter()
+            .find(|r| r.workflow_name == "noop-sub")
+            .expect("child run was created")
+    }
+
+    #[tokio::test]
+    async fn child_run_inherits_the_parent_author() {
+        let user_id = Uuid::now_v7();
+        let child = child_run_of_parent_authored_by(Some(RunActor::User { user_id })).await;
+
+        assert_eq!(child.created_by, Some(RunActor::User { user_id }));
+    }
+
+    #[tokio::test]
+    async fn child_run_of_an_unattributed_parent_has_no_author() {
+        let child = child_run_of_parent_authored_by(None).await;
+
+        assert!(child.created_by.is_none());
+    }
+
     #[tokio::test]
     async fn context_parallel_empty_steps_returns_empty_vec() {
         let mut ctx = create_test_context();
@@ -1469,6 +1755,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1476,9 +1763,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1519,6 +1809,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1526,9 +1817,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1603,6 +1897,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1610,9 +1905,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1690,6 +1988,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: test_payload.clone(),
@@ -1697,9 +1996,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store
@@ -1749,6 +2051,7 @@ mod tests {
         // Create the run first
         store
             .create_run(NewRun {
+                created_by: None,
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Manual,
                 payload: json!({}),
@@ -1756,9 +2059,12 @@ mod tests {
                 handler_version: None,
                 labels: Default::default(),
                 scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
             })
             .await
-            .expect("failed to create run");
+            .expect("failed to create run")
+            .into_run();
 
         // Get the created run to extract its ID
         let runs = store

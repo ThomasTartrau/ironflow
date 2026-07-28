@@ -15,8 +15,8 @@ use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
     ApiKey, ApiKeyUpdate, AuditLogEntry, AuditLogFilter, LeaseRequest, NewApiKey, NewAuditLogEntry,
-    NewRun, NewStep, NewStepDependency, NewUser, Page, ReapedRun, Run, RunFilter, RunStats,
-    RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
+    NewRun, NewStep, NewStepDependency, NewUser, Page, ReapedRun, Run, RunCreation, RunFilter,
+    RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::secret_store::SecretStore;
@@ -68,7 +68,7 @@ impl ApiRunStore {
 }
 
 impl RunStore for ApiRunStore {
-    fn create_run(&self, req: NewRun) -> StoreFuture<'_, Run> {
+    fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
         Box::pin(async move {
             let resp = self
                 .client
@@ -85,7 +85,16 @@ impl RunStore for ApiRunStore {
             }
 
             let api_resp: ApiResponse<Run> = resp.json().await.map_err(Self::err)?;
-            Ok(api_resp.data)
+            // The internal endpoint is not idempotent: a success is always a creation.
+            Ok(RunCreation::Created(api_resp.data))
+        })
+    }
+
+    fn find_run_by_idempotency_key(&self, _key: &str) -> StoreFuture<'_, Option<Run>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "find_run_by_idempotency_key not supported via worker API".to_string(),
+            ))
         })
     }
 
@@ -560,6 +569,7 @@ mod tests {
     async fn create_run_returns_error_on_unreachable_server() {
         let store = ApiRunStore::new("http://127.0.0.1:1", "token");
         let req = NewRun {
+            created_by: None,
             workflow_name: "test".to_string(),
             trigger: TriggerKind::Manual,
             payload: json!({}),
@@ -567,9 +577,21 @@ mod tests {
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
         };
         let result = store.create_run(req).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn find_run_by_idempotency_key_not_supported() {
+        let store = ApiRunStore::new("http://localhost:3000", "token");
+        let result = store.find_run_by_idempotency_key("github:abc").await;
+        match result {
+            Err(StoreError::Database(msg)) => assert!(msg.contains("not supported")),
+            other => panic!("expected an unsupported-operation error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
