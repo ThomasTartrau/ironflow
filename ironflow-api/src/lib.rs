@@ -74,6 +74,7 @@ pub mod middleware;
 #[cfg(feature = "openapi")]
 pub mod openapi;
 pub mod rate_limit;
+pub mod reaper;
 pub mod response;
 pub mod routes;
 pub mod sse;

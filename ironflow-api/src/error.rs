@@ -11,7 +11,7 @@ use ironflow_store::error::StoreError;
 use ironflow_types::ErrorEnvelope;
 use serde_json::json;
 use thiserror::Error;
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 /// Error type for REST API operations.
@@ -108,6 +108,7 @@ impl ApiError {
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
+            ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
         }
@@ -130,6 +131,7 @@ impl ApiError {
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::InsufficientScope => StatusCode::FORBIDDEN,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
+            ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -145,10 +147,18 @@ impl IntoResponse for ApiError {
             ApiError::Store(StoreError::Crypto(_)) => {
                 "secret store not configured (set IRONFLOW_SECRET_KEY)".to_string()
             }
+            // Carries the caller-facing detail in its own Display impl,
+            // unlike the generic "database error" of ApiError::Store.
+            ApiError::Store(e @ StoreError::LeaseLost { .. }) => e.to_string(),
             _ => self.to_string(),
         };
 
         match &self {
+            // A lost lease is a client-side condition, not a server fault:
+            // it must not page anyone.
+            ApiError::Store(e @ StoreError::LeaseLost { .. }) => {
+                warn!(error = %e, code = %code, "lease refused")
+            }
             ApiError::Store(e) => error!(error = %e, code = %code, "store error"),
             ApiError::Internal(detail) => {
                 error!(detail = %detail, code = %code, "internal error")

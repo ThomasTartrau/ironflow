@@ -48,6 +48,12 @@ pub const STEP_DURATION_SECONDS: &str = "ironflow_step_duration_seconds";
 pub const WORKER_ACTIVE: &str = "ironflow_worker_active";
 /// Counter: total poll attempts by the worker (label: result).
 pub const WORKER_POLLS_TOTAL: &str = "ironflow_worker_polls_total";
+/// Counter: runs abandoned by the worker after losing their lease.
+pub const WORKER_LEASES_LOST_TOTAL: &str = "ironflow_worker_leases_lost_total";
+
+// ── Reaper metrics ─────────────────────────────────────────────────
+/// Counter: runs recovered after a worker lease expired (label: outcome).
+pub const RUNS_REAPED_TOTAL: &str = "ironflow_runs_reaped_total";
 
 // ── API metrics ────────────────────────────────────────────────────
 /// Counter: total API requests (labels: method, path, status).

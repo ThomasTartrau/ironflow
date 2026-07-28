@@ -13,6 +13,7 @@ pub mod get_run;
 pub mod get_secret;
 pub mod pick_next_run;
 pub mod push_logs;
+pub mod renew_lease;
 pub mod update_run;
 pub mod update_run_status;
 pub mod update_step;

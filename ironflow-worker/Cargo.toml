@@ -33,5 +33,5 @@ heartbeat = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-axum = "0.7"
+axum = "0.8"
 rust_decimal = "1"

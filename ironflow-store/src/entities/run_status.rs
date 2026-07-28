@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Valid transitions:
 /// - `Pending` -> `Running`, `Cancelled`
-/// - `Running` -> `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
+/// - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
 /// - `Retrying` -> `Running`, `Failed`, `Cancelled`
 /// - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
 ///
@@ -22,6 +22,8 @@ use serde::{Deserialize, Serialize};
 /// assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));
 /// assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
+/// // A run whose worker lease expired goes back to the queue:
+/// assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 /// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
 /// // Terminal-to-same is idempotent:
 /// assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
@@ -60,6 +62,7 @@ impl RunStatus {
             (self, target),
             (RunStatus::Pending, RunStatus::Running)
                 | (RunStatus::Pending, RunStatus::Cancelled)
+                | (RunStatus::Running, RunStatus::Pending)
                 | (RunStatus::Running, RunStatus::Completed)
                 | (RunStatus::Running, RunStatus::Failed)
                 | (RunStatus::Running, RunStatus::Retrying)

@@ -26,7 +26,7 @@ pub use audit_log::{AuditLogEntry, AuditLogFilter, NewAuditLogEntry};
 pub use event_kind::EventKind;
 pub use fsm_state::FsmState;
 pub use page::Page;
-pub use run::{NewRun, Run, RunFilter, RunUpdate};
+pub use run::{LeaseRequest, NewRun, ReapedRun, Run, RunFilter, RunUpdate};
 pub use run_status::RunStatus;
 pub use secret::{Secret, SecretMetadata};
 pub use stats::RunStats;

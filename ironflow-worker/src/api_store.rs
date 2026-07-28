@@ -7,15 +7,16 @@ use std::pin::Pin;
 
 use std::time::Duration;
 
-use reqwest::Client;
+use chrono::{DateTime, Utc};
+use reqwest::{Client, StatusCode};
 use uuid::Uuid;
 
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
-    ApiKey, ApiKeyUpdate, AuditLogEntry, AuditLogFilter, NewApiKey, NewAuditLogEntry, NewRun,
-    NewStep, NewStepDependency, NewUser, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate,
-    Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
+    ApiKey, ApiKeyUpdate, AuditLogEntry, AuditLogFilter, LeaseRequest, NewApiKey, NewAuditLogEntry,
+    NewRun, NewStep, NewStepDependency, NewUser, Page, ReapedRun, Run, RunFilter, RunStats,
+    RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::secret_store::SecretStore;
@@ -167,15 +168,21 @@ impl RunStore for ApiRunStore {
         })
     }
 
-    fn pick_next_pending(&self) -> StoreFuture<'_, Option<Run>> {
+    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
-            let resp = self
+            let mut request = self
                 .client
                 .get(self.internal("/runs/next"))
-                .bearer_auth(&self.token)
-                .send()
-                .await
-                .map_err(Self::err)?;
+                .bearer_auth(&self.token);
+
+            if let Some(lease) = lease {
+                request = request.query(&[
+                    ("worker_id", lease.worker_id),
+                    ("lease_ttl_secs", lease.ttl.as_secs().to_string()),
+                ]);
+            }
+
+            let resp = request.send().await.map_err(Self::err)?;
 
             if !resp.status().is_success() {
                 let body = resp.text().await.unwrap_or_default();
@@ -185,6 +192,58 @@ impl RunStore for ApiRunStore {
             let api_resp: ApiResponse<Option<Run>> = resp.json().await.map_err(Self::err)?;
             Ok(api_resp.data)
         })
+    }
+
+    fn renew_lease(&self, id: Uuid, lease: LeaseRequest) -> StoreFuture<'_, DateTime<Utc>> {
+        Box::pin(async move {
+            #[derive(serde::Serialize)]
+            struct RenewLeaseBody {
+                worker_id: String,
+                lease_ttl_secs: u64,
+            }
+
+            #[derive(serde::Deserialize)]
+            struct RenewLeaseData {
+                lease_expires_at: DateTime<Utc>,
+            }
+
+            let resp = self
+                .client
+                .post(self.internal(&format!("/runs/{id}/lease")))
+                .bearer_auth(&self.token)
+                .json(&RenewLeaseBody {
+                    worker_id: lease.worker_id.clone(),
+                    lease_ttl_secs: lease.ttl.as_secs(),
+                })
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            // 409 means another worker owns the run now, or the run left the
+            // Running state: the caller must abandon it, not retry.
+            if resp.status() == StatusCode::CONFLICT {
+                return Err(StoreError::LeaseLost {
+                    run_id: id,
+                    held_by: None,
+                });
+            }
+            if resp.status() == StatusCode::NOT_FOUND {
+                return Err(StoreError::RunNotFound(id));
+            }
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<RenewLeaseData> = resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data.lease_expires_at)
+        })
+    }
+
+    fn reap_expired_leases(&self, _limit: u32) -> StoreFuture<'_, Vec<ReapedRun>> {
+        // Recovery is an API-server responsibility: the worker has no route for
+        // it and must never requeue runs it does not own.
+        Box::pin(async move { Ok(Vec::new()) })
     }
 
     fn create_step(&self, req: NewStep) -> StoreFuture<'_, Step> {

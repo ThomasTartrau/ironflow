@@ -1,16 +1,16 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::entities::{
-    NewRun, NewStep, NewStepDependency, Page, Run, RunFilter, RunStats, RunStatus, RunUpdate, Step,
-    StepDependency, StepUpdate,
+    LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run, RunFilter, RunStats,
+    RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
-use crate::store::{RunStore, StoreFuture};
+use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
 
 use super::PostgresStore;
-use super::helpers::{row_to_run, row_to_step, run_status_to_db_str};
+use super::helpers::{parse_run_status, row_to_run, row_to_step, run_status_to_db_str};
 
 /// Build SQL WHERE conditions from a [`RunFilter`], returning `(where_clause, next_bind_idx)`.
 fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
@@ -284,6 +284,9 @@ impl RunStore for PostgresStore {
             if new_status == RunStatus::Running {
                 sql.push_str(&format!(", started_at = COALESCE(started_at, ${bind_idx})"));
                 bind_idx += 1;
+            } else {
+                // Leaving Running releases the worker lease.
+                sql.push_str(", worker_id = NULL, lease_expires_at = NULL");
             }
             if new_status.is_terminal() {
                 sql.push_str(&format!(
@@ -368,7 +371,7 @@ impl RunStore for PostgresStore {
         })
     }
 
-    fn pick_next_pending(&self) -> StoreFuture<'_, Option<Run>> {
+    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let now = Utc::now();
             let event = "picked_up";
@@ -390,7 +393,12 @@ impl RunStore for PostgresStore {
                   AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
                 ORDER BY r.created_at ASC
                 LIMIT 1
-                FOR UPDATE SKIP LOCKED
+                -- Lock exactly the two per-run rows. A bare FOR UPDATE would
+                -- also lock `ast`, whose 'pending' row is shared by every run,
+                -- so SKIP LOCKED would make concurrent workers skip the whole
+                -- queue. Locking `sm` is what makes the pick exclusive: the
+                -- status lives there, and the FSM transition updates it.
+                FOR UPDATE OF r, sm SKIP LOCKED
                 "#,
             )
             .fetch_optional(&mut *tx)
@@ -409,15 +417,47 @@ impl RunStore for PostgresStore {
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
 
-                // Update timestamps
-                sqlx::query(
-                    "UPDATE ironflow.runs SET started_at = COALESCE(started_at, $1), updated_at = $1 WHERE id = $2",
-                )
-                .bind(now)
-                .bind(run_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                // Update timestamps and attach the lease in the same transaction,
+                // so a run is never Running without an owner. NOW() is the
+                // server clock: worker clock skew cannot shorten or extend a lease.
+                match lease {
+                    Some(lease) => {
+                        sqlx::query(
+                            r#"
+                            UPDATE ironflow.runs
+                            SET started_at = COALESCE(started_at, $1),
+                                updated_at = $1,
+                                worker_id = $2,
+                                lease_expires_at = NOW() + make_interval(secs => $3)
+                            WHERE id = $4
+                            "#,
+                        )
+                        .bind(now)
+                        .bind(&lease.worker_id)
+                        .bind(lease.ttl.as_secs_f64())
+                        .bind(run_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| StoreError::Database(e.to_string()))?;
+                    }
+                    None => {
+                        sqlx::query(
+                            r#"
+                            UPDATE ironflow.runs
+                            SET started_at = COALESCE(started_at, $1),
+                                updated_at = $1,
+                                worker_id = NULL,
+                                lease_expires_at = NULL
+                            WHERE id = $2
+                            "#,
+                        )
+                        .bind(now)
+                        .bind(run_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| StoreError::Database(e.to_string()))?;
+                    }
+                }
 
                 // Fetch and return the updated run
                 let updated_row = sqlx::query(
@@ -444,6 +484,191 @@ impl RunStore for PostgresStore {
             }
 
             Ok(None)
+        })
+    }
+
+    fn renew_lease(&self, id: Uuid, lease: LeaseRequest) -> StoreFuture<'_, DateTime<Utc>> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT r.worker_id, ast.name as state_name
+                FROM ironflow.runs r
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE r.id = $1
+                -- Lock `sm` too, so the status read here cannot be a stale
+                -- snapshot of a run another transaction is transitioning.
+                FOR UPDATE OF r, sm
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .ok_or(StoreError::RunNotFound(id))?;
+
+            let state_name: &str = row.get("state_name");
+            let held_by: Option<String> = row.get("worker_id");
+
+            if parse_run_status(state_name)? != RunStatus::Running
+                || held_by.as_deref() != Some(lease.worker_id.as_str())
+            {
+                return Err(StoreError::LeaseLost {
+                    run_id: id,
+                    held_by,
+                });
+            }
+
+            let updated = sqlx::query(
+                r#"
+                UPDATE ironflow.runs
+                SET lease_expires_at = NOW() + make_interval(secs => $1),
+                    updated_at = NOW()
+                WHERE id = $2
+                RETURNING lease_expires_at
+                "#,
+            )
+            .bind(lease.ttl.as_secs_f64())
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let expires_at: DateTime<Utc> = updated.get("lease_expires_at");
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(expires_at)
+        })
+    }
+
+    fn reap_expired_leases(&self, limit: u32) -> StoreFuture<'_, Vec<ReapedRun>> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // Lock the expired runs first: SKIP LOCKED lets concurrent reapers
+            // work on disjoint sets instead of blocking on each other.
+            let rows = sqlx::query(
+                r#"
+                SELECT r.id, r.state_machine__id, r.retry_count, r.max_retries
+                FROM ironflow.runs r
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE ast.name = 'running'
+                  AND r.lease_expires_at IS NOT NULL
+                  AND r.lease_expires_at < NOW()
+                ORDER BY r.lease_expires_at ASC
+                LIMIT $1
+                -- Same locking rule as pick_next_pending: the two per-run rows,
+                -- never the shared abstract_state row. Locking `sm` keeps a
+                -- reaper from recovering a run whose worker is committing a
+                -- status transition at that very moment.
+                FOR UPDATE OF r, sm SKIP LOCKED
+                "#,
+            )
+            .bind(limit as i64)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let mut reaped = Vec::with_capacity(rows.len());
+
+            for row in &rows {
+                let run_id: Uuid = row.get("id");
+                let state_machine_id: Uuid = row.get("state_machine__id");
+                let retry_count: i32 = row.get("retry_count");
+                let max_retries: i32 = row.get("max_retries");
+
+                let exhausted = retry_count + 1 > max_retries;
+                let to = if exhausted {
+                    RunStatus::Failed
+                } else {
+                    RunStatus::Pending
+                };
+                let event = PostgresStore::run_status_to_event(RunStatus::Running, to)?;
+
+                sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                    .bind(state_machine_id)
+                    .bind(event)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                // A requeued run keeps no error: it is going to run again.
+                // Only the final give-up records why the run failed.
+                if exhausted {
+                    sqlx::query(
+                        r#"
+                        UPDATE ironflow.runs
+                        SET retry_count = retry_count + 1,
+                            worker_id = NULL,
+                            lease_expires_at = NULL,
+                            error = $1,
+                            completed_at = COALESCE(completed_at, NOW()),
+                            updated_at = NOW()
+                        WHERE id = $2
+                        "#,
+                    )
+                    .bind(LEASE_EXPIRED_ERROR)
+                    .bind(run_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                } else {
+                    sqlx::query(
+                        r#"
+                        UPDATE ironflow.runs
+                        SET retry_count = retry_count + 1,
+                            worker_id = NULL,
+                            lease_expires_at = NULL,
+                            updated_at = NOW()
+                        WHERE id = $1
+                        "#,
+                    )
+                    .bind(run_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                }
+
+                let updated_row = sqlx::query(
+                    r#"
+                    SELECT r.*, ast.name as state_name
+                    FROM ironflow.runs r
+                    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                    WHERE r.id = $1
+                    "#,
+                )
+                .bind(run_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                reaped.push(ReapedRun {
+                    run: row_to_run(&updated_row)?,
+                    from: RunStatus::Running,
+                    to,
+                });
+            }
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(reaped)
         })
     }
 

@@ -478,8 +478,62 @@ When using `ironflow-runtime` with the `prometheus` feature, a `/metrics` endpoi
 | `ironflow_agent_tokens_output_total` | Counter | `model` |
 | `ironflow_webhook_received_total` | Counter | `path`, `auth` |
 | `ironflow_cron_runs_total` | Counter | `job` |
+| `ironflow_runs_reaped_total` | Counter | `outcome` |
+| `ironflow_worker_leases_lost_total` | Counter | |
 
 </details>
+
+---
+
+## 🔒 Worker Leases and Recovery
+
+A worker that dies mid-execution (OOM, reclaimed spot instance, deleted pod)
+would otherwise leave its run stuck in `Running` forever: workers only pick up
+`Pending` runs, so nobody takes it over.
+
+Every run a worker picks up carries a **lease**: the worker identifies itself
+(`worker_id`) and refreshes an expiry (`lease_expires_at`) every 30 seconds
+while it executes. The lease lasts 90 seconds, so three missed refreshes make
+the run recoverable. If the worker cannot refresh it — the API took the run away,
+or the API stayed unreachable longer than the lease — the worker **abandons** the
+run instead of executing it twice.
+
+The **reaper** runs on the API side and requeues those runs:
+
+```rust
+use ironflow_api::reaper::Reaper;
+use tokio_util::sync::CancellationToken;
+
+let shutdown = CancellationToken::new();
+tokio::spawn(Reaper::new(store, engine).run(shutdown.clone()));
+```
+
+**You must start the reaper yourself.** Without it, leases expire and nothing
+requeues the runs — the original problem is unchanged.
+
+Every 60 seconds the reaper recovers at most 100 runs whose lease expired: each
+goes back to `Pending` with `retry_count` incremented, or to `Failed` with
+`worker lease expired` once `max_retries` is exhausted. A recovered run restarts
+from scratch — completed steps are not replayed. Runs are recovered at most once
+even with several API instances, and a run holding a valid lease is never touched.
+
+Defaults are adjustable:
+
+```rust
+let reaper = Reaper::new(store, engine)
+    .interval(Duration::from_secs(30))
+    .batch_size(50);
+
+let worker = WorkerBuilder::new(api_url, token)
+    .worker_id("worker-eu-west-1a")     // default: worker-<uuid>, new at every start
+    .lease_ttl(Duration::from_secs(120))
+    .lease_refresh_interval(Duration::from_secs(30))
+    .build()?;
+```
+
+> **Note** — Runs executed inside the API server (inline execution, resume after
+> a human approval) hold no lease and are never reaped. An API crash during such
+> a run still leaves it stuck.
 
 ---
 

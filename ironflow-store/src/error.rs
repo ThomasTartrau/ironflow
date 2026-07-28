@@ -50,6 +50,18 @@ pub enum StoreError {
     #[error("user not found: {0}")]
     UserNotFound(Uuid),
 
+    /// The worker no longer holds the lease on this run.
+    ///
+    /// Either another worker took it over after the lease expired, or the run
+    /// left the `Running` state (cancelled, failed, awaiting approval).
+    #[error("lease lost on run {run_id}")]
+    LeaseLost {
+        /// Run whose lease was lost.
+        run_id: Uuid,
+        /// Worker currently holding the lease, if any.
+        held_by: Option<String>,
+    },
+
     /// A database or I/O error from the backing store.
     #[error("database error: {0}")]
     Database(String),
