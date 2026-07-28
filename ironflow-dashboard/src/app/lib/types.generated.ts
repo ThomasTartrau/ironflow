@@ -1396,7 +1396,7 @@ export interface components {
 		 *
 		 *     Valid transitions:
 		 *     - `Pending` -> `Running`, `Cancelled`
-		 *     - `Running` -> `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
+		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
 		 *     - `Retrying` -> `Running`, `Failed`, `Cancelled`
 		 *     - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
 		 *
@@ -1412,6 +1412,8 @@ export interface components {
 		 *     assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));
 		 *     assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
+		 *     // A run whose worker lease expired goes back to the queue:
+		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
 		 *     // Terminal-to-same is idempotent:
 		 *     assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
