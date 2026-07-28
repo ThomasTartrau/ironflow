@@ -155,6 +155,8 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         created_by_label,
         idempotency_key: row.get("idempotency_key"),
         max_cost_usd: row.get("max_cost_usd"),
+        worker_id: row.get("worker_id"),
+        lease_expires_at: row.get("lease_expires_at"),
     })
 }
 

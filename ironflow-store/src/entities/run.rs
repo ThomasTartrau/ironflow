@@ -1,6 +1,7 @@
 //! [`Run`] entity and related request/update types.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use rust_decimal::Decimal;
@@ -85,6 +86,19 @@ pub struct Run {
     /// `None` means no cap.
     #[serde(default)]
     pub max_cost_usd: Option<Decimal>,
+    /// Identifier of the worker currently holding the lease on this run.
+    ///
+    /// Set when a worker picks the run up, cleared as soon as the run leaves
+    /// `Running`. `None` means no worker owns this run (runs executed inline or
+    /// resumed in-process by the API server never hold a lease).
+    #[serde(default)]
+    pub worker_id: Option<String>,
+    /// When the worker lease expires.
+    ///
+    /// The worker refreshes this while it executes the run. Once it is in the
+    /// past, the reaper may requeue the run.
+    #[serde(default)]
+    pub lease_expires_at: Option<DateTime<Utc>>,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -202,6 +216,80 @@ impl RunCreation {
     pub fn is_created(&self) -> bool {
         matches!(self, RunCreation::Created(_))
     }
+}
+
+/// Request to acquire or renew a worker lease on a run.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use ironflow_store::entities::LeaseRequest;
+///
+/// let lease = LeaseRequest {
+///     worker_id: "worker-1".to_string(),
+///     ttl: Duration::from_secs(90),
+/// };
+/// assert_eq!(lease.ttl.as_secs(), 90);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseRequest {
+    /// Identifier of the worker acquiring the lease.
+    pub worker_id: String,
+    /// How long the lease stays valid without a refresh.
+    pub ttl: Duration,
+}
+
+impl LeaseRequest {
+    /// Compute the lease expiry from a reference instant.
+    ///
+    /// A TTL too large to be represented saturates to
+    /// [`DateTime::<Utc>::MAX_UTC`] instead of panicking.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use chrono::{TimeZone, Utc};
+    /// use ironflow_store::entities::LeaseRequest;
+    ///
+    /// let lease = LeaseRequest {
+    ///     worker_id: "worker-1".to_string(),
+    ///     ttl: Duration::from_secs(90),
+    /// };
+    /// let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    /// assert_eq!(lease.expires_at(now).timestamp(), now.timestamp() + 90);
+    /// ```
+    pub fn expires_at(&self, from: DateTime<Utc>) -> DateTime<Utc> {
+        TimeDelta::from_std(self.ttl)
+            .ok()
+            .and_then(|ttl| from.checked_add_signed(ttl))
+            .unwrap_or(DateTime::<Utc>::MAX_UTC)
+    }
+}
+
+/// A run recovered by the reaper after its worker lease expired.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::{ReapedRun, RunStatus};
+///
+/// // Reaped runs are produced by RunStore::reap_expired_leases.
+/// fn was_requeued(reaped: &ReapedRun) -> bool {
+///     reaped.to == RunStatus::Pending
+/// }
+/// ```
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ReapedRun {
+    /// The run after recovery.
+    pub run: Run,
+    /// Status the run held before recovery (always [`RunStatus::Running`]).
+    pub from: RunStatus,
+    /// Status the run was moved to: [`RunStatus::Pending`] when retries remain,
+    /// [`RunStatus::Failed`] once `max_retries` is exhausted.
+    pub to: RunStatus,
 }
 
 /// Request to create a new run.
@@ -441,6 +529,8 @@ mod tests {
             created_by_label: Some("alice".to_string()),
             idempotency_key: Some("gh:abc-123".to_string()),
             max_cost_usd: Some(Decimal::new(500, 2)),
+            worker_id: Some("worker-1".to_string()),
+            lease_expires_at: Some(now),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -465,6 +555,8 @@ mod tests {
         assert_eq!(back.created_by_label, run.created_by_label);
         assert_eq!(back.idempotency_key, run.idempotency_key);
         assert_eq!(back.max_cost_usd, run.max_cost_usd);
+        assert_eq!(back.worker_id, run.worker_id);
+        assert_eq!(back.lease_expires_at, run.lease_expires_at);
     }
 
     #[test]

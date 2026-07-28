@@ -28,8 +28,9 @@ ironflow-types = { version = "0.2.0", path = "../ironflow-types" }
 
 axum = { version = "0.8", features = ["json"] }
 rust-embed = { version = "8", optional = true }
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", features = ["macros", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7"
 futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "limit"] }

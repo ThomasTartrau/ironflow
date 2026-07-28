@@ -393,7 +393,7 @@ async fn update_run_nonexistent_run_errors() {
 #[tokio::test]
 async fn pick_next_pending_empty_store_returns_none() {
     let store = InMemoryStore::new();
-    let result = store.pick_next_pending().await.unwrap();
+    let result = store.pick_next_pending(None).await.unwrap();
     assert!(result.is_none());
 }
 
@@ -404,7 +404,7 @@ async fn pick_next_pending_returns_oldest_pending() {
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let _r2 = store.create_run(new_run("wf2")).await.unwrap().into_run();
 
-    let picked = store.pick_next_pending().await.unwrap().unwrap();
+    let picked = store.pick_next_pending(None).await.unwrap().unwrap();
     assert_eq!(picked.id, r1.id);
     assert_eq!(picked.status.state, RunStatus::Running);
 }
@@ -415,7 +415,7 @@ async fn pick_next_pending_transitions_to_running() {
     let run = store.create_run(new_run("wf")).await.unwrap().into_run();
     assert_eq!(run.status.state, RunStatus::Pending);
 
-    let picked = store.pick_next_pending().await.unwrap().unwrap();
+    let picked = store.pick_next_pending(None).await.unwrap().unwrap();
     assert_eq!(picked.status.state, RunStatus::Running);
     assert!(picked.started_at.is_some());
 
@@ -438,7 +438,7 @@ async fn pick_next_pending_skips_non_pending_runs() {
         .unwrap();
 
     // Should pick r2 (the next oldest pending)
-    let picked = store.pick_next_pending().await.unwrap().unwrap();
+    let picked = store.pick_next_pending(None).await.unwrap().unwrap();
     assert_eq!(picked.id, r2.id);
 }
 

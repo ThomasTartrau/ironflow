@@ -377,7 +377,7 @@ async fn pick_next_pending_resolves_author_label() {
     // so drain it until our own run comes up instead of assuming it is first.
     let mut drained = 0;
     let picked = loop {
-        let Some(run) = store.pick_next_pending().await.unwrap() else {
+        let Some(run) = store.pick_next_pending(None).await.unwrap() else {
             panic!("pending queue drained ({drained} runs) without yielding the seeded run");
         };
         drained += 1;

@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::entities::{
-    ApiKey, IDEMPOTENCY_WINDOW, NewRun, NewStep, NewStepDependency, Page, Run, RunActor,
-    RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency, StepStatus,
-    StepUpdate, User,
+    ApiKey, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun,
+    Run, RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency,
+    StepStatus, StepUpdate, User,
 };
 use crate::error::StoreError;
-use crate::store::{RunStore, StoreFuture};
+use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
 
 use super::{InMemoryStore, State};
 
@@ -44,6 +44,12 @@ fn run_with_label(run: &Run, state: &State) -> Run {
     run.created_by_label =
         resolve_created_by_label(run.created_by.as_ref(), &state.users, &state.api_keys);
     run
+}
+
+/// Drop the worker lease held on a run.
+fn clear_lease(run: &mut Run) {
+    run.worker_id = None;
+    run.lease_expires_at = None;
 }
 
 fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>) -> bool {
@@ -144,6 +150,8 @@ impl RunStore for InMemoryStore {
                 created_by_label: None,
                 idempotency_key: req.idempotency_key.clone(),
                 max_cost_usd: req.max_cost_usd,
+                worker_id: None,
+                lease_expires_at: None,
             };
 
             if let Some(key) = req.idempotency_key {
@@ -234,6 +242,9 @@ impl RunStore for InMemoryStore {
             if new_status.is_terminal() {
                 run.completed_at = Some(now);
             }
+            if new_status != RunStatus::Running {
+                clear_lease(run);
+            }
 
             Ok(())
         })
@@ -260,6 +271,9 @@ impl RunStore for InMemoryStore {
                     }
                     if status.is_terminal() {
                         run.completed_at = Some(now);
+                    }
+                    if status != RunStatus::Running {
+                        clear_lease(run);
                     }
                 }
             }
@@ -291,7 +305,7 @@ impl RunStore for InMemoryStore {
         })
     }
 
-    fn pick_next_pending(&self) -> StoreFuture<'_, Option<Run>> {
+    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let mut state = self.state.write().await;
             let now = Utc::now();
@@ -314,15 +328,90 @@ impl RunStore for InMemoryStore {
                 return Ok(None);
             };
 
-            // Transition to Running atomically.
+            // Transition to Running and attach the lease atomically.
             let run = state.runs.get_mut(&id).expect("run exists");
             let now = Utc::now();
             run.status.state = RunStatus::Running;
             run.started_at = Some(now);
             run.updated_at = now;
+            match lease {
+                Some(lease) => {
+                    run.lease_expires_at = Some(lease.expires_at(now));
+                    run.worker_id = Some(lease.worker_id);
+                }
+                None => clear_lease(run),
+            }
             let run = run.clone();
 
             Ok(Some(run_with_label(&run, &state)))
+        })
+    }
+
+    fn renew_lease(&self, id: Uuid, lease: LeaseRequest) -> StoreFuture<'_, DateTime<Utc>> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let run = state.runs.get_mut(&id).ok_or(StoreError::RunNotFound(id))?;
+
+            if run.status.state != RunStatus::Running
+                || run.worker_id.as_deref() != Some(lease.worker_id.as_str())
+            {
+                return Err(StoreError::LeaseLost {
+                    run_id: id,
+                    held_by: run.worker_id.clone(),
+                });
+            }
+
+            let now = Utc::now();
+            let expires_at = lease.expires_at(now);
+            run.lease_expires_at = Some(expires_at);
+            run.updated_at = now;
+
+            Ok(expires_at)
+        })
+    }
+
+    fn reap_expired_leases(&self, limit: u32) -> StoreFuture<'_, Vec<ReapedRun>> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let now = Utc::now();
+
+            let mut expired: Vec<Uuid> = state
+                .runs
+                .values()
+                .filter(|r| {
+                    r.status.state == RunStatus::Running
+                        && r.lease_expires_at.is_some_and(|at| at < now)
+                })
+                .map(|r| r.id)
+                .collect();
+            expired.sort_unstable();
+            expired.truncate(limit as usize);
+
+            let mut reaped = Vec::with_capacity(expired.len());
+            for id in expired {
+                let run = state.runs.get_mut(&id).expect("run exists");
+                run.retry_count += 1;
+                clear_lease(run);
+                run.updated_at = now;
+
+                let to = if run.retry_count > run.max_retries {
+                    run.status.state = RunStatus::Failed;
+                    run.error = Some(LEASE_EXPIRED_ERROR.to_string());
+                    run.completed_at = Some(now);
+                    RunStatus::Failed
+                } else {
+                    run.status.state = RunStatus::Pending;
+                    RunStatus::Pending
+                };
+
+                reaped.push(ReapedRun {
+                    run: run.clone(),
+                    from: RunStatus::Running,
+                    to,
+                });
+            }
+
+            Ok(reaped)
         })
     }
 
@@ -552,9 +641,12 @@ impl RunStore for InMemoryStore {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::Duration;
 
+    use chrono::TimeDelta;
     use serde_json::json;
     use tokio::spawn;
+    use tokio::time::sleep;
 
     use super::*;
     use crate::api_key_store::ApiKeyStore;
@@ -563,8 +655,6 @@ mod tests {
 
     use crate::memory::tests::{create_terminal_run, new_run_req};
     use crate::store::RunStore;
-
-    use chrono::TimeDelta;
 
     use crate::entities::StepKind;
 
@@ -850,12 +940,320 @@ mod tests {
         assert_eq!(page3.items.len(), 1);
     }
 
+    // ---- worker lease ----
+
+    fn lease(worker_id: &str, ttl_secs: u64) -> Option<LeaseRequest> {
+        Some(LeaseRequest {
+            worker_id: worker_id.to_string(),
+            ttl: Duration::from_secs(ttl_secs),
+        })
+    }
+
+    /// Pick a run holding a lease that is already in the past.
+    ///
+    /// The short sleep matters: `Utc::now()` has microsecond resolution, so a
+    /// sub-microsecond TTL can still read as "not yet expired" in the same tick.
+    async fn pick_with_expired_lease(store: &InMemoryStore, max_retries: u32) -> Run {
+        let mut req = new_run_req("test");
+        req.max_retries = max_retries;
+        store.create_run(req).await.unwrap();
+        let picked = expire_now(store).await;
+        picked.expect("a pending run was just created")
+    }
+
+    /// Pick the next pending run with a lease that is expired by the time this
+    /// returns.
+    async fn expire_now(store: &InMemoryStore) -> Option<Run> {
+        let picked = store
+            .pick_next_pending(Some(LeaseRequest {
+                worker_id: "worker-1".to_string(),
+                ttl: Duration::from_nanos(1),
+            }))
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(2)).await;
+        picked
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_attaches_lease() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+
+        let picked = store
+            .pick_next_pending(lease("worker-1", 90))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(picked.worker_id.as_deref(), Some("worker-1"));
+        let expires = picked.lease_expires_at.expect("lease set");
+        assert!(expires > Utc::now());
+        assert!(expires <= Utc::now() + TimeDelta::seconds(91));
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_without_lease_leaves_run_unowned() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+
+        assert!(picked.worker_id.is_none());
+        assert!(picked.lease_expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn renew_lease_extends_expiry_for_owner() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+        let picked = store
+            .pick_next_pending(lease("worker-1", 1))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let renewed = store
+            .renew_lease(picked.id, lease("worker-1", 90).unwrap())
+            .await
+            .unwrap();
+
+        assert!(renewed > picked.lease_expires_at.unwrap());
+        let after = store.get_run(picked.id).await.unwrap().unwrap();
+        assert_eq!(after.lease_expires_at, Some(renewed));
+    }
+
+    #[tokio::test]
+    async fn renew_lease_rejects_other_worker() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+        let picked = store
+            .pick_next_pending(lease("worker-1", 90))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let err = store
+            .renew_lease(picked.id, lease("worker-2", 90).unwrap())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            StoreError::LeaseLost { held_by: Some(ref w), .. } if w == "worker-1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn renew_lease_rejects_run_that_left_running() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+        let picked = store
+            .pick_next_pending(lease("worker-1", 90))
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .update_run_status(picked.id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+
+        let err = store
+            .renew_lease(picked.id, lease("worker-1", 90).unwrap())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StoreError::LeaseLost { .. }));
+    }
+
+    #[tokio::test]
+    async fn renew_lease_on_unknown_run_is_not_found() {
+        let store = InMemoryStore::new();
+
+        let err = store
+            .renew_lease(Uuid::now_v7(), lease("worker-1", 90).unwrap())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StoreError::RunNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn leaving_running_clears_the_lease() {
+        for target in [
+            RunStatus::Completed,
+            RunStatus::Retrying,
+            RunStatus::AwaitingApproval,
+        ] {
+            let store = InMemoryStore::new();
+            store.create_run(new_run_req("test")).await.unwrap();
+            let picked = store
+                .pick_next_pending(lease("worker-1", 90))
+                .await
+                .unwrap()
+                .unwrap();
+
+            store.update_run_status(picked.id, target).await.unwrap();
+
+            let after = store.get_run(picked.id).await.unwrap().unwrap();
+            assert!(after.worker_id.is_none(), "worker_id kept for {target}");
+            assert!(
+                after.lease_expires_at.is_none(),
+                "lease_expires_at kept for {target}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn update_run_to_terminal_clears_the_lease() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+        let picked = store
+            .pick_next_pending(lease("worker-1", 90))
+            .await
+            .unwrap()
+            .unwrap();
+
+        store
+            .update_run(
+                picked.id,
+                RunUpdate {
+                    status: Some(RunStatus::Failed),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let after = store.get_run(picked.id).await.unwrap().unwrap();
+        assert!(after.worker_id.is_none());
+        assert!(after.lease_expires_at.is_none());
+    }
+
+    // ---- reap_expired_leases ----
+
+    #[tokio::test]
+    async fn reap_expired_leases_empty_store() {
+        let store = InMemoryStore::new();
+        assert!(store.reap_expired_leases(100).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_requeues_run() {
+        let store = InMemoryStore::new();
+        let picked = pick_with_expired_lease(&store, 3).await;
+
+        let reaped = store.reap_expired_leases(100).await.unwrap();
+
+        assert_eq!(reaped.len(), 1);
+        assert_eq!(reaped[0].from, RunStatus::Running);
+        assert_eq!(reaped[0].to, RunStatus::Pending);
+
+        let after = store.get_run(picked.id).await.unwrap().unwrap();
+        assert_eq!(after.status.state, RunStatus::Pending);
+        assert_eq!(after.retry_count, 1);
+        assert!(after.error.is_none());
+        assert!(after.worker_id.is_none());
+        assert!(after.lease_expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_requeued_run_is_pickable_again() {
+        let store = InMemoryStore::new();
+        let picked = pick_with_expired_lease(&store, 3).await;
+        store.reap_expired_leases(100).await.unwrap();
+
+        let repicked = store
+            .pick_next_pending(lease("worker-2", 90))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(repicked.id, picked.id);
+        assert_eq!(repicked.worker_id.as_deref(), Some("worker-2"));
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_ignores_valid_lease() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+        let picked = store
+            .pick_next_pending(lease("worker-1", 90))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(store.reap_expired_leases(100).await.unwrap().is_empty());
+
+        let after = store.get_run(picked.id).await.unwrap().unwrap();
+        assert_eq!(after.status.state, RunStatus::Running);
+        assert_eq!(after.retry_count, 0);
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_ignores_run_without_lease() {
+        let store = InMemoryStore::new();
+        store.create_run(new_run_req("test")).await.unwrap();
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+
+        assert!(store.reap_expired_leases(100).await.unwrap().is_empty());
+
+        let after = store.get_run(picked.id).await.unwrap().unwrap();
+        assert_eq!(after.status.state, RunStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_fails_run_when_retries_exhausted() {
+        let store = InMemoryStore::new();
+        let picked = pick_with_expired_lease(&store, 0).await;
+
+        let reaped = store.reap_expired_leases(100).await.unwrap();
+
+        assert_eq!(reaped[0].to, RunStatus::Failed);
+        let after = store.get_run(picked.id).await.unwrap().unwrap();
+        assert_eq!(after.status.state, RunStatus::Failed);
+        assert_eq!(after.error.as_deref(), Some(LEASE_EXPIRED_ERROR));
+        assert!(after.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_fails_after_max_retries_recoveries() {
+        let store = InMemoryStore::new();
+        let picked = pick_with_expired_lease(&store, 2).await;
+
+        // Recovery 1 and 2 requeue, recovery 3 gives up.
+        for expected in [RunStatus::Pending, RunStatus::Pending, RunStatus::Failed] {
+            let reaped = store.reap_expired_leases(100).await.unwrap();
+            assert_eq!(reaped[0].to, expected);
+            if expected == RunStatus::Pending {
+                expire_now(&store).await;
+            }
+        }
+
+        let after = store.get_run(picked.id).await.unwrap().unwrap();
+        assert_eq!(after.retry_count, 3);
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_respects_limit() {
+        let store = InMemoryStore::new();
+        for _ in 0..3 {
+            pick_with_expired_lease(&store, 3).await;
+        }
+
+        let reaped = store.reap_expired_leases(2).await.unwrap();
+        assert_eq!(reaped.len(), 2);
+
+        let rest = store.reap_expired_leases(100).await.unwrap();
+        assert_eq!(rest.len(), 1);
+    }
+
     // ---- pick_next_pending ----
 
     #[tokio::test]
     async fn pick_next_pending_empty_store() {
         let store = InMemoryStore::new();
-        let result = store.pick_next_pending().await.unwrap();
+        let result = store.pick_next_pending(None).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -873,7 +1271,7 @@ mod tests {
             .unwrap()
             .into_run();
 
-        let picked = store.pick_next_pending().await.unwrap().unwrap();
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
         assert_eq!(picked.id, r1.id);
         assert_eq!(picked.status.state, RunStatus::Running);
         assert!(picked.started_at.is_some());
@@ -895,7 +1293,7 @@ mod tests {
             .await
             .unwrap();
 
-        let picked = store.pick_next_pending().await.unwrap().unwrap();
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
         assert_eq!(picked.id, r2.id);
     }
 
@@ -1145,7 +1543,7 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..10 {
             let s = store.clone();
-            handles.push(spawn(async move { s.pick_next_pending().await }));
+            handles.push(spawn(async move { s.pick_next_pending(None).await }));
         }
 
         let mut picked_ids = Vec::new();
@@ -2359,7 +2757,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(store.pick_next_pending().await.unwrap().is_none());
+        assert!(store.pick_next_pending(None).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -2388,7 +2786,7 @@ mod tests {
             .await
             .unwrap();
 
-        let picked = store.pick_next_pending().await.unwrap().unwrap();
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
         assert_eq!(picked.id, run.id);
         assert_eq!(picked.status.state, RunStatus::Running);
         assert_eq!(picked.retry_count, 1);
@@ -2684,7 +3082,7 @@ mod tests {
             .unwrap()
             .into_run();
 
-        let picked = store.pick_next_pending().await.unwrap().unwrap();
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
         assert_eq!(picked.created_by_label.as_deref(), Some("alice"));
     }
 }

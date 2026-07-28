@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(rejected.status.state, RunStatus::Failed);
         assert_eq!(rejected.retry_count, 0);
         assert!(rejected.scheduled_at.is_none());
-        assert!(store.pick_next_pending().await.unwrap().is_none());
+        assert!(store.pick_next_pending(None).await.unwrap().is_none());
     }
 
     #[tokio::test]

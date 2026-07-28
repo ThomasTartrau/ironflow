@@ -305,45 +305,11 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.7.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
-dependencies = [
- "async-trait",
- "axum-core 0.4.5",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "itoa",
- "matchit 0.7.3",
- "memchr",
- "mime",
- "percent-encoding",
- "pin-project-lite",
- "rustversion",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tower",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
- "axum-core 0.5.6",
+ "axum-core",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -353,7 +319,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
- "matchit 0.8.4",
+ "matchit",
  "memchr",
  "mime",
  "percent-encoding",
@@ -365,27 +331,6 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tower",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "axum-core"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
-dependencies = [
- "async-trait",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "mime",
- "pin-project-lite",
- "rustversion",
- "sync_wrapper",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -416,8 +361,8 @@ version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9963ff19f40c6102c76756ef0a46004c0d58957d87259fc9208ff8441c12ab96"
 dependencies = [
- "axum 0.8.9",
- "axum-core 0.5.6",
+ "axum",
+ "axum-core",
  "bytes",
  "cookie",
  "futures-util",
@@ -2522,7 +2467,7 @@ dependencies = [
 name = "ironflow-api"
 version = "2.21.1"
 dependencies = [
- "axum 0.8.9",
+ "axum",
  "chrono",
  "futures-util",
  "governor",
@@ -2544,6 +2489,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",
@@ -2557,7 +2503,7 @@ name = "ironflow-auth"
 version = "2.3.15"
 dependencies = [
  "argon2 0.5.3",
- "axum 0.8.9",
+ "axum",
  "axum-extra",
  "chrono",
  "cookie",
@@ -2578,7 +2524,7 @@ name = "ironflow-cli"
 version = "0.1.6"
 dependencies = [
  "anyhow",
- "axum 0.8.9",
+ "axum",
  "chrono",
  "clap",
  "comfy-table",
@@ -2630,7 +2576,7 @@ dependencies = [
 name = "ironflow-engine"
 version = "2.17.1"
 dependencies = [
- "axum 0.8.9",
+ "axum",
  "chrono",
  "croner",
  "hex",
@@ -2658,7 +2604,7 @@ dependencies = [
 name = "ironflow-example-server"
 version = "0.1.0"
 dependencies = [
- "axum 0.8.9",
+ "axum",
  "ironflow-api",
  "ironflow-auth",
  "ironflow-core",
@@ -2666,6 +2612,7 @@ dependencies = [
  "ironflow-store",
  "ironflow-workflows",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -2689,7 +2636,7 @@ version = "0.1.10"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum 0.8.9",
+ "axum",
  "reqwest 0.12.28",
  "rust-mcp-sdk",
  "serde",
@@ -2704,15 +2651,18 @@ dependencies = [
 name = "ironflow-readme-tests"
 version = "0.1.0"
 dependencies = [
+ "ironflow-api",
  "ironflow-core",
  "ironflow-engine",
  "ironflow-runtime",
  "ironflow-sdk",
  "ironflow-store",
+ "ironflow-worker",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -2720,7 +2670,7 @@ dependencies = [
 name = "ironflow-runtime"
 version = "2.1.35"
 dependencies = [
- "axum 0.8.9",
+ "axum",
  "dotenvy",
  "hex",
  "hmac 0.12.1",
@@ -2743,7 +2693,7 @@ dependencies = [
 name = "ironflow-sdk"
 version = "0.1.5"
 dependencies = [
- "axum 0.8.9",
+ "axum",
  "chrono",
  "eventsource-stream",
  "futures-util",
@@ -2798,7 +2748,7 @@ dependencies = [
 name = "ironflow-worker"
 version = "2.9.1"
 dependencies = [
- "axum 0.7.9",
+ "axum",
  "chrono",
  "ironflow-core",
  "ironflow-engine",
@@ -3207,12 +3157,6 @@ checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
 ]
-
-[[package]]
-name = "matchit"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "matchit"

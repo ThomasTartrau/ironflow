@@ -31,9 +31,12 @@ ironflow-store = { path = "../../ironflow-store", features = [
     "secret-store",
 ] }
 ironflow-sdk = { path = "../../ironflow-sdk" }
+ironflow-api = { path = "../../ironflow-api" }
+ironflow-worker = { path = "../../ironflow-worker" }
 
 schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }

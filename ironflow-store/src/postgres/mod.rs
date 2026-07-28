@@ -301,6 +301,7 @@ impl PostgresStore {
     ) -> Result<&'static str, StoreError> {
         match (from, to) {
             (RunStatus::Pending, RunStatus::Running) => Ok("picked_up"),
+            (RunStatus::Running, RunStatus::Pending) => Ok("lease_expired"),
             (RunStatus::Pending, RunStatus::Cancelled) => Ok("cancel_requested"),
             (RunStatus::Running, RunStatus::Completed) => Ok("all_steps_completed"),
             (RunStatus::Running, RunStatus::Failed) => Ok("step_failed"),
@@ -388,6 +389,13 @@ impl PostgresStore {
 
         if update.increment_retry {
             sets.push("retry_count = retry_count + 1".to_string());
+        }
+
+        // A run that is no longer executing must not keep a worker lease,
+        // otherwise the reaper would see a stale expiry on a finished run.
+        if update.status.is_some_and(|s| s != RunStatus::Running) {
+            sets.push("worker_id = NULL".to_string());
+            sets.push("lease_expires_at = NULL".to_string());
         }
 
         let sql = format!(

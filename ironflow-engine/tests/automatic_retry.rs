@@ -85,7 +85,7 @@ async fn fast_forward_backoff(store: &InMemoryStore, run_id: uuid::Uuid) {
         .expect("rewind scheduled_at");
 
     let picked = store
-        .pick_next_pending()
+        .pick_next_pending(None)
         .await
         .expect("pick")
         .expect("a run waiting for its retry");
@@ -201,7 +201,7 @@ async fn transient_failure_is_replayed_until_max_retries() {
     let run_id = enqueue(&store, "always-fails", 2).await;
 
     // Attempt 1.
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
     let run = store.get_run(run_id).await.unwrap().unwrap();
     assert_eq!(run.status.state, RunStatus::Retrying);
@@ -231,7 +231,7 @@ async fn backoff_is_in_the_future() {
     engine.register(AlwaysTransientlyFails).expect("register");
 
     let run_id = enqueue(&store, "always-fails", 1).await;
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     let before = Utc::now();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
@@ -244,7 +244,7 @@ async fn backoff_is_in_the_future() {
     assert!(scheduled_at < before + TimeDelta::seconds(40));
 
     // The run must not be picked up before its backoff elapses.
-    assert!(store.pick_next_pending().await.unwrap().is_none());
+    assert!(store.pick_next_pending(None).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -254,7 +254,7 @@ async fn non_retryable_failure_consumes_no_attempt() {
     engine.register(FailsPermanently).expect("register");
 
     let run_id = enqueue(&store, "fails-permanently", 3).await;
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
     let run = store.get_run(run_id).await.unwrap().unwrap();
@@ -270,7 +270,7 @@ async fn max_retries_zero_fails_immediately() {
     engine.register(AlwaysTransientlyFails).expect("register");
 
     let run_id = enqueue(&store, "always-fails", 0).await;
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
     let run = store.get_run(run_id).await.unwrap().unwrap();
@@ -290,7 +290,7 @@ async fn each_attempt_keeps_its_own_steps() {
 
     let run_id = enqueue(&store, "flaky", 1).await;
 
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
     fast_forward_backoff(&store, run_id).await;
@@ -323,7 +323,7 @@ async fn retry_does_not_replay_previous_attempt_steps() {
         .expect("register");
 
     let run_id = enqueue(&store, "flaky", 1).await;
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
     fast_forward_backoff(&store, run_id).await;
@@ -352,7 +352,7 @@ async fn approval_granted_in_a_previous_attempt_is_not_asked_again() {
     let run_id = enqueue(&store, "gated", 1).await;
 
     // Attempt 1 suspends on the approval gate.
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     engine.execute_handler_run(run_id).await.expect("suspends");
     let run = store.get_run(run_id).await.unwrap().unwrap();
     assert_eq!(run.status.state, RunStatus::AwaitingApproval);
@@ -396,7 +396,7 @@ async fn scheduling_a_retry_does_not_publish_run_failed() {
     engine.subscribe(collector.clone(), Event::ALL);
 
     let run_id = enqueue(&store, "always-fails", 1).await;
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
     // Subscribers run in spawned tasks; let them drain.
@@ -426,7 +426,7 @@ async fn duration_accumulates_across_attempts() {
     engine.register(AlwaysTransientlyFails).expect("register");
 
     let run_id = enqueue(&store, "always-fails", 1).await;
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
     // Pretend the first attempt took a while.
@@ -459,7 +459,7 @@ async fn cost_accumulates_across_attempts() {
     engine.register(AlwaysTransientlyFails).expect("register");
 
     let run_id = enqueue(&store, "always-fails", 1).await;
-    store.pick_next_pending().await.unwrap().unwrap();
+    store.pick_next_pending(None).await.unwrap().unwrap();
     assert!(engine.execute_handler_run(run_id).await.is_err());
 
     // Pretend the first attempt spent something.

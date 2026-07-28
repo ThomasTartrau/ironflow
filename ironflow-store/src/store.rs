@@ -8,13 +8,14 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::api_key_store::ApiKeyStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
-    NewRun, NewStep, NewStepDependency, Page, Run, RunCreation, RunFilter, RunStats, RunStatus,
-    RunUpdate, Step, StepDependency, StepUpdate,
+    LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run, RunCreation, RunFilter,
+    RunStats, RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::secret_store::SecretStore;
@@ -22,6 +23,12 @@ use crate::user_store::UserStore;
 
 /// Boxed future for [`RunStore`] methods — ensures object safety for `dyn RunStore`.
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
+
+/// Error recorded on a run that exhausted its retries through lease expiries.
+///
+/// Set by [`RunStore::reap_expired_leases`] when a run has been recovered more
+/// than `max_retries` times.
+pub const LEASE_EXPIRED_ERROR: &str = "worker lease expired";
 
 /// Async storage abstraction for workflow runs and steps.
 ///
@@ -103,8 +110,36 @@ pub trait RunStore: Send + Sync {
     /// In PostgreSQL, this uses `SELECT FOR UPDATE SKIP LOCKED` for safe
     /// multi-worker concurrency. The in-memory implementation uses a write lock.
     ///
+    /// When `lease` is `Some`, the worker lease is attached in the same
+    /// transaction as the status change, so a run is never `Running` without an
+    /// owner. Pass `None` for callers that execute runs in-process and cannot
+    /// refresh a lease (inline execution, API-side resume): those runs are never
+    /// recovered by [`reap_expired_leases`](Self::reap_expired_leases).
+    ///
     /// Returns `None` if no pending runs are available.
-    fn pick_next_pending(&self) -> StoreFuture<'_, Option<Run>>;
+    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>>;
+
+    /// Extend the worker lease on a run and return the new expiry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::RunNotFound`] if the run does not exist.
+    /// Returns [`StoreError::LeaseLost`] if the run is no longer `Running` or if
+    /// the lease belongs to another worker — the caller must stop executing it.
+    fn renew_lease(&self, id: Uuid, lease: LeaseRequest) -> StoreFuture<'_, DateTime<Utc>>;
+
+    /// Recover runs whose worker lease expired, at most `limit` per call.
+    ///
+    /// Each recovered run has its retry count incremented and its lease cleared,
+    /// then goes back to `Pending` — or to `Failed` with `worker lease expired`
+    /// once `max_retries` is exhausted. Runs without a lease are never touched.
+    ///
+    /// The whole batch is atomic per run (`FOR UPDATE SKIP LOCKED` in
+    /// PostgreSQL), so concurrent reapers never recover the same run twice.
+    ///
+    /// Callers are responsible for the side effects that follow a recovery:
+    /// failing orphaned steps and publishing status-change events.
+    fn reap_expired_leases(&self, limit: u32) -> StoreFuture<'_, Vec<ReapedRun>>;
 
     /// Create a new step for a run.
     ///

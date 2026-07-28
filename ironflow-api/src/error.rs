@@ -12,7 +12,7 @@ use ironflow_store::error::StoreError;
 use ironflow_types::ErrorEnvelope;
 use serde_json::{Value, json};
 use thiserror::Error;
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 /// Error type for REST API operations.
@@ -127,6 +127,7 @@ impl ApiError {
             ApiError::IdempotencyKeyConflict(_) => "IDEMPOTENCY_KEY_CONFLICT",
             ApiError::MonthlyBudgetExceeded(_) => MONTHLY_BUDGET_EXCEEDED_CODE,
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
+            ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
         }
@@ -152,6 +153,7 @@ impl ApiError {
             ApiError::IdempotencyKeyConflict(_) => StatusCode::CONFLICT,
             ApiError::MonthlyBudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
+            ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -179,10 +181,18 @@ impl IntoResponse for ApiError {
             ApiError::Store(StoreError::Crypto(_)) => {
                 "secret store not configured (set IRONFLOW_SECRET_KEY)".to_string()
             }
+            // Carries the caller-facing detail in its own Display impl,
+            // unlike the generic "database error" of ApiError::Store.
+            ApiError::Store(e @ StoreError::LeaseLost { .. }) => e.to_string(),
             _ => self.to_string(),
         };
 
         match &self {
+            // A lost lease is a client-side condition, not a server fault:
+            // it must not page anyone.
+            ApiError::Store(e @ StoreError::LeaseLost { .. }) => {
+                warn!(error = %e, code = %code, "lease refused")
+            }
             ApiError::Store(e) => error!(error = %e, code = %code, "store error"),
             ApiError::Internal(detail) => {
                 error!(detail = %detail, code = %code, "internal error")

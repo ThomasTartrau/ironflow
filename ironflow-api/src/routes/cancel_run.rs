@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(resp.status(), HttpStatusCode::OK);
 
         // Its backoff had already elapsed, yet it must never be picked up again.
-        assert!(store.pick_next_pending().await.unwrap().is_none());
+        assert!(store.pick_next_pending(None).await.unwrap().is_none());
     }
 
     #[tokio::test]

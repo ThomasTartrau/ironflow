@@ -9,14 +9,16 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 #[cfg(feature = "prometheus")]
-use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_POLLS_TOTAL};
+use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
-use ironflow_store::entities::RunStatus;
+use ironflow_store::entities::{LeaseRequest, RunStatus};
+use ironflow_store::error::StoreError;
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge};
@@ -32,6 +34,11 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const DEFAULT_RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_MAX_CONSECUTIVE_PANICS: u32 = 3;
 const DEFAULT_PANIC_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+/// Lease duration requested when picking a run: three missed refreshes before
+/// the run becomes recoverable by the reaper.
+const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(90);
+/// How often the lease of a running run is refreshed.
+const DEFAULT_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 #[cfg(feature = "heartbeat")]
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -61,6 +68,7 @@ const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 pub struct WorkerBuilder {
     api_url: String,
     worker_token: String,
+    worker_id: String,
     provider: Option<Arc<dyn AgentProvider>>,
     handlers: Vec<Box<dyn WorkflowHandler>>,
     concurrency: usize,
@@ -68,6 +76,8 @@ pub struct WorkerBuilder {
     run_timeout: Duration,
     max_consecutive_panics: u32,
     panic_cooldown: Duration,
+    lease_ttl: Duration,
+    lease_refresh_interval: Duration,
     #[cfg(feature = "heartbeat")]
     heartbeat_url: Option<String>,
     #[cfg(feature = "heartbeat")]
@@ -80,6 +90,7 @@ impl WorkerBuilder {
         Self {
             api_url: api_url.to_string(),
             worker_token: worker_token.to_string(),
+            worker_id: format!("worker-{}", Uuid::now_v7()),
             provider: None,
             handlers: Vec::new(),
             concurrency: DEFAULT_CONCURRENCY,
@@ -87,6 +98,8 @@ impl WorkerBuilder {
             run_timeout: DEFAULT_RUN_TIMEOUT,
             max_consecutive_panics: DEFAULT_MAX_CONSECUTIVE_PANICS,
             panic_cooldown: DEFAULT_PANIC_COOLDOWN,
+            lease_ttl: DEFAULT_LEASE_TTL,
+            lease_refresh_interval: DEFAULT_LEASE_REFRESH_INTERVAL,
             #[cfg(feature = "heartbeat")]
             heartbeat_url: None,
             #[cfg(feature = "heartbeat")]
@@ -182,6 +195,70 @@ impl WorkerBuilder {
         self
     }
 
+    /// Set the identifier this worker uses to claim runs.
+    ///
+    /// Defaults to `worker-<uuid>`, regenerated at every start so two processes
+    /// never share an identity. Override it only if you have a stable, unique
+    /// name per process.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .worker_id("worker-eu-west-1a");
+    /// # }
+    /// ```
+    pub fn worker_id(mut self, worker_id: &str) -> Self {
+        self.worker_id = worker_id.to_string();
+        self
+    }
+
+    /// Set how long a lease stays valid without a refresh.
+    ///
+    /// Once it expires, the API reaper requeues the run for another worker.
+    /// Keep it at a few times [`lease_refresh_interval`](Self::lease_refresh_interval)
+    /// so a transient network blip does not hand the run over. Defaults to 90 s.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .lease_ttl(Duration::from_secs(120));
+    /// # }
+    /// ```
+    pub fn lease_ttl(mut self, ttl: Duration) -> Self {
+        self.lease_ttl = ttl;
+        self
+    }
+
+    /// Set how often the lease of a running run is refreshed.
+    ///
+    /// Defaults to 30 seconds. Must stay well below
+    /// [`lease_ttl`](Self::lease_ttl).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .lease_refresh_interval(Duration::from_secs(10));
+    /// # }
+    /// ```
+    pub fn lease_refresh_interval(mut self, interval: Duration) -> Self {
+        self.lease_refresh_interval = interval;
+        self
+    }
+
     /// Set the heartbeat URL (dead man's switch).
     ///
     /// The worker pings this URL at every heartbeat interval with an HTTP
@@ -262,12 +339,15 @@ impl WorkerBuilder {
             engine: Arc::new(engine),
             api_url: self.api_url,
             worker_token: self.worker_token,
+            worker_id: self.worker_id,
             log_receiver: Mutex::new(Some(log_receiver)),
             concurrency: self.concurrency,
             poll_interval: self.poll_interval,
             run_timeout: self.run_timeout,
             max_consecutive_panics: self.max_consecutive_panics,
             panic_cooldown: self.panic_cooldown,
+            lease_ttl: self.lease_ttl,
+            lease_refresh_interval: self.lease_refresh_interval,
             #[cfg(feature = "heartbeat")]
             heartbeat_url: self.heartbeat_url,
             #[cfg(feature = "heartbeat")]
@@ -283,12 +363,15 @@ pub struct Worker {
     engine: Arc<Engine>,
     api_url: String,
     worker_token: String,
+    worker_id: String,
     log_receiver: Mutex<Option<LogReceiver>>,
     concurrency: usize,
     poll_interval: Duration,
     run_timeout: Duration,
     max_consecutive_panics: u32,
     panic_cooldown: Duration,
+    lease_ttl: Duration,
+    lease_refresh_interval: Duration,
     #[cfg(feature = "heartbeat")]
     heartbeat_url: Option<String>,
     #[cfg(feature = "heartbeat")]
@@ -420,6 +503,11 @@ impl Worker {
                 let mut tracker = poison_tracker.lock().expect("poison tracker lock poisoned");
                 match outcome {
                     RunOutcome::Success(ref wf) => tracker.record_success(wf),
+                    // Losing a lease says nothing about the workflow itself:
+                    // it must not count towards the poison pill threshold.
+                    RunOutcome::LeaseLost(ref wf) => {
+                        warn!(workflow = %wf, "run abandoned after losing its lease")
+                    }
                     RunOutcome::Failed(ref wf) | RunOutcome::Timeout(ref wf) => {
                         if tracker.record_panic(wf) {
                             warn!(workflow = %wf, "workflow flagged as poison pill after consecutive failures");
@@ -433,7 +521,14 @@ impl Worker {
                 }
             }
 
-            let run = self.engine.store().pick_next_pending().await;
+            let run = self
+                .engine
+                .store()
+                .pick_next_pending(Some(LeaseRequest {
+                    worker_id: self.worker_id.clone(),
+                    ttl: self.lease_ttl,
+                }))
+                .await;
 
             match run {
                 Ok(Some(run)) => {
@@ -480,9 +575,41 @@ impl Worker {
                     #[cfg(feature = "prometheus")]
                     gauge!(WORKER_ACTIVE).increment(1.0);
 
+                    // Keep the lease alive for as long as this run executes, and
+                    // abandon the run as soon as the lease is lost.
+                    let lease_token = CancellationToken::new();
+                    let refresher = spawn(refresh_lease(
+                        self.engine.store().clone(),
+                        run_id,
+                        LeaseRequest {
+                            worker_id: self.worker_id.clone(),
+                            ttl: self.lease_ttl,
+                        },
+                        self.lease_refresh_interval,
+                        lease_token.clone(),
+                    ));
+
                     let handle = spawn(async move {
                         let _permit = permit;
-                        let result = timeout(run_timeout, engine.execute_handler_run(run_id)).await;
+                        let result = tokio::select! {
+                            biased;
+                            _ = lease_token.cancelled() => {
+                                refresher.abort();
+                                // Dropping the execution future here cancels it;
+                                // child processes die with it (kill_on_drop).
+                                warn!(
+                                    run_id = %run_id,
+                                    workflow = %workflow,
+                                    "abandoning run: worker lease lost"
+                                );
+                                #[cfg(feature = "prometheus")]
+                                counter!(WORKER_LEASES_LOST_TOTAL).increment(1);
+                                // No status write: the run belongs to someone else now.
+                                return RunOutcome::LeaseLost(workflow);
+                            }
+                            result = timeout(run_timeout, engine.execute_handler_run(run_id)) => result,
+                        };
+                        refresher.abort();
 
                         match result {
                             Ok(Ok(_)) => {
@@ -599,6 +726,58 @@ enum RunOutcome {
     Timeout(String),
     /// Run panicked (task JoinError).
     Panicked(String),
+    /// Run was abandoned because this worker lost its lease.
+    LeaseLost(String),
+}
+
+/// Keep a run's lease alive until the run finishes or the lease is lost.
+///
+/// Cancels `lease_token` when the API hands the run to another worker, or when
+/// refreshes keep failing for longer than the lease TTL — in both cases this
+/// worker must stop executing the run rather than risk a double execution.
+async fn refresh_lease(
+    store: Arc<dyn Store>,
+    run_id: uuid::Uuid,
+    lease: LeaseRequest,
+    refresh_interval: Duration,
+    lease_token: CancellationToken,
+) {
+    let ttl = lease.ttl;
+    let mut deadline = Instant::now() + ttl;
+
+    loop {
+        sleep(refresh_interval).await;
+
+        match store.renew_lease(run_id, lease.clone()).await {
+            Ok(_) => {
+                deadline = Instant::now() + ttl;
+            }
+            Err(StoreError::LeaseLost { held_by, .. }) => {
+                warn!(
+                    run_id = %run_id,
+                    held_by = held_by.as_deref().unwrap_or("unknown"),
+                    "lease taken over by another worker"
+                );
+                lease_token.cancel();
+                return;
+            }
+            Err(err) if Instant::now() >= deadline => {
+                // The API has been unreachable longer than the lease lasts:
+                // another worker may already have picked the run up.
+                warn!(
+                    run_id = %run_id,
+                    error = %err,
+                    ttl_secs = ttl.as_secs(),
+                    "lease could not be refreshed before it expired"
+                );
+                lease_token.cancel();
+                return;
+            }
+            Err(err) => {
+                warn!(run_id = %run_id, error = %err, "lease refresh failed, retrying");
+            }
+        }
+    }
 }
 
 /// Wait for SIGTERM or SIGINT (Ctrl+C).
@@ -709,6 +888,45 @@ mod tests {
         let dur = Duration::from_secs(600);
         let builder = WorkerBuilder::new("http://localhost:3000", "token").panic_cooldown(dur);
         assert_eq!(builder.panic_cooldown, dur);
+    }
+
+    #[test]
+    fn builder_defaults_lease_settings() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token");
+        assert_eq!(builder.lease_ttl, DEFAULT_LEASE_TTL);
+        assert_eq!(
+            builder.lease_refresh_interval,
+            DEFAULT_LEASE_REFRESH_INTERVAL
+        );
+        assert!(builder.worker_id.starts_with("worker-"));
+    }
+
+    #[test]
+    fn builder_generates_a_distinct_worker_id_per_instance() {
+        let a = WorkerBuilder::new("http://localhost:3000", "token");
+        let b = WorkerBuilder::new("http://localhost:3000", "token");
+        assert_ne!(a.worker_id, b.worker_id);
+    }
+
+    #[test]
+    fn builder_worker_id_overrides_default() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token").worker_id("worker-eu-1");
+        assert_eq!(builder.worker_id, "worker-eu-1");
+    }
+
+    #[test]
+    fn builder_lease_ttl_sets_value() {
+        let dur = Duration::from_secs(120);
+        let builder = WorkerBuilder::new("http://localhost:3000", "token").lease_ttl(dur);
+        assert_eq!(builder.lease_ttl, dur);
+    }
+
+    #[test]
+    fn builder_lease_refresh_interval_sets_value() {
+        let dur = Duration::from_secs(5);
+        let builder =
+            WorkerBuilder::new("http://localhost:3000", "token").lease_refresh_interval(dur);
+        assert_eq!(builder.lease_refresh_interval, dur);
     }
 
     #[test]
