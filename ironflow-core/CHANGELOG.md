@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [3.3.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.2.0...ironflow-core-v3.3.0) - 2026-07-28
+
+### Added
+
+- #14 add worker lease and reaper to recover orphaned runs
+
 ## [3.2.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.1.1...ironflow-core-v3.2.0) - 2026-07-27
 
 ### Added

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.6](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.5...ironflow-sdk-v0.1.6) - 2026-07-28
+
+### Added
+
+- #14 add worker lease and reaper to recover orphaned runs
+
 ## [0.1.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.3...ironflow-sdk-v0.1.4) - 2026-07-27
 
 ### Added
