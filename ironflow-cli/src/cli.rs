@@ -351,6 +351,66 @@ mod tests {
         assert!(!yes);
     }
 
+    #[test]
+    fn parse_secret_rotate_defaults_to_the_active_version() {
+        let cli = parse(&["ironflow-cli", "secret", "rotate"]);
+        let Commands::Secret(args) = &cli.command else {
+            panic!("expected Secret command");
+        };
+        let SecretCommands::Rotate(rotate) = &args.command else {
+            panic!("expected Rotate subcommand");
+        };
+        assert!(rotate.to_version.is_none());
+        assert_eq!(rotate.batch_size, 100);
+    }
+
+    #[test]
+    fn parse_secret_rotate_with_version_and_batch_size() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "secret",
+            "rotate",
+            "--to-version",
+            "2",
+            "--batch-size",
+            "50",
+        ]);
+        let Commands::Secret(args) = &cli.command else {
+            panic!("expected Secret command");
+        };
+        let SecretCommands::Rotate(rotate) = &args.command else {
+            panic!("expected Rotate subcommand");
+        };
+        assert_eq!(rotate.to_version, Some(2));
+        assert_eq!(rotate.batch_size, 50);
+    }
+
+    #[test]
+    fn parse_secret_rotate_rejects_a_non_positive_version() {
+        let zero = ["ironflow-cli", "secret", "rotate", "--to-version", "0"];
+        let negative = ["ironflow-cli", "secret", "rotate", "--to-version", "-1"];
+        assert!(Cli::try_parse_from(zero).is_err());
+        assert!(Cli::try_parse_from(negative).is_err());
+    }
+
+    #[test]
+    fn parse_secret_rotate_rejects_an_out_of_range_batch_size() {
+        let zero = ["ironflow-cli", "secret", "rotate", "--batch-size", "0"];
+        let too_large = ["ironflow-cli", "secret", "rotate", "--batch-size", "1001"];
+        assert!(Cli::try_parse_from(zero).is_err());
+        assert!(Cli::try_parse_from(too_large).is_err());
+    }
+
+    #[test]
+    fn parse_secret_key_status_takes_no_arguments() {
+        let cli = parse(&["ironflow-cli", "secret", "key-status"]);
+        let Commands::Secret(args) = &cli.command else {
+            panic!("expected Secret command");
+        };
+        assert!(matches!(args.command, SecretCommands::KeyStatus));
+        assert!(Cli::try_parse_from(["ironflow-cli", "secret", "key-status", "extra"]).is_err());
+    }
+
     // ── API keys ───────────────────────────────────────────────────
 
     #[test]

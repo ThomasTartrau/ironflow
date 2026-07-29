@@ -2,5 +2,7 @@
 
 pub mod create;
 pub mod delete;
+pub mod key_versions;
 pub mod list;
+pub mod rotate;
 pub mod update;

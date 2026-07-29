@@ -44,7 +44,7 @@ use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::budget::BudgetConfig;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::{Event, WebhookSubscriber};
-use ironflow_store::crypto::MasterKey;
+use ironflow_store::crypto::{KeyRing, SECRET_KEYS_ENV};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
 
@@ -64,21 +64,46 @@ async fn main() {
 
     let mut store = InMemoryStore::new();
 
-    match std::env::var("IRONFLOW_SECRET_KEY") {
-        Ok(hex) => {
-            let master_key = MasterKey::from_hex(&hex).unwrap_or_else(|e| {
-                eprintln!("invalid IRONFLOW_SECRET_KEY: {e}");
-                process::exit(1);
-            });
-            store.set_master_key(master_key);
-            info!("secret store enabled");
+    let key_ring = KeyRing::from_env().unwrap_or_else(|e| {
+        eprintln!("invalid secret key configuration: {e}");
+        process::exit(1);
+    });
+
+    let has_key_ring = key_ring.is_some();
+    match key_ring {
+        Some(ring) => {
+            info!(
+                active_version = ring.active_version(),
+                configured_versions = ?ring.versions(),
+                "secret store enabled"
+            );
+            store.set_key_ring(ring);
         }
-        Err(_) => {
-            info!("IRONFLOW_SECRET_KEY not set, secret store disabled");
+        None => {
+            info!("{SECRET_KEYS_ENV} not set, secret store disabled");
         }
     }
 
     let store: Arc<dyn Store> = Arc::new(store);
+
+    // A secret encrypted with a key that is no longer configured is
+    // unreadable. Fail here rather than at the first workflow that needs it.
+    if has_key_ring {
+        let status = store.secret_key_status().await.unwrap_or_else(|e| {
+            eprintln!("cannot read secret key versions: {e}");
+            process::exit(1);
+        });
+
+        if !status.is_consistent() {
+            let missing: Vec<String> = status.missing.iter().map(|v| v.to_string()).collect();
+            eprintln!(
+                "secret key versions present in database but missing from configuration: {}\n\
+                 set {SECRET_KEYS_ENV} to include them, or rotate before removing a key",
+                missing.join(", ")
+            );
+            process::exit(1);
+        }
+    }
     let provider = Arc::new(ClaudeCodeProvider::new());
 
     let jwt_config = Arc::new(JwtConfig {

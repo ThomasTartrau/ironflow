@@ -662,6 +662,38 @@ impl IronflowClient {
             .await
     }
 
+    /// `POST /api/v1/secrets/rotate` -- Re-encrypt one batch of secrets
+    /// towards a key version (admin only).
+    ///
+    /// One call handles one batch. Loop, passing the returned `last_id` back
+    /// as `after_id`, until `remaining` reaches zero or `last_id` is `None`.
+    /// The operation is idempotent, so an interrupted rotation can simply be
+    /// restarted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 400 (unknown key version), 401, or 403.
+    pub async fn rotate_secrets(
+        &self,
+        request: &types::RotateSecretsRequest,
+    ) -> Result<ApiResponse<types::RotateSecretsResponse>, Error> {
+        self.send_envelope(self.post("/api/v1/secrets/rotate").json(request))
+            .await
+    }
+
+    /// `GET /api/v1/secrets/key-versions` -- Encryption key ring status
+    /// (admin only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401 or 403.
+    pub async fn secret_key_versions(
+        &self,
+    ) -> Result<ApiResponse<types::KeyVersionsResponse>, Error> {
+        self.send_envelope(self.get("/api/v1/secrets/key-versions"))
+            .await
+    }
+
     // ── Audit Logs (admin) ─────────────────────────────────────────
 
     /// `GET /api/v1/audit-logs` -- List audit log entries (admin only).

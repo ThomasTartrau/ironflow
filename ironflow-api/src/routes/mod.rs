@@ -214,6 +214,13 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             "/secrets",
             get(secrets::list::list_secrets).post(secrets::create::create_secret),
         )
+        // Registered before the catch-all below: a static segment wins over
+        // the wildcard, so `rotate` is never read as a secret key.
+        .route("/secrets/rotate", post(secrets::rotate::rotate_secrets))
+        .route(
+            "/secrets/key-versions",
+            get(secrets::key_versions::secret_key_versions),
+        )
         .route(
             "/secrets/{*key}",
             put(secrets::update::update_secret).delete(secrets::delete::delete_secret),

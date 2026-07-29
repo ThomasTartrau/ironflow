@@ -45,6 +45,8 @@ CLI flags (`--url`, `--api-key`) take the highest priority, then env vars, then 
 | `secret set <key> [value]` | Create or replace a secret; reads the value on stdin when omitted |
 | `secret update <key> [value]` | Replace an existing secret; fails if the key is unknown |
 | `secret delete <key> [--yes]` | Delete a secret |
+| `secret rotate [--to-version <n>] [--batch-size <n>]` | Re-encrypt every secret with a key version; resumable |
+| `secret key-status` | Show which encryption key versions are configured and in use |
 | `api-key list` | List API keys (prefix only, never the raw key) |
 | `api-key create <name> --scope <s>... [--expires-at <rfc3339>]` | Create an API key; the raw key is printed once |
 | `api-key scopes` | List the scopes an API key can be granted |

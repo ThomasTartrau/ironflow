@@ -10,11 +10,12 @@ use chrono::{DateTime, Utc};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::types::{
-    ApiKeyResponse, ApiKeyScope, AuditLogEntry, CreateApiKeyResponse, RunDetailResponse,
-    RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsResponse, StepResponse, StepStatus,
-    UserResponse, WorkflowDetailResponse, WorkflowSummary,
+    ApiKeyResponse, ApiKeyScope, AuditLogEntry, CreateApiKeyResponse, KeyVersionsResponse,
+    RunDetailResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsResponse,
+    StepResponse, StepStatus, UserResponse, WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
+use serde_json::to_string_pretty;
 use uuid::Uuid;
 
 /// Map a [`RunStatus`] to a terminal color.
@@ -93,7 +94,7 @@ pub fn render_output<W: Write, T: Serialize>(
     table_fn: impl FnOnce() -> Table,
 ) -> Result<()> {
     if json_mode {
-        let json = serde_json::to_string_pretty(value)?;
+        let json = to_string_pretty(value)?;
         writeln!(writer, "{json}")?;
     } else {
         writeln!(writer, "{}", table_fn())?;
@@ -112,6 +113,20 @@ pub fn print_output<T: Serialize>(
     table_fn: impl FnOnce() -> Table,
 ) -> Result<()> {
     render_output(&mut stdout().lock(), json_mode, value, table_fn)
+}
+
+/// Render a value as pretty JSON to stdout.
+///
+/// For commands whose output is a summary the CLI builds itself, with no
+/// table equivalent.
+///
+/// # Errors
+///
+/// Returns an error if JSON serialization or writing fails.
+pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
+    let json = to_string_pretty(value)?;
+    writeln!(stdout().lock(), "{json}")?;
+    Ok(())
 }
 
 /// Render a list of runs as a table.
@@ -372,6 +387,18 @@ pub fn stats_table(stats: &StatsResponse) -> Table {
     table
 }
 
+/// Render a list of key versions as a comma-separated string.
+fn format_versions(versions: &[i32]) -> String {
+    if versions.is_empty() {
+        return "-".to_string();
+    }
+    versions
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Outcome of a `delete` command.
 ///
 /// The API answers `204 No Content`, which serializes to nothing useful, so the
@@ -461,6 +488,43 @@ fn format_scopes(scopes: &[ApiKeyScope]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Render the encryption key ring status as a table.
+pub fn key_versions_table(status: &KeyVersionsResponse) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Property", "Versions"]);
+
+    table.add_row(vec![
+        Cell::new("Active"),
+        Cell::new(status.active).fg(Color::Green),
+    ]);
+    table.add_row(vec![
+        Cell::new("Configured"),
+        Cell::new(format_versions(&status.configured)),
+    ]);
+    table.add_row(vec![
+        Cell::new("In use"),
+        Cell::new(format_versions(&status.in_use)),
+    ]);
+    table.add_row(vec![
+        Cell::new("Missing"),
+        Cell::new(format_versions(&status.missing)).fg(if status.missing.is_empty() {
+            Color::Grey
+        } else {
+            Color::Red
+        }),
+    ]);
+    table.add_row(vec![
+        Cell::new("Retirable"),
+        Cell::new(format_versions(&status.retirable)).fg(if status.retirable.is_empty() {
+            Color::Grey
+        } else {
+            Color::Yellow
+        }),
+    ]);
+
+    table
 }
 
 /// Render a list of API keys as a table.

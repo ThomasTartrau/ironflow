@@ -861,9 +861,60 @@
           "log_line",
           "user_signed_in",
           "user_signed_up",
-          "user_signed_out"
+          "user_signed_out",
+          "secrets_rotated"
         ],
         "type": "string"
+      },
+      "KeyVersionsResponse": {
+        "description": "How the configured key ring lines up with the stored secrets.",
+        "properties": {
+          "active": {
+            "description": "Version used to encrypt new secrets.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "configured": {
+            "description": "Versions present in the configured key ring.",
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "in_use": {
+            "description": "Versions actually used by stored secrets.",
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "missing": {
+            "description": "Versions used by stored secrets but absent from the key ring.\nNon-empty means some secrets are unreadable.",
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "retirable": {
+            "description": "Versions that can be removed from the key ring safely.",
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "active",
+          "configured",
+          "in_use",
+          "missing",
+          "retirable"
+        ],
+        "type": "object"
       },
       "ListAuditLogsQuery": {
         "description": "Query parameters for listing audit log entries.",
@@ -1025,6 +1076,72 @@
           "email",
           "username",
           "is_admin"
+        ],
+        "type": "object"
+      },
+      "RotateSecretsRequest": {
+        "description": "Request body for rotating a batch of secrets to another key version.\n\nRotation is driven one batch per call so a long rotation never becomes a\nlong HTTP request: the client loops, carrying `after_id` forward.",
+        "properties": {
+          "after_id": {
+            "description": "Resume after this secret ID. Omit to start from the beginning.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "batch_size": {
+            "description": "Secrets to process in this batch. Defaults to 100, clamped to 1000.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "to_version": {
+            "description": "Target key version. Defaults to the server's active version.",
+            "format": "int32",
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "RotateSecretsResponse": {
+        "description": "Outcome of one rotation batch.",
+        "properties": {
+          "failed": {
+            "description": "Secrets skipped because they could not be decrypted.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_id": {
+            "description": "Highest secret ID seen in this batch. Pass it back as `after_id` to\ncontinue; `null` means there is nothing left to do.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "remaining": {
+            "description": "Secrets left on another key version after this batch.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rotated": {
+            "description": "Secrets successfully re-encrypted in this batch.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to_version": {
+            "description": "Key version the batch re-encrypted towards.",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "to_version",
+          "rotated",
+          "failed",
+          "remaining"
         ],
         "type": "object"
       },
@@ -2756,6 +2873,86 @@
           }
         ],
         "summary": "Create or update a secret. Admin only.",
+        "tags": [
+          "secrets"
+        ]
+      }
+    },
+    "/api/v1/secrets/key-versions": {
+      "get": {
+        "description": "This is what tells an operator whether an old key can be dropped from\n`IRONFLOW_SECRET_KEYS` without breaking the next startup: a version listed\nin `retirable` is configured, not active, and used by no secret.\n\nA non-empty `missing` means some stored secrets cannot be decrypted with\nthe current configuration -- the server refuses to start in that state.\n\n# Errors\n\n- 401 if the caller is not authenticated\n- 403 if the caller is not an admin",
+        "operationId": "secret_key_versions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyVersionsResponse"
+                }
+              }
+            },
+            "description": "Key ring status"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Report how the configured key ring lines up with the stored secrets.",
+        "tags": [
+          "secrets"
+        ]
+      }
+    },
+    "/api/v1/secrets/rotate": {
+      "post": {
+        "description": "One call processes one batch, so a rotation over a large stock never\nbecomes a single long request. The client loops, passing `last_id` back as\n`after_id`, until `remaining` reaches zero or `last_id` comes back null.\n\nThe operation is idempotent: secrets already on the target version are\nskipped, so an interrupted rotation can simply be restarted.\n\n# Errors\n\n- 400 if the target version is not in the configured key ring\n- 401 if the caller is not authenticated\n- 403 if the caller is not an admin",
+        "operationId": "rotate_secrets",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecretsRequest"
+              }
+            }
+          },
+          "description": "Target key version, batch size, and resume cursor",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateSecretsResponse"
+                }
+              }
+            },
+            "description": "Batch rotated"
+          },
+          "400": {
+            "description": "Invalid target key version"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Re-encrypt one batch of secrets towards a key version. Admin only.",
         "tags": [
           "secrets"
         ]

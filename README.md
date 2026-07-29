@@ -592,7 +592,9 @@ Ironflow reads `.env` via [dotenvy](https://crates.io/crates/dotenvy).
 | `DATABASE_URL` | in production | - |
 | `JWT_SECRET` | in production | development secret |
 | `WORKER_TOKEN` | in production | development token |
-| `IRONFLOW_SECRET_KEY` | no | unset, secret store disabled |
+| `IRONFLOW_SECRET_KEYS` | no | unset, secret store disabled |
+| `IRONFLOW_SECRET_ACTIVE_KEY_VERSION` | no | highest configured version |
+| `IRONFLOW_SECRET_KEY` | no | deprecated, see below |
 | `PORT` | no | `3000` |
 | `ALLOWED_ORIGINS` | no | same-origin only |
 | `DASHBOARD_DIR` | no | uses the embedded dashboard |
@@ -601,8 +603,61 @@ Ironflow reads `.env` via [dotenvy](https://crates.io/crates/dotenvy).
 | `RATE_LIMIT_GENERAL` | no | `60` req/min |
 
 Starting in production without `DATABASE_URL`, `JWT_SECRET` or `WORKER_TOKEN` aborts at boot
-rather than falling back to development defaults. `IRONFLOW_SECRET_KEY` is a hex-encoded AES-GCM
-key; without it the secret store stays off and workflows reading secrets fail.
+rather than falling back to development defaults.
+
+### Secret encryption keys
+
+`IRONFLOW_SECRET_KEYS` holds one or more versioned AES-GCM keys, as
+`version:hex` pairs separated by commas. Each key is 64 hex characters (32 bytes):
+
+```sh
+IRONFLOW_SECRET_KEYS="1:0123...ef,2:fedc...10"
+IRONFLOW_SECRET_ACTIVE_KEY_VERSION=2
+```
+
+Every key in the ring can decrypt; only the active one encrypts. Without any key the secret
+store stays off and workflows reading secrets fail.
+
+`IRONFLOW_SECRET_KEY` (a single unversioned key) is still accepted and read as version 1, so
+existing deployments keep working. It is deprecated: when `IRONFLOW_SECRET_KEYS` is also set,
+it is ignored with a warning.
+
+The server refuses to start if a stored secret uses a key version absent from the
+configuration, naming the missing versions. That is the safety net behind the rotation
+procedure below.
+
+### Rotating the encryption key
+
+```sh
+# 1. Add the new key without activating it, then restart.
+#    New secrets stay on version 1; version 2 is merely available.
+IRONFLOW_SECRET_KEYS="1:<hexA>,2:<hexB>"
+IRONFLOW_SECRET_ACTIVE_KEY_VERSION=1
+
+# 2. Activate version 2, then restart.
+#    New secrets use version 2; older ones stay readable.
+IRONFLOW_SECRET_ACTIVE_KEY_VERSION=2
+
+# 3. Re-encrypt the existing stock.
+ironflow-cli secret rotate
+
+# 4. Confirm version 1 is no longer used by any secret.
+ironflow-cli secret key-status
+
+# 5. Drop version 1, then restart.
+IRONFLOW_SECRET_KEYS="2:<hexB>"
+```
+
+Step 1 is kept separate from step 2 so rolling back to the previous deployment stays possible
+for as long as nothing has been encrypted with the new key.
+
+`secret rotate` works in batches and is safe to interrupt: secrets already re-encrypted are
+skipped on the next run, and every secret stays readable throughout. It re-encrypts in place --
+the ID, key, and timestamps of a secret never change. If a secret cannot be decrypted, it is
+skipped, reported, and the command exits non-zero rather than leaving the failure silent.
+
+`secret key-status` reports which versions are configured, which are actually used by stored
+secrets, and which can be retired.
 
 ### Worker
 

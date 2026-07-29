@@ -102,6 +102,16 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/secrets/{key}",
         Coverage::Command(&["secret", "delete", "db/password", "--yes"]),
     ),
+    (
+        "POST",
+        "/api/v1/secrets/rotate",
+        Coverage::Command(&["secret", "rotate"]),
+    ),
+    (
+        "GET",
+        "/api/v1/secrets/key-versions",
+        Coverage::Command(&["secret", "key-status"]),
+    ),
     // ── API keys ──
     (
         "GET",
