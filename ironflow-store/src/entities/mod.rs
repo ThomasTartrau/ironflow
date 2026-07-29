@@ -33,7 +33,10 @@ pub use run::{
 };
 pub use run_actor::RunActor;
 pub use run_status::RunStatus;
-pub use secret::{Secret, SecretMetadata};
+pub use secret::{
+    DEFAULT_ROTATION_BATCH_SIZE, KeyVersionStatus, MAX_ROTATION_BATCH_SIZE, RotationBatch,
+    RotationRequest, Secret, SecretMetadata,
+};
 pub use stats::RunStats;
 pub use step::{NewStep, Step, StepUpdate};
 pub use step_dependency::{NewStepDependency, StepDependency};

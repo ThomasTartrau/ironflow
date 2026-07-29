@@ -5,8 +5,15 @@ import type { Event, EventKind, EventPayload } from "../lib/types";
 export type { Event, EventKind, EventPayload };
 
 /**
- * Static list of every event kind, derived from the generated OpenAPI union.
- * TypeScript enforces at compile time that this covers all variants.
+ * Kinds that can actually be delivered over the SSE stream, i.e. the
+ * discriminants of the `Event` union. `EventKind` is broader: it also covers
+ * audit-log-only kinds that are never broadcast.
+ */
+export type StreamedEventKind = Event["type"];
+
+/**
+ * Static list of every streamed event kind, derived from the generated OpenAPI
+ * union. TypeScript enforces at compile time that this covers all variants.
  */
 export const ALL_EVENT_KINDS = [
 	"run_created",
@@ -22,12 +29,12 @@ export const ALL_EVENT_KINDS = [
 	"user_signed_in",
 	"user_signed_up",
 	"user_signed_out",
-] as const satisfies readonly EventKind[];
+] as const satisfies readonly StreamedEventKind[];
 
-// Exhaustiveness check: fails to compile if a new EventKind is added to the
+// Exhaustiveness check: fails to compile if a new Event variant is added to the
 // OpenAPI spec without being listed above.
 type _ExhaustiveCheck =
-	Exclude<EventKind, (typeof ALL_EVENT_KINDS)[number]> extends never
+	Exclude<StreamedEventKind, (typeof ALL_EVENT_KINDS)[number]> extends never
 		? true
 		: never;
 const _exhaustive: _ExhaustiveCheck = true;

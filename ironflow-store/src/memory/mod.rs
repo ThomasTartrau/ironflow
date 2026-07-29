@@ -67,6 +67,8 @@ pub(super) struct EncryptedSecret {
     pub(super) encrypted_value: Vec<u8>,
     #[cfg(feature = "secret-store")]
     pub(super) nonce: Vec<u8>,
+    #[cfg(feature = "secret-store")]
+    pub(super) key_version: i32,
     pub(super) created_at: chrono::DateTime<chrono::Utc>,
     pub(super) updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -89,7 +91,7 @@ pub(super) struct EncryptedSecret {
 pub struct InMemoryStore {
     pub(super) state: Arc<RwLock<State>>,
     #[cfg(feature = "secret-store")]
-    pub(super) master_key: Option<Arc<crate::crypto::MasterKey>>,
+    pub(super) key_ring: Option<Arc<crate::crypto::KeyRing>>,
 }
 
 impl InMemoryStore {
@@ -106,17 +108,20 @@ impl InMemoryStore {
         Self {
             state: Arc::new(RwLock::new(State::default())),
             #[cfg(feature = "secret-store")]
-            master_key: None,
+            key_ring: None,
         }
     }
 
-    /// Set the master key for secret encryption.
+    /// Set a single, unversioned master key for secret encryption.
+    ///
+    /// Shorthand for a key ring holding this key alone at
+    /// [`LEGACY_KEY_VERSION`](crate::crypto::LEGACY_KEY_VERSION).
     ///
     /// Required before using [`SecretStore`](crate::secret_store::SecretStore)
-    /// methods that read/write secret values. Without a master key, those
-    /// methods return [`StoreError::Crypto`](crate::error::StoreError::Crypto).
+    /// methods that read/write secret values. Without a key, those methods
+    /// return [`StoreError::Crypto`](crate::error::StoreError::Crypto).
     ///
-    /// Listing and deleting secrets works without a master key.
+    /// Listing and deleting secrets works without a key.
     ///
     /// # Examples
     ///
@@ -135,7 +140,30 @@ impl InMemoryStore {
     /// ```
     #[cfg(feature = "secret-store")]
     pub fn set_master_key(&mut self, key: crate::crypto::MasterKey) {
-        self.master_key = Some(Arc::new(key));
+        self.set_key_ring(crate::crypto::KeyRing::single(key));
+    }
+
+    /// Set the versioned key ring for secret encryption.
+    ///
+    /// New secrets are encrypted with the ring's active version; existing ones
+    /// are decrypted with whichever version they were written with.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_store::memory::InMemoryStore;
+    /// use ironflow_store::crypto::KeyRing;
+    ///
+    /// # fn example() -> Result<(), ironflow_store::crypto::CryptoError> {
+    /// let mut store = InMemoryStore::new();
+    /// let spec = format!("1:{},2:{}", "aa".repeat(32), "bb".repeat(32));
+    /// store.set_key_ring(KeyRing::from_spec(&spec, Some(2))?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "secret-store")]
+    pub fn set_key_ring(&mut self, ring: crate::crypto::KeyRing) {
+        self.key_ring = Some(Arc::new(ring));
     }
 }
 

@@ -21,7 +21,10 @@ pub use lease::{
     validate_lease_ttl,
 };
 pub use run::{ListRunsQuery, RunDetailResponse, RunResponse};
-pub use secret::{SecretResponse, SetSecretRequest};
+pub use secret::{
+    KeyVersionsResponse, RotateSecretsRequest, RotateSecretsResponse, SecretResponse,
+    SetSecretRequest,
+};
 pub use stats::StatsResponse;
 pub use step::StepResponse;
 pub use user::{CreateUserRequest, UpdateRoleRequest, UserResponse};

@@ -179,7 +179,7 @@ impl IntoResponse for ApiError {
 
         let message = match &self {
             ApiError::Store(StoreError::Crypto(_)) => {
-                "secret store not configured (set IRONFLOW_SECRET_KEY)".to_string()
+                "secret store not configured (set IRONFLOW_SECRET_KEYS)".to_string()
             }
             // Carries the caller-facing detail in its own Display impl,
             // unlike the generic "database error" of ApiError::Store.

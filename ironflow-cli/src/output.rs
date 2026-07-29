@@ -3,16 +3,17 @@
 //! Provides helpers to render API responses as either a UTF-8 styled
 //! terminal table (with colored status) or raw JSON.
 
-use std::io::Write;
+use std::io::{Write, stdout};
 
 use chrono::{DateTime, Utc};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::types::{
-    RunDetailResponse, RunResponse, RunStatus, StatsResponse, StepResponse, StepStatus,
-    WorkflowDetailResponse, WorkflowSummary,
+    KeyVersionsResponse, RunDetailResponse, RunResponse, RunStatus, StatsResponse, StepResponse,
+    StepStatus, WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
+use serde_json::to_string_pretty;
 
 /// Map a [`RunStatus`] to a terminal color.
 fn status_color(status: &RunStatus) -> Color {
@@ -90,7 +91,7 @@ pub fn render_output<W: Write, T: Serialize>(
     table_fn: impl FnOnce() -> Table,
 ) -> anyhow::Result<()> {
     if json_mode {
-        let json = serde_json::to_string_pretty(value)?;
+        let json = to_string_pretty(value)?;
         writeln!(writer, "{json}")?;
     } else {
         writeln!(writer, "{}", table_fn())?;
@@ -108,7 +109,21 @@ pub fn print_output<T: Serialize>(
     value: &T,
     table_fn: impl FnOnce() -> Table,
 ) -> anyhow::Result<()> {
-    render_output(&mut std::io::stdout().lock(), json_mode, value, table_fn)
+    render_output(&mut stdout().lock(), json_mode, value, table_fn)
+}
+
+/// Render a value as pretty JSON to stdout.
+///
+/// For commands whose output is a summary the CLI builds itself, with no
+/// table equivalent.
+///
+/// # Errors
+///
+/// Returns an error if JSON serialization or writing fails.
+pub fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
+    let json = to_string_pretty(value)?;
+    writeln!(stdout().lock(), "{json}")?;
+    Ok(())
 }
 
 /// Render a list of runs as a table.
@@ -364,6 +379,55 @@ pub fn stats_table(stats: &StatsResponse) -> Table {
     table.add_row(vec![
         Cell::new("Total duration"),
         Cell::new(format_duration_ms(stats.total_duration_ms)),
+    ]);
+
+    table
+}
+
+/// Render a list of key versions as a comma-separated string.
+fn format_versions(versions: &[i32]) -> String {
+    if versions.is_empty() {
+        return "-".to_string();
+    }
+    versions
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Render the encryption key ring status as a table.
+pub fn key_versions_table(status: &KeyVersionsResponse) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Property", "Versions"]);
+
+    table.add_row(vec![
+        Cell::new("Active"),
+        Cell::new(status.active).fg(Color::Green),
+    ]);
+    table.add_row(vec![
+        Cell::new("Configured"),
+        Cell::new(format_versions(&status.configured)),
+    ]);
+    table.add_row(vec![
+        Cell::new("In use"),
+        Cell::new(format_versions(&status.in_use)),
+    ]);
+    table.add_row(vec![
+        Cell::new("Missing"),
+        Cell::new(format_versions(&status.missing)).fg(if status.missing.is_empty() {
+            Color::Grey
+        } else {
+            Color::Red
+        }),
+    ]);
+    table.add_row(vec![
+        Cell::new("Retirable"),
+        Cell::new(format_versions(&status.retirable)).fg(if status.retirable.is_empty() {
+            Color::Grey
+        } else {
+            Color::Yellow
+        }),
     ]);
 
     table

@@ -23,6 +23,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::commands::logs::LogsArgs;
 use crate::commands::run::RunArgs;
+use crate::commands::secret::SecretArgs;
 use crate::commands::workflow::WorkflowArgs;
 
 /// CLI for the Ironflow workflow engine.
@@ -63,6 +64,8 @@ enum Commands {
     Workflow(WorkflowArgs),
     /// Stream run logs via SSE.
     Logs(LogsArgs),
+    /// Manage encrypted secrets.
+    Secret(SecretArgs),
     /// Show global statistics.
     Stats,
 }
@@ -81,6 +84,7 @@ async fn main() -> Result<()> {
         Commands::Run(args) => commands::run::execute(&client, args, cli.json, cli.verbose).await,
         Commands::Workflow(args) => commands::workflow::execute(&client, args, cli.json).await,
         Commands::Logs(args) => commands::logs::execute(&client, args, cli.json).await,
+        Commands::Secret(args) => commands::secret::execute(&client, args, cli.json).await,
         Commands::Stats => commands::stats::execute(&client, cli.json).await,
     }
 }
