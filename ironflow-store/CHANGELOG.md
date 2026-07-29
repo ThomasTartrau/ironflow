@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.17.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.16.0...ironflow-store-v2.17.0) - 2026-07-29
+
+### Added
+
+- #21 version and rotate the secret encryption keys
+
 ## [2.16.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.15.1...ironflow-store-v2.16.0) - 2026-07-28
 
 ### Added
