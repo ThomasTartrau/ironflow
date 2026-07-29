@@ -31,6 +31,7 @@ use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
 use metrics::{counter, gauge, histogram};
 
+use crate::artifact::ArtifactSink;
 use crate::budget::{BudgetConfig, month_start};
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
@@ -129,6 +130,7 @@ pub struct Engine {
     event_publisher: EventPublisher,
     log_sender: Option<LogSender>,
     budget: BudgetConfig,
+    artifact_sink: Option<Arc<dyn ArtifactSink>>,
 }
 
 /// Validate a workflow category path.
@@ -191,6 +193,7 @@ impl Engine {
             event_publisher: EventPublisher::new(),
             log_sender: None,
             budget: BudgetConfig::new(),
+            artifact_sink: None,
         }
     }
 
@@ -233,6 +236,32 @@ impl Engine {
         self.log_sender = Some(sender);
     }
 
+    /// Attach the backend that stores and serves artifact bytes.
+    ///
+    /// Every context this engine builds inherits it. Without one, steps that
+    /// declare artifacts fail explicitly and every other step is unaffected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use ironflow_engine::artifact::ArtifactSink;
+    /// use ironflow_engine::engine::Engine;
+    ///
+    /// # fn example(engine: &mut Engine, sink: Arc<dyn ArtifactSink>) {
+    /// engine.set_artifact_sink(sink);
+    /// # }
+    /// ```
+    pub fn set_artifact_sink(&mut self, sink: Arc<dyn ArtifactSink>) {
+        self.artifact_sink = Some(sink);
+    }
+
+    /// The artifact backend attached to this engine, if any.
+    pub fn artifact_sink(&self) -> Option<&Arc<dyn ArtifactSink>> {
+        self.artifact_sink.as_ref()
+    }
+
     /// Returns a reference to the backing store.
     pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
@@ -265,6 +294,9 @@ impl Engine {
         ctx.set_max_cost_usd(run.max_cost_usd);
         if let Some(ref sender) = self.log_sender {
             ctx.set_log_sender(sender.clone());
+        }
+        if let Some(ref sink) = self.artifact_sink {
+            ctx.set_artifact_sink(sink.clone());
         }
         ctx
     }

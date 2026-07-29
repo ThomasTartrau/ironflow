@@ -8,7 +8,7 @@ use ironflow_auth::extractor::Authenticated;
 use tokio::join;
 use uuid::Uuid;
 
-use crate::entities::{RunDetailResponse, RunResponse, StepResponse};
+use crate::entities::{ArtifactResponse, RunDetailResponse, RunResponse, StepResponse};
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
@@ -38,12 +38,16 @@ pub async fn get_run(
 ) -> Result<impl IntoResponse, ApiError> {
     let run = state.get_run_or_404(id).await?;
 
-    let (steps, deps) = join!(
+    // Artifacts are fetched for the whole run in one call and grouped by step,
+    // exactly like the dependency edges: one query, never one per step.
+    let (steps, deps, artifacts) = join!(
         state.store.list_steps(id),
-        state.store.list_step_dependencies(id)
+        state.store.list_step_dependencies(id),
+        state.store.list_artifacts_for_run(id)
     );
     let steps = steps?;
     let deps = deps?;
+    let artifacts = artifacts?;
 
     let mut deps_map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for dep in &deps {
@@ -53,11 +57,20 @@ pub async fn get_run(
             .push(dep.depends_on);
     }
 
+    let mut artifacts_map: HashMap<Uuid, Vec<ArtifactResponse>> = HashMap::new();
+    for artifact in artifacts {
+        artifacts_map
+            .entry(artifact.step_id)
+            .or_default()
+            .push(ArtifactResponse::from(artifact));
+    }
+
     let step_responses: Vec<StepResponse> = steps
         .into_iter()
         .map(|step| {
             let step_deps = deps_map.remove(&step.id).unwrap_or_default();
-            StepResponse::with_dependencies(step, step_deps)
+            let step_artifacts = artifacts_map.remove(&step.id).unwrap_or_default();
+            StepResponse::with_dependencies_and_artifacts(step, step_deps, step_artifacts)
         })
         .collect();
 

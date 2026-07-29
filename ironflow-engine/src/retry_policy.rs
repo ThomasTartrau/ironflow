@@ -92,7 +92,13 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::Store(_)
         | EngineError::RunBudgetExceeded { .. }
         | EngineError::MonthlyBudgetExceeded { .. }
-        | EngineError::ApprovalRequired { .. } => false,
+        | EngineError::ApprovalRequired { .. }
+        // A missing output, an unresolvable input or an unconfigured backend
+        // are deterministic: replaying the run reproduces them exactly.
+        | EngineError::MissingArtifact { .. }
+        | EngineError::ArtifactNotFound { .. }
+        | EngineError::ArtifactsUnavailable(_)
+        | EngineError::Artifact(_) => false,
     }
 }
 

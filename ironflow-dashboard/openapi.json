@@ -882,6 +882,69 @@
         ]
       }
     },
+    "/api/v1/runs/{id}/steps/{step_id}/artifacts/{name}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Download one artifact produced by a step.",
+        "description": "Streams the stored bytes with the MIME type recorded at upload time. The\nartifact must belong to both the run and the step named in the path, so an\nid guessed from another run resolves to a 404 rather than a leak.\n\nRequires the same permission as reading the run itself.",
+        "operationId": "download_artifact",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "Step ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Artifact name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact content",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Run, step or artifact not found"
+          },
+          "501": {
+            "description": "Artifact storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/secrets": {
       "get": {
         "tags": [
@@ -1625,6 +1688,54 @@
           "stats_read",
           "admin"
         ]
+      },
+      "ArtifactResponse": {
+        "type": "object",
+        "description": "An artifact as exposed by the REST API.\n\nThe storage key is deliberately absent: it is internal plumbing, and callers\naddress an artifact by `(run, step, name)` through the download route.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_api::entities::ArtifactResponse;\nuse uuid::Uuid;\n\nlet response = ArtifactResponse {\n    id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    name: \"report.html\".to_string(),\n    content_type: \"text/html\".to_string(),\n    size_bytes: 142,\n    sha256: \"0\".repeat(64),\n    created_at: Utc::now(),\n};\nassert_eq!(response.name, \"report.html\");\n```",
+        "required": [
+          "id",
+          "step_id",
+          "name",
+          "content_type",
+          "size_bytes",
+          "sha256",
+          "created_at"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string",
+            "description": "MIME type served on download."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the artifact was recorded."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique artifact identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "File name, unique within the step."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Lowercase hex SHA-256 of the content."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size of the content, in bytes.",
+            "minimum": 0
+          },
+          "step_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The step that produced it."
+          }
+        }
       },
       "AuditLogEntry": {
         "type": "object",
@@ -3021,6 +3132,13 @@
           "dependencies"
         ],
         "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactResponse"
+            },
+            "description": "Files this step produced, downloadable through the artifact route.\n\nEmpty when the step produced none or when artifact storage is not\nconfigured on the server."
+          },
           "attempt": {
             "type": "integer",
             "format": "int32",

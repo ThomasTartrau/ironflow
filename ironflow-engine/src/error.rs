@@ -3,6 +3,7 @@
 use rust_decimal::Decimal;
 use thiserror::Error;
 
+use ironflow_artifacts::error::ArtifactError;
 use ironflow_core::error::OperationError;
 use ironflow_store::error::StoreError;
 
@@ -69,6 +70,36 @@ pub enum EngineError {
         spent_usd: Decimal,
     },
 
+    /// A step declared an output that produced no file.
+    ///
+    /// Raised only when the step itself succeeded: a declared output that never
+    /// materialised is a broken contract, and failing here beats failing later
+    /// in whichever step tried to consume it.
+    #[error("step {step:?} declared output {pattern:?} but no file matched")]
+    MissingArtifact {
+        /// Name of the step that declared the output.
+        step: String,
+        /// The unmatched pattern.
+        pattern: String,
+    },
+
+    /// A step asked for an artifact that no earlier step produced.
+    #[error("no artifact {name:?} produced by step {step:?} before this point")]
+    ArtifactNotFound {
+        /// Name of the producing step that was searched for.
+        step: String,
+        /// Name of the artifact that was searched for.
+        name: String,
+    },
+
+    /// Artifacts were used but no storage backend is configured.
+    #[error("artifact storage is not configured: {0}")]
+    ArtifactsUnavailable(String),
+
+    /// The artifact storage backend failed.
+    #[error("artifact storage error: {0}")]
+    Artifact(#[from] ArtifactError),
+
     /// The run requires human approval before continuing.
     #[error("approval required for run {run_id}, step {step_id}: {message}")]
     ApprovalRequired {
@@ -133,6 +164,42 @@ mod tests {
         assert!(msg.contains(MONTHLY_BUDGET_EXCEEDED_CODE));
         assert!(msg.contains("100.00"));
         assert!(msg.contains("105.00"));
+    }
+
+    #[test]
+    fn missing_artifact_display_names_the_step_and_pattern() {
+        let err = EngineError::MissingArtifact {
+            step: "build".to_string(),
+            pattern: "target/report.html".to_string(),
+        };
+
+        let msg = err.to_string();
+        assert!(msg.contains("\"build\""));
+        assert!(msg.contains("target/report.html"));
+    }
+
+    #[test]
+    fn artifact_not_found_display_names_the_producer() {
+        let err = EngineError::ArtifactNotFound {
+            step: "build".to_string(),
+            name: "report.html".to_string(),
+        };
+
+        let msg = err.to_string();
+        assert!(msg.contains("\"build\""));
+        assert!(msg.contains("report.html"));
+    }
+
+    #[test]
+    fn artifacts_unavailable_display() {
+        let err = EngineError::ArtifactsUnavailable("no blob store".to_string());
+        assert!(err.to_string().contains("not configured"));
+    }
+
+    #[test]
+    fn artifact_error_from_conversion() {
+        let engine_err = EngineError::from(ArtifactError::NotFound("a/b".to_string()));
+        assert!(engine_err.to_string().contains("artifact storage error"));
     }
 
     #[test]

@@ -14,8 +14,11 @@ categories = ["asynchronous"]
 ironflow-core = { version = "3.3.0", path = "../ironflow-core" }
 ironflow-store = { version = "2.16.0", path = "../ironflow-store", default-features = false }
 ironflow-engine = { version = "2.17.2", path = "../ironflow-engine" }
+ironflow-artifacts = { version = "0.1.0", path = "../ironflow-artifacts" }
 
-reqwest = { version = "0.12", features = ["json"] }
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["time", "sync", "macros", "signal"] }
 tokio-util = "0.7"
 tracing = "0.1"

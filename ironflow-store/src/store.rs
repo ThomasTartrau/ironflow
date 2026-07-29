@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::api_key_store::ApiKeyStore;
+use crate::artifact_store::ArtifactStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
     LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run, RunCreation, RunFilter,
@@ -242,6 +243,12 @@ pub trait RunStore: Send + Sync {
 /// # Ok(())
 /// # }
 /// ```
-pub trait Store: RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore {}
+pub trait Store:
+    RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore + ArtifactStore
+{
+}
 
-impl<T: RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore> Store for T {}
+impl<T: RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore + ArtifactStore> Store
+    for T
+{
+}

@@ -12,6 +12,7 @@ use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::Event;
@@ -63,6 +64,11 @@ pub struct AppState {
     pub worker_token: String,
     /// Broadcast sender for SSE event streaming.
     pub event_sender: broadcast::Sender<Event>,
+    /// Where artifact bytes live, when artifacts are enabled.
+    ///
+    /// `None` on a deployment that has not configured artifact storage: the
+    /// artifact routes answer `501` and every other endpoint is unaffected.
+    pub blob_store: Option<Arc<dyn BlobStore>>,
     /// Prometheus metrics handle (only when `prometheus` feature is enabled).
     #[cfg(feature = "prometheus")]
     pub prometheus_handle: PrometheusHandle,
@@ -110,9 +116,42 @@ impl AppState {
             jwt_config,
             worker_token,
             event_sender,
+            blob_store: None,
             #[cfg(feature = "prometheus")]
             prometheus_handle: Self::global_prometheus_handle(),
         }
+    }
+
+    /// Enable artifacts by attaching the backend that holds their bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use ironflow_api::state::AppState;
+    /// use ironflow_artifacts::blob_store::BlobStore;
+    /// use ironflow_artifacts::local::LocalBlobStore;
+    ///
+    /// # fn example(state: AppState) -> AppState {
+    /// let blob: Arc<dyn BlobStore> = Arc::new(LocalBlobStore::new("/var/lib/ironflow/artifacts"));
+    /// state.with_blob_store(blob)
+    /// # }
+    /// ```
+    pub fn with_blob_store(mut self, blob_store: Arc<dyn BlobStore>) -> Self {
+        self.blob_store = Some(blob_store);
+        self
+    }
+
+    /// The artifact backend, or a `501` error when artifacts are disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::ArtifactStorageUnavailable`] when no backend is attached.
+    pub fn blob_store_or_501(&self) -> Result<&Arc<dyn BlobStore>, ApiError> {
+        self.blob_store
+            .as_ref()
+            .ok_or(ApiError::ArtifactStorageUnavailable)
     }
 
     /// Install (or reuse) a global Prometheus recorder and return its handle.

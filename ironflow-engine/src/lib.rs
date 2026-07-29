@@ -40,6 +40,7 @@
 //! }
 //! ```
 
+pub mod artifact;
 pub mod budget;
 pub mod config;
 pub mod context;
@@ -56,6 +57,7 @@ pub mod schedule;
 
 /// Convenience re-exports.
 pub mod prelude {
+    pub use crate::artifact::{ArtifactSink, ArtifactUpload, DirectArtifactSink};
     pub use crate::budget::BudgetConfig;
     pub use crate::config::{AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig};
     pub use crate::context::WorkflowContext;

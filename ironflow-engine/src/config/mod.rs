@@ -6,12 +6,14 @@
 
 mod agent;
 mod approval;
+mod artifact;
 mod http;
 mod shell;
 mod workflow;
 
 pub use agent::AgentStepConfig;
 pub use approval::ApprovalConfig;
+pub use artifact::{ArtifactInput, ArtifactOutput};
 pub use http::HttpConfig;
 pub use shell::ShellConfig;
 pub use workflow::WorkflowStepConfig;

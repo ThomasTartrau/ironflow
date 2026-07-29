@@ -32,6 +32,9 @@ export type CreateRunRequest = components["schemas"]["CreateRunRequest"];
 // -- Step --
 export type StepResponse = components["schemas"]["StepResponse"];
 
+// -- Artifacts --
+export type ArtifactResponse = components["schemas"]["ArtifactResponse"];
+
 // -- Stats --
 export type StatsResponse = components["schemas"]["StatsResponse"];
 

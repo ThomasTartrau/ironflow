@@ -11,6 +11,7 @@ keywords = ["workflow", "engine", "orchestration", "fsm"]
 categories = ["asynchronous", "development-tools"]
 
 [dependencies]
+ironflow-artifacts = { version = "0.1.0", path = "../ironflow-artifacts" }
 ironflow-core = { version = "3.3.0", path = "../ironflow-core" }
 ironflow-store = { version = "2.16.0", path = "../ironflow-store" }
 
@@ -19,7 +20,10 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rust_decimal = { version = "1", features = ["serde-float"] }
-tokio = { version = "1", features = ["time", "sync", "process", "io-util"] }
+tokio = { version = "1", features = ["time", "sync", "process", "io-util", "fs"] }
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+glob = "0.3"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"
@@ -41,6 +45,7 @@ openapi = ["utoipa", "ironflow-store/openapi"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
+tempfile = "3"
 axum = { version = "0.8", features = ["json"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }

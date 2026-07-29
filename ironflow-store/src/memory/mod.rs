@@ -40,6 +40,7 @@ use uuid::Uuid;
 use crate::entities::User;
 
 mod api_key_store;
+mod artifact_store;
 mod audit_log_store;
 mod run_store;
 mod secret_store;
@@ -53,6 +54,7 @@ pub(super) struct State {
     pub(super) idempotency_keys: HashMap<String, Uuid>,
     pub(super) steps: HashMap<Uuid, crate::entities::Step>,
     pub(super) step_dependencies: Vec<crate::entities::StepDependency>,
+    pub(super) artifacts: HashMap<Uuid, crate::entities::Artifact>,
     pub(super) users: HashMap<Uuid, User>,
     pub(super) api_keys: HashMap<Uuid, crate::entities::ApiKey>,
     pub(super) secrets: HashMap<String, EncryptedSecret>,

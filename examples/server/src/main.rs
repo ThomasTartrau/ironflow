@@ -15,6 +15,9 @@
 //! - `DASHBOARD_DIR` (optional: overrides the embedded dashboard with a filesystem path)
 //! - `ALLOWED_ORIGINS` (comma-separated list; omit to allow same-origin only)
 //! - `WEBHOOK_URL` (optional: outbound webhook for run events)
+//! - `ARTIFACTS_DIR` (optional: filesystem root for step artifacts; unset
+//!   leaves artifacts disabled and the artifact routes answer `501`)
+//! - `ARTIFACT_MAX_BYTES` (optional: per-artifact size limit, default 100 MiB)
 //! - `IRONFLOW_DEFAULT_RUN_MAX_COST_USD` (optional: default per-run cost cap in
 //!   USD, applied when neither the run creation request nor the workflow
 //!   handler declares one; unset means no cap)
@@ -39,8 +42,11 @@ use ironflow_api::reaper::Reaper;
 use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::sse::SseBroadcaster;
 use ironflow_api::state::AppState;
+use ironflow_artifacts::blob_store::BlobStore;
+use ironflow_artifacts::local::LocalBlobStore;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
+use ironflow_engine::artifact::DirectArtifactSink;
 use ironflow_engine::budget::BudgetConfig;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::{Event, WebhookSubscriber};
@@ -99,6 +105,26 @@ async fn main() {
     let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
     ironflow_workflows::register_all(&mut engine).expect("failed to register workflows");
 
+    // Artifacts stay off until a storage root is configured. The API and any
+    // in-process run then share the same backend, so a file a step produces is
+    // downloadable from the same server that stored it.
+    let blob_store: Option<Arc<dyn BlobStore>> = config.artifacts_dir.as_ref().map(|dir| {
+        info!(
+            dir = %dir.display(),
+            max_bytes = config.artifact_max_bytes,
+            "artifact storage enabled"
+        );
+        Arc::new(LocalBlobStore::new(dir).max_bytes(config.artifact_max_bytes))
+            as Arc<dyn BlobStore>
+    });
+
+    if let Some(ref blob) = blob_store {
+        engine.set_artifact_sink(Arc::new(DirectArtifactSink::new(
+            blob.clone(),
+            store.clone(),
+        )));
+    }
+
     if let Some(ref webhook_url) = config.webhook_url {
         info!(url = %webhook_url, "registering webhook subscriber");
         engine.subscribe(
@@ -115,13 +141,16 @@ async fn main() {
 
     let cors = build_cors(&config);
 
-    let state = AppState::new(
+    let mut state = AppState::new(
         store.clone(),
         engine.clone(),
         jwt_config,
         config.worker_token.clone(),
         event_sender,
     );
+    if let Some(blob) = blob_store {
+        state = state.with_blob_store(blob);
+    }
 
     // Without the reaper, a run whose worker dies stays Running forever.
     let shutdown = CancellationToken::new();

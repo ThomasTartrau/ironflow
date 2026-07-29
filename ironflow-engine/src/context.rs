@@ -29,20 +29,28 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use tokio::task::{Id, JoinSet};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::models::{
-    NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind, StepStatus,
-    StepUpdate, TriggerKind,
+    ArtifactLookup, NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind,
+    StepStatus, StepUpdate, TriggerKind,
 };
 use ironflow_store::store::Store;
 
+use ironflow_artifacts::name::guess_content_type;
+use ironflow_artifacts::stream_from_bytes;
+use ironflow_store::entities::Artifact;
+
+use crate::artifact::{
+    ArtifactSink, ArtifactUpload, StepLocation, collect_outputs, materialize_inputs,
+};
 use crate::budget::step_budget_usd;
 use crate::config::{
     AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig,
@@ -106,6 +114,10 @@ pub struct WorkflowContext {
     carried_duration_ms: u64,
     /// Optional sender for real-time log streaming.
     log_sender: Option<LogSender>,
+    /// Where artifact bytes are read and written. `None` when no artifact
+    /// storage is configured: steps that declare artifacts then fail explicitly
+    /// instead of silently dropping their files.
+    artifact_sink: Option<Arc<dyn ArtifactSink>>,
 }
 
 impl WorkflowContext {
@@ -130,6 +142,7 @@ impl WorkflowContext {
             attempt: 1,
             carried_duration_ms: 0,
             log_sender: None,
+            artifact_sink: None,
         }
     }
 
@@ -159,12 +172,227 @@ impl WorkflowContext {
             attempt: 1,
             carried_duration_ms: 0,
             log_sender: None,
+            artifact_sink: None,
         }
     }
 
     /// Attach a log sender for real-time step output streaming.
     pub fn set_log_sender(&mut self, sender: LogSender) {
         self.log_sender = Some(sender);
+    }
+
+    /// Attach the backend that stores and serves artifact bytes.
+    ///
+    /// Without one, any step that declares an output or calls
+    /// [`put_artifact`](Self::put_artifact) fails with
+    /// [`EngineError::ArtifactsUnavailable`]. Every other step is unaffected,
+    /// so an existing deployment keeps working until artifacts are configured.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use ironflow_engine::artifact::ArtifactSink;
+    /// use ironflow_engine::context::WorkflowContext;
+    ///
+    /// # fn example(ctx: &mut WorkflowContext, sink: Arc<dyn ArtifactSink>) {
+    /// ctx.set_artifact_sink(sink);
+    /// # }
+    /// ```
+    pub fn set_artifact_sink(&mut self, sink: Arc<dyn ArtifactSink>) {
+        self.artifact_sink = Some(sink);
+    }
+
+    /// The artifact backend, or an explicit error when none is configured.
+    fn artifact_sink(&self) -> Result<&Arc<dyn ArtifactSink>, EngineError> {
+        self.artifact_sink.as_ref().ok_or_else(|| {
+            EngineError::ArtifactsUnavailable(
+                "no artifact storage is attached to this run".to_string(),
+            )
+        })
+    }
+
+    /// Store an in-memory payload as an artifact of the given step.
+    ///
+    /// The declarative [`ShellConfig::output`](crate::config::ShellConfig::output)
+    /// covers shell steps; this covers custom operations and agent steps, which
+    /// have no working directory to collect from.
+    ///
+    /// The MIME type is guessed from `name` unless `content_type` is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::ArtifactsUnavailable`] when no backend is
+    /// attached, [`EngineError::Artifact`] when the name is invalid or storage
+    /// fails, and [`EngineError::Store`] when the step already owns that name.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example(ctx: &WorkflowContext, step_id: Uuid) -> Result<(), EngineError> {
+    /// let artifact = ctx
+    ///     .put_artifact(step_id, "summary.json", None, br#"{"ok":true}"#.to_vec())
+    ///     .await?;
+    /// assert_eq!(artifact.content_type, "application/json");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn put_artifact(
+        &self,
+        step_id: Uuid,
+        name: &str,
+        content_type: Option<&str>,
+        content: Vec<u8>,
+    ) -> Result<Artifact, EngineError> {
+        let sink = self.artifact_sink()?;
+        sink.put(
+            ArtifactUpload {
+                run_id: self.run_id,
+                step_id,
+                name: name.to_string(),
+                content_type: content_type
+                    .map(str::to_string)
+                    .unwrap_or_else(|| guess_content_type(name)),
+            },
+            stream_from_bytes(content),
+        )
+        .await
+    }
+
+    /// Read back an artifact produced earlier in this run.
+    ///
+    /// Resolution follows the same rule as a declared input: same run and
+    /// attempt, steps positioned strictly before the current one, closest
+    /// producer wins.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::ArtifactNotFound`] when nothing matches,
+    /// [`EngineError::ArtifactsUnavailable`] when no backend is attached, and
+    /// [`EngineError::Artifact`] when the bytes cannot be read.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &WorkflowContext) -> Result<(), EngineError> {
+    /// let bytes = ctx.get_artifact("build", "report.html").await?;
+    /// println!("{} bytes", bytes.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_artifact(&self, step: &str, name: &str) -> Result<Vec<u8>, EngineError> {
+        let sink = self.artifact_sink()?;
+
+        let artifact = self
+            .store
+            .find_artifact_for_input(ArtifactLookup {
+                run_id: self.run_id,
+                attempt: self.attempt,
+                before_position: self.position,
+                step_name: step.to_string(),
+                name: name.to_string(),
+            })
+            .await?
+            .ok_or_else(|| EngineError::ArtifactNotFound {
+                step: step.to_string(),
+                name: name.to_string(),
+            })?;
+
+        let mut content = sink.get(&artifact).await?;
+        let mut buffer = Vec::with_capacity(artifact.size_bytes as usize);
+        while let Some(chunk) = content.next().await {
+            let chunk = chunk?;
+            buffer.extend_from_slice(chunk.as_ref());
+        }
+
+        Ok(buffer)
+    }
+
+    /// Place a shell step's declared inputs in its working directory.
+    ///
+    /// A step that declares none needs no backend, so the check for one only
+    /// happens when there is something to materialize.
+    async fn prepare_step_inputs(
+        &self,
+        config: &StepConfig,
+        position: u32,
+    ) -> Result<(), EngineError> {
+        let StepConfig::Shell(shell) = config else {
+            return Ok(());
+        };
+        if shell.inputs.is_empty() {
+            return Ok(());
+        }
+
+        materialize_inputs(
+            self.artifact_sink()?,
+            &self.store,
+            shell,
+            StepLocation {
+                run_id: self.run_id,
+                attempt: self.attempt,
+                position,
+            },
+        )
+        .await
+    }
+
+    /// Store a shell step's declared outputs.
+    ///
+    /// On a failed step this is best-effort: the collection error is logged and
+    /// swallowed so it never masks the failure that actually stopped the step.
+    async fn store_step_outputs(
+        &self,
+        config: &StepConfig,
+        step_id: Uuid,
+        step_name: &str,
+        step_succeeded: bool,
+    ) -> Result<(), EngineError> {
+        let StepConfig::Shell(shell) = config else {
+            return Ok(());
+        };
+        if shell.outputs.is_empty() {
+            return Ok(());
+        }
+
+        let sink = match self.artifact_sink() {
+            Ok(sink) => sink,
+            Err(err) if step_succeeded => return Err(err),
+            Err(err) => {
+                warn!(
+                    run_id = %self.run_id,
+                    step = %step_name,
+                    error = %err,
+                    "cannot collect outputs of a failed step"
+                );
+                return Ok(());
+            }
+        };
+
+        let collected =
+            collect_outputs(sink, shell, self.run_id, step_id, step_name, step_succeeded).await;
+
+        match collected {
+            Ok(()) => Ok(()),
+            Err(err) if step_succeeded => Err(err),
+            Err(err) => {
+                warn!(
+                    run_id = %self.run_id,
+                    step = %step_name,
+                    error = %err,
+                    "failed to collect outputs of a failed step"
+                );
+                Ok(())
+            }
+        }
     }
 
     /// Seed the context with the run's attempt number and the totals already
@@ -387,6 +615,13 @@ impl WorkflowContext {
 
             self.start_step(step.id, now).await?;
 
+            // Inputs are materialized before any step in the wave starts, so a
+            // missing one fails the wave rather than a half-run command.
+            if let Err(err) = self.prepare_step_inputs(config, wave_position).await {
+                self.fail_step(step.id, &err).await;
+                return Err(err);
+            }
+
             step_records.push((step.id, name.to_string(), config.clone()));
         }
 
@@ -459,8 +694,23 @@ impl WorkflowContext {
                 }
             };
 
-            let (step_id, step_name, _) = &step_records[idx];
+            let (step_id, step_name, step_config) = &step_records[idx];
             let completed_at = Utc::now();
+
+            if let Err(err) = self
+                .store_step_outputs(step_config, *step_id, step_name, step_result.is_ok())
+                .await
+            {
+                self.fail_step(*step_id, &err).await;
+                indexed_results[idx] = Some(Err(err.to_string()));
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+                if fail_fast {
+                    join_set.abort_all();
+                }
+                continue;
+            }
 
             match step_result {
                 Ok(output) => {
@@ -1181,6 +1431,9 @@ impl WorkflowContext {
             attempt: 1,
             carried_duration_ms: 0,
             log_sender: self.log_sender.clone(),
+            // A child shares the storage backend but not the parent's artifacts:
+            // input lookups are scoped to the child's own run.
+            artifact_sink: self.artifact_sink.clone(),
         };
 
         let result = handler.execute(&mut child_ctx).await;
@@ -1311,12 +1564,29 @@ impl WorkflowContext {
 
         self.start_step(step.id, Utc::now()).await?;
 
+        // Inputs must exist before the command runs. A failure here fails the
+        // step: the command would otherwise run against missing files.
+        if let Err(err) = self.prepare_step_inputs(&config, position).await {
+            self.fail_step(step.id, &err).await;
+            return Err(err);
+        }
+
         let step_log_sender = self
             .log_sender
             .as_ref()
             .map(|s| StepLogSender::new(s.clone(), self.run_id, step.id, name.to_string()));
 
-        match execute_step_config(&config, &self.provider, step_log_sender).await {
+        let execution = execute_step_config(&config, &self.provider, step_log_sender).await;
+
+        if let Err(err) = self
+            .store_step_outputs(&config, step.id, name, execution.is_ok())
+            .await
+        {
+            self.fail_step(step.id, &err).await;
+            return Err(err);
+        }
+
+        match execution {
             Ok(output) => {
                 self.total_cost_usd += output.cost_usd;
                 self.total_duration_ms += output.duration_ms;
@@ -1423,6 +1693,34 @@ impl WorkflowContext {
             .await?;
 
         Ok(())
+    }
+
+    /// Mark a step as failed, best-effort.
+    ///
+    /// Used on paths that fail around the operation itself (artifact inputs and
+    /// outputs), where the step record is already `Running` and the caller is
+    /// about to propagate `err`. A store failure here is logged, never returned:
+    /// it must not replace the error the caller is reporting.
+    async fn fail_step(&self, step_id: Uuid, err: &EngineError) {
+        if let Err(store_err) = self
+            .store
+            .update_step(
+                step_id,
+                StepUpdate {
+                    status: Some(StepStatus::Failed),
+                    error: Some(err.to_string()),
+                    completed_at: Some(Utc::now()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+        {
+            error!(
+                step_id = %step_id,
+                error = %store_err,
+                "failed to persist step failure"
+            );
+        }
     }
 
     /// Access the store directly (advanced usage).

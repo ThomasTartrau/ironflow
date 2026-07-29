@@ -12,11 +12,13 @@ use reqwest::{Client, StatusCode};
 use uuid::Uuid;
 
 use ironflow_store::api_key_store::ApiKeyStore;
+use ironflow_store::artifact_store::ArtifactStore;
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
-    ApiKey, ApiKeyUpdate, AuditLogEntry, AuditLogFilter, LeaseRequest, NewApiKey, NewAuditLogEntry,
-    NewRun, NewStep, NewStepDependency, NewUser, Page, ReapedRun, Run, RunCreation, RunFilter,
-    RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
+    ApiKey, ApiKeyUpdate, Artifact, ArtifactLookup, AuditLogEntry, AuditLogFilter, LeaseRequest,
+    NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep, NewStepDependency, NewUser, Page,
+    ReapedRun, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata,
+    Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::secret_store::SecretStore;
@@ -551,6 +553,74 @@ impl SecretStore for ApiRunStore {
             Err(StoreError::Database(
                 "SecretStore not available in worker".to_string(),
             ))
+        })
+    }
+}
+
+impl ArtifactStore for ApiRunStore {
+    fn create_artifact(&self, artifact: NewArtifact) -> StoreFuture<'_, Artifact> {
+        Box::pin(async move {
+            // The worker records an artifact by uploading its bytes, which the
+            // API writes and registers in one call. There is no metadata-only
+            // route, so this must never be reached from the worker.
+            let _ = artifact;
+            Err(StoreError::Database(
+                "create_artifact not supported via worker API — upload the bytes instead"
+                    .to_string(),
+            ))
+        })
+    }
+
+    fn get_artifact(&self, _step_id: Uuid, _name: &str) -> StoreFuture<'_, Option<Artifact>> {
+        // The worker resolves artifacts through find_artifact_for_input, which
+        // needs the run to scope the search. Keep this total rather than add a
+        // route the worker never calls.
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn list_artifacts_for_run(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Artifact>> {
+        Box::pin(async move {
+            let resp = self
+                .client
+                .get(self.internal(&format!("/runs/{run_id}/artifacts")))
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<Vec<Artifact>> = resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
+        })
+    }
+
+    fn find_artifact_for_input(&self, lookup: ArtifactLookup) -> StoreFuture<'_, Option<Artifact>> {
+        Box::pin(async move {
+            // Resolved worker-side from the run's steps and artifacts, so the
+            // matching rule stays in one place instead of being duplicated in a
+            // dedicated route.
+            let steps = self.list_steps(lookup.run_id).await?;
+
+            let Some(producer) = steps
+                .iter()
+                .filter(|step| {
+                    step.attempt == lookup.attempt
+                        && step.name == lookup.step_name
+                        && step.position < lookup.before_position
+                })
+                .max_by_key(|step| step.position)
+            else {
+                return Ok(None);
+            };
+
+            let artifacts = self.list_artifacts_for_run(lookup.run_id).await?;
+            Ok(artifacts
+                .into_iter()
+                .find(|artifact| artifact.step_id == producer.id && artifact.name == lookup.name))
         })
     }
 }

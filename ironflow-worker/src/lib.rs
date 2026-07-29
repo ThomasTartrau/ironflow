@@ -27,6 +27,7 @@
 //! ```
 
 mod api_store;
+mod artifact_sink;
 pub mod error;
 mod log_pusher;
 pub mod worker;

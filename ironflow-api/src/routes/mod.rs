@@ -6,6 +6,7 @@ pub mod audit_logs;
 pub mod auth;
 pub mod cancel_run;
 pub mod create_run;
+pub mod download_artifact;
 pub mod events;
 pub mod get_run;
 pub mod get_stats;
@@ -38,6 +39,13 @@ use crate::state::AppState;
 
 /// Maximum request body size: 2 MiB.
 const MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
+
+/// Maximum artifact upload size: 128 MiB.
+///
+/// A transport ceiling only, sitting slightly above the blob store's own limit
+/// so an oversized payload is refused by the store with a precise error instead
+/// of being cut off by the transport layer.
+const MAX_ARTIFACT_BODY_SIZE: usize = 128 * 1024 * 1024;
 
 /// Router-level configuration with sensible defaults.
 ///
@@ -135,6 +143,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         )
         .route("/runs/{id}/logs", post(internal::push_logs::push_logs))
         .route("/runs/{id}/lease", post(internal::renew_lease::renew_lease))
+        .route(
+            "/runs/{id}/artifacts",
+            get(internal::list_artifacts::list_artifacts),
+        )
         .route("/steps", post(internal::create_step::create_step))
         .route("/steps/{id}", put(internal::update_step::update_step))
         .route(
@@ -144,6 +156,18 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/secrets/{*key}", get(internal::get_secret::get_secret))
         .layer(axum_mw::from_fn(worker_token_auth))
         .layer(Extension(WorkerToken(state.worker_token.clone())))
+        .with_state(state.clone());
+
+    // Artifact uploads carry file payloads, so they sit outside the 2 MiB
+    // limit that guards every JSON route and get their own, larger ceiling.
+    let artifact_upload_routes = Router::new()
+        .route(
+            "/api/v1/internal/runs/{id}/steps/{step_id}/artifacts/{name}",
+            post(internal::upload_artifact::upload_artifact),
+        )
+        .layer(axum_mw::from_fn(worker_token_auth))
+        .layer(Extension(WorkerToken(state.worker_token.clone())))
+        .layer(RequestBodyLimitLayer::new(MAX_ARTIFACT_BODY_SIZE))
         .with_state(state.clone());
 
     // Auth credential routes (rate-limited when configured)
@@ -190,6 +214,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/runs/{id}/approve", post(approve_run::approve_run))
         .route("/runs/{id}/reject", post(approve_run::reject_run))
         .route("/runs/{id}/retry", post(retry_run::retry_run))
+        .route(
+            "/runs/{id}/steps/{step_id}/artifacts/{name}",
+            get(download_artifact::download_artifact),
+        )
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
         .route("/stats", get(get_stats::get_stats))
@@ -242,6 +270,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .nest("/api/v1", api_v1)
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
+        .merge(artifact_upload_routes)
         .layer(axum_mw::from_fn(security_headers));
 
     #[cfg(feature = "prometheus")]
