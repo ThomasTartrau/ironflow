@@ -86,6 +86,11 @@ pub enum RunCommands {
         /// Run UUID.
         id: Uuid,
     },
+    /// Reject a run waiting for approval, failing it.
+    Reject {
+        /// Run UUID.
+        id: Uuid,
+    },
     /// Retry a failed run.
     Retry {
         /// Run UUID.
@@ -213,6 +218,12 @@ pub async fn execute(
         }
         RunCommands::Approve { id } => {
             let response = client.approve_run(*id).await?;
+            output::print_output(json_mode, &response, || {
+                output::runs_table(slice::from_ref(&response.data))
+            })?;
+        }
+        RunCommands::Reject { id } => {
+            let response = client.reject_run(*id).await?;
             output::print_output(json_mode, &response, || {
                 output::runs_table(slice::from_ref(&response.data))
             })?;

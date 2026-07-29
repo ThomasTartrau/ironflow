@@ -35,7 +35,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 tempfile = "3"
 ironflow-api = { path = "../ironflow-api" }
 ironflow-auth = { path = "../ironflow-auth" }
-ironflow-store = { path = "../ironflow-store" }
+ironflow-store = { path = "../ironflow-store", features = ["store-memory", "secret-store"] }
 ironflow-engine = { path = "../ironflow-engine" }
 ironflow-core = { path = "../ironflow-core" }
 axum = "0.8"
