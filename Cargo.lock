@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-cli"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -2691,7 +2691,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-sdk"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "chrono",

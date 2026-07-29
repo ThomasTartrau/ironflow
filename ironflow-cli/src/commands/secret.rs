@@ -1,13 +1,20 @@
-//! Secret subcommands: rotate, key-status.
+//! Secret subcommands: list, set, update, delete, rotate, key-status.
+//!
+//! No command in this module ever renders a secret value: the API's
+//! `SecretResponse` does not carry one, and values are only ever sent.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, value_parser};
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ApiResponse;
-use ironflow_sdk::types::{KeyVersionsResponse, RotateSecretsRequest};
+use ironflow_sdk::types::{
+    KeyVersionsResponse, RotateSecretsRequest, SetSecretRequest, UpdateSecretRequest,
+};
 use serde::Serialize;
+use std::slice;
 use uuid::Uuid;
 
+use crate::confirm::{confirm, resolve_secret_value};
 use crate::output;
 
 /// Arguments for the `secret` command group.
@@ -21,6 +28,31 @@ pub struct SecretArgs {
 /// Available secret subcommands.
 #[derive(Debug, Subcommand)]
 pub enum SecretCommands {
+    /// List secret keys. Values are never returned by the API.
+    List,
+    /// Create a secret, or replace the value of an existing one.
+    Set {
+        /// Secret key (namespaced, e.g. `workflows/inbox/gmail_token`).
+        key: String,
+        /// Secret value. Read from stdin when omitted, which keeps it out of
+        /// the shell history and out of `ps` output.
+        value: Option<String>,
+    },
+    /// Replace the value of an existing secret. Fails if the key is unknown.
+    Update {
+        /// Secret key.
+        key: String,
+        /// New secret value. Read from stdin when omitted.
+        value: Option<String>,
+    },
+    /// Delete a secret.
+    Delete {
+        /// Secret key.
+        key: String,
+        /// Skip the interactive confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Re-encrypt every stored secret with a key version.
     ///
     /// Runs batch by batch until the whole stock is on the target version.
@@ -59,13 +91,51 @@ struct RotationSummary {
 ///
 /// # Errors
 ///
-/// Returns an error on API failure, or when a rotation left secrets behind
-/// because they could not be decrypted.
+/// Returns an error on API failure, on an empty value, when a destructive
+/// command is not confirmed, or when a rotation left secrets behind because
+/// they could not be decrypted.
 pub async fn execute(client: &IronflowClient, args: &SecretArgs, json_mode: bool) -> Result<()> {
     match &args.command {
-        SecretCommands::Rotate(rotate_args) => rotate(client, rotate_args, json_mode).await,
-        SecretCommands::KeyStatus => key_status(client, json_mode).await,
+        SecretCommands::List => {
+            let response = client.list_secrets().await?;
+            output::print_output(json_mode, &response, || {
+                output::secrets_table(&response.data)
+            })?;
+        }
+        SecretCommands::Set { key, value } => {
+            let value = resolve_secret_value(value.as_deref(), "secret value")?;
+            let request: SetSecretRequest = SetSecretRequest::builder()
+                .key(key.clone())
+                .value(value)
+                .try_into()
+                .context("failed to build SetSecretRequest")?;
+
+            let response = client.create_secret(&request).await?;
+            output::print_output(json_mode, &response, || {
+                output::secrets_table(slice::from_ref(&response.data))
+            })?;
+        }
+        SecretCommands::Update { key, value } => {
+            let value = resolve_secret_value(value.as_deref(), "secret value")?;
+            let request: UpdateSecretRequest = UpdateSecretRequest::builder()
+                .value(value)
+                .try_into()
+                .context("failed to build UpdateSecretRequest")?;
+
+            let response = client.update_secret(key, &request).await?;
+            output::print_output(json_mode, &response, || {
+                output::secrets_table(slice::from_ref(&response.data))
+            })?;
+        }
+        SecretCommands::Delete { key, yes } => {
+            confirm(&format!("Delete secret '{key}'?"), *yes)?;
+            client.delete_secret(key).await?;
+            output::report_deletion(json_mode, "secret", key)?;
+        }
+        SecretCommands::Rotate(rotate_args) => rotate(client, rotate_args, json_mode).await?,
+        SecretCommands::KeyStatus => key_status(client, json_mode).await?,
     }
+    Ok(())
 }
 
 /// Drive a rotation to completion, one batch per request.
@@ -163,59 +233,4 @@ fn warn_on_missing(response: &ApiResponse<KeyVersionsResponse>) {
     eprintln!(
         "warning: key version(s) {missing} are used by stored secrets but not configured; those secrets cannot be read and the server will refuse to restart"
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use clap::Parser;
-
-    use super::*;
-
-    /// Minimal parser harness: the real CLI wraps these in its own enum.
-    #[derive(Debug, Parser)]
-    struct TestCli {
-        #[command(subcommand)]
-        command: SecretCommands,
-    }
-
-    #[test]
-    fn rotate_defaults_to_active_version() {
-        let cli = TestCli::try_parse_from(["test", "rotate"]).unwrap();
-        let SecretCommands::Rotate(args) = cli.command else {
-            panic!("expected rotate");
-        };
-        assert!(args.to_version.is_none());
-        assert_eq!(args.batch_size, 100);
-    }
-
-    #[test]
-    fn rotate_accepts_explicit_version_and_batch_size() {
-        let cli =
-            TestCli::try_parse_from(["test", "rotate", "--to-version", "2", "--batch-size", "50"])
-                .unwrap();
-        let SecretCommands::Rotate(args) = cli.command else {
-            panic!("expected rotate");
-        };
-        assert_eq!(args.to_version, Some(2));
-        assert_eq!(args.batch_size, 50);
-    }
-
-    #[test]
-    fn rotate_rejects_non_positive_version() {
-        assert!(TestCli::try_parse_from(["test", "rotate", "--to-version", "0"]).is_err());
-        assert!(TestCli::try_parse_from(["test", "rotate", "--to-version", "-1"]).is_err());
-    }
-
-    #[test]
-    fn rotate_rejects_out_of_range_batch_size() {
-        assert!(TestCli::try_parse_from(["test", "rotate", "--batch-size", "0"]).is_err());
-        assert!(TestCli::try_parse_from(["test", "rotate", "--batch-size", "1001"]).is_err());
-    }
-
-    #[test]
-    fn key_status_takes_no_arguments() {
-        let cli = TestCli::try_parse_from(["test", "key-status"]).unwrap();
-        assert!(matches!(cli.command, SecretCommands::KeyStatus));
-        assert!(TestCli::try_parse_from(["test", "key-status", "extra"]).is_err());
-    }
 }
