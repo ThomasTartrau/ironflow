@@ -20,6 +20,11 @@ variables:
   GIT_DEPTH: 0
   GIT_STRATEGY: clone
   RELEASE_PLZ_VERSION: "0.3.160"
+  # cargo defaults to a 30s HTTP timeout, which the runner blows through often
+  # enough that crates.io uploads fail mid-release and leave the workspace
+  # half-published. Give the upload room and retry transient network errors.
+  CARGO_HTTP_TIMEOUT: "180"
+  CARGO_NET_RETRY: "5"
   # Cached with node_modules so corepack downloads the pinned pnpm once per
   # branch instead of hitting the npm registry in every dashboard job.
   COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
@@ -250,5 +255,14 @@ release-plz-release:
     - git fetch origin "$CI_COMMIT_BRANCH"
     - git checkout -B "$CI_COMMIT_BRANCH" "origin/$CI_COMMIT_BRANCH"
     - release-plz release --forge gitlab --git-token "$GITLAB_TOKEN"
+  # release-plz skips any crate whose tag already exists, so a rerun resumes at
+  # the crate that failed instead of republishing. Retrying is what unblocks a
+  # release that died on a crates.io timeout partway through the workspace.
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
