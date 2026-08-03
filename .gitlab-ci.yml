@@ -14,6 +14,21 @@ stages:
   - build
   - release
 
+# Infrastructure-only retries. The runner reaches Docker Hub over a link that
+# times out often enough to redden pipelines on an image pull, before a single
+# line of the job script runs. Only the reasons GitLab attributes to the runner
+# or the platform are listed here: a script_failure -- a real clippy error, a
+# failing test, a vulnerability found by cargo audit -- still fails on the first
+# attempt.
+default:
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - scheduler_failure
+      - api_failure
+
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
   IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"

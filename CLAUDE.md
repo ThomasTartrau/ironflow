@@ -154,6 +154,22 @@ When a change touches the API surface (new route, modified response, new field),
 
 **Rule:** a PR that adds or changes an API route without updating SDK + CLI is incomplete.
 
+## Roadmap & Implementation Notes
+
+Two versioned documents track project state. GitLab issues remain the source of truth for
+status, priority and discussion; these files are the summary that lives in the repo.
+
+- **`ROADMAP.md`** (root) -- sections `Done`, `In progress`, `Planned`, `Rejected`. One line
+  per entry, each linking to its GitLab issue. `Rejected` carries a one-sentence reason so
+  the same ideas do not come back every six months. There is no automated sync: move the
+  entry yourself when the state changes.
+- **`docs/implementations/<issue-number>-<slug>.md`** -- optional write-up of how a shipped
+  issue was implemented. See `docs/implementations/README.md` for the conventions.
+
+**Rule:** an entry may only move to `Done`, and an implementation note may only be added,
+once the code is merged into `main`. No document in this repo describes as shipped code
+that does not exist on `main`.
+
 ## When Adding New Features
 
 Checklist for every PR:
@@ -163,5 +179,5 @@ Checklist for every PR:
 3. Add integration tests if the feature involves I/O
 4. Run `cargo doc --no-deps` - zero warnings
 5. Run `cargo test` - all tests pass
-6. Update `plan.md` if a roadmap item is completed
+6. Move the entry in `ROADMAP.md` once the issue is merged into `main` (see **Roadmap & Implementation Notes** above)
 7. Propagate API changes to SDK, CLI, and MCP (see **SDK & CLI Propagation** above)
