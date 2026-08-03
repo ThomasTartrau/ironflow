@@ -418,6 +418,67 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/secrets/key-versions": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Report how the configured key ring lines up with the stored secrets.
+		 * @description This is what tells an operator whether an old key can be dropped from
+		 *     `IRONFLOW_SECRET_KEYS` without breaking the next startup: a version listed
+		 *     in `retirable` is configured, not active, and used by no secret.
+		 *
+		 *     A non-empty `missing` means some stored secrets cannot be decrypted with
+		 *     the current configuration -- the server refuses to start in that state.
+		 *
+		 *     # Errors
+		 *
+		 *     - 401 if the caller is not authenticated
+		 *     - 403 if the caller is not an admin
+		 */
+		get: operations["secret_key_versions"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/secrets/rotate": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Re-encrypt one batch of secrets towards a key version. Admin only.
+		 * @description One call processes one batch, so a rotation over a large stock never
+		 *     becomes a single long request. The client loops, passing `last_id` back as
+		 *     `after_id`, until `remaining` reaches zero or `last_id` comes back null.
+		 *
+		 *     The operation is idempotent: secrets already on the target version are
+		 *     skipped, so an interrupted rotation can simply be restarted.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if the target version is not in the configured key ring
+		 *     - 401 if the caller is not authenticated
+		 *     - 403 if the caller is not an admin
+		 */
+		post: operations["rotate_secrets"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/secrets/{key}": {
 		parameters: {
 			query?: never;
@@ -1256,7 +1317,27 @@ export interface components {
 			| "log_line"
 			| "user_signed_in"
 			| "user_signed_up"
-			| "user_signed_out";
+			| "user_signed_out"
+			| "secrets_rotated";
+		/** @description How the configured key ring lines up with the stored secrets. */
+		KeyVersionsResponse: {
+			/**
+			 * Format: int32
+			 * @description Version used to encrypt new secrets.
+			 */
+			active: number;
+			/** @description Versions present in the configured key ring. */
+			configured: number[];
+			/** @description Versions actually used by stored secrets. */
+			in_use: number[];
+			/**
+			 * @description Versions used by stored secrets but absent from the key ring.
+			 *     Non-empty means some secrets are unreadable.
+			 */
+			missing: number[];
+			/** @description Versions that can be removed from the key ring safely. */
+			retirable: number[];
+		};
 		/** @description Query parameters for listing audit log entries. */
 		ListAuditLogsQuery: {
 			event_type?: null | components["schemas"]["EventKind"];
@@ -1371,6 +1452,58 @@ export interface components {
 			user_id: string;
 			/** @description Display username. */
 			username: string;
+		};
+		/**
+		 * @description Request body for rotating a batch of secrets to another key version.
+		 *
+		 *     Rotation is driven one batch per call so a long rotation never becomes a
+		 *     long HTTP request: the client loops, carrying `after_id` forward.
+		 */
+		RotateSecretsRequest: {
+			/**
+			 * Format: uuid
+			 * @description Resume after this secret ID. Omit to start from the beginning.
+			 */
+			after_id?: string | null;
+			/**
+			 * Format: int32
+			 * @description Secrets to process in this batch. Defaults to 100, clamped to 1000.
+			 */
+			batch_size?: number | null;
+			/**
+			 * Format: int32
+			 * @description Target key version. Defaults to the server's active version.
+			 */
+			to_version?: number | null;
+		};
+		/** @description Outcome of one rotation batch. */
+		RotateSecretsResponse: {
+			/**
+			 * Format: int64
+			 * @description Secrets skipped because they could not be decrypted.
+			 */
+			failed: number;
+			/**
+			 * Format: uuid
+			 * @description Highest secret ID seen in this batch. Pass it back as `after_id` to
+			 *     continue; `null` means there is nothing left to do.
+			 */
+			last_id?: string | null;
+			/**
+			 * Format: int64
+			 * @description Secrets left on another key version after this batch.
+			 */
+			remaining: number;
+			/**
+			 * Format: int64
+			 * @description Secrets successfully re-encrypted in this batch.
+			 */
+			rotated: number;
+			/**
+			 * Format: int32
+			 * @description Key version the batch re-encrypted towards.
+			 */
+			to_version: number;
 		};
 		/** @description Run detail response — includes steps and payload. */
 		RunDetailResponse: {
@@ -2708,6 +2841,86 @@ export interface operations {
 				};
 			};
 			/** @description Invalid input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	secret_key_versions: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Key ring status */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["KeyVersionsResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	rotate_secrets: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Target key version, batch size, and resume cursor */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["RotateSecretsRequest"];
+			};
+		};
+		responses: {
+			/** @description Batch rotated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["RotateSecretsResponse"];
+				};
+			};
+			/** @description Invalid target key version */
 			400: {
 				headers: {
 					[name: string]: unknown;

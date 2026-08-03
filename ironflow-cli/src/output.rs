@@ -3,16 +3,20 @@
 //! Provides helpers to render API responses as either a UTF-8 styled
 //! terminal table (with colored status) or raw JSON.
 
-use std::io::Write;
+use std::io::{Write, stdout};
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::types::{
-    ArtifactResponse, RunDetailResponse, RunResponse, RunStatus, StatsResponse, StepResponse,
-    StepStatus, WorkflowDetailResponse, WorkflowSummary,
+    ApiKeyResponse, ApiKeyScope, ArtifactResponse, AuditLogEntry, CreateApiKeyResponse,
+    KeyVersionsResponse, RunDetailResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse,
+    StatsResponse, StepResponse, StepStatus, UserResponse, WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
+use serde_json::to_string_pretty;
+use uuid::Uuid;
 
 /// Map a [`RunStatus`] to a terminal color.
 fn status_color(status: &RunStatus) -> Color {
@@ -88,9 +92,9 @@ pub fn render_output<W: Write, T: Serialize>(
     json_mode: bool,
     value: &T,
     table_fn: impl FnOnce() -> Table,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if json_mode {
-        let json = serde_json::to_string_pretty(value)?;
+        let json = to_string_pretty(value)?;
         writeln!(writer, "{json}")?;
     } else {
         writeln!(writer, "{}", table_fn())?;
@@ -107,8 +111,22 @@ pub fn print_output<T: Serialize>(
     json_mode: bool,
     value: &T,
     table_fn: impl FnOnce() -> Table,
-) -> anyhow::Result<()> {
-    render_output(&mut std::io::stdout().lock(), json_mode, value, table_fn)
+) -> Result<()> {
+    render_output(&mut stdout().lock(), json_mode, value, table_fn)
+}
+
+/// Render a value as pretty JSON to stdout.
+///
+/// For commands whose output is a summary the CLI builds itself, with no
+/// table equivalent.
+///
+/// # Errors
+///
+/// Returns an error if JSON serialization or writing fails.
+pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
+    let json = to_string_pretty(value)?;
+    writeln!(stdout().lock(), "{json}")?;
+    Ok(())
 }
 
 /// Render a list of runs as a table.
@@ -402,14 +420,303 @@ pub fn stats_table(stats: &StatsResponse) -> Table {
     table
 }
 
+/// Render a list of key versions as a comma-separated string.
+fn format_versions(versions: &[i32]) -> String {
+    if versions.is_empty() {
+        return "-".to_string();
+    }
+    versions
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Outcome of a `delete` command.
+///
+/// The API answers `204 No Content`, which serializes to nothing useful, so the
+/// CLI reports the deletion itself and keeps `--json` machine-readable.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_cli::output::Deleted;
+///
+/// let deleted = Deleted::new("secret", "db/password");
+/// assert_eq!(deleted.kind, "secret");
+/// ```
+#[derive(Debug, Serialize)]
+pub struct Deleted {
+    /// What was deleted (`secret`, `api-key`, `user`).
+    pub kind: &'static str,
+    /// Identifier of the deleted resource.
+    pub id: String,
+    /// Always `true`; present so consumers can match on a stable shape.
+    pub deleted: bool,
+}
+
+impl Deleted {
+    /// Build a deletion report.
+    pub fn new(kind: &'static str, id: impl Into<String>) -> Self {
+        Self {
+            kind,
+            id: id.into(),
+            deleted: true,
+        }
+    }
+}
+
+/// Render a deletion report as a table.
+pub fn deleted_table(deleted: &Deleted) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Deleted", "ID"]);
+    table.add_row(vec![Cell::new(deleted.kind), Cell::new(&deleted.id)]);
+    table
+}
+
+/// Report a deletion on stdout, as a table or as JSON.
+///
+/// # Errors
+///
+/// Returns an error if JSON serialization or writing fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_cli::output::report_deletion;
+///
+/// # fn example() -> anyhow::Result<()> {
+/// report_deletion(false, "secret", "db/password")?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn report_deletion(json_mode: bool, kind: &'static str, id: impl Into<String>) -> Result<()> {
+    let deleted = Deleted::new(kind, id);
+    print_output(json_mode, &deleted, || deleted_table(&deleted))
+}
+
+/// Render a list of secrets as a table.
+///
+/// [`SecretResponse`] carries no value field, so no secret material can reach
+/// this table by construction.
+pub fn secrets_table(secrets: &[SecretResponse]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Key", "Created", "Updated"]);
+
+    for secret in secrets {
+        table.add_row(vec![
+            Cell::new(&secret.key),
+            Cell::new(format_datetime(&secret.created_at)),
+            Cell::new(format_datetime(&secret.updated_at)),
+        ]);
+    }
+
+    table
+}
+
+/// Join the scopes of an API key into a single cell value.
+fn format_scopes(scopes: &[ApiKeyScope]) -> String {
+    scopes
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Render the encryption key ring status as a table.
+pub fn key_versions_table(status: &KeyVersionsResponse) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Property", "Versions"]);
+
+    table.add_row(vec![
+        Cell::new("Active"),
+        Cell::new(status.active).fg(Color::Green),
+    ]);
+    table.add_row(vec![
+        Cell::new("Configured"),
+        Cell::new(format_versions(&status.configured)),
+    ]);
+    table.add_row(vec![
+        Cell::new("In use"),
+        Cell::new(format_versions(&status.in_use)),
+    ]);
+    table.add_row(vec![
+        Cell::new("Missing"),
+        Cell::new(format_versions(&status.missing)).fg(if status.missing.is_empty() {
+            Color::Grey
+        } else {
+            Color::Red
+        }),
+    ]);
+    table.add_row(vec![
+        Cell::new("Retirable"),
+        Cell::new(format_versions(&status.retirable)).fg(if status.retirable.is_empty() {
+            Color::Grey
+        } else {
+            Color::Yellow
+        }),
+    ]);
+
+    table
+}
+
+/// Render a list of API keys as a table.
+///
+/// [`ApiKeyResponse`] never carries the raw key, only its prefix.
+pub fn api_keys_table(keys: &[ApiKeyResponse]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        "ID",
+        "Name",
+        "Prefix",
+        "Scopes",
+        "Active",
+        "Last used",
+        "Expires",
+        "Created",
+    ]);
+
+    for key in keys {
+        let active = Cell::new(if key.is_active { "yes" } else { "no" })
+            .fg(if key.is_active {
+                Color::Green
+            } else {
+                Color::Grey
+            })
+            .set_alignment(CellAlignment::Center);
+
+        table.add_row(vec![
+            Cell::new(key.id),
+            Cell::new(&key.name),
+            Cell::new(&key.key_prefix),
+            Cell::new(format_scopes(&key.scopes)),
+            active,
+            Cell::new(format_optional_datetime(&key.last_used_at)),
+            Cell::new(format_optional_datetime(&key.expires_at)),
+            Cell::new(format_datetime(&key.created_at)),
+        ]);
+    }
+
+    table
+}
+
+/// Render a freshly created API key, including its one-time raw secret.
+///
+/// This is the only place the raw key is ever rendered: the API returns it once
+/// at creation and never again, so withholding it would make the command
+/// useless.
+pub fn created_api_key_table(key: &CreateApiKeyResponse) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Field", "Value"]);
+
+    table.add_row(vec![Cell::new("ID"), Cell::new(key.id)]);
+    table.add_row(vec![Cell::new("Name"), Cell::new(&key.name)]);
+    table.add_row(vec![
+        Cell::new("Key"),
+        Cell::new(&key.key).fg(Color::Yellow),
+    ]);
+    table.add_row(vec![Cell::new("Prefix"), Cell::new(&key.key_prefix)]);
+    table.add_row(vec![
+        Cell::new("Scopes"),
+        Cell::new(format_scopes(&key.scopes)),
+    ]);
+    table.add_row(vec![
+        Cell::new("Expires"),
+        Cell::new(format_optional_datetime(&key.expires_at)),
+    ]);
+    table.add_row(vec![
+        Cell::new("Created"),
+        Cell::new(format_datetime(&key.created_at)),
+    ]);
+
+    table
+}
+
+/// Render the available API key scopes as a table.
+pub fn scopes_table(scopes: &[ScopeEntry]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["Value", "Label", "Description"]);
+
+    for scope in scopes {
+        table.add_row(vec![
+            Cell::new(&scope.value),
+            Cell::new(&scope.label),
+            Cell::new(&scope.description),
+        ]);
+    }
+
+    table
+}
+
+/// Render a list of users as a table.
+pub fn users_table(users: &[UserResponse]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["ID", "Username", "Email", "Admin", "Created"]);
+
+    for user in users {
+        let admin = Cell::new(if user.is_admin { "yes" } else { "no" })
+            .fg(if user.is_admin {
+                Color::Magenta
+            } else {
+                Color::Grey
+            })
+            .set_alignment(CellAlignment::Center);
+
+        table.add_row(vec![
+            Cell::new(user.id),
+            Cell::new(&user.username),
+            Cell::new(&user.email),
+            admin,
+            Cell::new(format_datetime(&user.created_at)),
+        ]);
+    }
+
+    table
+}
+
+/// Render a UUID as its first hyphen-separated group, enough to spot a row.
+fn short_id(id: Uuid) -> String {
+    id.to_string()
+        .split('-')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Render a UUID as a short prefix, or `-` when absent.
+fn format_optional_id(id: &Option<Uuid>) -> String {
+    id.map_or_else(|| "-".to_string(), short_id)
+}
+
+/// Render a list of audit log entries as a table.
+///
+/// The event payload is omitted: it is arbitrary JSON that would wreck the
+/// table layout. Use `--json` to get it.
+pub fn audit_logs_table(entries: &[AuditLogEntry]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["ID", "Type", "Run", "Step", "User", "Created"]);
+
+    for entry in entries {
+        table.add_row(vec![
+            Cell::new(short_id(entry.id)),
+            Cell::new(entry.event_type.to_string()),
+            Cell::new(format_optional_id(&entry.run_id)),
+            Cell::new(format_optional_id(&entry.step_id)),
+            Cell::new(format_optional_id(&entry.user_id)),
+            Cell::new(format_datetime(&entry.created_at)),
+        ]);
+    }
+
+    table
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::slice;
 
-    use ironflow_sdk::types::{CreatedBy, CreatedByKind, TriggerKind};
+    use ironflow_sdk::types::{ApiKeyScope, CreatedBy, CreatedByKind, EventKind, TriggerKind};
     use serde_json::{Map, Value};
-    use uuid::Uuid;
 
     use super::*;
 
@@ -618,5 +925,183 @@ mod tests {
         let output = table.to_string();
         assert!(output.contains("Name"));
         assert!(output.contains("Category"));
+    }
+
+    // ── Secrets ────────────────────────────────────────────────
+
+    fn secret_fixture(key: &str) -> SecretResponse {
+        let now = Utc::now();
+        SecretResponse {
+            id: Uuid::now_v7(),
+            key: key.to_string(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn empty_secrets_table_has_header() {
+        let output = secrets_table(&[]).to_string();
+        assert!(output.contains("Key"));
+        assert!(output.contains("Created"));
+        assert!(output.contains("Updated"));
+    }
+
+    #[test]
+    fn secrets_table_renders_the_key() {
+        let secret = secret_fixture("workflows/inbox/gmail_token");
+        let output = secrets_table(slice::from_ref(&secret)).to_string();
+        assert!(output.contains("workflows/inbox/gmail_token"), "{output}");
+    }
+
+    /// The value never even reaches this layer: `SecretResponse` has no such
+    /// field. Rendering it as JSON proves the whole payload is value-free.
+    #[test]
+    fn a_secret_response_carries_no_value_at_all() {
+        let secret = secret_fixture("db/password");
+        let json = serde_json::to_string(&secret).unwrap();
+        assert!(!json.contains("value"), "{json}");
+    }
+
+    // ── API keys ───────────────────────────────────────────────
+
+    fn api_key_fixture() -> ApiKeyResponse {
+        ApiKeyResponse {
+            id: Uuid::now_v7(),
+            name: "ci-deploy".to_string(),
+            key_prefix: "ifk_abcd".to_string(),
+            scopes: vec![ApiKeyScope::RunsRead, ApiKeyScope::RunsWrite],
+            is_active: true,
+            created_at: Utc::now(),
+            expires_at: None,
+            last_used_at: None,
+        }
+    }
+
+    #[test]
+    fn empty_api_keys_table_has_header() {
+        let output = api_keys_table(&[]).to_string();
+        for header in ["ID", "Name", "Prefix", "Scopes", "Active"] {
+            assert!(output.contains(header), "missing {header} in {output}");
+        }
+    }
+
+    #[test]
+    fn api_keys_table_joins_the_scopes() {
+        let key = api_key_fixture();
+        let output = api_keys_table(slice::from_ref(&key)).to_string();
+        assert!(output.contains("runs_read, runs_write"), "{output}");
+        assert!(output.contains("ifk_abcd"), "{output}");
+    }
+
+    #[test]
+    fn created_api_key_table_shows_the_raw_key() {
+        let created = CreateApiKeyResponse {
+            id: Uuid::now_v7(),
+            name: "ci-deploy".to_string(),
+            key: "ifk_full_raw_key".to_string(),
+            key_prefix: "ifk_full".to_string(),
+            scopes: vec![ApiKeyScope::Admin],
+            created_at: Utc::now(),
+            expires_at: None,
+        };
+
+        let output = created_api_key_table(&created).to_string();
+        assert!(output.contains("ifk_full_raw_key"), "{output}");
+    }
+
+    #[test]
+    fn empty_scopes_table_has_header() {
+        let output = scopes_table(&[]).to_string();
+        assert!(output.contains("Value"));
+        assert!(output.contains("Description"));
+    }
+
+    // ── Users ──────────────────────────────────────────────────
+
+    fn user_fixture(is_admin: bool) -> UserResponse {
+        let now = Utc::now();
+        UserResponse {
+            id: Uuid::now_v7(),
+            username: "alice".to_string(),
+            email: "alice@example.com".to_string(),
+            is_admin,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn empty_users_table_has_header() {
+        let output = users_table(&[]).to_string();
+        for header in ["ID", "Username", "Email", "Admin", "Created"] {
+            assert!(output.contains(header), "missing {header} in {output}");
+        }
+    }
+
+    #[test]
+    fn users_table_spells_out_the_role() {
+        let admin = user_fixture(true);
+        assert!(
+            users_table(slice::from_ref(&admin))
+                .to_string()
+                .contains("yes")
+        );
+
+        let member = user_fixture(false);
+        assert!(
+            users_table(slice::from_ref(&member))
+                .to_string()
+                .contains("no")
+        );
+    }
+
+    // ── Audit logs ─────────────────────────────────────────────
+
+    #[test]
+    fn empty_audit_logs_table_has_header() {
+        let output = audit_logs_table(&[]).to_string();
+        for header in ["ID", "Type", "Run", "Step", "User", "Created"] {
+            assert!(output.contains(header), "missing {header} in {output}");
+        }
+    }
+
+    #[test]
+    fn audit_logs_table_omits_the_payload() {
+        let entry = AuditLogEntry {
+            id: Uuid::now_v7(),
+            event_type: EventKind::RunCreated,
+            payload: Value::Object(Map::new()),
+            run_id: Some(Uuid::now_v7()),
+            step_id: None,
+            user_id: None,
+            created_at: Utc::now(),
+        };
+
+        let output = audit_logs_table(slice::from_ref(&entry)).to_string();
+        assert!(output.contains("run_created"), "{output}");
+        // Absent IDs collapse to a dash rather than an empty cell.
+        assert!(output.contains('-'), "{output}");
+    }
+
+    #[test]
+    fn format_optional_id_shortens_and_falls_back() {
+        assert_eq!(format_optional_id(&None), "-");
+        let id = Uuid::now_v7();
+        let short = format_optional_id(&Some(id));
+        assert_eq!(short, id.to_string().split('-').next().unwrap());
+    }
+
+    // ── Deletions ──────────────────────────────────────────────
+
+    #[test]
+    fn deleted_table_reports_the_kind_and_id() {
+        let deleted = Deleted::new("secret", "db/password");
+        let output = deleted_table(&deleted).to_string();
+        assert!(output.contains("secret"), "{output}");
+        assert!(output.contains("db/password"), "{output}");
+
+        let json = serde_json::to_string(&deleted).unwrap();
+        assert!(json.contains(r#""deleted":true"#), "{json}");
     }
 }

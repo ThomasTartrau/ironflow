@@ -25,6 +25,7 @@ mod run_store;
 mod secret_store;
 mod user_store;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -110,7 +111,7 @@ pub struct PostgresStore {
     pub(super) run_lifecycle_id: Uuid,
     pub(super) step_lifecycle_id: Uuid,
     #[cfg(feature = "secret-store")]
-    pub(super) master_key: Option<std::sync::Arc<crate::crypto::MasterKey>>,
+    pub(super) key_ring: Option<Arc<crate::crypto::KeyRing>>,
 }
 
 impl PostgresStore {
@@ -202,7 +203,7 @@ impl PostgresStore {
             run_lifecycle_id,
             step_lifecycle_id,
             #[cfg(feature = "secret-store")]
-            master_key: None,
+            key_ring: None,
         })
     }
 
@@ -218,11 +219,15 @@ impl PostgresStore {
             run_lifecycle_id,
             step_lifecycle_id,
             #[cfg(feature = "secret-store")]
-            master_key: None,
+            key_ring: None,
         })
     }
 
-    /// Set the master key for secret encryption.
+    /// Set a single, unversioned master key for secret encryption.
+    ///
+    /// Shorthand for a key ring holding this key alone at
+    /// [`LEGACY_KEY_VERSION`](crate::crypto::LEGACY_KEY_VERSION), which is how
+    /// the deprecated `IRONFLOW_SECRET_KEY` variable is interpreted.
     ///
     /// Required before using [`SecretStore`](crate::secret_store::SecretStore)
     /// methods. Call this after constructing the store.
@@ -230,19 +235,50 @@ impl PostgresStore {
     /// # Examples
     ///
     /// ```no_run
+    /// use std::env::var;
+    ///
     /// use ironflow_store::postgres::PostgresStore;
     /// use ironflow_store::crypto::MasterKey;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut store = PostgresStore::new("postgres://localhost/ironflow").await?;
-    /// let key = MasterKey::from_hex(&std::env::var("IRONFLOW_SECRET_KEY")?)?;
+    /// let key = MasterKey::from_hex(&var("IRONFLOW_SECRET_KEY")?)?;
     /// store.set_master_key(key);
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(feature = "secret-store")]
     pub fn set_master_key(&mut self, key: crate::crypto::MasterKey) {
-        self.master_key = Some(std::sync::Arc::new(key));
+        self.set_key_ring(crate::crypto::KeyRing::single(key));
+    }
+
+    /// Set the versioned key ring for secret encryption.
+    ///
+    /// New secrets are encrypted with the ring's active version; existing ones
+    /// are decrypted with whichever version they were written with. This is
+    /// what lets [`SecretStore::rotate_secrets`](crate::secret_store::SecretStore::rotate_secrets)
+    /// re-encrypt the stock while the service keeps serving.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::env::var;
+    ///
+    /// use ironflow_store::postgres::PostgresStore;
+    /// use ironflow_store::crypto::KeyRing;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut store = PostgresStore::new("postgres://localhost/ironflow").await?;
+    /// let active = var("IRONFLOW_SECRET_ACTIVE_KEY_VERSION").ok()
+    ///     .map(|v| v.parse::<i32>())
+    ///     .transpose()?;
+    /// store.set_key_ring(KeyRing::from_spec(&var("IRONFLOW_SECRET_KEYS")?, active)?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "secret-store")]
+    pub fn set_key_ring(&mut self, ring: crate::crypto::KeyRing) {
+        self.key_ring = Some(Arc::new(ring));
     }
 
     /// Check that the database connection is alive.

@@ -1,9 +1,10 @@
 //! OpenAPI/Swagger documentation for ironflow-api.
 
 use crate::entities::{
-    ArtifactResponse, CreateRunRequest, CreateUserRequest, CreatedBy, CreatedByKind, ListRunsQuery,
-    MeResponse, RunDetailResponse, RunResponse, SecretResponse, SetSecretRequest, SignInRequest,
-    StatsResponse, StepResponse, UpdateRoleRequest, UserResponse,
+    ArtifactResponse, CreateRunRequest, CreateUserRequest, CreatedBy, CreatedByKind,
+    KeyVersionsResponse, ListRunsQuery, MeResponse, RotateSecretsRequest, RotateSecretsResponse,
+    RunDetailResponse, RunResponse, SecretResponse, SetSecretRequest, SignInRequest, StatsResponse,
+    StepResponse, UpdateRoleRequest, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -85,6 +86,8 @@ mod with_signup {
             secrets::list::list_secrets,
             secrets::update::update_secret,
             secrets::delete::delete_secret,
+            secrets::rotate::rotate_secrets,
+            secrets::key_versions::secret_key_versions,
             audit_logs::list_audit_logs,
         ),
         components(
@@ -116,6 +119,9 @@ mod with_signup {
                 SecretResponse,
                 SetSecretRequest,
                 UpdateSecretRequest,
+                RotateSecretsRequest,
+                RotateSecretsResponse,
+                KeyVersionsResponse,
                 EventKind,
                 Event,
                 AuditLogEntry,
@@ -179,6 +185,8 @@ mod without_signup {
             secrets::list::list_secrets,
             secrets::update::update_secret,
             secrets::delete::delete_secret,
+            secrets::rotate::rotate_secrets,
+            secrets::key_versions::secret_key_versions,
             audit_logs::list_audit_logs,
         ),
         components(
@@ -209,6 +217,9 @@ mod without_signup {
                 SecretResponse,
                 SetSecretRequest,
                 UpdateSecretRequest,
+                RotateSecretsRequest,
+                RotateSecretsResponse,
+                KeyVersionsResponse,
                 EventKind,
                 Event,
                 AuditLogEntry,

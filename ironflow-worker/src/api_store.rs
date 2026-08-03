@@ -15,10 +15,11 @@ use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::artifact_store::ArtifactStore;
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
-    ApiKey, ApiKeyUpdate, Artifact, ArtifactLookup, AuditLogEntry, AuditLogFilter, LeaseRequest,
-    NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep, NewStepDependency, NewUser, Page,
-    ReapedRun, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata,
-    Step, StepDependency, StepUpdate, User,
+    ApiKey, ApiKeyUpdate, Artifact, ArtifactLookup, AuditLogEntry, AuditLogFilter,
+    KeyVersionStatus, LeaseRequest, NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep,
+    NewStepDependency, NewUser, Page, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation,
+    RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency,
+    StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::secret_store::SecretStore;
@@ -549,6 +550,22 @@ impl SecretStore for ApiRunStore {
         _page: u32,
         _per_page: u32,
     ) -> StoreFuture<'_, Page<SecretMetadata>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "SecretStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn secret_key_status(&self) -> StoreFuture<'_, KeyVersionStatus> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "SecretStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn rotate_secrets(&self, _request: RotationRequest) -> StoreFuture<'_, RotationBatch> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "SecretStore not available in worker".to_string(),

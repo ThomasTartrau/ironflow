@@ -8,7 +8,9 @@
 //! - [`InMemoryStore`](crate::memory::InMemoryStore) -- development and testing.
 //! - `PostgresStore` -- production (behind the `store-postgres` feature).
 
-use crate::entities::{Page, Secret, SecretMetadata};
+use crate::entities::{
+    KeyVersionStatus, Page, RotationBatch, RotationRequest, Secret, SecretMetadata,
+};
 use crate::store::StoreFuture;
 
 /// Async storage abstraction for encrypted secrets.
@@ -16,8 +18,11 @@ use crate::store::StoreFuture;
 /// All methods return a [`StoreFuture`] (boxed future) for object safety,
 /// allowing the store to be used as `Arc<dyn SecretStore>`.
 ///
-/// Values are encrypted at rest using AES-256-GCM. The master key is
-/// provided by the caller at startup via `set_master_key()`.
+/// Values are encrypted at rest using AES-256-GCM. The key ring is provided
+/// by the caller at startup via `set_key_ring()` (or `set_master_key()` for a
+/// single, unversioned key). Every key in the ring can decrypt; only the
+/// active one encrypts, which is what makes [`SecretStore::rotate_secrets`]
+/// able to re-encrypt the stock without downtime.
 ///
 /// # Examples
 ///
@@ -85,4 +90,33 @@ pub trait SecretStore: Send + Sync {
         page: u32,
         per_page: u32,
     ) -> StoreFuture<'_, Page<SecretMetadata>>;
+
+    /// Report how the configured key ring lines up with the stored secrets.
+    ///
+    /// Used at startup to refuse booting when a secret references a key
+    /// version that is not configured, and by operators to know when an old
+    /// key can be dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::StoreError::Crypto`] if no key ring is
+    /// configured.
+    fn secret_key_status(&self) -> StoreFuture<'_, KeyVersionStatus>;
+
+    /// Re-encrypt one batch of secrets towards the target key version.
+    ///
+    /// Only the ciphertext, nonce, and key version change: the ID, logical
+    /// key, creation and update timestamps are preserved. Secrets already on
+    /// the target version are skipped, which makes the operation idempotent
+    /// and safe to resume after an interruption.
+    ///
+    /// A secret that fails to decrypt is skipped and counted in
+    /// [`RotationBatch::failed`] rather than aborting the batch; the cursor
+    /// guarantees it is not served again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::StoreError::Crypto`] if no key ring is
+    /// configured or the target version is not in it.
+    fn rotate_secrets(&self, request: RotationRequest) -> StoreFuture<'_, RotationBatch>;
 }

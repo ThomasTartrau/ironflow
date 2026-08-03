@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 pub use ironflow_types::{ApiMeta, ApiResponse};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use reqwest::{Client, RequestBuilder};
@@ -77,6 +78,41 @@ pub struct ListRunsFilter<'a> {
     /// Also matches runs triggered by one of that user's API keys.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
+}
+
+/// Filtering options for [`IronflowClient::list_audit_logs_filtered`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_sdk::client::ListAuditLogsFilter;
+///
+/// let filter = ListAuditLogsFilter {
+///     event_type: Some("run_created"),
+///     per_page: Some(25),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ListAuditLogsFilter<'a> {
+    /// Filter by event type (e.g. `run_status_changed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<&'a str>,
+    /// Filter by run ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<Uuid>,
+    /// Keep entries recorded at or after this instant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<DateTime<Utc>>,
+    /// Keep entries recorded at or before this instant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<DateTime<Utc>>,
+    /// Page number (1-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    /// Items per page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<u32>,
 }
 
 /// Type-safe client for the Ironflow REST API.
@@ -626,6 +662,38 @@ impl IronflowClient {
             .await
     }
 
+    /// `POST /api/v1/secrets/rotate` -- Re-encrypt one batch of secrets
+    /// towards a key version (admin only).
+    ///
+    /// One call handles one batch. Loop, passing the returned `last_id` back
+    /// as `after_id`, until `remaining` reaches zero or `last_id` is `None`.
+    /// The operation is idempotent, so an interrupted rotation can simply be
+    /// restarted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 400 (unknown key version), 401, or 403.
+    pub async fn rotate_secrets(
+        &self,
+        request: &types::RotateSecretsRequest,
+    ) -> Result<ApiResponse<types::RotateSecretsResponse>, Error> {
+        self.send_envelope(self.post("/api/v1/secrets/rotate").json(request))
+            .await
+    }
+
+    /// `GET /api/v1/secrets/key-versions` -- Encryption key ring status
+    /// (admin only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401 or 403.
+    pub async fn secret_key_versions(
+        &self,
+    ) -> Result<ApiResponse<types::KeyVersionsResponse>, Error> {
+        self.send_envelope(self.get("/api/v1/secrets/key-versions"))
+            .await
+    }
+
     // ── Audit Logs (admin) ─────────────────────────────────────────
 
     /// `GET /api/v1/audit-logs` -- List audit log entries (admin only).
@@ -634,6 +702,37 @@ impl IronflowClient {
     ///
     /// Returns [`Error::Api`] on 401 or 403.
     pub async fn list_audit_logs(&self) -> Result<ApiResponse<Vec<types::AuditLogEntry>>, Error> {
-        self.send_envelope(self.get("/api/v1/audit-logs")).await
+        self.list_audit_logs_filtered(&ListAuditLogsFilter::default())
+            .await
+    }
+
+    /// `GET /api/v1/audit-logs` with query parameters (admin only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401 or 403.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::IronflowClient;
+    /// use ironflow_sdk::client::ListAuditLogsFilter;
+    ///
+    /// # async fn example() -> Result<(), ironflow_sdk::Error> {
+    /// let client = IronflowClient::new("https://ironflow.example.com", "key");
+    /// let filter = ListAuditLogsFilter {
+    ///     event_type: Some("run_created"),
+    ///     ..Default::default()
+    /// };
+    /// let entries = client.list_audit_logs_filtered(&filter).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn list_audit_logs_filtered(
+        &self,
+        filter: &ListAuditLogsFilter<'_>,
+    ) -> Result<ApiResponse<Vec<types::AuditLogEntry>>, Error> {
+        self.send_envelope(self.get("/api/v1/audit-logs").query(filter))
+            .await
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-cli"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -15,7 +15,7 @@ name = "ironflow-cli"
 path = "src/main.rs"
 
 [dependencies]
-ironflow-sdk = { version = "0.1.6", path = "../ironflow-sdk" }
+ironflow-sdk = { version = "0.1.7", path = "../ironflow-sdk" }
 ironflow-types = { version = "0.2.0", path = "../ironflow-types" }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
@@ -35,7 +35,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 tempfile = "3"
 ironflow-api = { path = "../ironflow-api" }
 ironflow-auth = { path = "../ironflow-auth" }
-ironflow-store = { path = "../ironflow-store" }
+ironflow-store = { path = "../ironflow-store", features = ["store-memory", "secret-store"] }
 ironflow-engine = { path = "../ironflow-engine" }
 ironflow-core = { path = "../ironflow-core" }
 axum = "0.8"

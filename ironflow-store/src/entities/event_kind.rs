@@ -59,6 +59,8 @@ pub enum EventKind {
     UserSignedUp,
     /// A user signed out.
     UserSignedOut,
+    /// A batch of secrets was re-encrypted with a different key version.
+    SecretsRotated,
 }
 
 impl EventKind {
@@ -77,6 +79,7 @@ impl EventKind {
         Self::UserSignedIn,
         Self::UserSignedUp,
         Self::UserSignedOut,
+        Self::SecretsRotated,
     ];
 
     /// Returns the wire-format string for this kind.
@@ -109,7 +112,16 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 13);
+        assert_eq!(EventKind::ALL.len(), 14);
+    }
+
+    #[test]
+    fn secrets_rotated_uses_snake_case_wire_format() {
+        assert_eq!(EventKind::SecretsRotated.as_str(), "secrets_rotated");
+        assert_eq!(
+            "secrets_rotated".parse::<EventKind>().unwrap(),
+            EventKind::SecretsRotated
+        );
     }
 
     #[test]
