@@ -14,7 +14,7 @@ categories = ["asynchronous"]
 ironflow-core = { version = "3.3.0", path = "../ironflow-core" }
 ironflow-store = { version = "2.17.1", path = "../ironflow-store", default-features = false }
 ironflow-engine = { version = "2.17.4", path = "../ironflow-engine" }
-ironflow-artifacts = { version = "0.1.0", path = "../ironflow-artifacts" }
+ironflow-artifacts = { version = "0.1.1", path = "../ironflow-artifacts" }
 
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
