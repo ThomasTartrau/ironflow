@@ -17,6 +17,8 @@
 //! | `IRONFLOW_ENV` | no | `development` | `production` or `development` |
 //! | `RATE_LIMIT_AUTH` | no | `10` | Auth rate limit (req/min/IP). `0` = disabled |
 //! | `RATE_LIMIT_GENERAL` | no | `60` | General rate limit (req/min/IP). `0` = disabled |
+//! | `ARTIFACTS_DIR` | no | - | Filesystem root for artifact blobs. Unset disables artifacts |
+//! | `ARTIFACT_MAX_BYTES` | no | `104857600` | Maximum size of a single artifact |
 //!
 //! # Examples
 //!
@@ -34,6 +36,7 @@ use std::env;
 use std::fmt;
 use std::path::PathBuf;
 
+use ironflow_artifacts::local::DEFAULT_MAX_ARTIFACT_BYTES;
 use tracing::warn;
 
 /// Server configuration loaded from environment variables.
@@ -67,6 +70,18 @@ pub struct ServerConfig {
     pub dashboard_dir: Option<PathBuf>,
     /// Outbound webhook URL for event notifications.
     pub webhook_url: Option<String>,
+    /// Filesystem root for artifact blobs.
+    ///
+    /// `None` leaves artifacts disabled: the artifact routes answer `501` and
+    /// a step that declares one fails explicitly. Every other endpoint is
+    /// unaffected, so an existing deployment upgrades without changes.
+    ///
+    /// Read from `ARTIFACTS_DIR`.
+    pub artifacts_dir: Option<PathBuf>,
+    /// Maximum size of a single artifact, in bytes.
+    ///
+    /// Read from `ARTIFACT_MAX_BYTES`, defaulting to 100 MiB.
+    pub artifact_max_bytes: u64,
     /// Whether the server is running in production mode.
     pub is_production: bool,
     /// Rate limit for auth credential routes (sign-in, sign-up) in requests
@@ -216,6 +231,17 @@ impl ServerConfig {
         let rate_limit_auth = parse_optional_u32("RATE_LIMIT_AUTH", 10, &mut errors);
         let rate_limit_general = parse_optional_u32("RATE_LIMIT_GENERAL", 60, &mut errors);
 
+        let artifacts_dir = env::var("ARTIFACTS_DIR").ok().map(PathBuf::from);
+        let artifact_max_bytes = match env::var("ARTIFACT_MAX_BYTES").ok() {
+            Some(raw) => raw.parse::<u64>().unwrap_or_else(|_| {
+                errors.push(format!(
+                    "ARTIFACT_MAX_BYTES must be a valid u64, got: {raw}"
+                ));
+                DEFAULT_MAX_ARTIFACT_BYTES
+            }),
+            None => DEFAULT_MAX_ARTIFACT_BYTES,
+        };
+
         if !errors.is_empty() {
             return Err(ConfigError::new(errors));
         }
@@ -231,6 +257,8 @@ impl ServerConfig {
             is_production,
             rate_limit_auth,
             rate_limit_general,
+            artifacts_dir,
+            artifact_max_bytes,
         })
     }
 }

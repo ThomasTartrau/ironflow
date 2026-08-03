@@ -197,6 +197,14 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/auth/me",
         Coverage::Exempt("introspects the caller's session, which the CLI does not hold"),
     ),
+    (
+        "GET",
+        "/api/v1/runs/{id}/steps/{step_id}/artifacts/{name}",
+        Coverage::Exempt(
+            "streams a raw file body, which the JSON-shaped SDK client cannot surface; \
+             `run get` already lists the artifacts and their sizes",
+        ),
+    ),
 ];
 
 /// Routes of the spec, parsed once for the whole test binary.

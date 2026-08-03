@@ -40,6 +40,7 @@
 //! ```
 
 pub mod api_key_store;
+pub mod artifact_store;
 pub mod audit_log_store;
 pub mod entities;
 pub mod error;
@@ -62,6 +63,7 @@ pub mod postgres;
 /// Convenience re-exports for common usage.
 pub mod prelude {
     pub use crate::api_key_store::ApiKeyStore;
+    pub use crate::artifact_store::ArtifactStore;
     pub use crate::audit_log_store::AuditLogStore;
     pub use crate::entities::*;
     pub use crate::error::StoreError;

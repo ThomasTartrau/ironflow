@@ -97,6 +97,21 @@ pub enum ApiError {
     #[error("{0}")]
     MonthlyBudgetExceeded(String),
 
+    /// The requested artifact does not exist (404).
+    #[error("artifact not found")]
+    ArtifactNotFound(String),
+
+    /// No artifact storage backend is configured (501).
+    ///
+    /// Every other endpoint keeps working: an upgraded deployment that has not
+    /// opted into artifacts is degraded here only.
+    #[error("artifact storage is not configured")]
+    ArtifactStorageUnavailable,
+
+    /// The uploaded payload exceeded the artifact size limit (413).
+    #[error("artifact exceeds the size limit")]
+    ArtifactTooLarge,
+
     /// Store operation failed (500).
     #[error("database error")]
     Store(#[from] StoreError),
@@ -126,7 +141,11 @@ impl ApiError {
             ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
             ApiError::IdempotencyKeyConflict(_) => "IDEMPOTENCY_KEY_CONFLICT",
             ApiError::MonthlyBudgetExceeded(_) => MONTHLY_BUDGET_EXCEEDED_CODE,
+            ApiError::ArtifactNotFound(_) => "ARTIFACT_NOT_FOUND",
+            ApiError::ArtifactStorageUnavailable => "ARTIFACT_STORAGE_UNAVAILABLE",
+            ApiError::ArtifactTooLarge => "ARTIFACT_TOO_LARGE",
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
+            ApiError::Store(StoreError::DuplicateArtifact { .. }) => "DUPLICATE_ARTIFACT",
             ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
@@ -152,7 +171,11 @@ impl ApiError {
             ApiError::InsufficientScope => StatusCode::FORBIDDEN,
             ApiError::IdempotencyKeyConflict(_) => StatusCode::CONFLICT,
             ApiError::MonthlyBudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            ApiError::ArtifactNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::ArtifactStorageUnavailable => StatusCode::NOT_IMPLEMENTED,
+            ApiError::ArtifactTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
+            ApiError::Store(StoreError::DuplicateArtifact { .. }) => StatusCode::CONFLICT,
             ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,

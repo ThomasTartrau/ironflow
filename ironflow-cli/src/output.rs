@@ -10,9 +10,9 @@ use chrono::{DateTime, Utc};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::types::{
-    ApiKeyResponse, ApiKeyScope, AuditLogEntry, CreateApiKeyResponse, KeyVersionsResponse,
-    RunDetailResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsResponse,
-    StepResponse, StepStatus, UserResponse, WorkflowDetailResponse, WorkflowSummary,
+    ApiKeyResponse, ApiKeyScope, ArtifactResponse, AuditLogEntry, CreateApiKeyResponse,
+    KeyVersionsResponse, RunDetailResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse,
+    StatsResponse, StepResponse, StepStatus, UserResponse, WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
 use serde_json::to_string_pretty;
@@ -265,6 +265,37 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
     table
 }
 
+/// Summarize a step's artifacts as a count and a total size.
+///
+/// A dash when the step produced none, so the column stays scannable.
+fn format_artifacts(artifacts: &[ArtifactResponse]) -> String {
+    if artifacts.is_empty() {
+        return "-".to_string();
+    }
+
+    let total: i64 = artifacts.iter().map(|artifact| artifact.size_bytes).sum();
+    format!("{} ({})", artifacts.len(), format_bytes(total))
+}
+
+/// Human-readable file size, using 1024-based units.
+fn format_bytes(bytes: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    let decimals = if value < 10.0 { 1 } else { 0 };
+    format!("{value:.decimals$} {}", UNITS[unit])
+}
+
 /// Render a run's steps as a table.
 pub fn steps_table(steps: &[StepResponse]) -> Table {
     let mut table = base_table();
@@ -275,6 +306,7 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
         "Attempt",
         "Duration",
         "Cost",
+        "Artifacts",
         "Started",
         "Completed",
     ]);
@@ -291,6 +323,7 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
             Cell::new(step.attempt).set_alignment(CellAlignment::Center),
             Cell::new(format_duration_ms(step.duration_ms)),
             Cell::new(format!("${:.4}", step.cost_usd)),
+            Cell::new(format_artifacts(&step.artifacts)).set_alignment(CellAlignment::Center),
             Cell::new(format_optional_datetime(&step.started_at)),
             Cell::new(format_optional_datetime(&step.completed_at)),
         ]);
@@ -741,6 +774,47 @@ mod tests {
     fn cost_color_handles_a_zero_cap() {
         assert_eq!(cost_color(0.0, Some(0.0)), None);
         assert_eq!(cost_color(0.01, Some(0.0)), Some(Color::Red));
+    }
+
+    fn artifact(name: &str, size_bytes: i64) -> ArtifactResponse {
+        ArtifactResponse {
+            id: Uuid::now_v7(),
+            step_id: Uuid::now_v7(),
+            name: name.to_string(),
+            content_type: "text/plain".to_string(),
+            size_bytes,
+            sha256: "0".repeat(64),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn format_bytes_keeps_raw_bytes_below_one_kilobyte() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_switches_units_at_each_boundary() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    #[test]
+    fn format_bytes_drops_the_decimal_past_ten() {
+        assert_eq!(format_bytes(145_408), "142 KB");
+    }
+
+    #[test]
+    fn format_artifacts_shows_a_dash_when_there_are_none() {
+        assert_eq!(format_artifacts(&[]), "-");
+    }
+
+    #[test]
+    fn format_artifacts_shows_the_count_and_total_size() {
+        let artifacts = vec![artifact("a.txt", 1024), artifact("b.txt", 1024)];
+        assert_eq!(format_artifacts(&artifacts), "2 (2.0 KB)");
     }
 
     #[test]

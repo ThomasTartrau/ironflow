@@ -1,0 +1,30 @@
+[package]
+name = "ironflow-artifacts"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Blob storage abstraction for ironflow workflow artifacts"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "artifacts", "storage", "ironflow"]
+categories = ["asynchronous", "filesystem"]
+
+[dependencies]
+uuid = { version = "1", features = ["v7", "serde"] }
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["fs", "io-util"] }
+sha2 = "0.10"
+hex = "0.4"
+mime_guess = "2"
+thiserror = "2"
+tracing = "0.1"
+
+[features]
+default = ["artifact-local"]
+artifact-local = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"

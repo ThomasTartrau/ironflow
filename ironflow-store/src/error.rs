@@ -62,6 +62,15 @@ pub enum StoreError {
         held_by: Option<String>,
     },
 
+    /// The step already holds an artifact with this name.
+    #[error("artifact {name:?} already exists on step {step_id}")]
+    DuplicateArtifact {
+        /// Step that already owns the name.
+        step_id: Uuid,
+        /// The conflicting artifact name.
+        name: String,
+    },
+
     /// A database or I/O error from the backing store.
     #[error("database error: {0}")]
     Database(String),

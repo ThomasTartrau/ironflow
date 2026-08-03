@@ -1,10 +1,10 @@
 //! OpenAPI/Swagger documentation for ironflow-api.
 
 use crate::entities::{
-    CreateRunRequest, CreateUserRequest, CreatedBy, CreatedByKind, KeyVersionsResponse,
-    ListRunsQuery, MeResponse, RotateSecretsRequest, RotateSecretsResponse, RunDetailResponse,
-    RunResponse, SecretResponse, SetSecretRequest, SignInRequest, StatsResponse, UpdateRoleRequest,
-    UserResponse,
+    ArtifactResponse, CreateRunRequest, CreateUserRequest, CreatedBy, CreatedByKind,
+    KeyVersionsResponse, ListRunsQuery, MeResponse, RotateSecretsRequest, RotateSecretsResponse,
+    RunDetailResponse, RunResponse, SecretResponse, SetSecretRequest, SignInRequest, StatsResponse,
+    StepResponse, UpdateRoleRequest, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -16,8 +16,8 @@ use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
 use crate::routes::secrets::update::UpdateSecretRequest;
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
-    api_keys, approve_run, audit_logs, auth, cancel_run, create_run, get_run, get_stats,
-    get_workflow, health_check, list_runs, list_workflows, retry_run, secrets, users,
+    api_keys, approve_run, audit_logs, auth, cancel_run, create_run, download_artifact, get_run,
+    get_stats, get_workflow, health_check, list_runs, list_workflows, retry_run, secrets, users,
 };
 use ironflow_engine::notify::Event;
 use ironflow_store::entities::AuditLogEntry;
@@ -65,6 +65,7 @@ mod with_signup {
             approve_run::approve_run,
             approve_run::reject_run,
             retry_run::retry_run,
+            download_artifact::download_artifact,
             list_workflows::list_workflows,
             get_workflow::get_workflow,
             get_stats::get_stats,
@@ -93,6 +94,8 @@ mod with_signup {
             schemas(
                 RunResponse,
                 RunDetailResponse,
+                StepResponse,
+                ArtifactResponse,
                 CreatedBy,
                 CreatedByKind,
                 CreateRunRequest,
@@ -162,6 +165,7 @@ mod without_signup {
             approve_run::approve_run,
             approve_run::reject_run,
             retry_run::retry_run,
+            download_artifact::download_artifact,
             list_workflows::list_workflows,
             get_workflow::get_workflow,
             get_stats::get_stats,
@@ -189,6 +193,8 @@ mod without_signup {
             schemas(
                 RunResponse,
                 RunDetailResponse,
+                StepResponse,
+                ArtifactResponse,
                 CreatedBy,
                 CreatedByKind,
                 CreateRunRequest,

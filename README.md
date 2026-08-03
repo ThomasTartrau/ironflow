@@ -53,6 +53,7 @@ It ships as two things you can use independently:
 | [`ironflow-core`](https://crates.io/crates/ironflow-core) | ![](https://img.shields.io/crates/v/ironflow-core.svg?label=) | Operations (Shell, Http, Agent), agent providers, tracker, parallelism, dry-run |
 | [`ironflow-store`](https://crates.io/crates/ironflow-store) | ![](https://img.shields.io/crates/v/ironflow-store.svg?label=) | Storage trait plus Postgres and in-memory backends, encrypted secrets |
 | [`ironflow-engine`](https://crates.io/crates/ironflow-engine) | ![](https://img.shields.io/crates/v/ironflow-engine.svg?label=) | Workflow orchestration, FSM-driven run lifecycle, outbound notifications |
+| [`ironflow-artifacts`](https://crates.io/crates/ironflow-artifacts) | ![](https://img.shields.io/crates/v/ironflow-artifacts.svg?label=) | Blob storage for files produced by steps, with a local filesystem backend |
 | [`ironflow-auth`](https://crates.io/crates/ironflow-auth) | ![](https://img.shields.io/crates/v/ironflow-auth.svg?label=) | JWT issuing and verification, Argon2 password hashing, axum extractors |
 | [`ironflow-api`](https://crates.io/crates/ironflow-api) | ![](https://img.shields.io/crates/v/ironflow-api.svg?label=) | REST API: runs, workflows, stats, audit logs, secrets, API keys, SSE |
 | [`ironflow-worker`](https://crates.io/crates/ironflow-worker) | ![](https://img.shields.io/crates/v/ironflow-worker.svg?label=) | Background worker that polls the API and executes workflow handlers |
@@ -305,6 +306,50 @@ ironflow run create deploy --payload '{"env":"prod"}' \
 With the `prometheus` feature, `ironflow_run_idempotency_total{outcome}` counts
 `created`, `replayed` and `conflict` outcomes.
 
+### Artifacts
+
+Steps produce text and JSON outputs by default. When a step produces *files*, declare them and
+they are persisted with their size, MIME type and SHA-256, then made available to later steps and
+to the dashboard.
+
+```rust
+use ironflow_engine::config::ShellConfig;
+
+// Produce: every glob match becomes an artifact named after the file.
+let build = ShellConfig::new("cargo build --release && ./gen-report")
+    .dir("/app")
+    .output("target/report.html")
+    .output("target/*.log");
+assert_eq!(build.outputs.len(), 2);
+
+// Consume: the file is written into the working directory before the command runs.
+let publish = ShellConfig::new("./publish report.html")
+    .dir("/app")
+    .input("build", "report.html");
+assert_eq!(publish.inputs[0].destination(), "report.html");
+```
+
+`ctx.put_artifact()` and `ctx.get_artifact()` cover custom operations and agent steps, which have
+no working directory to collect from.
+
+| Behaviour | Rule |
+|---|---|
+| Declared output matched no file | The step fails, unless the step had already failed for another reason |
+| Step failed but produced files | The files are still collected - they are usually what you need to debug |
+| Input resolution | Same run and attempt, steps positioned before the consumer, closest producer wins |
+| Retry | Each attempt owns its artifacts; nothing is overwritten |
+| Sub-workflow | A child run never sees its parent's artifacts - pass what it needs through the payload |
+| Name validation | `^[A-Za-z0-9._][A-Za-z0-9._-]{0,254}$`; the storage key is derived from UUIDs only |
+
+Download one with `GET /api/v1/runs/{id}/steps/{step_id}/artifacts/{name}`, or from the artifact
+list on the step in the dashboard.
+
+Artifacts stay off until `ARTIFACTS_DIR` is set on the API server: the artifact routes then answer
+`501` and a step that declares one fails with an explicit error, while everything else is
+unaffected. `LocalBlobStore` writes to the API server's filesystem, so a multi-replica deployment
+needs a shared volume. Workers hold no storage credential - they stream artifact bytes through the
+internal API.
+
 ### Platform capabilities
 
 | | |
@@ -315,7 +360,7 @@ With the `prometheus` feature, `ironflow_run_idempotency_total{outcome}` counts
 | **🔔 Outbound notifications** - webhook and Betterstack subscribers with retry | **📊 Prometheus metrics** - shell, HTTP, agent, webhook and cron counters |
 | **💰 Budget control** - per-step `max_budget_usd` caps agent spending | **🧪 Record/replay** - deterministic agent tests without spending tokens |
 | **🏃 Dry-run mode** - skip execution while logging intent | **❌ No hidden retries** - a step fails, the run fails, unless you ask for a `RetryPolicy` |
-| **🔁 Idempotent runs** - `Idempotency-Key` on run creation, so replayed webhooks never duplicate | |
+| **🔁 Idempotent runs** - `Idempotency-Key` on run creation, so replayed webhooks never duplicate | **📦 Artifacts** - steps declare the files they produce and consume, with SHA-256, MIME type and a download endpoint |
 
 ---
 
@@ -601,6 +646,8 @@ Ironflow reads `.env` via [dotenvy](https://crates.io/crates/dotenvy).
 | `WEBHOOK_URL` | no | no outbound webhook |
 | `RATE_LIMIT_AUTH` | no | `10` req/min |
 | `RATE_LIMIT_GENERAL` | no | `60` req/min |
+| `ARTIFACTS_DIR` | no | unset, artifacts disabled |
+| `ARTIFACT_MAX_BYTES` | no | `104857600` (100 MiB) |
 
 Starting in production without `DATABASE_URL`, `JWT_SECRET` or `WORKER_TOKEN` aborts at boot
 rather than falling back to development defaults.

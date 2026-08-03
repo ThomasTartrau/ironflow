@@ -1,10 +1,37 @@
 import { describe, it, expect } from "vitest";
 import {
 	capitalize,
+	formatBytes,
 	formatDuration,
 	formatPercent,
 	formatCost,
 } from "./format";
+
+describe("formatBytes", () => {
+	it("keeps raw bytes below 1 KB", () => {
+		expect(formatBytes(0)).toBe("0 B");
+		expect(formatBytes(1023)).toBe("1023 B");
+	});
+
+	it("switches units at each 1024 boundary", () => {
+		expect(formatBytes(1024)).toBe("1.0 KB");
+		expect(formatBytes(1024 * 1024)).toBe("1.0 MB");
+		expect(formatBytes(1024 * 1024 * 1024)).toBe("1.0 GB");
+	});
+
+	it("drops the decimal once the value reaches 10", () => {
+		expect(formatBytes(145_408)).toBe("142 KB");
+	});
+
+	it("caps at the largest known unit", () => {
+		expect(formatBytes(1024 ** 5)).toBe("1024 TB");
+	});
+
+	it("returns a dash for a nonsensical size", () => {
+		expect(formatBytes(-1)).toBe("-");
+		expect(formatBytes(Number.NaN)).toBe("-");
+	});
+});
 
 describe("capitalize", () => {
 	it("capitalizes first letter", () => {

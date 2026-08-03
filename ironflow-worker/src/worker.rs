@@ -26,6 +26,7 @@ use metrics::{counter, gauge};
 use reqwest::Client;
 
 use crate::api_store::ApiRunStore;
+use crate::artifact_sink::ApiArtifactSink;
 use crate::error::WorkerError;
 use crate::log_pusher::LogPusher;
 
@@ -328,6 +329,14 @@ impl WorkerBuilder {
 
         let (log_sender, log_receiver) = ironflow_engine::log_sender::channel();
         engine.set_log_sender(log_sender);
+
+        // Artifact bytes travel through the API: the worker holds no storage
+        // credential. When the API has no backend configured, a step that
+        // declares artifacts fails with a clear message and the rest runs on.
+        engine.set_artifact_sink(Arc::new(ApiArtifactSink::new(
+            &self.api_url,
+            &self.worker_token,
+        )));
 
         #[cfg(feature = "heartbeat")]
         let heartbeat_client = Client::builder()

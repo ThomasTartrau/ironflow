@@ -369,6 +369,30 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/runs/{id}/steps/{step_id}/artifacts/{name}": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Download one artifact produced by a step.
+		 * @description Streams the stored bytes with the MIME type recorded at upload time. The
+		 *     artifact must belong to both the run and the step named in the path, so an
+		 *     id guessed from another run resolves to a 404 rather than a leak.
+		 *
+		 *     Requires the same permission as reading the run itself.
+		 */
+		get: operations["download_artifact"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/secrets": {
 		parameters: {
 			query?: never;
@@ -685,6 +709,59 @@ export interface components {
 			| "runs_manage"
 			| "stats_read"
 			| "admin";
+		/**
+		 * @description An artifact as exposed by the REST API.
+		 *
+		 *     The storage key is deliberately absent: it is internal plumbing, and callers
+		 *     address an artifact by `(run, step, name)` through the download route.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_api::entities::ArtifactResponse;
+		 *     use uuid::Uuid;
+		 *
+		 *     let response = ArtifactResponse {
+		 *         id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         name: "report.html".to_string(),
+		 *         content_type: "text/html".to_string(),
+		 *         size_bytes: 142,
+		 *         sha256: "0".repeat(64),
+		 *         created_at: Utc::now(),
+		 *     };
+		 *     assert_eq!(response.name, "report.html");
+		 *     ```
+		 */
+		ArtifactResponse: {
+			/** @description MIME type served on download. */
+			content_type: string;
+			/**
+			 * Format: date-time
+			 * @description When the artifact was recorded.
+			 */
+			created_at: string;
+			/**
+			 * Format: uuid
+			 * @description Unique artifact identifier.
+			 */
+			id: string;
+			/** @description File name, unique within the step. */
+			name: string;
+			/** @description Lowercase hex SHA-256 of the content. */
+			sha256: string;
+			/**
+			 * Format: int64
+			 * @description Size of the content, in bytes.
+			 */
+			size_bytes: number;
+			/**
+			 * Format: uuid
+			 * @description The step that produced it.
+			 */
+			step_id: string;
+		};
 		/**
 		 * @description A persisted audit log entry capturing a domain event.
 		 *
@@ -1680,6 +1757,13 @@ export interface components {
 		 */
 		StepResponse: {
 			/**
+			 * @description Files this step produced, downloadable through the artifact route.
+			 *
+			 *     Empty when the step produced none or when artifact storage is not
+			 *     configured on the server.
+			 */
+			artifacts?: components["schemas"]["ArtifactResponse"][];
+			/**
 			 * Format: int32
 			 * @description Which run attempt produced this step (1-based).
 			 *
@@ -2637,6 +2721,54 @@ export interface operations {
 			};
 			/** @description Run is already waiting for an automatic retry */
 			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	download_artifact: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+				/** @description Step ID */
+				step_id: string;
+				/** @description Artifact name */
+				name: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Artifact content */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/octet-stream": unknown;
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run, step or artifact not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Artifact storage is not configured */
+			501: {
 				headers: {
 					[name: string]: unknown;
 				};

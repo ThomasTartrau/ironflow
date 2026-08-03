@@ -15,6 +15,7 @@ import { api } from "@/app/lib/api";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { AgentDebugTimeline, countVisibleTurns } from "./AgentDebugTimeline";
+import { StepArtifacts } from "./StepArtifacts";
 import { Badge } from "@/components/ui/badge";
 import {
 	Collapsible,
@@ -206,6 +207,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 						) : (
 							<StepOutput step={step} />
 						))}
+					<StepArtifacts runId={step.run_id} artifacts={step.artifacts} />
 					{step.kind === "agent" && step.debug_messages != null && (
 						<CollapsibleBlock
 							label="Conversation trace"
@@ -660,6 +662,8 @@ function StepRow({ step }: { step: StepResponse }) {
 								) : (
 									<StepOutput step={step} />
 								))}
+
+							<StepArtifacts runId={step.run_id} artifacts={step.artifacts} />
 
 							{step.kind === "agent" && step.debug_messages != null && (
 								<CollapsibleBlock
