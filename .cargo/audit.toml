@@ -14,4 +14,8 @@ ignore = [
     # proc-macro-error2 2.0.1 (via validator_derive) -- unmaintained
     # validator 0.20 is the latest version, no alternative available
     "RUSTSEC-2026-0173",
+
+    # rkyv 0.7.46 (optional dep of rust_decimal, never compiled)
+    # rust_decimal's rkyv feature is not enabled; present in lockfile only
+    "RUSTSEC-2026-0235",
 ]
