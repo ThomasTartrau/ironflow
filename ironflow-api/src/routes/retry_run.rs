@@ -39,7 +39,7 @@ pub struct RetryQuery {
         tags = ["runs"],
         params(
             ("id" = Uuid, Path, description = "Run ID"),
-            ("force" = bool, Query, description = "Force retry despite handler version mismatch"),
+            ("force" = Option<bool>, Query, description = "Force retry despite handler version mismatch"),
         ),
         responses(
             (status = 201, description = "Run retry created successfully", body = RunResponse),
