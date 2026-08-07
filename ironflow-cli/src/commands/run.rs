@@ -95,6 +95,10 @@ pub enum RunCommands {
     Retry {
         /// Run UUID.
         id: Uuid,
+        /// Force retry even when the handler version has changed since the
+        /// original run.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -228,8 +232,8 @@ pub async fn execute(
                 output::runs_table(slice::from_ref(&response.data))
             })?;
         }
-        RunCommands::Retry { id } => {
-            let response = client.retry_run(*id).await?;
+        RunCommands::Retry { id, force } => {
+            let response = client.retry_run(*id, *force).await?;
             output::print_output(json_mode, &response, || {
                 output::runs_table(slice::from_ref(&response.data))
             })?;

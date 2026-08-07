@@ -19,6 +19,7 @@ impl WorkflowHandler for WeatherReport {
             sub_workflows: Vec::new(),
             category: None,
             version: self.version().map(str::to_string),
+            compatible_versions: Vec::new(),
             input_schema: None,
             default_labels: HashMap::new(),
             schedule: None,

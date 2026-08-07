@@ -508,7 +508,10 @@ async fn run_retry_not_found() {
     let client = make_client(&base_url, &token);
 
     let args = RunArgs {
-        command: RunCommands::Retry { id: Uuid::now_v7() },
+        command: RunCommands::Retry {
+            id: Uuid::now_v7(),
+            force: false,
+        },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
     assert!(result.is_err());

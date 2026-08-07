@@ -90,7 +90,7 @@ async fn record_mode_writes_fixture_file() {
 
     // Pre-write a fixture so the inner provider can replay it
     // (we test record mode by wrapping a replay provider)
-    let inner_dir = format!("{}-inner", &fixtures_dir);
+    let inner_dir = format!("{}-inner", fixtures_dir);
     let inner_output = make_output(json!("recorded answer"), 0.002, 200, 10);
     write_fixture(&inner_dir, &config, &inner_output);
     let _inner_guard = FixtureGuard::new(&inner_dir);

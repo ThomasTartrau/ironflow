@@ -109,6 +109,9 @@ pub struct WorkflowInfo {
     /// Handler version string, used to trace which code produced a given run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Versions accepted for replay without `force`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatible_versions: Vec<String>,
     /// JSON Schema describing the expected input payload.
     ///
     /// When present, the dashboard renders a dynamic form from this schema
@@ -147,9 +150,45 @@ pub trait WorkflowHandler: Send + Sync {
     /// Handler version string, used to trace which code version produced a run.
     ///
     /// Override this to return a meaningful version (semver, git SHA, build
-    /// hash, etc.). The default is `None`.
+    /// hash, etc.). The default is `"1"`.
+    ///
+    /// The engine records this value on every run it creates so that retries
+    /// can detect when the handler has changed since the original execution.
     fn version(&self) -> Option<&str> {
-        None
+        Some("1")
+    }
+
+    /// Versions of this handler that can replay payloads produced by an
+    /// older run without requiring `force`.
+    ///
+    /// When a retry targets a run whose `handler_version` differs from
+    /// [`version`](Self::version), the engine checks this list. If the
+    /// run's version appears here, the retry proceeds normally; otherwise
+    /// it is refused with `409 HANDLER_VERSION_MISMATCH` unless the caller
+    /// passes `force=true`.
+    ///
+    /// The default is an empty slice (only the current version is accepted).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// struct MigratedHandler;
+    ///
+    /// impl WorkflowHandler for MigratedHandler {
+    ///     fn name(&self) -> &str { "migrated" }
+    ///     fn version(&self) -> Option<&str> { Some("2.0.0") }
+    ///     fn compatible_versions(&self) -> &[&str] { &["1.0.0", "1.5.0"] }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(MigratedHandler.compatible_versions(), &["1.0.0", "1.5.0"]);
+    /// ```
+    fn compatible_versions(&self) -> &[&str] {
+        &[]
     }
 
     /// Optional `/`-separated category path used to group workflows in the UI tree.
@@ -247,6 +286,48 @@ pub trait WorkflowHandler: Send + Sync {
         None
     }
 
+    /// Check whether a run carrying `run_version` can be replayed by this
+    /// handler without `force`.
+    ///
+    /// Compatibility rules:
+    /// - `run_version` is `None` (old run predating version tracking): always
+    ///   compatible.
+    /// - `run_version` equals [`version`](Self::version): compatible.
+    /// - `run_version` appears in [`compatible_versions`](Self::compatible_versions):
+    ///   compatible.
+    /// - Otherwise: incompatible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// struct MyHandler;
+    ///
+    /// impl WorkflowHandler for MyHandler {
+    ///     fn name(&self) -> &str { "my-handler" }
+    ///     fn version(&self) -> Option<&str> { Some("2.0.0") }
+    ///     fn compatible_versions(&self) -> &[&str] { &["1.0.0"] }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert!(MyHandler.is_version_compatible(None));
+    /// assert!(MyHandler.is_version_compatible(Some("2.0.0")));
+    /// assert!(MyHandler.is_version_compatible(Some("1.0.0")));
+    /// assert!(!MyHandler.is_version_compatible(Some("0.5.0")));
+    /// ```
+    fn is_version_compatible(&self, run_version: Option<&str>) -> bool {
+        let Some(rv) = run_version else {
+            return true;
+        };
+        if self.version() == Some(rv) {
+            return true;
+        }
+        self.compatible_versions().contains(&rv)
+    }
+
     /// Return metadata about this workflow (description, source code).
     ///
     /// Override this to provide a description and source code for the
@@ -254,6 +335,7 @@ pub trait WorkflowHandler: Send + Sync {
     /// but propagates [`WorkflowHandler::category`],
     /// [`WorkflowHandler::version`], [`WorkflowHandler::input_schema`],
     /// [`WorkflowHandler::default_labels`],
+    /// [`WorkflowHandler::compatible_versions`],
     /// and [`WorkflowHandler::schedule`].
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
@@ -262,6 +344,11 @@ pub trait WorkflowHandler: Send + Sync {
             sub_workflows: Vec::new(),
             category: self.category().map(str::to_string),
             version: self.version().map(str::to_string),
+            compatible_versions: self
+                .compatible_versions()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             input_schema: self.input_schema(),
             default_labels: self.default_labels(),
             schedule: self.schedule().cloned(),
@@ -343,6 +430,11 @@ mod tests {
                 sub_workflows: vec!["helper".to_string()],
                 category: self.category().map(str::to_string),
                 version: self.version().map(str::to_string),
+                compatible_versions: self
+                    .compatible_versions()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
                 input_schema: self.input_schema(),
                 default_labels: self.default_labels(),
                 schedule: self.schedule().cloned(),
@@ -362,9 +454,15 @@ mod tests {
     }
 
     #[test]
-    fn minimal_handler_defaults_to_no_version() {
+    fn minimal_handler_defaults_to_version_1() {
         let handler = MinimalHandler;
-        assert_eq!(handler.version(), None);
+        assert_eq!(handler.version(), Some("1"));
+    }
+
+    #[test]
+    fn minimal_handler_defaults_to_no_compatible_versions() {
+        let handler = MinimalHandler;
+        assert!(handler.compatible_versions().is_empty());
     }
 
     #[test]
@@ -400,7 +498,8 @@ mod tests {
         assert_eq!(info.source_code, None);
         assert_eq!(info.sub_workflows, Vec::<String>::new());
         assert_eq!(info.category, None);
-        assert_eq!(info.version, None);
+        assert_eq!(info.version, Some("1".to_string()));
+        assert!(info.compatible_versions.is_empty());
         assert_eq!(info.input_schema, None);
         assert!(info.default_labels.is_empty());
         assert_eq!(info.schedule, None);
@@ -481,6 +580,7 @@ mod tests {
             sub_workflows: Vec::new(),
             category: None,
             version: None,
+            compatible_versions: Vec::new(),
             input_schema: None,
             default_labels: HashMap::new(),
             schedule: None,
@@ -502,6 +602,7 @@ mod tests {
             sub_workflows: vec!["sub".to_string()],
             category: Some("cat".to_string()),
             version: Some("1.0.0".to_string()),
+            compatible_versions: vec!["0.9.0".to_string()],
             input_schema: Some(serde_json::json!({"type": "object"})),
             default_labels: HashMap::from([("key".to_string(), "value".to_string())]),
             schedule: Some(CronSchedule::new("0 0 * * * *").unwrap()),
@@ -516,5 +617,57 @@ mod tests {
         assert_eq!(json["version"], "1.0.0");
         assert_eq!(json["default_labels"]["key"], "value");
         assert_eq!(json["schedule"], "0 0 * * * *");
+        assert_eq!(json["compatible_versions"][0], "0.9.0");
+    }
+
+    // ---- is_version_compatible ----
+
+    struct VersionedHandler;
+
+    impl WorkflowHandler for VersionedHandler {
+        fn name(&self) -> &str {
+            "versioned"
+        }
+        fn version(&self) -> Option<&str> {
+            Some("2.0.0")
+        }
+        fn compatible_versions(&self) -> &[&str] {
+            &["1.5.0", "1.9.0"]
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn version_compatible_with_same_version() {
+        assert!(VersionedHandler.is_version_compatible(Some("2.0.0")));
+    }
+
+    #[test]
+    fn version_compatible_with_none_run_version() {
+        assert!(VersionedHandler.is_version_compatible(None));
+    }
+
+    #[test]
+    fn version_compatible_with_listed_version() {
+        assert!(VersionedHandler.is_version_compatible(Some("1.5.0")));
+        assert!(VersionedHandler.is_version_compatible(Some("1.9.0")));
+    }
+
+    #[test]
+    fn version_incompatible_with_unlisted_version() {
+        assert!(!VersionedHandler.is_version_compatible(Some("1.0.0")));
+        assert!(!VersionedHandler.is_version_compatible(Some("3.0.0")));
+    }
+
+    #[test]
+    fn minimal_handler_compatible_with_same_default() {
+        assert!(MinimalHandler.is_version_compatible(Some("1")));
+    }
+
+    #[test]
+    fn minimal_handler_incompatible_with_different_version() {
+        assert!(!MinimalHandler.is_version_compatible(Some("2")));
     }
 }

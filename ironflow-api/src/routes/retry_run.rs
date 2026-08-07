@@ -1,12 +1,14 @@
 //! `POST /api/v1/runs/:id/retry` — Retry a failed run.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_engine::error::HANDLER_VERSION_MISMATCH_CODE;
 use ironflow_engine::notify::Event;
 use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::actor::run_actor_of;
@@ -15,25 +17,37 @@ use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
 
+/// Query parameters for `POST /api/v1/runs/:id/retry`.
+#[derive(Debug, Deserialize, Default)]
+pub struct RetryQuery {
+    /// Force the retry even when the handler version has changed.
+    #[serde(default)]
+    pub force: bool,
+}
+
 /// Retry a failed run.
 ///
 /// Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
-/// original. Returns 400 if the run is not in a retryable state, and 409 if an
-/// automatic retry is already armed for it.
+/// original. Returns 400 if the run is not in a retryable state, 409 if an
+/// automatic retry is already armed, and 409 if the handler version has
+/// changed since the original run (pass `?force=true` to override).
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
         post,
         path = "/api/v1/runs/{id}/retry",
         tags = ["runs"],
-        params(("id" = Uuid, Path, description = "Run ID")),
+        params(
+            ("id" = Uuid, Path, description = "Run ID"),
+            ("force" = bool, Query, description = "Force retry despite handler version mismatch"),
+        ),
         responses(
             (status = 201, description = "Run retry created successfully", body = RunResponse),
             (status = 400, description = "Run cannot be retried"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
             (status = 404, description = "Run not found"),
-            (status = 409, description = "Run is already waiting for an automatic retry")
+            (status = 409, description = "Version mismatch or automatic retry already armed")
         ),
         security(("Bearer" = []))
     )
@@ -42,6 +56,7 @@ pub async fn retry_run(
     auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(query): Query<RetryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !auth.is_admin() {
         return Err(ApiError::Forbidden);
@@ -49,8 +64,8 @@ pub async fn retry_run(
 
     let original = state.get_run_or_404(id).await?;
 
-    // A `Retrying` run already has an automatic retry armed: creating a second
-    // run here would execute the same work twice, concurrently.
+    // Retrying means an automatic retry is already armed; creating a manual
+    // retry on top would produce a duplicate run once the timer fires.
     if original.status.state == RunStatus::Retrying {
         return Err(ApiError::Conflict(
             "run is already waiting for an automatic retry; cancel it first to retry manually"
@@ -68,28 +83,62 @@ pub async fn retry_run(
         )));
     }
 
+    let force = query.force;
+    let handler = state.engine.get_handler(&original.workflow_name);
+    let current_version = handler.and_then(|h| h.version().map(str::to_string));
+
+    if let Some(handler) = &handler
+        && !handler.is_version_compatible(original.handler_version.as_deref())
+        && !force
+    {
+        return Err(ApiError::Conflict(format!(
+            "{}: handler '{}' is now at version {}, but the run was created \
+             with version {}. Pass ?force=true to override.",
+            HANDLER_VERSION_MISMATCH_CODE,
+            original.workflow_name,
+            current_version.as_deref().unwrap_or("unknown"),
+            original.handler_version.as_deref().unwrap_or("unknown"),
+        )));
+    }
+
+    // When the handler is still registered, use its current version.
+    // When unregistered (e.g. removed between deploys), preserve the
+    // original version so version-tracking information is not lost.
+    let effective_version = current_version.clone().or(original.handler_version.clone());
+
     let new_run = state
         .store
         .create_run(NewRun {
-            workflow_name: original.workflow_name,
+            workflow_name: original.workflow_name.clone(),
             trigger: TriggerKind::Retry { parent_run_id: id },
             payload: original.payload,
             max_retries: original.max_retries,
-            handler_version: original.handler_version,
+            handler_version: effective_version,
             labels: original.labels,
             scheduled_at: None,
-            // A retry is a new, accountable action: the author is whoever
-            // triggered it, not the author of the original run.
+            // The retry is attributed to the user who triggered it, not the
+            // original author, so the audit trail shows who actually acted.
             created_by: Some(run_actor_of(&auth)),
-            // A retry is a deliberate re-execution: it must not inherit the
-            // original key, which is still bound to the run being retried.
+            // A retry must not inherit the parent's idempotency key: it is a
+            // new logical operation and must be eligible for its own dedup.
             idempotency_key: None,
-            // The retry inherits the original cap, so a run cancelled for
-            // reaching it does not silently come back unbounded.
+            // Inherit the original cost cap so budget constraints survive retries.
             max_cost_usd: original.max_cost_usd,
         })
         .await?
         .into_run();
+
+    // Only emit RetryForced when both the handler is registered (so
+    // current_version is meaningful) and the versions actually differ.
+    if force && handler.is_some() && original.handler_version != current_version {
+        state.engine.event_publisher().publish(Event::RetryForced {
+            run_id: new_run.id,
+            workflow_name: original.workflow_name.clone(),
+            original_version: original.handler_version.unwrap_or_default(),
+            current_version: current_version.unwrap_or_default(),
+            at: Utc::now(),
+        });
+    }
 
     state.engine.event_publisher().publish(Event::RunCreated {
         run_id: new_run.id,
@@ -111,7 +160,9 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
+    use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, NewUser, RunActor, RunStatus, TriggerKind};
@@ -652,5 +703,248 @@ mod tests {
             .unwrap()
             .expect("key still bound");
         assert_eq!(bound.id, run.id);
+    }
+
+    // ---- Handler version compatibility ----
+
+    struct V2Handler;
+    impl WorkflowHandler for V2Handler {
+        fn name(&self) -> &str {
+            "versioned-wf"
+        }
+        fn version(&self) -> Option<&str> {
+            Some("2.0.0")
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct V2CompatHandler;
+    impl WorkflowHandler for V2CompatHandler {
+        fn name(&self) -> &str {
+            "compat-wf"
+        }
+        fn version(&self) -> Option<&str> {
+            Some("2.0.0")
+        }
+        fn compatible_versions(&self) -> &[&str] {
+            &["1.0.0"]
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn test_state_with_handlers(store: Arc<InMemoryStore>) -> AppState {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.register(V2Handler).unwrap();
+        engine.register(V2CompatHandler).unwrap();
+        let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        AppState::new(
+            store,
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        )
+    }
+
+    async fn create_failed_run(
+        store: &Arc<InMemoryStore>,
+        workflow_name: &str,
+        handler_version: Option<&str>,
+    ) -> ironflow_store::models::Run {
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: workflow_name.to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: handler_version.map(str::to_string),
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Failed)
+            .await
+            .unwrap();
+        run
+    }
+
+    #[tokio::test]
+    async fn retry_same_version_succeeds() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_failed_run(&store, "versioned-wf", Some("2.0.0")).await;
+
+        let state = test_state_with_handlers(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn retry_version_mismatch_returns_409() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_failed_run(&store, "versioned-wf", Some("1.0.0")).await;
+
+        let state = test_state_with_handlers(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CONFLICT);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let msg = json_val["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("HANDLER_VERSION_MISMATCH"));
+        assert!(msg.contains("2.0.0"));
+        assert!(msg.contains("1.0.0"));
+    }
+
+    #[tokio::test]
+    async fn retry_version_mismatch_with_force_succeeds() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_failed_run(&store, "versioned-wf", Some("1.0.0")).await;
+
+        let state = test_state_with_handlers(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry?force=true", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
+        let new_run = store.get_run(new_id).await.unwrap().unwrap();
+        assert_eq!(new_run.handler_version, Some("2.0.0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn retry_compatible_version_succeeds() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_failed_run(&store, "compat-wf", Some("1.0.0")).await;
+
+        let state = test_state_with_handlers(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn retry_null_version_is_compatible() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_failed_run(&store, "versioned-wf", None).await;
+
+        let state = test_state_with_handlers(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn retry_writes_current_handler_version() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_failed_run(&store, "versioned-wf", Some("2.0.0")).await;
+
+        let state = test_state_with_handlers(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
+        let new_run = store.get_run(new_id).await.unwrap().unwrap();
+        assert_eq!(new_run.handler_version, Some("2.0.0".to_string()));
     }
 }

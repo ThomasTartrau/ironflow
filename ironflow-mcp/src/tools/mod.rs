@@ -523,6 +523,7 @@ mod tests {
         let client = client_for(addr);
         let tool = RetryRunTool {
             run_id: "r4".to_string(),
+            force: None,
         };
 
         let result = tool.run(&client).await.unwrap();
