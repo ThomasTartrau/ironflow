@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.11.2"
+version = "2.11.3"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -11,9 +11,9 @@ keywords = ["workflow", "worker", "queue", "background"]
 categories = ["asynchronous"]
 
 [dependencies]
-ironflow-core = { version = "3.3.0", path = "../ironflow-core" }
-ironflow-store = { version = "2.17.1", path = "../ironflow-store", default-features = false }
-ironflow-engine = { version = "2.17.5", path = "../ironflow-engine" }
+ironflow-core = { version = "3.4.0", path = "../ironflow-core" }
+ironflow-store = { version = "2.18.0", path = "../ironflow-store", default-features = false }
+ironflow-engine = { version = "2.18.0", path = "../ironflow-engine" }
 ironflow-artifacts = { version = "0.1.1", path = "../ironflow-artifacts" }
 
 bytes = "1"
