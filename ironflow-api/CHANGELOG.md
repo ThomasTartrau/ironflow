@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.24.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.23.2...ironflow-api-v2.24.0) - 2026-08-08
+
+### Added
+
+- #23 enforce handler version compatibility on retry
+
+
+### Fixed
+
+- mark retry force query param as optional in OpenAPI spec
+
 ## [2.23.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.23.0...ironflow-api-v2.23.1) - 2026-08-03
 ## [2.23.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.22.0...ironflow-api-v2.23.0) - 2026-07-29
 
