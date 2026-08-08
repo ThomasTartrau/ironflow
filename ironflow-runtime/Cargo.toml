@@ -29,7 +29,7 @@ hex = "0.4"
 subtle = "2"
 dotenvy = "0.15"
 thiserror = "2"
-async-nats = { version = "0.40", optional = true }
+async-nats = { version = "0.50", optional = true, default-features = false, features = ["jetstream"] }
 futures-util = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false }
@@ -50,7 +50,7 @@ rust_decimal = "1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
-async-nats = "0.40"
+async-nats = { version = "0.50", default-features = false, features = ["jetstream"] }
 
 [[example]]
 name = "daemon"
