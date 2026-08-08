@@ -41,6 +41,9 @@ pub struct WorkflowDetailResponse {
     pub category: Option<String>,
     /// Current handler version.
     pub version: Option<String>,
+    /// Versions accepted for replay without `force`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatible_versions: Vec<String>,
     /// JSON Schema describing the expected input payload.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
@@ -107,6 +110,7 @@ pub async fn get_workflow(
         sub_workflows,
         category: info.category,
         version: info.version,
+        compatible_versions: info.compatible_versions,
         input_schema: info.input_schema,
         default_labels: info.default_labels,
         schedule: info.schedule.map(|s| s.as_str().to_string()),

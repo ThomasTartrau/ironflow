@@ -61,6 +61,8 @@ pub enum EventKind {
     UserSignedOut,
     /// A batch of secrets was re-encrypted with a different key version.
     SecretsRotated,
+    /// A retry was forced despite a handler version mismatch.
+    RetryForced,
 }
 
 impl EventKind {
@@ -80,6 +82,7 @@ impl EventKind {
         Self::UserSignedUp,
         Self::UserSignedOut,
         Self::SecretsRotated,
+        Self::RetryForced,
     ];
 
     /// Returns the wire-format string for this kind.
@@ -112,7 +115,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 14);
+        assert_eq!(EventKind::ALL.len(), 15);
     }
 
     #[test]

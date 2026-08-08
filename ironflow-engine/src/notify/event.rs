@@ -160,6 +160,25 @@ pub enum Event {
         at: DateTime<Utc>,
     },
 
+    /// A manual retry was forced despite a handler version mismatch.
+    ///
+    /// Emitted when a caller passes `force=true` on a retry where the
+    /// handler version differs from the run's recorded version. This is
+    /// an audit event: it means the new code will execute on the old
+    /// payload without the handler explicitly declaring compatibility.
+    RetryForced {
+        /// The new run created by the forced retry.
+        run_id: Uuid,
+        /// Workflow name.
+        workflow_name: String,
+        /// Version stored on the original run.
+        original_version: String,
+        /// Current version of the handler.
+        current_version: String,
+        /// When the forced retry occurred.
+        at: DateTime<Utc>,
+    },
+
     // -- Step lifecycle --
     /// A step completed successfully.
     StepCompleted {
@@ -289,6 +308,8 @@ impl Event {
     pub const RUN_FAILED: &'static str = "run_failed";
     /// Event type constant for [`RunBudgetExceeded`](Event::RunBudgetExceeded).
     pub const RUN_BUDGET_EXCEEDED: &'static str = "run_budget_exceeded";
+    /// Event type constant for [`RetryForced`](Event::RetryForced).
+    pub const RETRY_FORCED: &'static str = "retry_forced";
     /// Event type constant for [`StepCompleted`](Event::StepCompleted).
     pub const STEP_COMPLETED: &'static str = "step_completed";
     /// Event type constant for [`StepFailed`](Event::StepFailed).
@@ -337,6 +358,7 @@ impl Event {
         Self::USER_SIGNED_IN,
         Self::USER_SIGNED_UP,
         Self::USER_SIGNED_OUT,
+        Self::RETRY_FORCED,
     ];
 
     /// Returns the event type as a static string (e.g. `"run_status_changed"`).
@@ -372,6 +394,7 @@ impl Event {
             Event::UserSignedIn { .. } => Self::USER_SIGNED_IN,
             Event::UserSignedUp { .. } => Self::USER_SIGNED_UP,
             Event::UserSignedOut { .. } => Self::USER_SIGNED_OUT,
+            Event::RetryForced { .. } => Self::RETRY_FORCED,
         }
     }
 }

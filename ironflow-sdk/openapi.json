@@ -548,6 +548,48 @@
             "type": "object"
           },
           {
+            "description": "A manual retry was forced despite a handler version mismatch.\n\nEmitted when a caller passes `force=true` on a retry where the\nhandler version differs from the run's recorded version. This is\nan audit event: it means the new code will execute on the old\npayload without the handler explicitly declaring compatibility.",
+            "properties": {
+              "at": {
+                "description": "When the forced retry occurred.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "current_version": {
+                "description": "Current version of the handler.",
+                "type": "string"
+              },
+              "original_version": {
+                "description": "Version stored on the original run.",
+                "type": "string"
+              },
+              "run_id": {
+                "description": "The new run created by the forced retry.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "retry_forced"
+                ],
+                "type": "string"
+              },
+              "workflow_name": {
+                "description": "Workflow name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "workflow_name",
+              "original_version",
+              "current_version",
+              "at",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
             "description": "A step completed successfully.",
             "properties": {
               "at": {
@@ -910,7 +952,8 @@
           "user_signed_in",
           "user_signed_up",
           "user_signed_out",
-          "secrets_rotated"
+          "secrets_rotated",
+          "retry_forced"
         ],
         "type": "string"
       },
@@ -1892,6 +1935,13 @@
             "nullable": true,
             "type": "string"
           },
+          "compatible_versions": {
+            "description": "Versions accepted for replay without `force`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "default_labels": {
             "additionalProperties": {
               "type": "string"
@@ -2767,7 +2817,7 @@
     },
     "/api/v1/runs/{id}/retry": {
       "post": {
-        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, and 409 if an\nautomatic retry is already armed for it.",
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, 409 if an\nautomatic retry is already armed, and 409 if the handler version has\nchanged since the original run (pass `?force=true` to override).",
         "operationId": "retry_run",
         "parameters": [
           {
@@ -2778,6 +2828,15 @@
             "schema": {
               "format": "uuid",
               "type": "string"
+            }
+          },
+          {
+            "description": "Force retry despite handler version mismatch",
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -2805,7 +2864,7 @@
             "description": "Run not found"
           },
           "409": {
-            "description": "Run is already waiting for an automatic retry"
+            "description": "Version mismatch or automatic retry already armed"
           }
         },
         "security": [

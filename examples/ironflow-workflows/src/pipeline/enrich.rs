@@ -28,6 +28,7 @@ impl WorkflowHandler for Enrich {
             sub_workflows: vec!["pipeline-collect".to_string()],
             category: Some("examples/pipeline".to_string()),
             version: self.version().map(str::to_string),
+            compatible_versions: Vec::new(),
             input_schema: None,
             default_labels: HashMap::new(),
             schedule: None,

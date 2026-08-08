@@ -359,8 +359,9 @@ export interface paths {
 		/**
 		 * Retry a failed run.
 		 * @description Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
-		 *     original. Returns 400 if the run is not in a retryable state, and 409 if an
-		 *     automatic retry is already armed for it.
+		 *     original. Returns 400 if the run is not in a retryable state, 409 if an
+		 *     automatic retry is already armed, and 409 if the handler version has
+		 *     changed since the original run (pass `?force=true` to override).
 		 */
 		post: operations["retry_run"];
 		delete?: never;
@@ -1109,6 +1110,26 @@ export interface components {
 			| {
 					/**
 					 * Format: date-time
+					 * @description When the forced retry occurred.
+					 */
+					at: string;
+					/** @description Current version of the handler. */
+					current_version: string;
+					/** @description Version stored on the original run. */
+					original_version: string;
+					/**
+					 * Format: uuid
+					 * @description The new run created by the forced retry.
+					 */
+					run_id: string;
+					/** @enum {string} */
+					type: "retry_forced";
+					/** @description Workflow name. */
+					workflow_name: string;
+			  }
+			| {
+					/**
+					 * Format: date-time
 					 * @description When the step completed.
 					 */
 					at: string;
@@ -1318,7 +1339,8 @@ export interface components {
 			| "user_signed_in"
 			| "user_signed_up"
 			| "user_signed_out"
-			| "secrets_rotated";
+			| "secrets_rotated"
+			| "retry_forced";
 		/** @description How the configured key ring lines up with the stored secrets. */
 		KeyVersionsResponse: {
 			/**
@@ -1966,6 +1988,8 @@ export interface components {
 		WorkflowDetailResponse: {
 			/** @description Optional `/`-separated category path used to group workflows. */
 			category?: string | null;
+			/** @description Versions accepted for replay without `force`. */
+			compatible_versions?: string[];
 			/** @description Labels automatically applied to every run of this workflow. */
 			default_labels?: {
 				[key: string]: string;
@@ -2672,7 +2696,10 @@ export interface operations {
 	};
 	retry_run: {
 		parameters: {
-			query?: never;
+			query?: {
+				/** @description Force retry despite handler version mismatch */
+				force?: boolean;
+			};
 			header?: never;
 			path: {
 				/** @description Run ID */
@@ -2719,7 +2746,7 @@ export interface operations {
 				};
 				content?: never;
 			};
-			/** @description Run is already waiting for an automatic retry */
+			/** @description Version mismatch or automatic retry already armed */
 			409: {
 				headers: {
 					[name: string]: unknown;

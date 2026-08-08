@@ -61,6 +61,7 @@ impl WorkflowHandler for Greeting {
             sub_workflows: Vec::new(),
             category: self.category().map(str::to_string),
             version: self.version().map(str::to_string),
+            compatible_versions: Vec::new(),
             input_schema: self.input_schema(),
             default_labels: self.default_labels(),
             schedule: None,

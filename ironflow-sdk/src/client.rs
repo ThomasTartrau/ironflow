@@ -444,11 +444,19 @@ impl IronflowClient {
 
     /// `POST /api/v1/runs/:id/retry` -- Retry a failed run (creates a new run).
     ///
+    /// When `force` is `true`, the query parameter `?force=true` is appended
+    /// to override a handler version mismatch.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::Api`] on 404 or 400.
-    pub async fn retry_run(&self, id: Uuid) -> Result<ApiResponse<types::RunResponse>, Error> {
-        self.run_action(id, "retry").await
+    /// Returns [`Error::Api`] on 404, 400, or 409 (version mismatch).
+    pub async fn retry_run(
+        &self,
+        id: Uuid,
+        force: bool,
+    ) -> Result<ApiResponse<types::RunResponse>, Error> {
+        let action = if force { "retry?force=true" } else { "retry" };
+        self.run_action(id, action).await
     }
 
     // ── Workflows ──────────────────────────────────────────────────

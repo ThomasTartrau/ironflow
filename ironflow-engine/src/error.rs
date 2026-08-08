@@ -13,6 +13,9 @@ pub const RUN_BUDGET_EXCEEDED_CODE: &str = "RUN_BUDGET_EXCEEDED";
 /// Business error code carried by [`EngineError::MonthlyBudgetExceeded`].
 pub const MONTHLY_BUDGET_EXCEEDED_CODE: &str = "MONTHLY_BUDGET_EXCEEDED";
 
+/// Business error code for handler-version mismatch on retry.
+pub const HANDLER_VERSION_MISMATCH_CODE: &str = "HANDLER_VERSION_MISMATCH";
+
 /// Errors produced by the workflow engine.
 #[derive(Debug, Error)]
 pub enum EngineError {
