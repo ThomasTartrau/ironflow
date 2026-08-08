@@ -34,11 +34,14 @@
 //!
 //! - [`runtime`] - The [`runtime::Runtime`] builder and HTTP server.
 //! - [`webhook`] - Webhook authentication strategies ([`webhook::WebhookAuth`]).
+//! - [`trigger`] - Pluggable trigger sources (`EventTrigger`,
+//!   `NatsTrigger` behind `trigger-nats` feature).
 //! - `cron` - Internal cron job representation (crate-private).
 
 pub(crate) mod cron;
 pub mod error;
 pub mod runtime;
+pub mod trigger;
 pub mod webhook;
 
 /// Convenience re-exports for common usage.
@@ -50,5 +53,6 @@ pub mod webhook;
 pub mod prelude {
     pub use crate::error::RuntimeError;
     pub use crate::runtime::{Runtime, WebhookContext};
+    pub use crate::trigger::{Trigger, TriggerEvent, TriggerSink};
     pub use crate::webhook::WebhookAuth;
 }

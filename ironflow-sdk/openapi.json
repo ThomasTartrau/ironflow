@@ -1857,6 +1857,52 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "description": "Triggered by a message consumed from a NATS subject.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "nats"
+                ],
+                "type": "string"
+              },
+              "subject": {
+                "description": "The NATS subject the message was consumed from.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "subject",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Triggered by an internal run event (workflow chaining).",
+            "properties": {
+              "event_kind": {
+                "description": "The event kind that fired (e.g. `\"run_failed\"`).",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "run_event"
+                ],
+                "type": "string"
+              },
+              "source_run_id": {
+                "description": "The run whose event triggered this run.",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_run_id",
+              "event_kind",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },

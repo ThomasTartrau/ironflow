@@ -1949,6 +1949,23 @@ export interface components {
 			| {
 					/** @enum {string} */
 					kind: "workflow";
+			  }
+			| {
+					/** @enum {string} */
+					kind: "nats";
+					/** @description The NATS subject the message was consumed from. */
+					subject: string;
+			  }
+			| {
+					/** @description The event kind that fired (e.g. `"run_failed"`). */
+					event_kind: string;
+					/** @enum {string} */
+					kind: "run_event";
+					/**
+					 * Format: uuid
+					 * @description The run whose event triggered this run.
+					 */
+					source_run_id: string;
 			  };
 		/** @description Request body for updating a user's role (admin only). */
 		UpdateRoleRequest: {

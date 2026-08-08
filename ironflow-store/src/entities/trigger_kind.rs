@@ -39,6 +39,18 @@ pub enum TriggerKind {
     },
     /// Triggered by a parent workflow as a sub-workflow step.
     Workflow,
+    /// Triggered by a message consumed from a NATS subject.
+    Nats {
+        /// The NATS subject the message was consumed from.
+        subject: String,
+    },
+    /// Triggered by an internal run event (workflow chaining).
+    RunEvent {
+        /// The run whose event triggered this run.
+        source_run_id: Uuid,
+        /// The event kind that fired (e.g. `"run_failed"`).
+        event_kind: String,
+    },
 }
 
 #[cfg(test)]
@@ -59,11 +71,41 @@ mod tests {
             TriggerKind::Retry {
                 parent_run_id: Uuid::nil(),
             },
+            TriggerKind::Nats {
+                subject: "workflows.deploy".to_string(),
+            },
+            TriggerKind::RunEvent {
+                source_run_id: Uuid::nil(),
+                event_kind: "run_failed".to_string(),
+            },
         ];
         for trigger in triggers {
             let json = serde_json::to_string(&trigger).expect("serialize");
             let back: TriggerKind = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(trigger, back);
         }
+    }
+
+    #[test]
+    fn nats_serializes_with_subject() {
+        let trigger = TriggerKind::Nats {
+            subject: "orders.created".to_string(),
+        };
+        let json = serde_json::to_string(&trigger).expect("serialize");
+        assert!(json.contains("\"kind\":\"nats\""));
+        assert!(json.contains("\"subject\":\"orders.created\""));
+    }
+
+    #[test]
+    fn run_event_serializes_with_source() {
+        let run_id = Uuid::nil();
+        let trigger = TriggerKind::RunEvent {
+            source_run_id: run_id,
+            event_kind: "step_failed".to_string(),
+        };
+        let json = serde_json::to_string(&trigger).expect("serialize");
+        assert!(json.contains("\"kind\":\"run_event\""));
+        assert!(json.contains("\"event_kind\":\"step_failed\""));
+        assert!(json.contains("\"source_run_id\""));
     }
 }

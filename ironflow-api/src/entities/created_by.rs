@@ -70,6 +70,8 @@ fn trigger_label(trigger: &TriggerKind) -> String {
         TriggerKind::Retry { .. } => "retry".to_string(),
         TriggerKind::Webhook { path } => path.clone(),
         TriggerKind::Cron { schedule } => schedule.clone(),
+        TriggerKind::Nats { subject } => format!("nats:{subject}"),
+        TriggerKind::RunEvent { event_kind, .. } => format!("event:{event_kind}"),
     }
 }
 
