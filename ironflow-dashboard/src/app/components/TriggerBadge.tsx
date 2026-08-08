@@ -33,7 +33,10 @@ function getTriggerMeta(t: TriggerKind): TriggerMeta {
 		case "nats":
 			return { label: "NATS", tooltip: t.subject };
 		case "run_event":
-			return { label: "Event", tooltip: `${t.event_kind} (${t.source_run_id})` };
+			return {
+				label: "Event",
+				tooltip: `${t.event_kind} (${t.source_run_id})`,
+			};
 		default: {
 			const _exhaustive: never = t;
 			return _exhaustive;
