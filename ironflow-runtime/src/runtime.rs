@@ -25,9 +25,19 @@ use tokio::task::JoinSet;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info, warn};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::cron::CronJob;
 use crate::error::RuntimeError;
+use crate::trigger::{Trigger, TriggerEvent, TriggerSink};
 use crate::webhook::{WebhookAuth, extract_delivery_id};
+
+/// Default buffer size for the trigger event channel.
+const DEFAULT_TRIGGER_CHANNEL_SIZE: usize = 256;
+
+/// Callback invoked when a [`Trigger`] emits a [`TriggerEvent`].
+type TriggerHandler =
+    Arc<dyn Fn(TriggerEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// Default maximum body size for webhook payloads (2 MiB).
 const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
@@ -120,6 +130,8 @@ struct WebhookRoute {
 pub struct Runtime {
     webhooks: Vec<WebhookRoute>,
     crons: Vec<CronJob>,
+    triggers: Vec<Box<dyn Trigger>>,
+    trigger_handler: Option<TriggerHandler>,
     max_body_size: usize,
     max_concurrent_handlers: usize,
     custom_shutdown: Option<ShutdownSignal>,
@@ -139,6 +151,8 @@ impl Runtime {
         Self {
             webhooks: Vec::new(),
             crons: Vec::new(),
+            triggers: Vec::new(),
+            trigger_handler: None,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
             max_concurrent_handlers: DEFAULT_MAX_CONCURRENT_HANDLERS,
             custom_shutdown: None,
@@ -340,6 +354,60 @@ impl Runtime {
             name: name.to_string(),
             handler: handler_fn,
         });
+        self
+    }
+
+    /// Registers a [`Trigger`] that will be started alongside the
+    /// HTTP server and cron scheduler.
+    ///
+    /// Triggers emit [`TriggerEvent`]s through a channel. Use
+    /// [`Runtime::on_trigger`] to handle those events (typically by
+    /// creating a workflow run).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_runtime::prelude::*;
+    /// use ironflow_runtime::trigger::event::{EventTrigger, EventTriggerRule};
+    /// use ironflow_store::entities::EventKind;
+    ///
+    /// let trigger = EventTrigger::new(vec![
+    ///     EventTriggerRule {
+    ///         on_event: EventKind::RunFailed,
+    ///         source_workflow: "deploy".to_string(),
+    ///         target_workflow: "rollback".to_string(),
+    ///         max_chain_depth: 3,
+    ///     },
+    /// ]);
+    ///
+    /// let runtime = Runtime::new().trigger(trigger);
+    /// ```
+    pub fn trigger(mut self, trigger: impl Trigger + 'static) -> Self {
+        self.triggers.push(Box::new(trigger));
+        self
+    }
+
+    /// Set the handler called when a [`Trigger`] emits a
+    /// [`TriggerEvent`].
+    ///
+    /// The handler typically creates a workflow run via the API.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_runtime::prelude::*;
+    ///
+    /// let runtime = Runtime::new()
+    ///     .on_trigger(|event| async move {
+    ///         println!("trigger fired: {} -> {}", event.workflow_name, event.payload);
+    ///     });
+    /// ```
+    pub fn on_trigger<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(TriggerEvent) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.trigger_handler = Some(Arc::new(move |event| Box::pin(handler(event))));
         self
     }
 
@@ -581,6 +649,11 @@ impl Runtime {
 
         let mut scheduler = Self::start_scheduler(self.crons).await?;
 
+        // Start triggers
+        let trigger_token = CancellationToken::new();
+        let trigger_handles =
+            Self::start_triggers(self.triggers, self.trigger_handler, trigger_token.clone());
+
         let tracker = Arc::new(HandlerTracker::new(self.max_concurrent_handlers));
         let router = Self::build_router(
             self.webhooks,
@@ -608,11 +681,77 @@ impl Runtime {
         info!("waiting for in-flight webhook handlers to complete");
         tracker.wait().await;
 
+        // Stop triggers
+        info!("stopping triggers");
+        trigger_token.cancel();
+        for handle in trigger_handles {
+            if let Err(e) = handle.await {
+                error!(error = %e, "trigger task panicked");
+            }
+        }
+
         info!("shutting down scheduler");
         scheduler.shutdown().await.map_err(RuntimeError::Shutdown)?;
         info!("ironflow runtime stopped");
 
         Ok(())
+    }
+
+    /// Start all registered triggers and the event-dispatch loop.
+    ///
+    /// Returns handles for each trigger task and the dispatch task.
+    fn start_triggers(
+        triggers: Vec<Box<dyn Trigger>>,
+        handler: Option<TriggerHandler>,
+        token: CancellationToken,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
+        if triggers.is_empty() {
+            return Vec::new();
+        }
+
+        let (sink, mut rx) = TriggerSink::channel(DEFAULT_TRIGGER_CHANNEL_SIZE);
+        let mut handles = Vec::new();
+
+        for trigger in triggers {
+            let sink = sink.clone();
+            let token = token.clone();
+            let name = trigger.name().to_string();
+            let handle = tokio::spawn(async move {
+                info!(trigger = %name, "starting trigger");
+                if let Err(e) = trigger.start(sink, &token).await {
+                    error!(trigger = %name, error = %e, "trigger failed");
+                }
+                info!(trigger = %name, "trigger stopped");
+            });
+            handles.push(handle);
+        }
+
+        // Dispatch loop: forward trigger events to the handler.
+        if let Some(handler) = handler {
+            let dispatch_token = token.clone();
+            let dispatch_handle = tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = dispatch_token.cancelled() => break,
+                        event = rx.recv() => {
+                            let Some(event) = event else { break };
+                            info!(
+                                workflow = %event.workflow_name,
+                                "trigger event received, dispatching"
+                            );
+                            handler(event).await;
+                        }
+                    }
+                }
+            });
+            handles.push(dispatch_handle);
+        } else if !handles.is_empty() {
+            warn!(
+                "triggers registered but no on_trigger handler set - trigger events will be dropped"
+            );
+        }
+
+        handles
     }
 }
 

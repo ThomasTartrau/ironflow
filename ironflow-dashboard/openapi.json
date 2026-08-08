@@ -3672,6 +3672,52 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Triggered by a message consumed from a NATS subject.",
+            "required": [
+              "subject",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "nats"
+                ]
+              },
+              "subject": {
+                "type": "string",
+                "description": "The NATS subject the message was consumed from."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Triggered by an internal run event (workflow chaining).",
+            "required": [
+              "source_run_id",
+              "event_kind",
+              "kind"
+            ],
+            "properties": {
+              "event_kind": {
+                "type": "string",
+                "description": "The event kind that fired (e.g. `\"run_failed\"`)."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "run_event"
+                ]
+              },
+              "source_run_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The run whose event triggered this run."
+              }
+            }
           }
         ],
         "description": "How a run was triggered.\n\n# Examples\n\n```\nuse ironflow_store::entities::TriggerKind;\n\nlet trigger = TriggerKind::Manual;\nlet json = serde_json::to_string(&trigger).unwrap();\nassert!(json.contains(\"manual\"));\n```"
