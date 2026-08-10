@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.27.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.26.0...ironflow-api-v2.27.0) - 2026-08-10
+
+### Added
+
+- #27 add conditions on EventTriggerRule (labels, expressions)
+
 ## [2.26.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.25.0...ironflow-api-v2.26.0) - 2026-08-10
 
 ### Added
