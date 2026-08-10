@@ -58,6 +58,7 @@ pub async fn pick_next_run(
                 error: None,
                 cost_usd: Decimal::ZERO,
                 duration_ms: 0,
+                labels: picked.labels.clone(),
                 at: Utc::now(),
             });
     }

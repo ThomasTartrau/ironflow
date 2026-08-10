@@ -84,6 +84,7 @@ pub async fn update_run_status(
             error: error_msg.clone(),
             cost_usd,
             duration_ms,
+            labels: previous.labels.clone(),
             at: now,
         });
         if new_status == RunStatus::Failed {
@@ -93,6 +94,7 @@ pub async fn update_run_status(
                 error: error_msg,
                 cost_usd,
                 duration_ms,
+                labels: previous.labels,
                 at: now,
             });
         }

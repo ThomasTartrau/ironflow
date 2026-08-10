@@ -183,6 +183,7 @@ impl BetterStackSubscriber {
                 cost_usd,
                 duration_ms,
                 at,
+                ..
             } => {
                 let error_detail = error.as_deref().unwrap_or("unknown error");
                 let message = format!(
@@ -237,6 +238,8 @@ impl EventSubscriber for BetterStackSubscriber {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use chrono::Utc;
     use ironflow_store::models::{RunStatus, StepKind};
@@ -292,6 +295,7 @@ mod tests {
             error: Some("step 'build' failed".to_string()),
             cost_usd: Decimal::new(42, 2),
             duration_ms: 5000,
+            labels: HashMap::new(),
             at: Utc::now(),
         };
 
@@ -313,6 +317,7 @@ mod tests {
             error: None,
             cost_usd: Decimal::ZERO,
             duration_ms: 1000,
+            labels: HashMap::new(),
             at: Utc::now(),
         };
 
@@ -331,6 +336,7 @@ mod tests {
             error: None,
             cost_usd: Decimal::ZERO,
             duration_ms: 1000,
+            labels: HashMap::new(),
             at: Utc::now(),
         };
 

@@ -594,7 +594,7 @@ impl Engine {
         let mut ctx = self.build_context(&run);
 
         let result = handler.execute(&mut ctx).await;
-        self.finalize_run(run_id, handler_name, result, &ctx, run_start)
+        self.finalize_run(run_id, handler_name, result, &ctx, run_start, run.labels)
             .await
     }
 
@@ -776,8 +776,15 @@ impl Engine {
         }
 
         let result = handler.execute(&mut ctx).await;
-        self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
-            .await
+        self.finalize_run(
+            run_id,
+            &run.workflow_name,
+            result,
+            &ctx,
+            run_start,
+            run.labels,
+        )
+        .await
     }
 
     /// Execute a run by its ID (used by the worker after pick_next_pending).
@@ -831,8 +838,15 @@ impl Engine {
         ctx.load_replay_steps().await?;
 
         let result = handler.execute(&mut ctx).await;
-        self.finalize_run(run_id, &run.workflow_name, result, &ctx, run_start)
-            .await
+        self.finalize_run(
+            run_id,
+            &run.workflow_name,
+            result,
+            &ctx,
+            run_start,
+            run.labels,
+        )
+        .await
     }
 
     /// Record a run failure, replaying the run later when retries remain.
@@ -1021,6 +1035,7 @@ impl Engine {
         result: Result<(), EngineError>,
         ctx: &WorkflowContext,
         run_start: Instant,
+        run_labels: HashMap<String, String>,
     ) -> Result<Run, EngineError> {
         // Covers the whole run: previous attempts plus this one, so a retried
         // run reports the time it really consumed.
@@ -1139,6 +1154,7 @@ impl Engine {
                     Some(err.to_string()),
                     ctx,
                     total_duration,
+                    run_labels,
                 );
 
                 #[cfg(feature = "prometheus")]
@@ -1155,6 +1171,7 @@ impl Engine {
             None,
             ctx,
             total_duration,
+            run_labels,
         );
 
         #[cfg(feature = "prometheus")]
@@ -1233,6 +1250,7 @@ impl Engine {
         error: Option<String>,
         ctx: &WorkflowContext,
         duration_ms: u64,
+        labels: HashMap<String, String>,
     ) {
         let now = Utc::now();
         let cost_usd = ctx.total_cost_usd();
@@ -1246,6 +1264,7 @@ impl Engine {
             error: error.clone(),
             cost_usd,
             duration_ms,
+            labels: labels.clone(),
             at: now,
         });
 
@@ -1256,6 +1275,7 @@ impl Engine {
                 error,
                 cost_usd,
                 duration_ms,
+                labels,
                 at: now,
             });
         }

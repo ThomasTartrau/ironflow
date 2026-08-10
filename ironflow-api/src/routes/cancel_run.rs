@@ -70,6 +70,7 @@ pub async fn cancel_run(
             error: None,
             cost_usd: cancelled.cost_usd,
             duration_ms: cancelled.duration_ms,
+            labels: cancelled.labels.clone(),
             at: Utc::now(),
         });
 

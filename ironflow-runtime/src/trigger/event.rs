@@ -23,10 +23,17 @@
 //!         source_workflow: "deploy".to_string(),
 //!         target_workflow: "rollback".to_string(),
 //!         max_chain_depth: 3,
+//!         conditions: vec![],
 //!     },
 //! ]);
 //! ```
 
+use std::collections::HashMap;
+use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+
+use rust_decimal::Decimal;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +48,139 @@ use super::{Trigger, TriggerEvent, TriggerFuture, TriggerSink};
 /// Label key used to track chaining depth on triggered runs.
 pub const CHAIN_DEPTH_LABEL: &str = "_chain_depth";
 
+/// Context available to [`TriggerCondition`]s when evaluating whether a
+/// rule should fire.
+///
+/// Exposes metadata from the source run: labels, error message,
+/// aggregated cost and duration.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use ironflow_runtime::trigger::event::TriggerContext;
+/// use rust_decimal::Decimal;
+///
+/// let ctx = TriggerContext {
+///     labels: HashMap::from([("env".to_string(), "prod".to_string())]),
+///     error: Some("timeout".to_string()),
+///     cost_usd: Decimal::new(42, 2),
+///     duration_ms: 5000,
+/// };
+/// assert_eq!(ctx.labels.get("env").unwrap(), "prod");
+/// ```
+#[derive(Debug, Clone)]
+pub struct TriggerContext {
+    /// Labels of the source run.
+    pub labels: HashMap<String, String>,
+    /// Error message of the source run (if any).
+    pub error: Option<String>,
+    /// Aggregated cost in USD of the source run.
+    pub cost_usd: Decimal,
+    /// Aggregated duration in milliseconds of the source run.
+    pub duration_ms: u64,
+}
+
+/// A condition that must be satisfied for an [`EventTriggerRule`] to fire.
+///
+/// All conditions on a rule are evaluated with AND semantics: the rule
+/// fires only when every condition returns `true`. For OR semantics,
+/// create separate rules.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_runtime::trigger::event::TriggerCondition;
+///
+/// let cond = TriggerCondition::Label {
+///     key: "env".to_string(),
+///     value: "prod".to_string(),
+/// };
+/// assert!(matches!(cond, TriggerCondition::Label { .. }));
+/// ```
+pub enum TriggerCondition {
+    /// The source run must carry a label with this exact key-value pair.
+    Label {
+        /// Label key to check.
+        key: String,
+        /// Expected label value.
+        value: String,
+    },
+    /// An arbitrary predicate evaluated against the [`TriggerContext`].
+    ///
+    /// Uses [`Arc`] so the condition is `Clone + Send + Sync`.
+    Expression(Arc<dyn Fn(&TriggerContext) -> bool + Send + Sync>),
+}
+
+impl TriggerCondition {
+    /// Evaluate this condition against the given context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use ironflow_runtime::trigger::event::{TriggerCondition, TriggerContext};
+    /// use rust_decimal::Decimal;
+    ///
+    /// let ctx = TriggerContext {
+    ///     labels: HashMap::from([("env".to_string(), "prod".to_string())]),
+    ///     error: None,
+    ///     cost_usd: Decimal::ZERO,
+    ///     duration_ms: 0,
+    /// };
+    /// let cond = TriggerCondition::Label {
+    ///     key: "env".to_string(),
+    ///     value: "prod".to_string(),
+    /// };
+    /// assert!(cond.evaluate(&ctx));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Does not panic. If an [`Expression`](TriggerCondition::Expression)
+    /// closure panics, the panic is caught and the condition evaluates to
+    /// `false`.
+    pub fn evaluate(&self, ctx: &TriggerContext) -> bool {
+        match self {
+            TriggerCondition::Label { key, value } => {
+                ctx.labels.get(key).is_some_and(|v| v == value)
+            }
+            TriggerCondition::Expression(f) => match catch_unwind(AssertUnwindSafe(|| f(ctx))) {
+                Ok(result) => result,
+                Err(_) => {
+                    warn!("expression condition panicked, treating as false");
+                    false
+                }
+            },
+        }
+    }
+}
+
+impl Clone for TriggerCondition {
+    fn clone(&self) -> Self {
+        match self {
+            TriggerCondition::Label { key, value } => TriggerCondition::Label {
+                key: key.clone(),
+                value: value.clone(),
+            },
+            TriggerCondition::Expression(f) => TriggerCondition::Expression(Arc::clone(f)),
+        }
+    }
+}
+
+impl fmt::Debug for TriggerCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TriggerCondition::Label { key, value } => f
+                .debug_struct("Label")
+                .field("key", key)
+                .field("value", value)
+                .finish(),
+            TriggerCondition::Expression(_) => f.write_str("Expression(<closure>)"),
+        }
+    }
+}
+
 /// A rule that maps a domain event to a workflow to trigger.
 ///
 /// # Examples
@@ -54,6 +194,7 @@ pub const CHAIN_DEPTH_LABEL: &str = "_chain_depth";
 ///     source_workflow: "deploy".to_string(),
 ///     target_workflow: "rollback".to_string(),
 ///     max_chain_depth: 3,
+///     conditions: vec![],
 ///  };
 /// assert_eq!(rule.target_workflow, "rollback");
 /// ```
@@ -68,6 +209,11 @@ pub struct EventTriggerRule {
     /// Maximum chaining depth (default 3). Beyond this, the event is
     /// ignored and logged.
     pub max_chain_depth: u8,
+    /// Optional conditions that must all match for the rule to fire.
+    ///
+    /// Evaluated with AND semantics. An empty list means the rule fires
+    /// unconditionally (backward compatible).
+    pub conditions: Vec<TriggerCondition>,
 }
 
 /// A trigger that reacts to internal domain events.
@@ -90,6 +236,7 @@ pub struct EventTriggerRule {
 ///         source_workflow: "deploy".to_string(),
 ///         target_workflow: "rollback".to_string(),
 ///         max_chain_depth: 3,
+///         conditions: vec![],
 ///     },
 /// ]);
 /// ```
@@ -107,6 +254,9 @@ struct InternalEvent {
     workflow_name: String,
     event_kind: EventKind,
     error: Option<String>,
+    labels: HashMap<String, String>,
+    cost_usd: Decimal,
+    duration_ms: u64,
 }
 
 impl EventTrigger {
@@ -124,6 +274,7 @@ impl EventTrigger {
     ///         source_workflow: "deploy".to_string(),
     ///         target_workflow: "rollback".to_string(),
     ///         max_chain_depth: 3,
+    ///         conditions: vec![],
     ///     },
     /// ]);
     /// ```
@@ -150,6 +301,7 @@ impl EventTrigger {
     ///         source_workflow: "deploy".to_string(),
     ///         target_workflow: "rollback".to_string(),
     ///         max_chain_depth: 3,
+    ///         conditions: vec![],
     ///     },
     /// ]);
     /// let kinds = trigger.subscribed_event_types();
@@ -205,6 +357,17 @@ impl Trigger for EventTrigger {
                             return Ok(());
                         };
                         let rules = self.matching_rules(event.event_kind, &event.workflow_name);
+                        if rules.is_empty() {
+                            continue;
+                        }
+
+                        let trigger_ctx = TriggerContext {
+                            labels: event.labels.clone(),
+                            error: event.error.clone(),
+                            cost_usd: event.cost_usd,
+                            duration_ms: event.duration_ms,
+                        };
+
                         for rule in rules {
                             let depth = Self::chain_depth_from_event(&rule.on_event);
                             if depth >= rule.max_chain_depth {
@@ -214,6 +377,15 @@ impl Trigger for EventTrigger {
                                     chain_depth = depth,
                                     max_chain_depth = rule.max_chain_depth,
                                     "chain depth exceeded, ignoring event"
+                                );
+                                continue;
+                            }
+
+                            if !rule.conditions.iter().all(|c| c.evaluate(&trigger_ctx)) {
+                                info!(
+                                    source_workflow = %event.workflow_name,
+                                    target_workflow = %rule.target_workflow,
+                                    "conditions not met, skipping rule"
                                 );
                                 continue;
                             }
@@ -263,23 +435,35 @@ impl EventSubscriber for EventTrigger {
                     run_id,
                     workflow_name,
                     error,
+                    cost_usd,
+                    duration_ms,
+                    labels,
                     ..
                 } => InternalEvent {
                     run_id: *run_id,
                     workflow_name: workflow_name.clone(),
                     event_kind: EventKind::RunFailed,
                     error: error.clone(),
+                    labels: labels.clone(),
+                    cost_usd: *cost_usd,
+                    duration_ms: *duration_ms,
                 },
                 Event::RunStatusChanged {
                     run_id,
                     workflow_name,
                     error,
+                    cost_usd,
+                    duration_ms,
+                    labels,
                     ..
                 } => InternalEvent {
                     run_id: *run_id,
                     workflow_name: workflow_name.clone(),
                     event_kind: EventKind::RunStatusChanged,
                     error: error.clone(),
+                    labels: labels.clone(),
+                    cost_usd: *cost_usd,
+                    duration_ms: *duration_ms,
                 },
                 Event::StepFailed {
                     run_id,
@@ -291,6 +475,9 @@ impl EventSubscriber for EventTrigger {
                     workflow_name: step_name.clone(),
                     event_kind: EventKind::StepFailed,
                     error: Some(error.clone()),
+                    labels: HashMap::new(),
+                    cost_usd: Decimal::ZERO,
+                    duration_ms: 0,
                 },
                 Event::ApprovalRejected {
                     run_id,
@@ -301,6 +488,9 @@ impl EventSubscriber for EventTrigger {
                     workflow_name: String::new(),
                     event_kind: EventKind::ApprovalRejected,
                     error: Some(format!("rejected by {rejected_by}")),
+                    labels: HashMap::new(),
+                    cost_usd: Decimal::ZERO,
+                    duration_ms: 0,
                 },
                 _ => return,
             };
@@ -332,6 +522,24 @@ mod tests {
             source_workflow: "deploy".to_string(),
             target_workflow: "rollback".to_string(),
             max_chain_depth: 3,
+            conditions: vec![],
+        }
+    }
+
+    fn internal_event(
+        run_id: Uuid,
+        workflow_name: &str,
+        event_kind: EventKind,
+        error: Option<String>,
+    ) -> InternalEvent {
+        InternalEvent {
+            run_id,
+            workflow_name: workflow_name.to_string(),
+            event_kind,
+            error,
+            labels: HashMap::new(),
+            cost_usd: Decimal::ZERO,
+            duration_ms: 0,
         }
     }
 
@@ -342,16 +550,15 @@ mod tests {
         let token = CancellationToken::new();
         let token_clone = token.clone();
 
-        // Send an internal event through the subscriber path
         let run_id = Uuid::now_v7();
         trigger
             .event_tx
-            .send(InternalEvent {
+            .send(internal_event(
                 run_id,
-                workflow_name: "deploy".to_string(),
-                event_kind: EventKind::RunFailed,
-                error: Some("step crashed".to_string()),
-            })
+                "deploy",
+                EventKind::RunFailed,
+                Some("step crashed".to_string()),
+            ))
             .await
             .unwrap();
 
@@ -388,15 +595,14 @@ mod tests {
         let token = CancellationToken::new();
         let token_clone = token.clone();
 
-        // Send an event from a different workflow
         trigger
             .event_tx
-            .send(InternalEvent {
-                run_id: Uuid::now_v7(),
-                workflow_name: "build".to_string(),
-                event_kind: EventKind::RunFailed,
-                error: None,
-            })
+            .send(internal_event(
+                Uuid::now_v7(),
+                "build",
+                EventKind::RunFailed,
+                None,
+            ))
             .await
             .unwrap();
 
@@ -418,15 +624,14 @@ mod tests {
         let token = CancellationToken::new();
         let token_clone = token.clone();
 
-        // RunStatusChanged instead of RunFailed
         trigger
             .event_tx
-            .send(InternalEvent {
-                run_id: Uuid::now_v7(),
-                workflow_name: "deploy".to_string(),
-                event_kind: EventKind::RunStatusChanged,
-                error: None,
-            })
+            .send(internal_event(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunStatusChanged,
+                None,
+            ))
             .await
             .unwrap();
 
@@ -449,12 +654,12 @@ mod tests {
         let run_id = Uuid::now_v7();
         trigger
             .event_tx
-            .send(InternalEvent {
+            .send(internal_event(
                 run_id,
-                workflow_name: "deploy".to_string(),
-                event_kind: EventKind::RunFailed,
-                error: Some("timeout".to_string()),
-            })
+                "deploy",
+                EventKind::RunFailed,
+                Some("timeout".to_string()),
+            ))
             .await
             .unwrap();
 
@@ -481,12 +686,14 @@ mod tests {
                 source_workflow: "a".to_string(),
                 target_workflow: "b".to_string(),
                 max_chain_depth: 3,
+                conditions: vec![],
             },
             EventTriggerRule {
                 on_event: EventKind::StepFailed,
                 source_workflow: "c".to_string(),
                 target_workflow: "d".to_string(),
                 max_chain_depth: 3,
+                conditions: vec![],
             },
         ]);
         let types = trigger.subscribed_event_types();
@@ -504,6 +711,7 @@ mod tests {
             error: Some("crash".to_string()),
             cost_usd: Decimal::ZERO,
             duration_ms: 0,
+            labels: HashMap::new(),
             at: Utc::now(),
         };
 
@@ -553,5 +761,349 @@ mod tests {
             .expect("timed out")
             .expect("task panicked");
         assert!(result.is_ok());
+    }
+
+    fn internal_event_with_labels(
+        run_id: Uuid,
+        workflow_name: &str,
+        event_kind: EventKind,
+        error: Option<String>,
+        labels: HashMap<String, String>,
+    ) -> InternalEvent {
+        InternalEvent {
+            run_id,
+            workflow_name: workflow_name.to_string(),
+            event_kind,
+            error,
+            labels,
+            cost_usd: Decimal::new(42, 2),
+            duration_ms: 5000,
+        }
+    }
+
+    #[tokio::test]
+    async fn condition_label_matches() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![TriggerCondition::Label {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        let run_id = Uuid::now_v7();
+        trigger
+            .event_tx
+            .send(internal_event_with_labels(
+                run_id,
+                "deploy",
+                EventKind::RunFailed,
+                Some("crash".to_string()),
+                HashMap::from([("env".to_string(), "prod".to_string())]),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        assert_eq!(event.workflow_name, "rollback");
+        token.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn condition_label_absent_no_fire() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![TriggerCondition::Label {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        trigger
+            .event_tx
+            .send(internal_event_with_labels(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunFailed,
+                None,
+                HashMap::new(),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token.cancel();
+        let _ = handle.await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn condition_label_wrong_value_no_fire() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![TriggerCondition::Label {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        trigger
+            .event_tx
+            .send(internal_event_with_labels(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunFailed,
+                None,
+                HashMap::from([("env".to_string(), "staging".to_string())]),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token.cancel();
+        let _ = handle.await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn multiple_conditions_all_match() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![
+                TriggerCondition::Label {
+                    key: "env".to_string(),
+                    value: "prod".to_string(),
+                },
+                TriggerCondition::Label {
+                    key: "region".to_string(),
+                    value: "eu-west-1".to_string(),
+                },
+            ],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        trigger
+            .event_tx
+            .send(internal_event_with_labels(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunFailed,
+                None,
+                HashMap::from([
+                    ("env".to_string(), "prod".to_string()),
+                    ("region".to_string(), "eu-west-1".to_string()),
+                ]),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        assert_eq!(event.workflow_name, "rollback");
+        token.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn multiple_conditions_one_fails() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![
+                TriggerCondition::Label {
+                    key: "env".to_string(),
+                    value: "prod".to_string(),
+                },
+                TriggerCondition::Label {
+                    key: "region".to_string(),
+                    value: "eu-west-1".to_string(),
+                },
+            ],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        trigger
+            .event_tx
+            .send(internal_event_with_labels(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunFailed,
+                None,
+                HashMap::from([("env".to_string(), "prod".to_string())]),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token.cancel();
+        let _ = handle.await;
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn empty_conditions_backward_compat() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        trigger
+            .event_tx
+            .send(internal_event(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunFailed,
+                Some("boom".to_string()),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        assert_eq!(event.workflow_name, "rollback");
+        token.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn expression_condition_with_context() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![TriggerCondition::Expression(Arc::new(|ctx| {
+                ctx.cost_usd > Decimal::new(10, 2) && ctx.duration_ms > 1000
+            }))],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        trigger
+            .event_tx
+            .send(internal_event_with_labels(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunFailed,
+                None,
+                HashMap::new(),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        let event = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        assert_eq!(event.workflow_name, "rollback");
+        token.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn expression_returns_false_no_fire() {
+        let rule = EventTriggerRule {
+            on_event: EventKind::RunFailed,
+            source_workflow: "deploy".to_string(),
+            target_workflow: "rollback".to_string(),
+            max_chain_depth: 3,
+            conditions: vec![TriggerCondition::Expression(Arc::new(|ctx| {
+                ctx.cost_usd > Decimal::new(100, 0)
+            }))],
+        };
+        let trigger = make_trigger(vec![rule]);
+        let (sink, mut rx) = TriggerSink::channel(16);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        trigger
+            .event_tx
+            .send(internal_event_with_labels(
+                Uuid::now_v7(),
+                "deploy",
+                EventKind::RunFailed,
+                None,
+                HashMap::new(),
+            ))
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(async move { trigger.start(sink, &token_clone).await });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token.cancel();
+        let _ = handle.await;
+
+        assert!(rx.try_recv().is_err());
     }
 }

@@ -137,6 +137,7 @@ pub async fn events(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -190,6 +191,7 @@ mod tests {
             error: None,
             cost_usd: Decimal::ZERO,
             duration_ms: 1000,
+            labels: HashMap::new(),
             at: Utc::now(),
         }
     }

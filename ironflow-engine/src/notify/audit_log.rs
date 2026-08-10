@@ -130,6 +130,7 @@ impl EventSubscriber for AuditLogSubscriber {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -154,6 +155,7 @@ mod tests {
             error: None,
             cost_usd: Decimal::new(42, 2),
             duration_ms: 5000,
+            labels: HashMap::new(),
             at: Utc::now(),
         }
     }
@@ -311,6 +313,7 @@ mod tests {
             error: Some("step crashed".to_string()),
             cost_usd: Decimal::new(10, 2),
             duration_ms: 3000,
+            labels: HashMap::new(),
             at: Utc::now(),
         };
         subscriber.handle(&event).await;
