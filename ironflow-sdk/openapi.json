@@ -1507,6 +1507,29 @@
         ],
         "type": "object"
       },
+      "SignUpRequest": {
+        "description": "Sign-up request body.",
+        "properties": {
+          "email": {
+            "description": "Email address.",
+            "type": "string"
+          },
+          "password": {
+            "description": "Plaintext password (min 8 characters).",
+            "type": "string"
+          },
+          "username": {
+            "description": "Display username.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "username",
+          "password"
+        ],
+        "type": "object"
+      },
       "StatsResponse": {
         "description": "Aggregate statistics response.\n\nComputed from all runs in the store.\n\n# Examples\n\n```\nuse ironflow_api::entities::StatsResponse;\n```",
         "properties": {
@@ -2435,6 +2458,38 @@
           }
         ],
         "summary": "Sign out the current user by clearing auth cookies.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/sign-up": {
+      "post": {
+        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 400 if email/username/password is invalid\n- 409 if email or username is already taken",
+        "operationId": "sign_up",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignUpRequest"
+              }
+            }
+          },
+          "description": "Sign up credentials",
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "User registered successfully, cookies set"
+          },
+          "400": {
+            "description": "Invalid email, username, or password"
+          },
+          "409": {
+            "description": "Email or username already taken"
+          }
+        },
+        "summary": "Register a new user with email and password.",
         "tags": [
           "auth"
         ]
