@@ -142,6 +142,7 @@ mod tests {
                 kind: StepKind::Shell,
                 position,
                 input: Some(json!({})),
+                is_error_handler: false,
             })
             .await
             .expect("create step");
@@ -239,6 +240,7 @@ mod tests {
                 kind: StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .expect("create step")
@@ -354,6 +356,7 @@ mod tests {
                 kind: StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .expect("create step")

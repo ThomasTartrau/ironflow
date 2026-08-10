@@ -447,6 +447,7 @@ impl RunStore for InMemoryStore {
                 started_at: None,
                 completed_at: None,
                 debug_messages: None,
+                is_error_handler: req.is_error_handler,
             };
 
             state.steps.insert(step.id, step.clone());
@@ -665,6 +666,7 @@ mod tests {
             kind: StepKind::Shell,
             position,
             input: None,
+            is_error_handler: false,
         }
     }
 
@@ -1315,6 +1317,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: Some(json!({"command": "cargo build"})),
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1335,6 +1338,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await;
         assert!(matches!(result.unwrap_err(), StoreError::RunNotFound(_)));
@@ -1358,6 +1362,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1421,6 +1426,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 2,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1431,6 +1437,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1441,6 +1448,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1767,6 +1775,7 @@ mod tests {
                 kind: crate::entities::StepKind::Agent,
                 position: 0,
                 input: Some(complex_input.clone()),
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1790,6 +1799,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1850,6 +1860,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -1981,6 +1992,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2007,6 +2019,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2041,6 +2054,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2239,6 +2253,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2250,6 +2265,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2285,6 +2301,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2296,6 +2313,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2331,6 +2349,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2361,6 +2380,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2391,6 +2411,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2402,6 +2423,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2413,6 +2435,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 2,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2454,6 +2477,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2483,6 +2507,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2494,6 +2519,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2505,6 +2531,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2516,6 +2543,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2569,6 +2597,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2580,6 +2609,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
@@ -2591,6 +2621,7 @@ mod tests {
                 kind: crate::entities::StepKind::Shell,
                 position: 2,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
