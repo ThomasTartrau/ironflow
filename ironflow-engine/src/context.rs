@@ -1838,9 +1838,7 @@ fn allowed_failure_output(
     StepOutput {
         output: raw_response.unwrap_or_else(|| json!({"error": error_msg})),
         duration_ms: partial.and_then(|p| p.duration_ms).unwrap_or(0),
-        cost_usd: partial
-            .and_then(|p| p.cost_usd)
-            .unwrap_or(Decimal::ZERO),
+        cost_usd: partial.and_then(|p| p.cost_usd).unwrap_or(Decimal::ZERO),
         input_tokens: partial.and_then(|p| p.input_tokens),
         output_tokens: partial.and_then(|p| p.output_tokens),
         model: None,

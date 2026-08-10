@@ -666,11 +666,7 @@ async fn non_allow_failure_after_allow_failure_is_still_failed() {
 
     let runs = engine
         .store()
-        .list_runs(
-            ironflow_store::models::RunFilter::default(),
-            1,
-            10,
-        )
+        .list_runs(ironflow_store::models::RunFilter::default(), 1, 10)
         .await
         .unwrap();
     let run = &runs.items[0];
