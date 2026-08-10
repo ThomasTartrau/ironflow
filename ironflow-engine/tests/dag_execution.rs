@@ -494,3 +494,185 @@ async fn skip_in_branch_shows_skipped_step() {
     let deploy = steps.iter().find(|s| s.name == "deploy").unwrap();
     assert_eq!(deploy.status.state, StepStatus::Completed);
 }
+
+// ---------------------------------------------------------------------------
+// allow_failure handlers
+// ---------------------------------------------------------------------------
+
+struct AllowFailureWorkflow;
+
+impl WorkflowHandler for AllowFailureWorkflow {
+    fn name(&self) -> &str {
+        "allow-failure"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("build", ShellConfig::new("echo built")).await?;
+            ctx.shell("lint", ShellConfig::new("exit 1").allow_failure())
+                .await?;
+            ctx.shell("deploy", ShellConfig::new("echo deployed"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+struct AllowFailureSuccessWorkflow;
+
+impl WorkflowHandler for AllowFailureSuccessWorkflow {
+    fn name(&self) -> &str {
+        "allow-failure-success"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("build", ShellConfig::new("echo built")).await?;
+            ctx.shell("lint", ShellConfig::new("echo ok").allow_failure())
+                .await?;
+            ctx.shell("deploy", ShellConfig::new("echo deployed"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+struct AllowFailureParallelWorkflow;
+
+impl WorkflowHandler for AllowFailureParallelWorkflow {
+    fn name(&self) -> &str {
+        "allow-failure-parallel"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.parallel(
+                vec![
+                    ("ok-step", StepConfig::Shell(ShellConfig::new("echo ok"))),
+                    (
+                        "lint",
+                        StepConfig::Shell(ShellConfig::new("exit 1").allow_failure()),
+                    ),
+                ],
+                true,
+            )
+            .await?;
+            ctx.shell("deploy", ShellConfig::new("echo deployed"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+struct AllowFailureThenRealFailureWorkflow;
+
+impl WorkflowHandler for AllowFailureThenRealFailureWorkflow {
+    fn name(&self) -> &str {
+        "allow-then-real-failure"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("lint", ShellConfig::new("exit 1").allow_failure())
+                .await?;
+            ctx.shell("build", ShellConfig::new("exit 1")).await?;
+            Ok(())
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// allow_failure tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn allow_failure_step_continues_run_with_warning() {
+    let mut engine = create_test_engine();
+    engine.register(AllowFailureWorkflow).unwrap();
+
+    let run = engine
+        .run_handler("allow-failure", TriggerKind::Manual, json!({}))
+        .await
+        .unwrap();
+
+    assert_eq!(run.status.state, RunStatus::Warning);
+
+    let steps = engine.store().list_steps(run.id).await.unwrap();
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0].name, "build");
+    assert_eq!(steps[0].status.state, StepStatus::Completed);
+    assert_eq!(steps[1].name, "lint");
+    assert_eq!(steps[1].status.state, StepStatus::Failed);
+    assert_eq!(steps[2].name, "deploy");
+    assert_eq!(steps[2].status.state, StepStatus::Completed);
+}
+
+#[tokio::test]
+async fn allow_failure_step_succeeds_run_is_completed() {
+    let mut engine = create_test_engine();
+    engine.register(AllowFailureSuccessWorkflow).unwrap();
+
+    let run = engine
+        .run_handler("allow-failure-success", TriggerKind::Manual, json!({}))
+        .await
+        .unwrap();
+
+    assert_eq!(run.status.state, RunStatus::Completed);
+
+    let steps = engine.store().list_steps(run.id).await.unwrap();
+    assert_eq!(steps.len(), 3);
+    for step in &steps {
+        assert_eq!(step.status.state, StepStatus::Completed);
+    }
+}
+
+#[tokio::test]
+async fn allow_failure_parallel_does_not_trigger_fail_fast() {
+    let mut engine = create_test_engine();
+    engine.register(AllowFailureParallelWorkflow).unwrap();
+
+    let run = engine
+        .run_handler("allow-failure-parallel", TriggerKind::Manual, json!({}))
+        .await
+        .unwrap();
+
+    assert_eq!(run.status.state, RunStatus::Warning);
+
+    let steps = engine.store().list_steps(run.id).await.unwrap();
+    assert_eq!(steps.len(), 3);
+
+    let ok_step = steps.iter().find(|s| s.name == "ok-step").unwrap();
+    assert_eq!(ok_step.status.state, StepStatus::Completed);
+
+    let lint = steps.iter().find(|s| s.name == "lint").unwrap();
+    assert_eq!(lint.status.state, StepStatus::Failed);
+
+    let deploy = steps.iter().find(|s| s.name == "deploy").unwrap();
+    assert_eq!(deploy.status.state, StepStatus::Completed);
+}
+
+#[tokio::test]
+async fn non_allow_failure_after_allow_failure_is_still_failed() {
+    let mut engine = create_test_engine();
+    engine
+        .register(AllowFailureThenRealFailureWorkflow)
+        .unwrap();
+
+    let result = engine
+        .run_handler("allow-then-real-failure", TriggerKind::Manual, json!({}))
+        .await;
+
+    assert!(result.is_err());
+
+    let runs = engine
+        .store()
+        .list_runs(ironflow_store::models::RunFilter::default(), 1, 10)
+        .await
+        .unwrap();
+    let run = &runs.items[0];
+    assert!(
+        run.status.state == RunStatus::Failed || run.status.state == RunStatus::Retrying,
+        "expected Failed or Retrying, got {:?}",
+        run.status.state
+    );
+}

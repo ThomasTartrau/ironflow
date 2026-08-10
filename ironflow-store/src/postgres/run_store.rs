@@ -814,9 +814,10 @@ impl RunStore for PostgresStore {
             let kind_str = super::helpers::step_kind_to_str(&req.kind);
             sqlx::query(
                 r#"
-                INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt)
+                INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt, is_error_handler)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                        (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $2))
+                        (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $2),
+                        $10)
                 "#,
             )
             .bind(id)
@@ -828,6 +829,7 @@ impl RunStore for PostgresStore {
             .bind(req.input.as_ref())
             .bind(now)
             .bind(now)
+            .bind(req.is_error_handler)
             .execute(&mut *tx)
             .await
             .map_err(|e| {
@@ -1038,7 +1040,7 @@ impl RunStore for PostgresStore {
                 r#"
                 SELECT
                     COUNT(*) as total,
-                    COUNT(*) FILTER (WHERE ast.name = 'completed') as completed,
+                    COUNT(*) FILTER (WHERE ast.name IN ('completed', 'warning')) as completed,
                     COUNT(*) FILTER (WHERE ast.name = 'failed') as failed,
                     COUNT(*) FILTER (WHERE ast.name = 'cancelled') as cancelled,
                     COUNT(*) FILTER (WHERE ast.name IN ('pending', 'running', 'retrying')) as active,

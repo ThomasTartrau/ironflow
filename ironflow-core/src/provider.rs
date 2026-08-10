@@ -246,6 +246,10 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<AgentInput>,
 
+    /// When `true`, a failure of this step does not fail the run.
+    #[serde(default)]
+    pub allow_failure: bool,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -279,6 +283,7 @@ impl AgentConfig {
             verbose: false,
             pod_labels: BTreeMap::new(),
             inputs: Vec::new(),
+            allow_failure: false,
             _marker: PhantomData,
         }
     }
@@ -400,6 +405,21 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// ```
     pub fn bare(mut self, enabled: bool) -> Self {
         self.bare = enabled;
+        self
+    }
+
+    /// Mark this step as allowed to fail without stopping the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("lint the code").allow_failure();
+    /// assert!(config.allow_failure);
+    /// ```
+    pub fn allow_failure(mut self) -> Self {
+        self.allow_failure = true;
         self
     }
 
@@ -529,6 +549,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             verbose: self.verbose,
             pod_labels: self.pod_labels,
             inputs: self.inputs,
+            allow_failure: self.allow_failure,
             _marker: PhantomData,
         }
     }
@@ -999,6 +1020,7 @@ mod tests {
             verbose: false,
             pod_labels: BTreeMap::new(),
             inputs: Vec::new(),
+            allow_failure: false,
             _marker: PhantomData,
         }
     }
@@ -1040,6 +1062,7 @@ mod tests {
             verbose: false,
             pod_labels: BTreeMap::new(),
             inputs: Vec::new(),
+            allow_failure: false,
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();

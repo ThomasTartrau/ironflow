@@ -24,6 +24,9 @@ pub struct HttpConfig {
     pub body: Option<Value>,
     /// Timeout in seconds (default: 30).
     pub timeout_secs: Option<u64>,
+    /// When `true`, a failure of this step does not fail the run.
+    #[serde(default)]
+    pub allow_failure: bool,
 }
 
 impl HttpConfig {
@@ -68,6 +71,7 @@ impl HttpConfig {
             headers: Vec::new(),
             body: None,
             timeout_secs: None,
+            allow_failure: false,
         }
     }
 
@@ -86,6 +90,21 @@ impl HttpConfig {
     /// Set the timeout in seconds.
     pub fn timeout_secs(mut self, secs: u64) -> Self {
         self.timeout_secs = Some(secs);
+        self
+    }
+
+    /// Mark this step as allowed to fail without stopping the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::HttpConfig;
+    ///
+    /// let config = HttpConfig::get("https://example.com").allow_failure();
+    /// assert!(config.allow_failure);
+    /// ```
+    pub fn allow_failure(mut self) -> Self {
+        self.allow_failure = true;
         self
     }
 }

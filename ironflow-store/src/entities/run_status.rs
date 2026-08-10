@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// Valid transitions:
 /// - `Pending` -> `Running`, `Cancelled`
-/// - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
+/// - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`
 /// - `Retrying` -> `Running`, `Failed`, `Cancelled`
 /// - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
 ///
-/// Terminal states (`Completed`, `Failed`, `Cancelled`) are idempotent:
+/// Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
 /// transitioning to the same terminal state is a no-op, not an error.
 ///
 /// # Examples
@@ -22,12 +22,14 @@ use serde::{Deserialize, Serialize};
 /// assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));
 /// assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
+/// assert!(RunStatus::Running.can_transition_to(&RunStatus::Warning));
 /// // A run whose worker lease expired goes back to the queue:
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 /// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
 /// // Terminal-to-same is idempotent:
 /// assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
 /// assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
+/// assert!(RunStatus::Warning.can_transition_to(&RunStatus::Warning));
 /// assert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));
 /// ```
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -48,6 +50,8 @@ pub enum RunStatus {
     Cancelled,
     /// Waiting for human approval before continuing.
     AwaitingApproval,
+    /// All steps finished but at least one `allow_failure` step failed.
+    Warning,
 }
 
 impl RunStatus {
@@ -65,6 +69,7 @@ impl RunStatus {
                 | (RunStatus::Running, RunStatus::Pending)
                 | (RunStatus::Running, RunStatus::Completed)
                 | (RunStatus::Running, RunStatus::Failed)
+                | (RunStatus::Running, RunStatus::Warning)
                 | (RunStatus::Running, RunStatus::Retrying)
                 | (RunStatus::Running, RunStatus::Cancelled)
                 | (RunStatus::Running, RunStatus::AwaitingApproval)
@@ -81,7 +86,7 @@ impl RunStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
+            RunStatus::Completed | RunStatus::Failed | RunStatus::Warning | RunStatus::Cancelled
         )
     }
 }
@@ -96,6 +101,7 @@ impl std::fmt::Display for RunStatus {
             RunStatus::Retrying => f.write_str("Retrying"),
             RunStatus::Cancelled => f.write_str("Cancelled"),
             RunStatus::AwaitingApproval => f.write_str("AwaitingApproval"),
+            RunStatus::Warning => f.write_str("Warning"),
         }
     }
 }
@@ -212,9 +218,21 @@ mod tests {
     }
 
     #[test]
+    fn running_can_transition_to_warning() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Warning));
+    }
+
+    #[test]
+    fn warning_is_terminal() {
+        assert!(RunStatus::Warning.is_terminal());
+        assert!(!RunStatus::Warning.can_transition_to(&RunStatus::Running));
+    }
+
+    #[test]
     fn terminal_to_same_is_idempotent() {
         assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
         assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
+        assert!(RunStatus::Warning.can_transition_to(&RunStatus::Warning));
         assert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));
     }
 
@@ -222,10 +240,16 @@ mod tests {
     fn terminal_to_different_terminal_is_forbidden() {
         assert!(!RunStatus::Failed.can_transition_to(&RunStatus::Completed));
         assert!(!RunStatus::Failed.can_transition_to(&RunStatus::Cancelled));
+        assert!(!RunStatus::Failed.can_transition_to(&RunStatus::Warning));
         assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Failed));
         assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Cancelled));
+        assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Warning));
+        assert!(!RunStatus::Warning.can_transition_to(&RunStatus::Completed));
+        assert!(!RunStatus::Warning.can_transition_to(&RunStatus::Failed));
+        assert!(!RunStatus::Warning.can_transition_to(&RunStatus::Cancelled));
         assert!(!RunStatus::Cancelled.can_transition_to(&RunStatus::Failed));
         assert!(!RunStatus::Cancelled.can_transition_to(&RunStatus::Completed));
+        assert!(!RunStatus::Cancelled.can_transition_to(&RunStatus::Warning));
     }
 
     #[test]
@@ -245,6 +269,7 @@ mod tests {
         assert_eq!(RunStatus::Retrying.to_string(), "Retrying");
         assert_eq!(RunStatus::Cancelled.to_string(), "Cancelled");
         assert_eq!(RunStatus::AwaitingApproval.to_string(), "AwaitingApproval");
+        assert_eq!(RunStatus::Warning.to_string(), "Warning");
     }
 
     #[test]
@@ -257,6 +282,7 @@ mod tests {
             RunStatus::Retrying,
             RunStatus::Cancelled,
             RunStatus::AwaitingApproval,
+            RunStatus::Warning,
         ] {
             let json = serde_json::to_string(&status).expect("serialize");
             let back: RunStatus = serde_json::from_str(&json).expect("deserialize");

@@ -1047,13 +1047,17 @@ impl Engine {
 
         match result {
             Ok(()) => {
-                final_status = RunStatus::Completed;
+                final_status = if ctx.has_allowed_failure() {
+                    RunStatus::Warning
+                } else {
+                    RunStatus::Completed
+                };
                 final_run = self
                     .store
                     .update_run_returning(
                         run_id,
                         RunUpdate {
-                            status: Some(RunStatus::Completed),
+                            status: Some(final_status),
                             cost_usd: Some(ctx.total_cost_usd()),
                             duration_ms: Some(total_duration),
                             completed_at: Some(completed_at),
@@ -1064,6 +1068,7 @@ impl Engine {
 
                 info!(
                     run_id = %run_id,
+                    status = %final_status,
                     cost_usd = %ctx.total_cost_usd(),
                     duration_ms = total_duration,
                     "run completed"
@@ -2068,6 +2073,7 @@ mod tests {
                 kind: StepKind::Shell,
                 position,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();

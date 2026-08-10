@@ -341,6 +341,7 @@ impl PostgresStore {
             (RunStatus::Running, RunStatus::Pending) => Ok("lease_expired"),
             (RunStatus::Pending, RunStatus::Cancelled) => Ok("cancel_requested"),
             (RunStatus::Running, RunStatus::Completed) => Ok("all_steps_completed"),
+            (RunStatus::Running, RunStatus::Warning) => Ok("completed_with_warnings"),
             (RunStatus::Running, RunStatus::Failed) => Ok("step_failed"),
             (RunStatus::Running, RunStatus::Retrying) => Ok("step_failed_retryable"),
             (RunStatus::Running, RunStatus::Cancelled) => Ok("cancel_requested"),

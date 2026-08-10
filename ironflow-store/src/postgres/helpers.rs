@@ -22,6 +22,7 @@ pub(crate) fn parse_run_status(s: &str) -> Result<RunStatus, StoreError> {
         "retrying" => Ok(RunStatus::Retrying),
         "cancelled" => Ok(RunStatus::Cancelled),
         "awaiting_approval" => Ok(RunStatus::AwaitingApproval),
+        "warning" => Ok(RunStatus::Warning),
         other => Err(StoreError::Database(format!("unknown run status: {other}"))),
     }
 }
@@ -67,6 +68,7 @@ pub(crate) fn run_status_to_db_str(status: &RunStatus) -> &'static str {
         RunStatus::Retrying => "retrying",
         RunStatus::Cancelled => "cancelled",
         RunStatus::AwaitingApproval => "awaiting_approval",
+        RunStatus::Warning => "warning",
     }
 }
 
@@ -189,6 +191,7 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
         debug_messages: row.get("debug_messages"),
+        is_error_handler: row.try_get("is_error_handler").unwrap_or(false),
     })
 }
 

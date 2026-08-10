@@ -34,6 +34,11 @@ pub struct ShellConfig {
     /// Artifacts of earlier steps to place in the working directory first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<ArtifactInput>,
+    /// When `true`, a failure of this step does not fail the run. The step is
+    /// still marked `Failed` but execution continues and the run finishes with
+    /// [`RunStatus::Warning`] instead of `Failed`.
+    #[serde(default)]
+    pub allow_failure: bool,
 }
 
 impl ShellConfig {
@@ -56,6 +61,7 @@ impl ShellConfig {
             clean_env: false,
             outputs: Vec::new(),
             inputs: Vec::new(),
+            allow_failure: false,
         }
     }
 
@@ -133,6 +139,21 @@ impl ShellConfig {
     /// ```
     pub fn input(mut self, step: &str, name: &str) -> Self {
         self.inputs.push(ArtifactInput::new(step, name));
+        self
+    }
+
+    /// Mark this step as allowed to fail without stopping the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::ShellConfig;
+    ///
+    /// let config = ShellConfig::new("cargo clippy").allow_failure();
+    /// assert!(config.allow_failure);
+    /// ```
+    pub fn allow_failure(mut self) -> Self {
+        self.allow_failure = true;
         self
     }
 

@@ -1,0 +1,1 @@
+ALTER TABLE ironflow.steps ADD COLUMN is_error_handler BOOLEAN NOT NULL DEFAULT FALSE;
