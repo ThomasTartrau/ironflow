@@ -75,7 +75,7 @@ pub async fn retry_run(
 
     if !matches!(
         original.status.state,
-        RunStatus::Failed | RunStatus::Cancelled
+        RunStatus::Failed | RunStatus::Cancelled | RunStatus::Warning
     ) {
         return Err(ApiError::BadRequest(format!(
             "cannot retry run in {} state",

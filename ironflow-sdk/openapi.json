@@ -1392,7 +1392,8 @@
           "failed",
           "retrying",
           "cancelled",
-          "awaiting_approval"
+          "awaiting_approval",
+          "warning"
         ],
         "type": "string"
       },

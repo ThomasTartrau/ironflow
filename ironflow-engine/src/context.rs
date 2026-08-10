@@ -118,6 +118,8 @@ pub struct WorkflowContext {
     /// storage is configured: steps that declare artifacts then fail explicitly
     /// instead of silently dropping their files.
     artifact_sink: Option<Arc<dyn ArtifactSink>>,
+    /// Set to `true` when at least one `allow_failure` step failed.
+    has_allowed_failure: bool,
 }
 
 impl WorkflowContext {
@@ -143,6 +145,7 @@ impl WorkflowContext {
             carried_duration_ms: 0,
             log_sender: None,
             artifact_sink: None,
+            has_allowed_failure: false,
         }
     }
 
@@ -173,6 +176,7 @@ impl WorkflowContext {
             carried_duration_ms: 0,
             log_sender: None,
             artifact_sink: None,
+            has_allowed_failure: false,
         }
     }
 
@@ -532,6 +536,11 @@ impl WorkflowContext {
         self.total_cost_usd
     }
 
+    /// Whether at least one `allow_failure` step failed during this run.
+    pub fn has_allowed_failure(&self) -> bool {
+        self.has_allowed_failure
+    }
+
     /// Accumulated duration across all executed steps so far.
     pub fn total_duration_ms(&self) -> u64 {
         self.total_duration_ms
@@ -619,7 +628,17 @@ impl WorkflowContext {
             // missing one fails the wave rather than a half-run command.
             if let Err(err) = self.prepare_step_inputs(config, wave_position).await {
                 self.fail_step(step.id, &err).await;
-                return Err(err);
+                if !config.allow_failure() {
+                    return Err(err);
+                }
+                self.has_allowed_failure = true;
+                info!(
+                    run_id = %self.run_id,
+                    step = %name,
+                    error = %err,
+                    "parallel step input preparation failed but allow_failure is set, skipping"
+                );
+                continue;
             }
 
             step_records.push((step.id, name.to_string(), config.clone()));
@@ -767,7 +786,7 @@ impl WorkflowContext {
                             StepUpdate {
                                 status: Some(StepStatus::Failed),
                                 error: Some(err_msg.clone()),
-                                output: raw_response_output,
+                                output: raw_response_output.clone(),
                                 completed_at: Some(completed_at),
                                 debug_messages: debug_messages_json,
                                 duration_ms: partial.as_ref().and_then(|p| p.duration_ms),
@@ -786,14 +805,29 @@ impl WorkflowContext {
                         );
                     }
 
-                    indexed_results[idx] = Some(Err(err_msg.clone()));
+                    if step_config.allow_failure() {
+                        self.has_allowed_failure = true;
+                        info!(
+                            run_id = %self.run_id,
+                            step = %step_name,
+                            error = %err_msg,
+                            "parallel step failed but allow_failure is set, continuing"
+                        );
+                        indexed_results[idx] = Some(Ok(allowed_failure_output(
+                            &err_msg,
+                            raw_response_output,
+                            partial.as_ref(),
+                        )));
+                    } else {
+                        indexed_results[idx] = Some(Err(err_msg.clone()));
 
-                    if first_error.is_none() {
-                        first_error = Some(err);
-                    }
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
 
-                    if fail_fast {
-                        join_set.abort_all();
+                        if fail_fast {
+                            join_set.abort_all();
+                        }
                     }
                 }
             }
@@ -1307,9 +1341,12 @@ impl WorkflowContext {
         self.start_step(step.id, Utc::now()).await?;
 
         match self.execute_child_workflow(&config).await {
-            Ok(output) => {
+            Ok((output, child_had_allowed_failure)) => {
                 self.total_cost_usd += output.cost_usd;
                 self.total_duration_ms += output.duration_ms;
+                if child_had_allowed_failure {
+                    self.has_allowed_failure = true;
+                }
 
                 let completed_at = Utc::now();
                 self.store
@@ -1360,11 +1397,12 @@ impl WorkflowContext {
         }
     }
 
-    /// Execute a child workflow and return aggregated output.
+    /// Execute a child workflow and return aggregated output plus whether
+    /// at least one `allow_failure` step failed.
     async fn execute_child_workflow(
         &self,
         config: &WorkflowStepConfig,
-    ) -> Result<StepOutput, EngineError> {
+    ) -> Result<(StepOutput, bool), EngineError> {
         let resolver = self.handler_resolver.as_ref().ok_or_else(|| {
             EngineError::InvalidWorkflow(
                 "sub-workflow requires a handler resolver (use Engine to execute)".to_string(),
@@ -1434,6 +1472,7 @@ impl WorkflowContext {
             // A child shares the storage backend but not the parent's artifacts:
             // input lookups are scoped to the child's own run.
             artifact_sink: self.artifact_sink.clone(),
+            has_allowed_failure: false,
         };
 
         let result = handler.execute(&mut child_ctx).await;
@@ -1442,11 +1481,16 @@ impl WorkflowContext {
 
         match result {
             Ok(()) => {
+                let child_status = if child_ctx.has_allowed_failure {
+                    RunStatus::Warning
+                } else {
+                    RunStatus::Completed
+                };
                 self.store
                     .update_run(
                         child_run_id,
                         RunUpdate {
-                            status: Some(RunStatus::Completed),
+                            status: Some(child_status),
                             cost_usd: Some(child_ctx.total_cost_usd),
                             duration_ms: Some(total_duration),
                             completed_at: Some(completed_at),
@@ -1455,21 +1499,25 @@ impl WorkflowContext {
                     )
                     .await?;
 
-                Ok(StepOutput {
-                    output: serde_json::json!({
-                        "run_id": child_run_id,
-                        "workflow_name": config.workflow_name,
-                        "status": RunStatus::Completed,
-                        "cost_usd": child_ctx.total_cost_usd,
-                        "duration_ms": total_duration,
-                    }),
-                    duration_ms: total_duration,
-                    cost_usd: child_ctx.total_cost_usd,
-                    input_tokens: None,
-                    output_tokens: None,
-                    model: None,
-                    debug_messages: None,
-                })
+                let child_had_allowed_failure = child_ctx.has_allowed_failure;
+                Ok((
+                    StepOutput {
+                        output: serde_json::json!({
+                            "run_id": child_run_id,
+                            "workflow_name": config.workflow_name,
+                            "status": child_status,
+                            "cost_usd": child_ctx.total_cost_usd,
+                            "duration_ms": total_duration,
+                        }),
+                        duration_ms: total_duration,
+                        cost_usd: child_ctx.total_cost_usd,
+                        input_tokens: None,
+                        output_tokens: None,
+                        model: None,
+                        debug_messages: None,
+                    },
+                    child_had_allowed_failure,
+                ))
             }
             Err(err) => {
                 if let Err(store_err) = self
@@ -1568,6 +1616,25 @@ impl WorkflowContext {
         // step: the command would otherwise run against missing files.
         if let Err(err) = self.prepare_step_inputs(&config, position).await {
             self.fail_step(step.id, &err).await;
+            if config.allow_failure() {
+                self.has_allowed_failure = true;
+                self.last_step_ids = vec![step.id];
+                info!(
+                    run_id = %self.run_id,
+                    step = %name,
+                    error = %err,
+                    "step input preparation failed but allow_failure is set, continuing"
+                );
+                return Ok(StepOutput {
+                    output: json!({"error": err.to_string()}),
+                    duration_ms: 0,
+                    cost_usd: Decimal::ZERO,
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    debug_messages: None,
+                });
+            }
             return Err(err);
         }
 
@@ -1644,7 +1711,7 @@ impl WorkflowContext {
                         StepUpdate {
                             status: Some(StepStatus::Failed),
                             error: Some(err.to_string()),
-                            output: raw_response_output,
+                            output: raw_response_output.clone(),
                             completed_at: Some(completed_at),
                             debug_messages: debug_messages_json,
                             duration_ms: partial.as_ref().and_then(|p| p.duration_ms),
@@ -1659,7 +1726,23 @@ impl WorkflowContext {
                     tracing::error!(step_id = %step.id, error = %store_err, "failed to persist step failure");
                 }
 
-                Err(err)
+                if config.allow_failure() {
+                    self.has_allowed_failure = true;
+                    self.last_step_ids = vec![step.id];
+                    info!(
+                        run_id = %self.run_id,
+                        step = %name,
+                        error = %err,
+                        "step failed but allow_failure is set, continuing"
+                    );
+                    Ok(allowed_failure_output(
+                        &err.to_string(),
+                        raw_response_output,
+                        partial.as_ref(),
+                    ))
+                } else {
+                    Err(err)
+                }
             }
         }
     }
@@ -1744,6 +1827,24 @@ impl WorkflowContext {
                 ironflow_store::error::StoreError::RunNotFound(self.run_id),
             ))?;
         Ok(run.payload)
+    }
+}
+
+fn allowed_failure_output(
+    error_msg: &str,
+    raw_response: Option<Value>,
+    partial: Option<&StepPartialUsage>,
+) -> StepOutput {
+    StepOutput {
+        output: raw_response.unwrap_or_else(|| json!({"error": error_msg})),
+        duration_ms: partial.and_then(|p| p.duration_ms).unwrap_or(0),
+        cost_usd: partial
+            .and_then(|p| p.cost_usd)
+            .unwrap_or(Decimal::ZERO),
+        input_tokens: partial.and_then(|p| p.input_tokens),
+        output_tokens: partial.and_then(|p| p.output_tokens),
+        model: None,
+        debug_messages: None,
     }
 }
 

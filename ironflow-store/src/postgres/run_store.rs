@@ -1038,7 +1038,7 @@ impl RunStore for PostgresStore {
                 r#"
                 SELECT
                     COUNT(*) as total,
-                    COUNT(*) FILTER (WHERE ast.name = 'completed') as completed,
+                    COUNT(*) FILTER (WHERE ast.name IN ('completed', 'warning')) as completed,
                     COUNT(*) FILTER (WHERE ast.name = 'failed') as failed,
                     COUNT(*) FILTER (WHERE ast.name = 'cancelled') as cancelled,
                     COUNT(*) FILTER (WHERE ast.name IN ('pending', 'running', 'retrying')) as active,
