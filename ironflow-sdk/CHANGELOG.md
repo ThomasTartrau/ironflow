@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.11](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.10...ironflow-sdk-v0.1.11) - 2026-08-10
+
+### Added
+
+- #25 allow_failure on steps to continue run with Warning status
+
+
+### Fixed
+
+- #27 regenerate OpenAPI snapshots with sign-up feature
+
+- #25 regenerate openapi snapshots with full CI features
+
+- #25 regenerate openapi snapshots and dashboard TS types
+
+- #25 cargo fmt and openapi snapshot sync for Warning variant
+
 ## [0.1.10](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.9...ironflow-sdk-v0.1.10) - 2026-08-08
 
 ### Added

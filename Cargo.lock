@@ -2507,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-api"
-version = "2.26.0"
+version = "2.27.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2560,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth"
-version = "2.3.21"
+version = "2.3.22"
 dependencies = [
  "argon2 0.5.3",
  "axum",
@@ -2581,7 +2581,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-cli"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "axum",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-core"
-version = "3.4.0"
+version = "3.5.0"
 dependencies = [
  "bollard",
  "futures-util",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.19.0"
+version = "2.20.0"
 dependencies = [
  "axum",
  "bytes",
@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "async-nats",
  "axum",
@@ -2766,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-sdk"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "axum",
  "chrono",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-store"
-version = "2.20.0"
+version = "2.20.1"
 dependencies = [
  "aes-gcm 0.10.3",
  "chrono",
@@ -2821,7 +2821,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.11.5"
+version = "2.11.6"
 dependencies = [
  "axum",
  "bytes",
