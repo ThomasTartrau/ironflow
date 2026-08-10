@@ -1247,6 +1247,7 @@ impl Engine {
     ///
     /// `from` is always `Running` because `finalize_run` is only called
     /// from a running state.
+    #[allow(clippy::too_many_arguments)]
     fn publish_run_status_changed(
         &self,
         workflow_name: &str,
