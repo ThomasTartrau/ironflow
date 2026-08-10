@@ -104,6 +104,7 @@ mod tests {
                 kind: StepKind::Shell,
                 position: 0,
                 input: Some(json!({"tool": "test"})),
+                is_error_handler: false,
             })
             .await
             .unwrap();

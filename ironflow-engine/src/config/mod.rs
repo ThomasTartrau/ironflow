@@ -73,6 +73,24 @@ impl StepConfig {
     }
 }
 
+impl From<ShellConfig> for StepConfig {
+    fn from(c: ShellConfig) -> Self {
+        StepConfig::Shell(c)
+    }
+}
+
+impl From<HttpConfig> for StepConfig {
+    fn from(c: HttpConfig) -> Self {
+        StepConfig::Http(c)
+    }
+}
+
+impl From<AgentStepConfig> for StepConfig {
+    fn from(c: AgentStepConfig) -> Self {
+        StepConfig::Agent(c)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

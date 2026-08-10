@@ -76,6 +76,9 @@ pub struct Step {
     pub completed_at: Option<DateTime<Utc>>,
     /// Debug messages (verbose conversation trace), stored as JSON.
     pub debug_messages: Option<Value>,
+    /// Whether this step is an error handler (`on_error`) rather than a normal step.
+    #[serde(default)]
+    pub is_error_handler: bool,
 }
 
 /// Request to create a new step.
@@ -93,6 +96,7 @@ pub struct Step {
 ///     kind: StepKind::Shell,
 ///     position: 0,
 ///     input: Some(json!({"command": "cargo build"})),
+///     is_error_handler: false,
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +111,9 @@ pub struct NewStep {
     pub position: u32,
     /// Serialized operation configuration.
     pub input: Option<Value>,
+    /// Whether this step is an error handler (`on_error`).
+    #[serde(default)]
+    pub is_error_handler: bool,
 }
 
 /// Partial update for a step after execution.
@@ -162,6 +169,7 @@ mod tests {
             kind: StepKind::Shell,
             position: 0,
             input: Some(json!({"command": "cargo build"})),
+            is_error_handler: false,
         };
 
         let json = serde_json::to_string(&new_step).expect("serialize");
@@ -200,6 +208,7 @@ mod tests {
             started_at: Some(now),
             completed_at: Some(now),
             debug_messages: None,
+            is_error_handler: false,
         };
 
         let json = serde_json::to_string(&step).expect("serialize");

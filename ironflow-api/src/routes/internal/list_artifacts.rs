@@ -58,6 +58,7 @@ mod tests {
                 kind: StepKind::Shell,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .expect("create step");

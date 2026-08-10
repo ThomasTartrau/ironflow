@@ -2048,6 +2048,7 @@ mod tests {
                 kind: StepKind::Shell,
                 position,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();
