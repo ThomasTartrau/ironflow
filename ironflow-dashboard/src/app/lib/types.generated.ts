@@ -176,31 +176,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	"/api/v1/auth/sign-up": {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/**
-		 * Register a new user with email and password.
-		 * @description Returns access and refresh tokens on success, and sets HttpOnly cookies.
-		 *
-		 *     # Errors
-		 *
-		 *     - 400 if email/username/password is invalid
-		 *     - 409 if email or username is already taken
-		 */
-		post: operations["sign_up"];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	"/api/v1/health-check": {
 		parameters: {
 			query?: never;
@@ -1628,11 +1603,11 @@ export interface components {
 		 *
 		 *     Valid transitions:
 		 *     - `Pending` -> `Running`, `Cancelled`
-		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Retrying`, `Cancelled`, `AwaitingApproval`
+		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`
 		 *     - `Retrying` -> `Running`, `Failed`, `Cancelled`
 		 *     - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
 		 *
-		 *     Terminal states (`Completed`, `Failed`, `Cancelled`) are idempotent:
+		 *     Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
 		 *     transitioning to the same terminal state is a no-op, not an error.
 		 *
 		 *     # Examples
@@ -1644,12 +1619,14 @@ export interface components {
 		 *     assert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));
 		 *     assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));
+		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Warning));
 		 *     // A run whose worker lease expired goes back to the queue:
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
 		 *     // Terminal-to-same is idempotent:
 		 *     assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
 		 *     assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
+		 *     assert!(RunStatus::Warning.can_transition_to(&RunStatus::Warning));
 		 *     assert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));
 		 *     ```
 		 * @enum {string}
@@ -1661,7 +1638,8 @@ export interface components {
 			| "failed"
 			| "retrying"
 			| "cancelled"
-			| "awaiting_approval";
+			| "awaiting_approval"
+			| "warning";
 		/** @description A scope entry with its machine name and human-readable label. */
 		ScopeEntry: {
 			/** @description Short description. */
@@ -1704,15 +1682,6 @@ export interface components {
 			email: string;
 			/** @description Plaintext password. */
 			password: string;
-		};
-		/** @description Sign-up request body. */
-		SignUpRequest: {
-			/** @description Email address. */
-			email: string;
-			/** @description Plaintext password (min 8 characters). */
-			password: string;
-			/** @description Display username. */
-			username: string;
 		};
 		/**
 		 * @description Aggregate statistics response.
@@ -2336,43 +2305,6 @@ export interface operations {
 			};
 			/** @description Unauthorized */
 			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-		};
-	};
-	sign_up: {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** @description Sign up credentials */
-		requestBody: {
-			content: {
-				"application/json": components["schemas"]["SignUpRequest"];
-			};
-		};
-		responses: {
-			/** @description User registered successfully, cookies set */
-			204: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Invalid email, username, or password */
-			400: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Email or username already taken */
-			409: {
 				headers: {
 					[name: string]: unknown;
 				};
