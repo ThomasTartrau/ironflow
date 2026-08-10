@@ -1882,9 +1882,10 @@ impl WorkflowContext {
                 continue;
             }
 
-            let step_log_sender = self.log_sender.as_ref().map(|s| {
-                StepLogSender::new(s.clone(), self.run_id, step.id, handler.name.clone())
-            });
+            let step_log_sender = self
+                .log_sender
+                .as_ref()
+                .map(|s| StepLogSender::new(s.clone(), self.run_id, step.id, handler.name.clone()));
 
             let start = Instant::now();
             let result = execute_step_config(&config, &self.provider, step_log_sender).await;
@@ -1985,10 +1986,8 @@ fn inject_error_context(
             );
         }
         StepConfig::Http(http) => {
-            http.headers.push((
-                "X-Ironflow-Error-Step".to_string(),
-                failed_step.to_string(),
-            ));
+            http.headers
+                .push(("X-Ironflow-Error-Step".to_string(), failed_step.to_string()));
             http.headers.push((
                 "X-Ironflow-Error-Message".to_string(),
                 error_msg.to_string(),

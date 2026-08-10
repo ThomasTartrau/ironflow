@@ -18,8 +18,10 @@ use serde_json::json;
 fn create_test_engine() -> Engine {
     let store = Arc::new(InMemoryStore::new());
     let inner = ClaudeCodeProvider::new();
-    let provider: Arc<dyn AgentProvider> =
-        Arc::new(RecordReplayProvider::replay(inner, "/tmp/ironflow-fixtures"));
+    let provider: Arc<dyn AgentProvider> = Arc::new(RecordReplayProvider::replay(
+        inner,
+        "/tmp/ironflow-fixtures",
+    ));
     Engine::new(store, provider)
 }
 
@@ -275,7 +277,8 @@ impl WorkflowHandler for FailWithContextCheck {
                 "check-context",
                 ShellConfig::new("echo $IRONFLOW_ERROR_STEP"),
             );
-            ctx.shell("failing-step", ShellConfig::new("exit 1")).await?;
+            ctx.shell("failing-step", ShellConfig::new("exit 1"))
+                .await?;
             Ok(())
         })
     }
