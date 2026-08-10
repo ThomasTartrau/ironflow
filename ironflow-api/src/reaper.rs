@@ -185,6 +185,7 @@ impl Reaper {
                 error: (entry.to == RunStatus::Failed).then(|| LEASE_EXPIRED_ERROR.to_string()),
                 cost_usd: run.cost_usd,
                 duration_ms: run.duration_ms,
+                labels: run.labels.clone(),
                 at: Utc::now(),
             });
     }

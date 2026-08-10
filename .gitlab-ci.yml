@@ -33,7 +33,7 @@ variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
   IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"
   GIT_DEPTH: 0
-  GIT_STRATEGY: fetch
+  GIT_STRATEGY: clone
   RELEASE_PLZ_VERSION: "0.3.160"
   # cargo defaults to a 30s HTTP timeout, which the runner blows through often
   # enough that crates.io uploads fail mid-release and leave the workspace

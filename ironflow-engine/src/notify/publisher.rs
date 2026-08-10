@@ -126,11 +126,13 @@ impl Default for EventPublisher {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
     use super::*;
     use crate::notify::{SubscriberFuture, WebhookSubscriber};
     use rust_decimal::Decimal;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::time::Duration;
     use tokio::time::sleep;
 
     use chrono::Utc;
@@ -146,6 +148,7 @@ mod tests {
             error: None,
             cost_usd: Decimal::new(42, 2),
             duration_ms: 5000,
+            labels: HashMap::new(),
             at: Utc::now(),
         }
     }

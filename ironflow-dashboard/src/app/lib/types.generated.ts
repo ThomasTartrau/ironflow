@@ -983,6 +983,7 @@ export interface components {
 		 *     # Examples
 		 *
 		 *     ```
+		 *     use std::collections::HashMap;
 		 *     use ironflow_engine::notify::Event;
 		 *     use ironflow_store::models::RunStatus;
 		 *     use uuid::Uuid;
@@ -995,6 +996,7 @@ export interface components {
 		 *         error: None,
 		 *         cost_usd: rust_decimal::Decimal::ZERO,
 		 *         duration_ms: 5000,
+		 *         labels: HashMap::new(),
 		 *         at: chrono::Utc::now(),
 		 *     };
 		 *     ```
@@ -1036,6 +1038,10 @@ export interface components {
 					error?: string | null;
 					/** @description Previous status. */
 					from: components["schemas"]["RunStatus"];
+					/** @description Labels of the run at the time of the transition. */
+					labels?: {
+						[key: string]: string;
+					};
 					/**
 					 * Format: uuid
 					 * @description Run identifier.
@@ -1066,6 +1072,10 @@ export interface components {
 					duration_ms: number;
 					/** @description Error message. */
 					error?: string | null;
+					/** @description Labels of the run at the time of the failure. */
+					labels?: {
+						[key: string]: string;
+					};
 					/**
 					 * Format: uuid
 					 * @description Run identifier.

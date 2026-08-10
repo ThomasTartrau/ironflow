@@ -377,6 +377,7 @@ impl Runtime {
     ///         source_workflow: "deploy".to_string(),
     ///         target_workflow: "rollback".to_string(),
     ///         max_chain_depth: 3,
+    ///         conditions: vec![],
     ///     },
     /// ]);
     ///

@@ -1,5 +1,7 @@
 //! Domain events emitted throughout the ironflow lifecycle.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -68,6 +70,7 @@ impl std::str::FromStr for LogStream {
 /// # Examples
 ///
 /// ```
+/// use std::collections::HashMap;
 /// use ironflow_engine::notify::Event;
 /// use ironflow_store::models::RunStatus;
 /// use uuid::Uuid;
@@ -80,6 +83,7 @@ impl std::str::FromStr for LogStream {
 ///     error: None,
 ///     cost_usd: rust_decimal::Decimal::ZERO,
 ///     duration_ms: 5000,
+///     labels: HashMap::new(),
 ///     at: chrono::Utc::now(),
 /// };
 /// ```
@@ -114,6 +118,9 @@ pub enum Event {
         cost_usd: Decimal,
         /// Aggregated duration in milliseconds at the time of transition.
         duration_ms: u64,
+        /// Labels of the run at the time of the transition.
+        #[serde(default)]
+        labels: HashMap<String, String>,
         /// When the transition occurred.
         at: DateTime<Utc>,
     },
@@ -134,6 +141,9 @@ pub enum Event {
         cost_usd: Decimal,
         /// Aggregated duration in milliseconds at the time of failure.
         duration_ms: u64,
+        /// Labels of the run at the time of the failure.
+        #[serde(default)]
+        labels: HashMap<String, String>,
         /// When the failure occurred.
         at: DateTime<Utc>,
     },
@@ -413,6 +423,7 @@ mod tests {
             error: None,
             cost_usd: Decimal::new(42, 2),
             duration_ms: 5000,
+            labels: HashMap::new(),
             at: Utc::now(),
         };
 
@@ -431,6 +442,7 @@ mod tests {
             error: Some("step crashed".to_string()),
             cost_usd: Decimal::new(10, 2),
             duration_ms: 3000,
+            labels: HashMap::new(),
             at: Utc::now(),
         };
 
@@ -554,6 +566,7 @@ mod tests {
                     error: None,
                     cost_usd: Decimal::ZERO,
                     duration_ms: 0,
+                    labels: HashMap::new(),
                     at: now,
                 },
                 "run_status_changed",
@@ -565,6 +578,7 @@ mod tests {
                     error: Some("boom".to_string()),
                     cost_usd: Decimal::ZERO,
                     duration_ms: 0,
+                    labels: HashMap::new(),
                     at: now,
                 },
                 "run_failed",

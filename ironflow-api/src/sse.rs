@@ -101,6 +101,8 @@ impl EventSubscriber for SseBroadcaster {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use chrono::Utc;
     use ironflow_store::models::RunStatus;
@@ -116,6 +118,7 @@ mod tests {
             error: None,
             cost_usd: Decimal::ZERO,
             duration_ms: 1000,
+            labels: HashMap::new(),
             at: Utc::now(),
         }
     }
