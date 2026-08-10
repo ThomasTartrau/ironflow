@@ -22,6 +22,7 @@ pub(crate) fn parse_run_status(s: &str) -> Result<RunStatus, StoreError> {
         "retrying" => Ok(RunStatus::Retrying),
         "cancelled" => Ok(RunStatus::Cancelled),
         "awaiting_approval" => Ok(RunStatus::AwaitingApproval),
+        "warning" => Ok(RunStatus::Warning),
         other => Err(StoreError::Database(format!("unknown run status: {other}"))),
     }
 }
@@ -67,6 +68,7 @@ pub(crate) fn run_status_to_db_str(status: &RunStatus) -> &'static str {
         RunStatus::Retrying => "retrying",
         RunStatus::Cancelled => "cancelled",
         RunStatus::AwaitingApproval => "awaiting_approval",
+        RunStatus::Warning => "warning",
     }
 }
 

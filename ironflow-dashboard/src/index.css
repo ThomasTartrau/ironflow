@@ -75,6 +75,9 @@ html.dark body {
   --status-retrying-bg: oklch(0.955 0.055 70);
   --status-retrying-fg: oklch(0.520 0.130 60);
   --status-retrying-border: oklch(0.885 0.075 70);
+  --status-warning-bg: oklch(0.955 0.060 80);
+  --status-warning-fg: oklch(0.520 0.140 75);
+  --status-warning-border: oklch(0.885 0.080 80);
   --status-awaiting-bg: oklch(0.955 0.065 100);
   --status-awaiting-fg: oklch(0.520 0.130 95);
   --status-awaiting-border: oklch(0.885 0.085 100);
@@ -153,6 +156,9 @@ html.dark body {
   --status-retrying-bg: oklch(0.295 0.055 60);
   --status-retrying-fg: oklch(0.820 0.130 70);
   --status-retrying-border: oklch(0.395 0.075 60);
+  --status-warning-bg: oklch(0.295 0.060 75);
+  --status-warning-fg: oklch(0.830 0.140 80);
+  --status-warning-border: oklch(0.395 0.080 75);
   --status-awaiting-bg: oklch(0.300 0.060 95);
   --status-awaiting-fg: oklch(0.850 0.140 100);
   --status-awaiting-border: oklch(0.400 0.080 95);

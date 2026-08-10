@@ -25,6 +25,8 @@ export function StatusBadge({ status }: StatusBadgeProps) {
 				return "bg-[var(--status-awaiting-bg)] text-[var(--status-awaiting-fg)] border-[var(--status-awaiting-border)] animate-pulse";
 			case "rejected":
 				return "bg-[var(--status-rejected-bg)] text-[var(--status-rejected-fg)] border-[var(--status-rejected-border)]";
+			case "warning":
+				return "bg-[var(--status-warning-bg)] text-[var(--status-warning-fg)] border-[var(--status-warning-border)]";
 			case "cancelled":
 			case "skipped":
 				return "bg-[var(--status-cancelled-bg)] text-[var(--status-cancelled-fg)] border-[var(--status-cancelled-border)]";

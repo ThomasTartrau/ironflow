@@ -51,6 +51,28 @@ pub enum StepConfig {
 }
 
 impl StepConfig {
+    /// Whether this step is allowed to fail without stopping the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::{StepConfig, ShellConfig};
+    ///
+    /// let config = StepConfig::Shell(ShellConfig::new("cargo clippy").allow_failure());
+    /// assert!(config.allow_failure());
+    ///
+    /// let config = StepConfig::Shell(ShellConfig::new("cargo build"));
+    /// assert!(!config.allow_failure());
+    /// ```
+    pub fn allow_failure(&self) -> bool {
+        match self {
+            StepConfig::Shell(c) => c.allow_failure,
+            StepConfig::Http(c) => c.allow_failure,
+            StepConfig::Agent(c) => c.allow_failure,
+            StepConfig::Workflow(_) | StepConfig::Approval(_) => false,
+        }
+    }
+
     /// Get the kind of step this configuration represents.
     ///
     /// # Examples

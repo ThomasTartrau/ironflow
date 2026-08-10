@@ -561,7 +561,7 @@ impl RunStore for InMemoryStore {
                 total_runs += 1;
 
                 match run.status.state {
-                    RunStatus::Completed => completed_runs += 1,
+                    RunStatus::Completed | RunStatus::Warning => completed_runs += 1,
                     RunStatus::Failed => failed_runs += 1,
                     RunStatus::Cancelled => cancelled_runs += 1,
                     RunStatus::Pending
