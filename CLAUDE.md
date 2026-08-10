@@ -28,31 +28,6 @@ cargo doc --no-deps                # Build docs, check for warnings
 cargo doc --no-deps --open         # Build and open in browser
 ```
 
-## CI Features & OpenAPI Snapshots
-
-The CI pipeline compiles the workspace with a specific feature set that differs from a bare `cargo test`:
-
-```
-IRONFLOW_FEATURES="prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"
-```
-
-**When regenerating the OpenAPI snapshots**, always use the full CI feature set:
-
-```bash
-UPDATE_OPENAPI=1 cargo test --workspace --exclude ironflow-example-server \
-  --features "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh" \
-  -- openapi_spec_is_up_to_date
-```
-
-Then regenerate the dashboard TypeScript types:
-
-```bash
-cd ironflow-dashboard && pnpm generate:types
-```
-
-Using fewer features (e.g. `--features "openapi"` alone) produces a snapshot missing routes
-gated behind other features (like `sign-up`), which passes locally but fails in CI.
-
 ## Documentation Rules
 
 Every public item MUST have rustdoc documentation. No exceptions.
