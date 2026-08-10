@@ -353,7 +353,7 @@
         "type": "string"
       },
       "Event": {
-        "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\n# Examples\n\n```\nuse ironflow_engine::notify::Event;\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    at: chrono::Utc::now(),\n};\n```",
+        "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\n# Examples\n\n```\nuse std::collections::HashMap;\nuse ironflow_engine::notify::Event;\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    labels: HashMap::new(),\n    at: chrono::Utc::now(),\n};\n```",
         "oneOf": [
           {
             "description": "A new run was created (status: Pending).",
@@ -415,6 +415,16 @@
                 "$ref": "#/components/schemas/RunStatus",
                 "description": "Previous status."
               },
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Labels of the run at the time of the transition.",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
               "run_id": {
                 "description": "Run identifier.",
                 "format": "uuid",
@@ -470,6 +480,16 @@
                 "description": "Error message.",
                 "nullable": true,
                 "type": "string"
+              },
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Labels of the run at the time of the failure.",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
               },
               "run_id": {
                 "description": "Run identifier.",
@@ -1487,29 +1507,6 @@
         ],
         "type": "object"
       },
-      "SignUpRequest": {
-        "description": "Sign-up request body.",
-        "properties": {
-          "email": {
-            "description": "Email address.",
-            "type": "string"
-          },
-          "password": {
-            "description": "Plaintext password (min 8 characters).",
-            "type": "string"
-          },
-          "username": {
-            "description": "Display username.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "email",
-          "username",
-          "password"
-        ],
-        "type": "object"
-      },
       "StatsResponse": {
         "description": "Aggregate statistics response.\n\nComputed from all runs in the store.\n\n# Examples\n\n```\nuse ironflow_api::entities::StatsResponse;\n```",
         "properties": {
@@ -2438,38 +2435,6 @@
           }
         ],
         "summary": "Sign out the current user by clearing auth cookies.",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/sign-up": {
-      "post": {
-        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 400 if email/username/password is invalid\n- 409 if email or username is already taken",
-        "operationId": "sign_up",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SignUpRequest"
-              }
-            }
-          },
-          "description": "Sign up credentials",
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "User registered successfully, cookies set"
-          },
-          "400": {
-            "description": "Invalid email, username, or password"
-          },
-          "409": {
-            "description": "Email or username already taken"
-          }
-        },
-        "summary": "Register a new user with email and password.",
         "tags": [
           "auth"
         ]
