@@ -1,6 +1,5 @@
 //! Integration tests for on_error handlers.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ironflow_core::provider::AgentProvider;
@@ -9,7 +8,6 @@ use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, StepStatus, TriggerKind};
@@ -308,7 +306,7 @@ async fn on_error_receives_error_context() {
 
     let input = cleanup.input.as_ref().unwrap();
     assert_eq!(input["failed_step"], "failing-step");
-    assert!(input["error"].as_str().unwrap().len() > 0);
+    assert!(!input["error"].as_str().unwrap().is_empty());
     assert!(input["duration_ms"].is_number());
 
     let output = cleanup.output.as_ref().unwrap();
