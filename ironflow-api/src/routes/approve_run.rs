@@ -418,6 +418,7 @@ mod tests {
                 kind: StepKind::Approval,
                 position: 0,
                 input: None,
+                is_error_handler: false,
             })
             .await
             .unwrap();

@@ -33,6 +33,7 @@ fn new_step(run_id: Uuid, name: &str, position: u32) -> NewStep {
         kind: StepKind::Shell,
         position,
         input: None,
+        is_error_handler: false,
     }
 }
 

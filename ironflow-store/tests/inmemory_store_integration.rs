@@ -29,6 +29,7 @@ fn new_step(run_id: Uuid, name: &str, position: u32) -> NewStep {
         kind: StepKind::Shell,
         position,
         input: None,
+        is_error_handler: false,
     }
 }
 
@@ -486,6 +487,7 @@ async fn list_steps_returns_steps_ordered_by_position() {
             kind: StepKind::Shell,
             position: 2,
             input: None,
+            is_error_handler: false,
         })
         .await
         .unwrap();
@@ -497,6 +499,7 @@ async fn list_steps_returns_steps_ordered_by_position() {
             kind: StepKind::Shell,
             position: 0,
             input: None,
+            is_error_handler: false,
         })
         .await
         .unwrap();
@@ -508,6 +511,7 @@ async fn list_steps_returns_steps_ordered_by_position() {
             kind: StepKind::Shell,
             position: 1,
             input: None,
+            is_error_handler: false,
         })
         .await
         .unwrap();
