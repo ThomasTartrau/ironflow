@@ -17,6 +17,7 @@ members = [
     "ironflow-types",
     "ironflow-sdk",
     "ironflow-cli",
+    "ironflow-templates",
 ]
 
 [profile.release]

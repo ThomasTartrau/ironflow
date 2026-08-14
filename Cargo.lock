@@ -2596,6 +2596,7 @@ dependencies = [
  "ironflow-engine",
  "ironflow-sdk",
  "ironflow-store",
+ "ironflow-templates",
  "ironflow-types",
  "serde",
  "serde_json",
@@ -2808,6 +2809,16 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "ironflow-templates"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
 ]
 
 [[package]]

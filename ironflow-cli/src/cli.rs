@@ -14,6 +14,7 @@ use crate::commands::audit_log::AuditLogArgs;
 use crate::commands::logs::LogsArgs;
 use crate::commands::run::RunArgs;
 use crate::commands::secret::SecretArgs;
+use crate::commands::template::TemplateArgs;
 use crate::commands::user::UserArgs;
 use crate::commands::workflow::WorkflowArgs;
 
@@ -78,6 +79,8 @@ pub enum Commands {
     /// Inspect audit logs (admin only).
     #[command(name = "audit-log")]
     AuditLog(AuditLogArgs),
+    /// Manage workflow templates (add, list, info).
+    Template(TemplateArgs),
 }
 
 /// Dispatch a parsed command against a client.
@@ -96,6 +99,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::ApiKey(args) => commands::api_key::execute(client, args, cli.json).await,
         Commands::User(args) => commands::user::execute(client, args, cli.json).await,
         Commands::AuditLog(args) => commands::audit_log::execute(client, args, cli.json).await,
+        Commands::Template(args) => commands::template::execute(args),
     }
 }
 
@@ -627,6 +631,63 @@ mod tests {
     #[test]
     fn parse_audit_log_list_rejects_a_malformed_date() {
         let result = Cli::try_parse_from(["ironflow-cli", "audit-log", "list", "--from", "hier"]);
+        assert!(result.is_err());
+    }
+
+    // ---- template ----
+
+    #[test]
+    fn parse_template_list() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "template",
+            "list",
+            "https://github.com/user/templates",
+        ]);
+        assert!(matches!(cli.command, Commands::Template(_)));
+    }
+
+    #[test]
+    fn parse_template_add() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "template",
+            "add",
+            "https://github.com/user/templates",
+            "ci-pipeline",
+        ]);
+        assert!(matches!(cli.command, Commands::Template(_)));
+    }
+
+    #[test]
+    fn parse_template_add_with_output() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "template",
+            "add",
+            "https://github.com/user/templates",
+            "ci-pipeline",
+            "--output",
+            "my/custom/path",
+        ]);
+        assert!(matches!(cli.command, Commands::Template(_)));
+    }
+
+    #[test]
+    fn parse_template_info() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "template",
+            "info",
+            "https://github.com/user/templates",
+            "ci-pipeline",
+        ]);
+        assert!(matches!(cli.command, Commands::Template(_)));
+    }
+
+    #[test]
+    fn parse_template_requires_subcommand() {
+        let result = Cli::try_parse_from(["ironflow-cli", "template"]);
         assert!(result.is_err());
     }
 }

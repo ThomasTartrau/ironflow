@@ -1,0 +1,12 @@
+[template]
+name = "template/hello-world"
+description = "Minimal workflow that greets someone and logs the current date"
+version = "1.0.0"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+category = "examples"
+
+[dependencies]
+ironflow-engine = "0.1"
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
