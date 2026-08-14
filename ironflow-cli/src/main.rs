@@ -14,7 +14,8 @@
 
 use anyhow::Result;
 use clap::Parser;
-use ironflow_cli::cli::{Cli, dispatch};
+use ironflow_cli::cli::{Cli, Commands, dispatch};
+use ironflow_cli::commands;
 use ironflow_cli::config;
 use ironflow_sdk::IronflowClient;
 use tracing_subscriber::EnvFilter;
@@ -26,6 +27,11 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    if let Commands::Template(args) = &cli.command {
+        return commands::template::execute(args);
+    }
+
     let config = config::load(cli.url.as_deref(), cli.api_key.as_deref())?;
     let client = IronflowClient::new(&config.base_url, &config.api_key);
 
