@@ -63,6 +63,8 @@ pub const STEP_DURATION_SECONDS: &str = "ironflow_step_duration_seconds";
 pub const WORKER_ACTIVE: &str = "ironflow_worker_active";
 /// Counter: total poll attempts by the worker (label: result).
 pub const WORKER_POLLS_TOTAL: &str = "ironflow_worker_polls_total";
+/// Gauge: number of runs waiting in the queue (`Pending` status).
+pub const WORKER_QUEUE_DEPTH: &str = "ironflow_worker_queue_depth";
 /// Counter: runs abandoned by the worker after losing their lease.
 pub const WORKER_LEASES_LOST_TOTAL: &str = "ironflow_worker_leases_lost_total";
 
