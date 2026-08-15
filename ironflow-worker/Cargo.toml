@@ -32,6 +32,7 @@ metrics = { version = "0.24", optional = true }
 [features]
 default = []
 prometheus = ["metrics", "ironflow-engine/prometheus"]
+opentelemetry = ["ironflow-engine/opentelemetry"]
 heartbeat = []
 
 [dev-dependencies]

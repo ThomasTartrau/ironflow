@@ -40,6 +40,7 @@ utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], option
 [features]
 default = []
 prometheus = ["metrics", "ironflow-core/prometheus"]
+opentelemetry = ["ironflow-core/opentelemetry"]
 openapi = ["utoipa", "ironflow-store/openapi"]
 
 [dev-dependencies]

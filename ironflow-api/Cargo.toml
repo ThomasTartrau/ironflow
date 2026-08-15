@@ -16,6 +16,7 @@ default = []
 sign-up = []
 dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
+opentelemetry = ["ironflow-engine/opentelemetry"]
 openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi", "ironflow-types/openapi"]
 
 [dependencies]

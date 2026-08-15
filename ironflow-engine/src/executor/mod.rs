@@ -112,18 +112,20 @@ pub trait StepExecutor: Send + Sync {
 /// # Ok(())
 /// # }
 /// ```
+#[tracing::instrument(name = "executor.execute_step", skip_all, fields(step.kind))]
 pub async fn execute_step_config(
     config: &StepConfig,
     provider: &Arc<dyn AgentProvider>,
     log_sender: Option<StepLogSender>,
 ) -> Result<StepOutput, EngineError> {
-    let _kind = match config {
+    let kind = match config {
         StepConfig::Shell(_) => "shell",
         StepConfig::Http(_) => "http",
         StepConfig::Agent(_) => "agent",
         StepConfig::Workflow(_) => "workflow",
         StepConfig::Approval(_) => "approval",
     };
+    tracing::Span::current().record("step.kind", kind);
 
     let result = match config {
         StepConfig::Shell(cfg) => {
@@ -160,9 +162,9 @@ pub async fn execute_step_config(
         } else {
             STATUS_ERROR
         };
-        counter!(STEPS_TOTAL, "kind" => _kind, "status" => status).increment(1);
+        counter!(STEPS_TOTAL, "kind" => kind, "status" => status).increment(1);
         if let Ok(ref output) = result {
-            histogram!(STEP_DURATION_SECONDS, "kind" => _kind)
+            histogram!(STEP_DURATION_SECONDS, "kind" => kind)
                 .record(output.duration_ms as f64 / 1000.0);
         }
     }

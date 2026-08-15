@@ -33,7 +33,7 @@ use futures_util::StreamExt;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use tokio::task::{Id, JoinSet};
-use tracing::{error, info, warn};
+use tracing::{Span, error, info, warn};
 use uuid::Uuid;
 
 use ironflow_core::error::{AgentError, OperationError};
@@ -1595,12 +1595,32 @@ impl WorkflowContext {
     }
 
     /// Internal: execute a step with full persistence lifecycle.
+    #[tracing::instrument(
+        name = "context.execute_step",
+        skip_all,
+        fields(
+            run_id = %self.run_id,
+            step.name = %name,
+            step.kind,
+            step.position = self.position,
+        )
+    )]
     async fn execute_step(
         &mut self,
         name: &str,
         kind: StepKind,
         config: StepConfig,
     ) -> Result<StepOutput, EngineError> {
+        let kind_str = match &kind {
+            StepKind::Shell => "shell",
+            StepKind::Http => "http",
+            StepKind::Agent => "agent",
+            StepKind::Workflow => "workflow",
+            StepKind::Approval => "approval",
+            StepKind::Custom(name) => name.as_str(),
+        };
+        Span::current().record("step.kind", kind_str);
+
         let position = self.position;
         self.position += 1;
 

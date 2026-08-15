@@ -75,6 +75,8 @@ pub mod provider;
 pub mod providers;
 pub mod retry;
 pub mod schema_transform;
+#[cfg(feature = "opentelemetry")]
+pub mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tracker;
