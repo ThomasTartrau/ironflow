@@ -51,6 +51,11 @@ pub enum TriggerKind {
         /// The event kind that fired (e.g. `"run_failed"`).
         event_kind: String,
     },
+    /// Triggered by a polling probe detecting new data.
+    Polling {
+        /// Name of the probe that fired (e.g. `"http"`, `"sql"`).
+        probe: String,
+    },
 }
 
 #[cfg(test)]
@@ -77,6 +82,9 @@ mod tests {
             TriggerKind::RunEvent {
                 source_run_id: Uuid::nil(),
                 event_kind: "run_failed".to_string(),
+            },
+            TriggerKind::Polling {
+                probe: "http".to_string(),
             },
         ];
         for trigger in triggers {
@@ -107,5 +115,15 @@ mod tests {
         assert!(json.contains("\"kind\":\"run_event\""));
         assert!(json.contains("\"event_kind\":\"step_failed\""));
         assert!(json.contains("\"source_run_id\""));
+    }
+
+    #[test]
+    fn polling_serializes_with_probe() {
+        let trigger = TriggerKind::Polling {
+            probe: "http".to_string(),
+        };
+        let json = serde_json::to_string(&trigger).expect("serialize");
+        assert!(json.contains("\"kind\":\"polling\""));
+        assert!(json.contains("\"probe\":\"http\""));
     }
 }

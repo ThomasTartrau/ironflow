@@ -72,6 +72,7 @@ fn trigger_label(trigger: &TriggerKind) -> String {
         TriggerKind::Cron { schedule } => schedule.clone(),
         TriggerKind::Nats { subject } => format!("nats:{subject}"),
         TriggerKind::RunEvent { event_kind, .. } => format!("event:{event_kind}"),
+        TriggerKind::Polling { probe } => format!("polling:{probe}"),
     }
 }
 
@@ -257,6 +258,25 @@ mod tests {
                     schedule: "0 */5 * * * *".to_string(),
                 },
                 "0 */5 * * * *",
+            ),
+            (
+                TriggerKind::Nats {
+                    subject: "orders.created".to_string(),
+                },
+                "nats:orders.created",
+            ),
+            (
+                TriggerKind::RunEvent {
+                    source_run_id: Uuid::now_v7(),
+                    event_kind: "completed".to_string(),
+                },
+                "event:completed",
+            ),
+            (
+                TriggerKind::Polling {
+                    probe: "http".to_string(),
+                },
+                "polling:http",
             ),
         ];
 

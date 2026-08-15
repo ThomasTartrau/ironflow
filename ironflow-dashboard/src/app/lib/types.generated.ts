@@ -1979,6 +1979,12 @@ export interface components {
 					 * @description The run whose event triggered this run.
 					 */
 					source_run_id: string;
+			  }
+			| {
+					/** @enum {string} */
+					kind: "polling";
+					/** @description Name of the probe that fired (e.g. `"http"`, `"sql"`). */
+					probe: string;
 			  };
 		/** @description Request body for updating a user's role (admin only). */
 		UpdateRoleRequest: {
