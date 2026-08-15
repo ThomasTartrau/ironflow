@@ -37,6 +37,8 @@ function getTriggerMeta(t: TriggerKind): TriggerMeta {
 				label: "Event",
 				tooltip: `${t.event_kind} (${t.source_run_id})`,
 			};
+		case "polling":
+			return { label: "Polling", tooltip: t.probe };
 		default: {
 			const _exhaustive: never = t;
 			return _exhaustive;

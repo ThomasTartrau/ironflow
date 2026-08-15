@@ -3739,6 +3739,26 @@
                 "description": "The run whose event triggered this run."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Triggered by a polling probe detecting new data.",
+            "required": [
+              "probe",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "polling"
+                ]
+              },
+              "probe": {
+                "type": "string",
+                "description": "Name of the probe that fired (e.g. `\"http\"`, `\"sql\"`)."
+              }
+            }
           }
         ],
         "description": "How a run was triggered.\n\n# Examples\n\n```\nuse ironflow_store::entities::TriggerKind;\n\nlet trigger = TriggerKind::Manual;\nlet json = serde_json::to_string(&trigger).unwrap();\nassert!(json.contains(\"manual\"));\n```"

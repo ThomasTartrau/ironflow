@@ -34,11 +34,15 @@ async-nats = { version = "0.50", optional = true, default-features = false, feat
 futures-util = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false }
+reqwest = { version = "0.13", optional = true, features = ["json"] }
+tokio-postgres = { version = "0.7", optional = true }
 
 [features]
 default = []
 prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-core/prometheus"]
 trigger-nats = ["async-nats", "futures-util"]
+trigger-polling-http = ["reqwest"]
+trigger-polling-sql = ["tokio-postgres"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -52,6 +56,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 async-nats = { version = "0.50", default-features = false, features = ["jetstream"] }
+wiremock = "0.6"
 
 [[example]]
 name = "daemon"

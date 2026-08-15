@@ -9,6 +9,10 @@
 //! - `EventTrigger` -- reacts to internal domain events (workflow chaining).
 //! - `NatsTrigger` -- consumes messages from a NATS JetStream subject
 //!   (behind the `trigger-nats` feature flag).
+//! - [`PollingTrigger`](polling::PollingTrigger) -- periodically polls an
+//!   external source via a [`PollingProbe`](polling::PollingProbe) and
+//!   triggers when new data is detected. Built-in probes: `HttpProbe`
+//!   (`trigger-polling-http`) and `SqlProbe` (`trigger-polling-sql`).
 //!
 //! # Examples
 //!
@@ -31,6 +35,7 @@
 pub mod event;
 #[cfg(feature = "trigger-nats")]
 pub mod nats;
+pub mod polling;
 
 use std::future::Future;
 use std::pin::Pin;
