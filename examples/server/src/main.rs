@@ -24,6 +24,8 @@
 //! - `IRONFLOW_MONTHLY_COST_LIMIT_USD` (optional: global cost quota for the
 //!   current calendar month in UTC; beyond it, creating a run returns
 //!   `429 MONTHLY_BUDGET_EXCEEDED` while in-flight runs continue)
+//! - `IRONFLOW_SEED` (optional: when set to any value, seeds development data
+//!   at startup -- users, runs, steps, API keys)
 
 use std::process;
 use std::sync::Arc;
@@ -53,6 +55,7 @@ use ironflow_engine::notify::{Event, WebhookSubscriber};
 use ironflow_store::crypto::{KeyRing, SECRET_KEYS_ENV};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
+use xtask::seed::{SeedOptions, seed_store};
 
 #[tokio::main]
 async fn main() {
@@ -110,6 +113,17 @@ async fn main() {
             process::exit(1);
         }
     }
+    if std::env::var("IRONFLOW_SEED").is_ok() {
+        info!("IRONFLOW_SEED set, seeding development data...");
+        let seed_opts = SeedOptions {
+            force: false,
+            artifacts_dir: config.artifacts_dir.clone(),
+        };
+        seed_store(&*store, &seed_opts).await.unwrap_or_else(|e| {
+            warn!("seed skipped: {e}");
+        });
+    }
+
     let provider = Arc::new(ClaudeCodeProvider::new());
 
     let jwt_config = Arc::new(JwtConfig {

@@ -5,12 +5,11 @@
 //! cargo xtask seed --force   # reset and re-seed
 //! ```
 
-mod seed;
-
 use std::process;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
+use xtask::seed;
 
 /// ironflow developer task runner.
 #[derive(Parser)]

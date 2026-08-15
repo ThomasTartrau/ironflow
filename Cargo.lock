@@ -2683,6 +2683,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "xtask",
 ]
 
 [[package]]

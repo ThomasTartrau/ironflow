@@ -16,6 +16,7 @@ ironflow-artifacts = { path = "../../ironflow-artifacts" }
 ironflow-api = { path = "../../ironflow-api", features = ["dashboard", "sign-up", "openapi"] }
 ironflow-auth = { path = "../../ironflow-auth" }
 ironflow-workflows = { path = "../ironflow-workflows" }
+xtask = { path = "../../xtask" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
