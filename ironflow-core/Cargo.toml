@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-core"
-version = "3.5.0"
+version = "3.6.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
