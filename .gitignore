@@ -2,6 +2,7 @@ target
 .DS_Store
 .cargo/*
 !.cargo/audit.toml
+!.cargo/config.toml
 .mcp.json
 
 # Dashboard build artifacts (built in CI before cargo build)
