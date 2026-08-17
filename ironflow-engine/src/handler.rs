@@ -395,7 +395,7 @@ pub trait WorkflowHandler: Send + Sync {
         creator: &'a dyn RunCreator,
         opts: CreateRunOpts,
     ) -> RunCreatorFuture<'a> {
-        use tracing::{info_span, Instrument};
+        use tracing::{Instrument, info_span};
 
         let new_run = opts.build(self.name(), self.version(), self.default_max_cost_usd());
         let span = info_span!("handler.create_run", workflow = %self.name());

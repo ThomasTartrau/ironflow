@@ -344,21 +344,21 @@ mod tests {
         let creator: &dyn RunCreator = &store;
 
         let first = creator
-            .create_run(
-                CreateRunOpts::new()
-                    .idempotency_key("dedup-1")
-                    .build("idem-test", None, None),
-            )
+            .create_run(CreateRunOpts::new().idempotency_key("dedup-1").build(
+                "idem-test",
+                None,
+                None,
+            ))
             .await
             .expect("first create_run");
         assert!(first.is_created());
 
         let second = creator
-            .create_run(
-                CreateRunOpts::new()
-                    .idempotency_key("dedup-1")
-                    .build("idem-test", None, None),
-            )
+            .create_run(CreateRunOpts::new().idempotency_key("dedup-1").build(
+                "idem-test",
+                None,
+                None,
+            ))
             .await
             .expect("second create_run");
         assert!(!second.is_created());
