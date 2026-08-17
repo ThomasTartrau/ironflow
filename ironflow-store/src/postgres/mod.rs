@@ -25,6 +25,7 @@ mod run_store;
 mod secret_store;
 mod user_store;
 
+#[cfg(feature = "secret-store")]
 use std::sync::Arc;
 use std::time::Duration;
 
