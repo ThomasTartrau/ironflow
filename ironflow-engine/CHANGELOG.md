@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.22.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.21.0...ironflow-engine-v2.22.0) - 2026-08-17
+
+### Added
+
+- #33 add RunCreator trait and CreateRunOpts builder
+
 ## [2.21.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.20.1...ironflow-engine-v2.21.0) - 2026-08-15
 
 ### Added
