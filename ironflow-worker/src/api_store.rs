@@ -1,6 +1,4 @@
-//! HTTP-based RunStore that talks to the ironflow API internal routes.
-//!
-//! This is internal to the worker crate — not exposed publicly.
+//! HTTP-based [`RunStore`] that talks to the ironflow API internal routes.
 
 use std::future::Future;
 use std::pin::Pin;

@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.12.1"
+version = "2.13.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]

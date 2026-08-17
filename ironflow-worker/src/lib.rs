@@ -26,11 +26,12 @@
 //! # }
 //! ```
 
-mod api_store;
+pub mod api_store;
 mod artifact_sink;
 pub mod error;
 mod log_pusher;
 pub mod worker;
 
+pub use api_store::ApiRunStore;
 pub use error::WorkerError;
 pub use worker::{Worker, WorkerBuilder};
