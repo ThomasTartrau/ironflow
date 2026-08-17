@@ -55,6 +55,7 @@ use serde_json::Value;
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+use crate::run_creator::{CreateRunOpts, RunCreator, RunCreatorFuture};
 use crate::schedule::CronSchedule;
 
 /// Generate a JSON Schema [`Value`] from a type that derives [`JsonSchema`].
@@ -354,6 +355,51 @@ pub trait WorkflowHandler: Send + Sync {
             schedule: self.schedule().cloned(),
             default_max_cost_usd: self.default_max_cost_usd(),
         }
+    }
+
+    /// Create a run for this workflow, using handler metadata automatically.
+    ///
+    /// Assembles a [`NewRun`](ironflow_store::entities::NewRun) from [`name`](Self::name),
+    /// [`version`](Self::version), and [`default_max_cost_usd`](Self::default_max_cost_usd),
+    /// then delegates to the given [`RunCreator`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the underlying store rejects the run.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// # use ironflow_engine::run_creator::{CreateRunOpts, RunCreator};
+    /// # use ironflow_store::entities::TriggerKind;
+    /// struct DeployWorkflow;
+    ///
+    /// impl WorkflowHandler for DeployWorkflow {
+    ///     fn name(&self) -> &str { "deploy" }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// # async fn example(store: &dyn RunCreator) -> Result<(), ironflow_engine::error::EngineError> {
+    /// let opts = CreateRunOpts::new().trigger(TriggerKind::Api);
+    /// let run = DeployWorkflow.create_run(store, opts).await?.into_run();
+    /// assert_eq!(run.workflow_name, "deploy");
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn create_run<'a>(
+        &self,
+        creator: &'a dyn RunCreator,
+        opts: CreateRunOpts,
+    ) -> RunCreatorFuture<'a> {
+        use tracing::{Instrument, info_span};
+
+        let new_run = opts.build(self.name(), self.version(), self.default_max_cost_usd());
+        let span = info_span!("handler.create_run", workflow = %self.name());
+        Box::pin(creator.create_run(new_run).instrument(span))
     }
 
     /// Execute the workflow with the given context.
@@ -669,5 +715,60 @@ mod tests {
     #[test]
     fn minimal_handler_incompatible_with_different_version() {
         assert!(!MinimalHandler.is_version_compatible(Some("2")));
+    }
+
+    // ---- WorkflowHandler::create_run ----
+
+    #[tokio::test]
+    async fn handler_create_run_uses_handler_metadata() {
+        use ironflow_store::entities::TriggerKind;
+        use ironflow_store::memory::InMemoryStore;
+
+        let store = InMemoryStore::new();
+
+        let opts = CreateRunOpts::new().trigger(TriggerKind::Api);
+        let creation = FullFeaturedHandler
+            .create_run(&store, opts)
+            .await
+            .expect("create_run");
+        let run = creation.into_run();
+
+        assert_eq!(run.workflow_name, "full");
+        assert_eq!(run.handler_version, Some("1.2.0".to_string()));
+        assert_eq!(run.max_cost_usd, Some(Decimal::new(750, 2)));
+    }
+
+    #[tokio::test]
+    async fn handler_create_run_opts_override_handler_defaults() {
+        use ironflow_store::memory::InMemoryStore;
+
+        let store = InMemoryStore::new();
+
+        let opts = CreateRunOpts::new().max_cost_usd(Decimal::new(100, 2));
+        let creation = FullFeaturedHandler
+            .create_run(&store, opts)
+            .await
+            .expect("create_run");
+        let run = creation.into_run();
+
+        assert_eq!(run.max_cost_usd, Some(Decimal::new(100, 2)));
+    }
+
+    #[tokio::test]
+    async fn handler_create_run_minimal_handler_defaults() {
+        use ironflow_store::memory::InMemoryStore;
+
+        let store = InMemoryStore::new();
+
+        let opts = CreateRunOpts::new();
+        let creation = MinimalHandler
+            .create_run(&store, opts)
+            .await
+            .expect("create_run");
+        let run = creation.into_run();
+
+        assert_eq!(run.workflow_name, "minimal");
+        assert_eq!(run.handler_version, Some("1".to_string()));
+        assert_eq!(run.max_cost_usd, None);
     }
 }
