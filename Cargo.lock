@@ -2547,7 +2547,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-api"
-version = "2.29.1"
+version = "2.29.2"
 dependencies = [
  "axum",
  "chrono",
@@ -2679,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.22.0"
+version = "2.23.0"
 dependencies = [
  "axum",
  "bytes",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.4.2"
+version = "2.4.3"
 dependencies = [
  "async-nats",
  "axum",
@@ -2879,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.13.0"
+version = "2.13.1"
 dependencies = [
  "axum",
  "bytes",
