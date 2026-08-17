@@ -1871,6 +1871,38 @@ impl WorkflowContext {
         Ok(run.payload)
     }
 
+    /// Deserialize the run payload into a typed input struct.
+    ///
+    /// Shorthand for `serde_json::from_value(ctx.payload().await?)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Store`] if the run is not found, or
+    /// [`EngineError::Serialization`] if the payload does not match `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// # use ironflow_engine::error::EngineError;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct DeployInput {
+    ///     environment: String,
+    ///     dry_run: Option<bool>,
+    /// }
+    ///
+    /// # async fn example(ctx: &WorkflowContext) -> Result<(), EngineError> {
+    /// let input: DeployInput = ctx.input().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn input<T: serde::de::DeserializeOwned>(&self) -> Result<T, EngineError> {
+        let payload = self.payload().await?;
+        serde_json::from_value(payload).map_err(EngineError::Serialization)
+    }
+
     /// Register an error handler that fires when any subsequent step fails.
     ///
     /// The handler is consumed after firing (fire-once). Multiple handlers
