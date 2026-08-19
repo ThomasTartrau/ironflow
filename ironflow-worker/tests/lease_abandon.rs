@@ -4,42 +4,26 @@
 //! boundary), so the worker exercises its real HTTP client, its real lease
 //! refresher, and its real execution path.
 
-use std::collections::HashMap;
+mod helpers;
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::routing::{get, post, put};
-use axum::{Json, Router};
-use chrono::Utc;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_store::entities::Run;
 use ironflow_worker::WorkerBuilder;
-use rust_decimal::Decimal;
-use serde_json::{Value, from_value, json};
-use tokio::net::TcpListener;
+use serde_json::from_value;
 use tokio::spawn;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-/// Counters observed by the assertions.
-#[derive(Default)]
-struct ApiState {
-    /// Runs handed out so far — the queue holds exactly one run.
-    handed_out: AtomicUsize,
-    /// Lease refresh attempts received.
-    lease_calls: AtomicUsize,
-    /// Status writes received for the run (PUT /runs/:id or /runs/:id/status).
-    status_writes: AtomicUsize,
-    run_id: Uuid,
-}
+use helpers::{TestApiState, make_run_json, spawn_test_api};
 
 /// A workflow that stays busy long enough for the lease to be lost.
 struct SlowWorkflow {
@@ -63,96 +47,13 @@ impl WorkflowHandler for SlowWorkflow {
     }
 }
 
-fn run_json(state: &ApiState) -> Value {
-    json!({
-        "id": state.run_id,
-        "workflow_name": "slow",
-        "status": { "state": "running", "state_machine_id": Uuid::now_v7() },
-        "trigger": { "kind": "manual" },
-        "payload": {},
-        "error": null,
-        "retry_count": 0,
-        "max_retries": 3,
-        "cost_usd": Decimal::ZERO,
-        "duration_ms": 0,
-        "created_at": Utc::now(),
-        "updated_at": Utc::now(),
-        "started_at": Utc::now(),
-        "completed_at": null,
-        "handler_version": null,
-        "labels": {},
-        "scheduled_at": null,
-        "worker_id": "worker-test",
-        "lease_expires_at": Utc::now(),
-    })
-}
-
-async fn pick_next(State(state): State<Arc<ApiState>>) -> Json<Value> {
-    // Hand the single run out once, then report an empty queue.
-    if state.handed_out.fetch_add(1, Ordering::SeqCst) == 0 {
-        Json(json!({ "data": run_json(&state) }))
-    } else {
-        Json(json!({ "data": null }))
-    }
-}
-
-async fn get_run(State(state): State<Arc<ApiState>>, Path(_id): Path<Uuid>) -> Json<Value> {
-    Json(json!({ "data": { "run": run_json(&state), "steps": [] } }))
-}
-
-/// Always refuse the refresh: this is a worker whose run was taken over.
-async fn refuse_lease(
-    State(state): State<Arc<ApiState>>,
-    Path(_id): Path<Uuid>,
-    Json(_body): Json<Value>,
-) -> (StatusCode, Json<Value>) {
-    state.lease_calls.fetch_add(1, Ordering::SeqCst);
-    (
-        StatusCode::CONFLICT,
-        Json(json!({ "error": { "code": "LEASE_LOST", "message": "lease lost" } })),
-    )
-}
-
-async fn record_status_write(
-    State(state): State<Arc<ApiState>>,
-    Path(_id): Path<Uuid>,
-    Json(_body): Json<Value>,
-) -> Json<Value> {
-    state.status_writes.fetch_add(1, Ordering::SeqCst);
-    Json(json!({ "data": null }))
-}
-
-async fn spawn_api(state: Arc<ApiState>) -> String {
-    let app = Router::new()
-        .route("/api/v1/internal/runs/next", get(pick_next))
-        .route(
-            "/api/v1/internal/runs/{id}",
-            get(get_run).put(record_status_write),
-        )
-        .route(
-            "/api/v1/internal/runs/{id}/status",
-            put(record_status_write),
-        )
-        .route("/api/v1/internal/runs/{id}/lease", post(refuse_lease))
-        .with_state(state);
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-
-    format!("http://{addr}")
-}
-
 #[tokio::test]
 async fn worker_abandons_run_when_the_api_refuses_the_lease() {
     let handler_finished = Arc::new(AtomicBool::new(false));
-    let state = Arc::new(ApiState {
-        run_id: Uuid::now_v7(),
-        ..ApiState::default()
-    });
-    let api_url = spawn_api(state.clone()).await;
+    let run_id = Uuid::now_v7();
+    let state = Arc::new(TestApiState::new(vec![make_run_json(run_id, "slow", 3)]));
+    state.refuse_lease.store(true, Ordering::SeqCst);
+    let api_url = spawn_test_api(state.clone()).await;
 
     let worker = WorkerBuilder::new(&api_url, "test-token")
         .provider(Arc::new(ClaudeCodeProvider::new()))
@@ -170,7 +71,9 @@ async fn worker_abandons_run_when_the_api_refuses_the_lease() {
 
     // Worker::run only returns on SIGTERM, so bound it: the assertions are
     // about what happened inside this window.
-    let _ = timeout(Duration::from_secs(3), worker.run()).await;
+    if let Ok(Err(e)) = timeout(Duration::from_secs(3), worker.run()).await {
+        eprintln!("worker exited with error: {e:?}");
+    }
 
     assert!(
         state.handed_out.load(Ordering::SeqCst) >= 1,
@@ -185,7 +88,7 @@ async fn worker_abandons_run_when_the_api_refuses_the_lease() {
         "the workflow kept running after the lease was lost"
     );
     assert_eq!(
-        state.status_writes.load(Ordering::SeqCst),
+        state.total_status_writes(),
         0,
         "an abandoned run must not be written to: it belongs to another worker"
     );
@@ -196,11 +99,10 @@ async fn worker_abandons_run_when_the_api_refuses_the_lease() {
 #[tokio::test]
 async fn abandon_happens_within_a_refresh_interval() {
     let handler_finished = Arc::new(AtomicBool::new(false));
-    let state = Arc::new(ApiState {
-        run_id: Uuid::now_v7(),
-        ..ApiState::default()
-    });
-    let api_url = spawn_api(state.clone()).await;
+    let run_id = Uuid::now_v7();
+    let state = Arc::new(TestApiState::new(vec![make_run_json(run_id, "slow", 3)]));
+    state.refuse_lease.store(true, Ordering::SeqCst);
+    let api_url = spawn_test_api(state.clone()).await;
 
     let worker = WorkerBuilder::new(&api_url, "test-token")
         .provider(Arc::new(ClaudeCodeProvider::new()))
@@ -216,9 +118,11 @@ async fn abandon_happens_within_a_refresh_interval() {
         .build()
         .expect("build worker");
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let handle = spawn(async move {
-        let _ = timeout(Duration::from_secs(5), worker.run()).await;
+        if let Ok(Err(e)) = timeout(Duration::from_secs(5), worker.run()).await {
+            eprintln!("worker exited with error: {e:?}");
+        }
     });
 
     // Wait until the API has refused at least one refresh.
@@ -235,7 +139,7 @@ async fn abandon_happens_within_a_refresh_interval() {
     // Give the worker a moment to react, then confirm it did not keep going.
     sleep(Duration::from_millis(200)).await;
     assert_eq!(
-        state.status_writes.load(Ordering::SeqCst),
+        state.total_status_writes(),
         0,
         "an abandoned run must not be written to"
     );
@@ -246,97 +150,11 @@ async fn abandon_happens_within_a_refresh_interval() {
 /// A run without any lease trouble is not affected by the refresher.
 #[tokio::test]
 async fn worker_keeps_running_while_the_lease_is_granted() {
-    #[derive(Default)]
-    struct GrantingState {
-        handed_out: AtomicUsize,
-        lease_calls: AtomicUsize,
-        status_writes: AtomicUsize,
-    }
-
-    async fn grant_lease(
-        State(state): State<Arc<GrantingState>>,
-        Path(_id): Path<Uuid>,
-        Json(_body): Json<Value>,
-    ) -> Json<Value> {
-        state.lease_calls.fetch_add(1, Ordering::SeqCst);
-        Json(json!({
-            "data": { "lease_expires_at": Utc::now() + chrono::TimeDelta::seconds(90) }
-        }))
-    }
-
     let run_id = Uuid::now_v7();
-    let state = Arc::new(GrantingState::default());
+    let state = Arc::new(TestApiState::new(vec![make_run_json(run_id, "slow", 3)]));
+    let api_url = spawn_test_api(state.clone()).await;
 
-    let run_payload = move || {
-        json!({
-            "id": run_id,
-            "workflow_name": "slow",
-            "status": { "state": "running", "state_machine_id": Uuid::now_v7() },
-            "trigger": { "kind": "manual" },
-            "payload": {},
-            "error": null,
-            "retry_count": 0,
-            "max_retries": 3,
-            "cost_usd": Decimal::ZERO,
-            "duration_ms": 0,
-            "created_at": Utc::now(),
-            "updated_at": Utc::now(),
-            "started_at": Utc::now(),
-            "completed_at": null,
-            "handler_version": null,
-            "labels": HashMap::<String, String>::new(),
-            "scheduled_at": null,
-            "worker_id": "worker-test",
-            "lease_expires_at": Utc::now() + chrono::TimeDelta::seconds(90),
-        })
-    };
-
-    let next_payload = run_payload;
-    let detail_payload = run_payload;
-
-    let app = Router::new()
-        .route(
-            "/api/v1/internal/runs/next",
-            get({
-                let state = state.clone();
-                move || {
-                    let state = state.clone();
-                    async move {
-                        if state.handed_out.fetch_add(1, Ordering::SeqCst) == 0 {
-                            Json(json!({ "data": next_payload() }))
-                        } else {
-                            Json(json!({ "data": null }))
-                        }
-                    }
-                }
-            }),
-        )
-        .route(
-            "/api/v1/internal/runs/{id}",
-            get(move || async move {
-                Json(json!({ "data": { "run": detail_payload(), "steps": [] } }))
-            })
-            .put({
-                let state = state.clone();
-                move |Json(_body): Json<Value>| {
-                    let state = state.clone();
-                    async move {
-                        state.status_writes.fetch_add(1, Ordering::SeqCst);
-                        Json(json!({ "data": null }))
-                    }
-                }
-            }),
-        )
-        .route("/api/v1/internal/runs/{id}/lease", post(grant_lease))
-        .with_state(state.clone());
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-
-    let worker = WorkerBuilder::new(&format!("http://{addr}"), "test-token")
+    let worker = WorkerBuilder::new(&api_url, "test-token")
         .provider(Arc::new(ClaudeCodeProvider::new()))
         .register(SlowWorkflow {
             finished: Arc::new(AtomicBool::new(false)),
@@ -351,7 +169,9 @@ async fn worker_keeps_running_while_the_lease_is_granted() {
         .expect("build worker");
 
     let handle = spawn(async move {
-        let _ = timeout(Duration::from_secs(5), worker.run()).await;
+        if let Ok(Err(e)) = timeout(Duration::from_secs(5), worker.run()).await {
+            eprintln!("worker exited with error: {e:?}");
+        }
     });
 
     sleep(Duration::from_millis(400)).await;
@@ -361,7 +181,7 @@ async fn worker_keeps_running_while_the_lease_is_granted() {
         "the lease should be refreshed repeatedly while the run executes"
     );
     assert_eq!(
-        state.status_writes.load(Ordering::SeqCst),
+        state.total_status_writes(),
         0,
         "a run that is still executing must not be finalised"
     );
@@ -372,11 +192,7 @@ async fn worker_keeps_running_while_the_lease_is_granted() {
 /// Guard: the API double must produce a payload the worker can actually parse.
 #[test]
 fn stub_run_payload_deserializes_into_a_run() {
-    let state = ApiState {
-        run_id: Uuid::now_v7(),
-        ..ApiState::default()
-    };
-    let payload = run_json(&state);
+    let payload = make_run_json(Uuid::now_v7(), "test", 3);
     let parsed: Result<Run, _> = from_value(payload.clone());
     assert!(
         parsed.is_ok(),
