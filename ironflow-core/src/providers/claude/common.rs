@@ -1670,6 +1670,7 @@ mod tests {
             pod_labels: std::collections::BTreeMap::new(),
             inputs: Vec::new(),
             allow_failure: false,
+            retry: None,
             _marker: PhantomData,
         };
 

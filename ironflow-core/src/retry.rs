@@ -40,7 +40,26 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{AgentError, OperationError};
+
+mod serde_duration_ms {
+    use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(duration: &Duration, s: S) -> Result<S::Ok, S::Error> {
+        let ms = u64::try_from(duration.as_millis())
+            .map_err(|_| serde::ser::Error::custom("duration exceeds u64::MAX milliseconds"))?;
+        s.serialize_u64(ms)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+        let ms = u64::deserialize(d)?;
+        Ok(Duration::from_millis(ms))
+    }
+}
 
 /// Default initial backoff between retries.
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
@@ -77,12 +96,54 @@ const DEFAULT_MULTIPLIER: f64 = 2.0;
 ///     .max_backoff(Duration::from_secs(10))
 ///     .multiplier(3.0);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "RetryPolicyRaw")]
 pub struct RetryPolicy {
     pub(crate) max_retries: u32,
+    #[serde(serialize_with = "serde_duration_ms::serialize")]
     pub(crate) initial_backoff: Duration,
+    #[serde(serialize_with = "serde_duration_ms::serialize")]
     pub(crate) max_backoff: Duration,
     pub(crate) multiplier: f64,
+}
+
+/// Wire format for [`RetryPolicy`] deserialization with post-validation.
+#[derive(Deserialize)]
+struct RetryPolicyRaw {
+    max_retries: u32,
+    #[serde(deserialize_with = "serde_duration_ms::deserialize")]
+    initial_backoff: Duration,
+    #[serde(deserialize_with = "serde_duration_ms::deserialize")]
+    max_backoff: Duration,
+    multiplier: f64,
+}
+
+impl TryFrom<RetryPolicyRaw> for RetryPolicy {
+    type Error = String;
+
+    fn try_from(raw: RetryPolicyRaw) -> Result<Self, Self::Error> {
+        if raw.max_retries == 0 {
+            return Err("max_retries must be greater than 0".into());
+        }
+        if raw.initial_backoff.is_zero() {
+            return Err("initial backoff must not be zero".into());
+        }
+        if raw.max_backoff.is_zero() {
+            return Err("max backoff must not be zero".into());
+        }
+        if raw.multiplier < 1.0 || !raw.multiplier.is_finite() {
+            return Err(format!(
+                "multiplier must be >= 1.0 and finite, got {}",
+                raw.multiplier
+            ));
+        }
+        Ok(Self {
+            max_retries: raw.max_retries,
+            initial_backoff: raw.initial_backoff,
+            max_backoff: raw.max_backoff,
+            multiplier: raw.multiplier,
+        })
+    }
 }
 
 impl RetryPolicy {
@@ -167,7 +228,7 @@ impl RetryPolicy {
     /// Compute the backoff duration for the given retry attempt (0-indexed).
     ///
     /// Returns the delay capped at [`max_backoff`](RetryPolicy::max_backoff).
-    pub(crate) fn delay_for_attempt(&self, attempt: u32) -> Duration {
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let delay = self.initial_backoff.as_secs_f64() * self.multiplier.powi(attempt as i32);
         let capped = delay.min(self.max_backoff.as_secs_f64());
         Duration::from_secs_f64(capped)
@@ -532,5 +593,56 @@ mod tests {
         let policy = RetryPolicy::new(1);
         let debug = format!("{:?}", policy);
         assert!(debug.contains("RetryPolicy"));
+    }
+
+    // --- serde ---
+
+    #[test]
+    fn serde_roundtrip() {
+        let policy = RetryPolicy::new(3)
+            .backoff(Duration::from_millis(500))
+            .max_backoff(Duration::from_secs(10))
+            .multiplier(2.5);
+
+        let json = serde_json::to_string(&policy).expect("serialize");
+        let back: RetryPolicy = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.max_retries, 3);
+        assert_eq!(back.initial_backoff, Duration::from_millis(500));
+        assert_eq!(back.max_backoff, Duration::from_secs(10));
+        assert!((back.multiplier - 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn serde_duration_is_millis() {
+        let policy = RetryPolicy::new(1).backoff(Duration::from_secs(2));
+        let json = serde_json::to_string(&policy).expect("serialize");
+        assert!(json.contains("2000"), "expected 2000ms, got: {json}");
+    }
+
+    #[test]
+    fn serde_rejects_zero_max_retries() {
+        let json =
+            r#"{"max_retries":0,"initial_backoff":200,"max_backoff":30000,"multiplier":2.0}"#;
+        let err = serde_json::from_str::<RetryPolicy>(json).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("max_retries must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn serde_rejects_invalid_multiplier() {
+        let json =
+            r#"{"max_retries":3,"initial_backoff":200,"max_backoff":30000,"multiplier":0.5}"#;
+        let err = serde_json::from_str::<RetryPolicy>(json).unwrap_err();
+        assert!(err.to_string().contains("multiplier must be >= 1.0"));
+    }
+
+    #[test]
+    fn serde_rejects_zero_backoff() {
+        let json = r#"{"max_retries":3,"initial_backoff":0,"max_backoff":30000,"multiplier":2.0}"#;
+        let err = serde_json::from_str::<RetryPolicy>(json).unwrap_err();
+        assert!(err.to_string().contains("initial backoff must not be zero"));
     }
 }

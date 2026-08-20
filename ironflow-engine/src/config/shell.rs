@@ -1,5 +1,6 @@
 //! [`ShellConfig`] — serializable configuration for a shell step.
 
+use ironflow_core::retry::RetryPolicy;
 use serde::{Deserialize, Serialize};
 
 use super::artifact::{ArtifactInput, ArtifactOutput};
@@ -39,6 +40,10 @@ pub struct ShellConfig {
     /// [`RunStatus::Warning`] instead of `Failed`.
     #[serde(default)]
     pub allow_failure: bool,
+    /// Optional step-level retry policy. When set, a transient failure retries
+    /// the step locally with exponential backoff before propagating the error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
 }
 
 impl ShellConfig {
@@ -62,6 +67,7 @@ impl ShellConfig {
             outputs: Vec::new(),
             inputs: Vec::new(),
             allow_failure: false,
+            retry: None,
         }
     }
 
@@ -157,6 +163,23 @@ impl ShellConfig {
         self
     }
 
+    /// Set a step-level retry policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::retry::RetryPolicy;
+    /// use ironflow_engine::config::ShellConfig;
+    ///
+    /// let config = ShellConfig::new("curl http://api")
+    ///     .retry_policy(RetryPolicy::new(3));
+    /// assert!(config.retry.is_some());
+    /// ```
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry = Some(policy);
+        self
+    }
+
     /// Consume an artifact and write it to an explicit path.
     ///
     /// # Examples
@@ -232,5 +255,25 @@ mod tests {
 
         assert!(config.outputs.is_empty());
         assert!(config.inputs.is_empty());
+    }
+
+    #[test]
+    fn a_config_predating_retry_still_deserializes() {
+        let config: ShellConfig = serde_json::from_str(
+            r#"{"command":"echo hi","timeout_secs":null,"dir":null,"env":[],"clean_env":false,"allow_failure":false}"#,
+        )
+        .expect("deserialize");
+
+        assert!(config.retry.is_none());
+    }
+
+    #[test]
+    fn retry_policy_roundtrip() {
+        use ironflow_core::retry::RetryPolicy;
+
+        let config = ShellConfig::new("curl http://api").retry_policy(RetryPolicy::new(3));
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: ShellConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.retry.as_ref().unwrap().max_retries(), 3);
     }
 }

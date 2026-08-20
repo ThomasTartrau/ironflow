@@ -1,5 +1,6 @@
 //! Configuration for workflow (sub-workflow) steps.
 
+use ironflow_core::retry::RetryPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -23,6 +24,9 @@ pub struct WorkflowStepConfig {
     pub workflow_name: String,
     /// Payload to pass to the child workflow run.
     pub payload: Value,
+    /// Optional step-level retry policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
 }
 
 impl WorkflowStepConfig {
@@ -41,7 +45,26 @@ impl WorkflowStepConfig {
         Self {
             workflow_name: workflow_name.to_string(),
             payload,
+            retry: None,
         }
+    }
+
+    /// Set a step-level retry policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::retry::RetryPolicy;
+    /// use ironflow_engine::config::WorkflowStepConfig;
+    /// use serde_json::json;
+    ///
+    /// let config = WorkflowStepConfig::new("build", json!({}))
+    ///     .retry_policy(RetryPolicy::new(3));
+    /// assert!(config.retry.is_some());
+    /// ```
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry = Some(policy);
+        self
     }
 }
 
@@ -64,5 +87,21 @@ mod tests {
         let back: WorkflowStepConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.workflow_name, "deploy");
         assert_eq!(back.payload["env"], "prod");
+    }
+
+    #[test]
+    fn a_config_predating_retry_still_deserializes() {
+        let config: WorkflowStepConfig =
+            serde_json::from_str(r#"{"workflow_name":"build","payload":{"key":"val"}}"#)
+                .expect("deserialize");
+        assert!(config.retry.is_none());
+    }
+
+    #[test]
+    fn retry_policy_roundtrip() {
+        let config = WorkflowStepConfig::new("deploy", json!({})).retry_policy(RetryPolicy::new(3));
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: WorkflowStepConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.retry.as_ref().unwrap().max_retries(), 3);
     }
 }

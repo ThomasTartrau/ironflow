@@ -27,6 +27,7 @@ use serde_json::Value;
 
 use crate::error::AgentError;
 use crate::operations::agent::{Model, PermissionMode};
+use crate::retry::RetryPolicy;
 
 /// Boxed future returned by [`AgentProvider::invoke`].
 pub type InvokeFuture<'a> =
@@ -250,6 +251,10 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default)]
     pub allow_failure: bool,
 
+    /// Optional step-level retry policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -284,6 +289,7 @@ impl AgentConfig {
             pod_labels: BTreeMap::new(),
             inputs: Vec::new(),
             allow_failure: false,
+            retry: None,
             _marker: PhantomData,
         }
     }
@@ -499,6 +505,23 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Set a step-level retry policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    /// use ironflow_core::retry::RetryPolicy;
+    ///
+    /// let config = AgentConfig::new("Summarize this document")
+    ///     .retry_policy(RetryPolicy::new(3));
+    /// assert!(config.retry.is_some());
+    /// ```
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry = Some(policy);
+        self
+    }
+
     /// Declare an external input that the provider must materialize on the
     /// agent's filesystem before invocation.
     ///
@@ -550,6 +573,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             pod_labels: self.pod_labels,
             inputs: self.inputs,
             allow_failure: self.allow_failure,
+            retry: self.retry,
             _marker: PhantomData,
         }
     }
@@ -1021,6 +1045,7 @@ mod tests {
             pod_labels: BTreeMap::new(),
             inputs: Vec::new(),
             allow_failure: false,
+            retry: None,
             _marker: PhantomData,
         }
     }
@@ -1063,6 +1088,7 @@ mod tests {
             pod_labels: BTreeMap::new(),
             inputs: Vec::new(),
             allow_failure: false,
+            retry: None,
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();
