@@ -4,8 +4,12 @@
 //! argument vectors -- in particular `tests/route_coverage.rs`, which checks
 //! that every API route is reachable through a command that really exists.
 
+use std::io;
+
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
+use clap_mangen::Man;
 use ironflow_sdk::IronflowClient;
 
 use crate::commands;
@@ -81,6 +85,58 @@ pub enum Commands {
     AuditLog(AuditLogArgs),
     /// Manage workflow templates (add, list, info).
     Template(TemplateArgs),
+    /// Generate shell completions for the given shell.
+    Completions {
+        /// Target shell.
+        shell: Shell,
+    },
+    /// Generate a man page and write it to stdout.
+    Man,
+}
+
+/// Write shell completions for `shell` to `writer`.
+///
+/// # Errors
+///
+/// Returns an error if writing to `writer` fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_cli::cli::generate_completions;
+/// use clap_complete::Shell;
+///
+/// let mut buf = Vec::new();
+/// generate_completions(Shell::Bash, &mut buf)?;
+/// assert!(!buf.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn generate_completions(shell: Shell, writer: &mut impl io::Write) -> Result<()> {
+    let mut cmd = Cli::command();
+    clap_complete::generate(shell, &mut cmd, "ironflow-cli", writer);
+    Ok(())
+}
+
+/// Write a roff-formatted man page to `writer`.
+///
+/// # Errors
+///
+/// Returns an error if rendering or writing fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_cli::cli::generate_man_page;
+///
+/// let mut buf = Vec::new();
+/// generate_man_page(&mut buf)?;
+/// assert!(!buf.is_empty());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn generate_man_page(writer: &mut impl io::Write) -> Result<()> {
+    let cmd = Cli::command();
+    Man::new(cmd).render(writer)?;
+    Ok(())
 }
 
 /// Dispatch a parsed command against a client.
@@ -100,6 +156,8 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::User(args) => commands::user::execute(client, args, cli.json).await,
         Commands::AuditLog(args) => commands::audit_log::execute(client, args, cli.json).await,
         Commands::Template(args) => commands::template::execute(args),
+        Commands::Completions { shell } => generate_completions(*shell, &mut io::stdout()),
+        Commands::Man => generate_man_page(&mut io::stdout()),
     }
 }
 
@@ -632,6 +690,77 @@ mod tests {
     fn parse_audit_log_list_rejects_a_malformed_date() {
         let result = Cli::try_parse_from(["ironflow-cli", "audit-log", "list", "--from", "hier"]);
         assert!(result.is_err());
+    }
+
+    // ── Completions & man ───────────────────────────────────────
+
+    #[test]
+    fn parse_completions_bash() {
+        let cli = parse(&["ironflow-cli", "completions", "bash"]);
+        let Commands::Completions { shell } = &cli.command else {
+            panic!("expected Completions command");
+        };
+        assert_eq!(*shell, Shell::Bash);
+    }
+
+    #[test]
+    fn parse_completions_zsh() {
+        let cli = parse(&["ironflow-cli", "completions", "zsh"]);
+        let Commands::Completions { shell } = &cli.command else {
+            panic!("expected Completions command");
+        };
+        assert_eq!(*shell, Shell::Zsh);
+    }
+
+    #[test]
+    fn parse_completions_fish() {
+        let cli = parse(&["ironflow-cli", "completions", "fish"]);
+        let Commands::Completions { shell } = &cli.command else {
+            panic!("expected Completions command");
+        };
+        assert_eq!(*shell, Shell::Fish);
+    }
+
+    #[test]
+    fn parse_completions_powershell() {
+        let cli = parse(&["ironflow-cli", "completions", "powershell"]);
+        let Commands::Completions { shell } = &cli.command else {
+            panic!("expected Completions command");
+        };
+        assert_eq!(*shell, Shell::PowerShell);
+    }
+
+    #[test]
+    fn parse_completions_requires_shell() {
+        assert!(Cli::try_parse_from(["ironflow-cli", "completions"]).is_err());
+    }
+
+    #[test]
+    fn parse_completions_rejects_unknown_shell() {
+        assert!(Cli::try_parse_from(["ironflow-cli", "completions", "nushell"]).is_err());
+    }
+
+    #[test]
+    fn parse_man() {
+        let cli = parse(&["ironflow-cli", "man"]);
+        assert!(matches!(cli.command, Commands::Man));
+    }
+
+    #[test]
+    fn completions_bash_output_is_valid() {
+        let mut buf = Vec::new();
+        super::generate_completions(Shell::Bash, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("ironflow-cli"));
+    }
+
+    #[test]
+    fn man_page_output_is_valid() {
+        let mut buf = Vec::new();
+        super::generate_man_page(&mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains(".TH"));
+        assert!(output.contains("ironflow-cli"));
     }
 
     // ---- template ----

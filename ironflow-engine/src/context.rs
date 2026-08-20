@@ -1611,13 +1611,13 @@ impl WorkflowContext {
         kind: StepKind,
         config: StepConfig,
     ) -> Result<StepOutput, EngineError> {
-        let kind_str = match &kind {
+        let kind_str: &'static str = match kind {
             StepKind::Shell => "shell",
             StepKind::Http => "http",
             StepKind::Agent => "agent",
             StepKind::Workflow => "workflow",
             StepKind::Approval => "approval",
-            StepKind::Custom(name) => name.as_str(),
+            StepKind::Custom(_) => "custom",
         };
         Span::current().record("step.kind", kind_str);
 
@@ -1682,6 +1682,10 @@ impl WorkflowContext {
             .map(|s| StepLogSender::new(s.clone(), self.run_id, step.id, name.to_string()));
 
         let execution = execute_step_config(&config, &self.provider, step_log_sender).await;
+
+        let execution = self
+            .retry_step_if_configured(name, kind_str, &config, step.id, execution)
+            .await;
 
         if let Err(err) = self
             .store_step_outputs(&config, step.id, name, execution.is_ok())
@@ -1787,6 +1791,73 @@ impl WorkflowContext {
                 }
             }
         }
+    }
+
+    /// Retry a failed step execution when a step-level retry policy is configured
+    /// and the error is transient.
+    ///
+    /// Returns the original result unchanged when no retry policy is set, the
+    /// first attempt succeeded, or the error is not retryable.
+    #[cfg_attr(not(feature = "prometheus"), allow(unused_variables))]
+    async fn retry_step_if_configured(
+        &self,
+        name: &str,
+        kind_str: &str,
+        config: &StepConfig,
+        step_id: Uuid,
+        first_result: Result<StepOutput, EngineError>,
+    ) -> Result<StepOutput, EngineError> {
+        let policy = match config.retry() {
+            Some(p) => p,
+            None => return first_result,
+        };
+
+        let mut last_result = match first_result {
+            Ok(output) => return Ok(output),
+            Err(err) if !is_step_retryable(&err) => return Err(err),
+            Err(err) => Err(err),
+        };
+
+        let step_log_sender = self
+            .log_sender
+            .as_ref()
+            .map(|s| StepLogSender::new(s.clone(), self.run_id, step_id, name.to_string()));
+
+        for attempt in 0..policy.max_retries() {
+            if let StepConfig::Agent(agent_config) = config {
+                self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?;
+            }
+
+            let delay = policy.delay_for_attempt(attempt);
+            info!(
+                run_id = %self.run_id,
+                step = %name,
+                attempt = attempt + 1,
+                max_retries = policy.max_retries(),
+                delay_ms = delay.as_millis() as u64,
+                "retrying step after transient failure"
+            );
+            tokio::time::sleep(delay).await;
+
+            record_retry_metric(kind_str, "retry");
+
+            match execute_step_config(config, &self.provider, step_log_sender.clone()).await {
+                Ok(output) => return Ok(output),
+                Err(err) if !is_step_retryable(&err) => return Err(err),
+                err => last_result = err,
+            }
+        }
+
+        record_retry_metric(kind_str, "exhausted");
+
+        info!(
+            run_id = %self.run_id,
+            step = %name,
+            max_retries = policy.max_retries(),
+            "step retries exhausted"
+        );
+
+        last_result
     }
 
     /// Record dependency edges and transition a step to Running.
@@ -2129,6 +2200,37 @@ fn inject_error_context(
             ));
         }
         StepConfig::Workflow(_) | StepConfig::Approval(_) => {}
+    }
+}
+
+#[cfg(feature = "prometheus")]
+fn record_retry_metric(kind: &str, outcome: &str) {
+    use ironflow_core::metric_names::STEP_RETRIES_TOTAL;
+    use metrics::counter;
+    counter!(STEP_RETRIES_TOTAL, "kind" => kind.to_string(), "outcome" => outcome.to_string())
+        .increment(1);
+}
+
+#[cfg(not(feature = "prometheus"))]
+fn record_retry_metric(_kind: &str, _outcome: &str) {}
+
+/// Step-level retryability: broader than operation-level retry because the user
+/// explicitly opted in. Excludes only deterministic or financially wasteful
+/// errors that retrying cannot fix.
+fn is_step_retryable(err: &EngineError) -> bool {
+    use ironflow_core::error::{AgentError, OperationError};
+
+    match err {
+        EngineError::Operation(op) => match op {
+            OperationError::Agent(AgentError::PromptTooLarge { .. }) => false,
+            OperationError::Agent(AgentError::BudgetExceeded { .. }) => false,
+            OperationError::Deserialize { .. } => false,
+            OperationError::Http {
+                status: Some(code), ..
+            } if (400..500).contains(code) && *code != 429 => false,
+            _ => true,
+        },
+        _ => false,
     }
 }
 

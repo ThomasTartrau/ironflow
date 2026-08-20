@@ -35,7 +35,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::middleware::{WorkerToken, security_headers, worker_token_auth};
-use crate::rate_limit::{per_minute, rate_limit};
+use crate::rate_limit::{RateLimitContext, per_minute, rate_limit};
 use crate::state::AppState;
 
 /// Maximum request body size: 2 MiB.
@@ -190,9 +190,14 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         auth_credential_routes.route("/sign-in", post(auth::sign_in::sign_in));
 
     if let Some(rpm) = config.rate_limit_auth {
+        let ctx = RateLimitContext {
+            store: state.store.clone(),
+            jwt_config: state.jwt_config.clone(),
+            limiter: per_minute(rpm),
+        };
         auth_credential_routes = auth_credential_routes
             .layer(axum_mw::from_fn(rate_limit))
-            .layer(Extension(per_minute(rpm)));
+            .layer(Extension(ctx));
     }
 
     // Auth session routes (no strict rate limiting, covered by general limiter)
@@ -266,9 +271,14 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .nest("/auth", auth_session_routes);
 
     if let Some(rpm) = config.rate_limit_general {
+        let ctx = RateLimitContext {
+            store: state.store.clone(),
+            jwt_config: state.jwt_config.clone(),
+            limiter: per_minute(rpm),
+        };
         api_v1 = api_v1
             .layer(axum_mw::from_fn(rate_limit))
-            .layer(Extension(per_minute(rpm)));
+            .layer(Extension(ctx));
     }
 
     let api_v1 = api_v1.with_state(state.clone());

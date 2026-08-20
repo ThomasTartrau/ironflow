@@ -572,6 +572,7 @@ pub fn api_keys_table(keys: &[ApiKeyResponse]) -> Table {
         "Prefix",
         "Scopes",
         "Active",
+        "Rate limit",
         "Last used",
         "Expires",
         "Created",
@@ -586,12 +587,18 @@ pub fn api_keys_table(keys: &[ApiKeyResponse]) -> Table {
             })
             .set_alignment(CellAlignment::Center);
 
+        let rate_limit = key
+            .rate_limit_override
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string());
+
         table.add_row(vec![
             Cell::new(key.id),
             Cell::new(&key.name),
             Cell::new(&key.key_prefix),
             Cell::new(format_scopes(&key.scopes)),
             active,
+            Cell::new(rate_limit),
             Cell::new(format_optional_datetime(&key.last_used_at)),
             Cell::new(format_optional_datetime(&key.expires_at)),
             Cell::new(format_datetime(&key.created_at)),
@@ -621,6 +628,12 @@ pub fn created_api_key_table(key: &CreateApiKeyResponse) -> Table {
         Cell::new("Scopes"),
         Cell::new(format_scopes(&key.scopes)),
     ]);
+    if let Some(override_val) = key.rate_limit_override {
+        table.add_row(vec![
+            Cell::new("Rate limit"),
+            Cell::new(format!("{override_val} req/min")),
+        ]);
+    }
     table.add_row(vec![
         Cell::new("Expires"),
         Cell::new(format_optional_datetime(&key.expires_at)),
@@ -976,6 +989,7 @@ mod tests {
             created_at: Utc::now(),
             expires_at: None,
             last_used_at: None,
+            rate_limit_override: None,
         }
     }
 
@@ -1005,6 +1019,7 @@ mod tests {
             scopes: vec![ApiKeyScope::Admin],
             created_at: Utc::now(),
             expires_at: None,
+            rate_limit_override: None,
         };
 
         let output = created_api_key_table(&created).to_string();

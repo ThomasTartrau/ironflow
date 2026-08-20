@@ -18,6 +18,7 @@ pub use http::HttpConfig;
 pub use shell::ShellConfig;
 pub use workflow::WorkflowStepConfig;
 
+use ironflow_core::retry::RetryPolicy;
 use ironflow_store::entities::StepKind;
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +74,30 @@ impl StepConfig {
         }
     }
 
+    /// Get the step-level retry policy, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::retry::RetryPolicy;
+    /// use ironflow_engine::config::{StepConfig, ShellConfig};
+    ///
+    /// let config = StepConfig::Shell(ShellConfig::new("echo test").retry_policy(RetryPolicy::new(3)));
+    /// assert!(config.retry().is_some());
+    ///
+    /// let config = StepConfig::Shell(ShellConfig::new("echo test"));
+    /// assert!(config.retry().is_none());
+    /// ```
+    pub fn retry(&self) -> Option<&RetryPolicy> {
+        match self {
+            StepConfig::Shell(c) => c.retry.as_ref(),
+            StepConfig::Http(c) => c.retry.as_ref(),
+            StepConfig::Agent(c) => c.retry.as_ref(),
+            StepConfig::Workflow(c) => c.retry.as_ref(),
+            StepConfig::Approval(_) => None,
+        }
+    }
+
     /// Get the kind of step this configuration represents.
     ///
     /// # Examples
@@ -115,7 +140,30 @@ impl From<AgentStepConfig> for StepConfig {
 
 #[cfg(test)]
 mod tests {
+    use ironflow_core::retry::RetryPolicy;
+
     use super::*;
+
+    #[test]
+    fn retry_accessor_returns_policy_for_each_variant() {
+        let shell = StepConfig::Shell(ShellConfig::new("echo").retry_policy(RetryPolicy::new(2)));
+        assert_eq!(shell.retry().unwrap().max_retries(), 2);
+
+        let http = StepConfig::Http(HttpConfig::get("http://x").retry_policy(RetryPolicy::new(3)));
+        assert_eq!(http.retry().unwrap().max_retries(), 3);
+
+        let workflow = StepConfig::Workflow(
+            WorkflowStepConfig::new("build", serde_json::json!({}))
+                .retry_policy(RetryPolicy::new(4)),
+        );
+        assert_eq!(workflow.retry().unwrap().max_retries(), 4);
+
+        let agent = StepConfig::Agent(AgentStepConfig::new("test"));
+        assert!(agent.retry().is_none());
+
+        let approval = StepConfig::Approval(ApprovalConfig::new("ok?"));
+        assert!(approval.retry().is_none());
+    }
 
     #[test]
     fn serde_roundtrip() {

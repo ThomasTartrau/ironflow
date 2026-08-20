@@ -57,6 +57,8 @@ pub const IDEMPOTENCY_CONFLICT: &str = "conflict";
 pub const STEPS_TOTAL: &str = "ironflow_steps_total";
 /// Histogram: step duration in seconds (label: kind).
 pub const STEP_DURATION_SECONDS: &str = "ironflow_step_duration_seconds";
+/// Counter: total step-level retries (labels: kind, outcome).
+pub const STEP_RETRIES_TOTAL: &str = "ironflow_step_retries_total";
 
 // ── Worker metrics ─────────────────────────────────────────────────
 /// Gauge: number of currently active worker tasks.
@@ -71,6 +73,10 @@ pub const WORKER_LEASES_LOST_TOTAL: &str = "ironflow_worker_leases_lost_total";
 // ── Reaper metrics ─────────────────────────────────────────────────
 /// Counter: runs recovered after a worker lease expired (label: outcome).
 pub const RUNS_REAPED_TOTAL: &str = "ironflow_runs_reaped_total";
+
+// ── Purger metrics ─────────────────────────────────────────────────
+/// Counter: runs purged by the retention policy (labels: workflow, reason).
+pub const RUNS_PURGED_TOTAL: &str = "ironflow_runs_purged_total";
 
 // ── API metrics ────────────────────────────────────────────────────
 /// Counter: total API requests (labels: method, path, status).

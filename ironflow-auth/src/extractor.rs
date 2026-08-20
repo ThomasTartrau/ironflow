@@ -597,6 +597,7 @@ mod tests {
                 key_prefix: prefix.to_string(),
                 scopes: vec![ApiKeyScope::RunsRead, ApiKeyScope::WorkflowsRead],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();

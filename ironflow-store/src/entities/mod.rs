@@ -34,8 +34,8 @@ pub use log_entry::{LogEntry, LogFilter, NewLogEntries};
 pub use log_stream::LogStream;
 pub use page::Page;
 pub use run::{
-    IDEMPOTENCY_WINDOW, LeaseRequest, MAX_IDEMPOTENCY_KEY_LEN, NewRun, ReapedRun, Run, RunCreation,
-    RunFilter, RunUpdate,
+    IDEMPOTENCY_WINDOW, LeaseRequest, MAX_IDEMPOTENCY_KEY_LEN, NewRun, PurgePolicy, PurgeReason,
+    PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunUpdate,
 };
 pub use run_actor::RunActor;
 pub use run_status::RunStatus;

@@ -32,6 +32,8 @@ pub struct ApiKeyResponse {
     pub last_used_at: Option<DateTime<Utc>>,
     /// Creation date.
     pub created_at: DateTime<Utc>,
+    /// Per-key rate limit override (requests per minute), if set.
+    pub rate_limit_override: Option<u32>,
 }
 
 /// List all API keys for the authenticated user.
@@ -69,6 +71,7 @@ pub async fn list_api_keys(
             expires_at: k.expires_at,
             last_used_at: k.last_used_at,
             created_at: k.created_at,
+            rate_limit_override: k.rate_limit_override,
         })
         .collect();
 
@@ -185,6 +188,7 @@ mod tests {
                 key_prefix: "sk_".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -198,6 +202,7 @@ mod tests {
                 key_prefix: "sk_".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -258,6 +263,7 @@ mod tests {
                 key_prefix: "sk_".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -271,6 +277,7 @@ mod tests {
                 key_prefix: "sk_".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();

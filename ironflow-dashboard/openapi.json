@@ -1861,6 +1861,15 @@
             "type": "string",
             "description": "Key name."
           },
+          "rate_limit_override": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-key rate limit override (requests per minute), if set.",
+            "minimum": 0
+          },
           "scopes": {
             "type": "array",
             "items": {
@@ -2003,6 +2012,15 @@
             "type": "string",
             "description": "Human-readable name for this key."
           },
+          "rate_limit_override": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Optional per-key rate limit override (requests per minute).\nWhen set, the server uses this value instead of the global rate\nlimit for requests authenticated with this key.",
+            "minimum": 0
+          },
           "scopes": {
             "type": "array",
             "items": {
@@ -2053,6 +2071,15 @@
           "name": {
             "type": "string",
             "description": "Key name."
+          },
+          "rate_limit_override": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-key rate limit override (requests per minute), if set.",
+            "minimum": 0
           },
           "scopes": {
             "type": "array",

@@ -38,6 +38,13 @@
             "description": "Key name.",
             "type": "string"
           },
+          "rate_limit_override": {
+            "description": "Per-key rate limit override (requests per minute), if set.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
           "scopes": {
             "description": "Granted scopes.",
             "items": {
@@ -176,6 +183,13 @@
             "description": "Human-readable name for this key.",
             "type": "string"
           },
+          "rate_limit_override": {
+            "description": "Optional per-key rate limit override (requests per minute).\nWhen set, the server uses this value instead of the global rate\nlimit for requests authenticated with this key.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
           "scopes": {
             "description": "Scopes to grant.",
             "items": {
@@ -220,6 +234,13 @@
           "name": {
             "description": "Key name.",
             "type": "string"
+          },
+          "rate_limit_override": {
+            "description": "Per-key rate limit override (requests per minute), if set.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
           },
           "scopes": {
             "description": "Granted scopes.",

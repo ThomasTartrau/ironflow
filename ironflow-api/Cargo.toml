@@ -41,7 +41,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde-float"] }
 subtle = "2"
-governor = { version = "0.10", features = ["std"] }
+dashmap = "6"
 rand = "0.9"
 hex = "0.4"
 ironflow-artifacts = { version = "0.1.1", path = "../ironflow-artifacts" }

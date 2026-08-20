@@ -621,6 +621,7 @@ mod tests {
                 key_prefix: raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN].to_string(),
                 scopes: vec![ApiKeyScope::RunsWrite],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .expect("create api key");

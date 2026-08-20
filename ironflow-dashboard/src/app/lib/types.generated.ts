@@ -715,6 +715,11 @@ export interface components {
 			last_used_at?: string | null;
 			/** @description Key name. */
 			name: string;
+			/**
+			 * Format: int32
+			 * @description Per-key rate limit override (requests per minute), if set.
+			 */
+			rate_limit_override?: number | null;
 			/** @description Granted scopes. */
 			scopes: components["schemas"]["ApiKeyScope"][];
 		};
@@ -851,6 +856,13 @@ export interface components {
 			expires_at?: string | null;
 			/** @description Human-readable name for this key. */
 			name: string;
+			/**
+			 * Format: int32
+			 * @description Optional per-key rate limit override (requests per minute).
+			 *     When set, the server uses this value instead of the global rate
+			 *     limit for requests authenticated with this key.
+			 */
+			rate_limit_override?: number | null;
 			/** @description Scopes to grant. */
 			scopes: components["schemas"]["ApiKeyScope"][];
 		};
@@ -880,6 +892,11 @@ export interface components {
 			key_prefix: string;
 			/** @description Key name. */
 			name: string;
+			/**
+			 * Format: int32
+			 * @description Per-key rate limit override (requests per minute), if set.
+			 */
+			rate_limit_override?: number | null;
 			/** @description Granted scopes. */
 			scopes: components["schemas"]["ApiKeyScope"][];
 		};
