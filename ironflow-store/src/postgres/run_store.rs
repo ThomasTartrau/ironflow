@@ -1,11 +1,11 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::entities::{
-    IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run,
-    RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency,
-    StepUpdate,
+    IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
+    PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter, RunStats,
+    RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -786,6 +786,148 @@ impl RunStore for PostgresStore {
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(reaped)
+        })
+    }
+
+    fn list_purgeable_runs(
+        &self,
+        policy: &PurgePolicy,
+        batch_size: u32,
+    ) -> StoreFuture<'_, Vec<PurgeableRun>> {
+        let max_age_days = policy.max_age_days;
+        let max_runs_per_workflow = policy.max_runs_per_workflow;
+        Box::pin(async move {
+            let terminal_states: Vec<String> = [
+                RunStatus::Completed,
+                RunStatus::Failed,
+                RunStatus::Warning,
+                RunStatus::Cancelled,
+            ]
+            .iter()
+            .map(|s| run_status_to_db_str(s).to_string())
+            .collect();
+
+            let cutoff = Utc::now() - Duration::days(i64::from(max_age_days));
+
+            // Age-based: terminal runs older than cutoff.
+            let age_rows = sqlx::query(
+                r#"
+                SELECT r.id, r.workflow_name
+                FROM ironflow.runs r
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE ast.name = ANY($1)
+                  AND r.created_at < $2
+                ORDER BY r.created_at ASC
+                LIMIT $3
+                "#,
+            )
+            .bind(&terminal_states)
+            .bind(cutoff)
+            .bind(batch_size as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let mut result: Vec<PurgeableRun> = age_rows
+                .iter()
+                .map(|row| PurgeableRun {
+                    run_id: row.get("id"),
+                    workflow_name: row.get("workflow_name"),
+                    reason: PurgeReason::TooOld,
+                })
+                .collect();
+
+            // Count-based: for each workflow, terminal runs beyond the limit.
+            let excess_rows = sqlx::query(
+                r#"
+                WITH ranked AS (
+                    SELECT r.id, r.workflow_name,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY r.workflow_name
+                               ORDER BY r.created_at DESC
+                           ) AS rn
+                    FROM ironflow.runs r
+                    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                    WHERE ast.name = ANY($1)
+                )
+                SELECT id, workflow_name
+                FROM ranked
+                WHERE rn > $2
+                ORDER BY workflow_name, rn ASC
+                LIMIT $3
+                "#,
+            )
+            .bind(&terminal_states)
+            .bind(max_runs_per_workflow as i64)
+            .bind(batch_size as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            for row in &excess_rows {
+                let run_id: Uuid = row.get("id");
+                if !result.iter().any(|p| p.run_id == run_id) {
+                    result.push(PurgeableRun {
+                        run_id,
+                        workflow_name: row.get("workflow_name"),
+                        reason: PurgeReason::ExceedsWorkflowLimit,
+                    });
+                }
+            }
+
+            result.truncate(batch_size as usize);
+            Ok(result)
+        })
+    }
+
+    fn delete_run(&self, id: Uuid) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let key_rows =
+                sqlx::query("SELECT storage_key FROM ironflow.step_artifacts WHERE run_id = $1")
+                    .bind(id)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let storage_keys: Vec<String> = key_rows.iter().map(|r| r.get("storage_key")).collect();
+
+            let result = sqlx::query("DELETE FROM ironflow.runs WHERE id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            if result.rows_affected() == 0 {
+                return Err(StoreError::RunNotFound(id));
+            }
+
+            sqlx::query(
+                r#"
+                DELETE FROM lib_fsm.state_machine
+                WHERE state_machine__id NOT IN (
+                    SELECT state_machine__id FROM ironflow.runs
+                    UNION ALL
+                    SELECT state_machine__id FROM ironflow.steps
+                )
+                "#,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(storage_keys)
         })
     }
 

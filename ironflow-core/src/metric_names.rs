@@ -72,6 +72,10 @@ pub const WORKER_LEASES_LOST_TOTAL: &str = "ironflow_worker_leases_lost_total";
 /// Counter: runs recovered after a worker lease expired (label: outcome).
 pub const RUNS_REAPED_TOTAL: &str = "ironflow_runs_reaped_total";
 
+// ── Purger metrics ─────────────────────────────────────────────────
+/// Counter: runs purged by the retention policy (labels: workflow, reason).
+pub const RUNS_PURGED_TOTAL: &str = "ironflow_runs_purged_total";
+
 // ── API metrics ────────────────────────────────────────────────────
 /// Counter: total API requests (labels: method, path, status).
 pub const API_REQUESTS_TOTAL: &str = "ironflow_api_requests_total";

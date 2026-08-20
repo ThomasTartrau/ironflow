@@ -1,13 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::entities::{
-    ApiKey, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun,
-    Run, RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency,
-    StepStatus, StepUpdate, User,
+    ApiKey, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page,
+    PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter,
+    RunStats, RunStatus, RunUpdate, Step, StepDependency, StepStatus, StepUpdate, User,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -412,6 +412,101 @@ impl RunStore for InMemoryStore {
             }
 
             Ok(reaped)
+        })
+    }
+
+    fn list_purgeable_runs(
+        &self,
+        policy: &PurgePolicy,
+        batch_size: u32,
+    ) -> StoreFuture<'_, Vec<PurgeableRun>> {
+        let max_age_days = policy.max_age_days;
+        let max_runs_per_workflow = policy.max_runs_per_workflow;
+        Box::pin(async move {
+            let state = self.state.read().await;
+            let cutoff = Utc::now() - Duration::days(i64::from(max_age_days));
+            let mut result: Vec<PurgeableRun> = Vec::new();
+            let mut seen: HashSet<Uuid> = HashSet::new();
+
+            for run in state.runs.values() {
+                if run.status.state.is_terminal() && run.created_at < cutoff {
+                    seen.insert(run.id);
+                    result.push(PurgeableRun {
+                        run_id: run.id,
+                        workflow_name: run.workflow_name.clone(),
+                        reason: PurgeReason::TooOld,
+                    });
+                }
+            }
+
+            let mut by_workflow: HashMap<&str, Vec<&Run>> = HashMap::new();
+            for run in state.runs.values() {
+                if run.status.state.is_terminal() {
+                    by_workflow.entry(&run.workflow_name).or_default().push(run);
+                }
+            }
+            for (_, mut runs) in by_workflow {
+                if runs.len() > max_runs_per_workflow as usize {
+                    runs.sort_by_key(|r| r.created_at);
+                    let excess = runs.len() - max_runs_per_workflow as usize;
+                    for run in runs.into_iter().take(excess) {
+                        if seen.insert(run.id) {
+                            result.push(PurgeableRun {
+                                run_id: run.id,
+                                workflow_name: run.workflow_name.clone(),
+                                reason: PurgeReason::ExceedsWorkflowLimit,
+                            });
+                        }
+                    }
+                }
+            }
+
+            result.sort_by_key(|p| p.run_id);
+            result.truncate(batch_size as usize);
+            Ok(result)
+        })
+    }
+
+    fn delete_run(&self, id: Uuid) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+
+            if !state.runs.contains_key(&id) {
+                return Err(StoreError::RunNotFound(id));
+            }
+
+            // Collect artifact storage keys before removing them.
+            let storage_keys: Vec<String> = state
+                .artifacts
+                .values()
+                .filter(|a| a.run_id == id)
+                .map(|a| a.storage_key.clone())
+                .collect();
+
+            // Remove artifacts.
+            state.artifacts.retain(|_, a| a.run_id != id);
+
+            // Remove step dependencies (both sides).
+            let step_ids: Vec<Uuid> = state
+                .steps
+                .values()
+                .filter(|s| s.run_id == id)
+                .map(|s| s.id)
+                .collect();
+            state
+                .step_dependencies
+                .retain(|d| !step_ids.contains(&d.step_id) && !step_ids.contains(&d.depends_on));
+
+            // Remove steps.
+            state.steps.retain(|_, s| s.run_id != id);
+
+            // Remove idempotency key pointing to this run.
+            state.idempotency_keys.retain(|_, &mut run_id| run_id != id);
+
+            // Remove the run itself.
+            state.runs.remove(&id);
+
+            Ok(storage_keys)
         })
     }
 
@@ -3115,5 +3210,147 @@ mod tests {
 
         let picked = store.pick_next_pending(None).await.unwrap().unwrap();
         assert_eq!(picked.created_by_label.as_deref(), Some("alice"));
+    }
+
+    // ---- list_purgeable_runs ----
+
+    #[tokio::test]
+    async fn list_purgeable_runs_returns_old_terminal_runs() {
+        let store = InMemoryStore::new();
+        let old = create_terminal_run(&store, "deploy", RunStatus::Completed).await;
+        store
+            .set_run_created_at(old.id, Utc::now() - chrono::Duration::days(100))
+            .await;
+
+        let policy = PurgePolicy {
+            max_age_days: 90,
+            max_runs_per_workflow: 10000,
+            dry_run: false,
+        };
+        let result = store.list_purgeable_runs(&policy, 100).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].run_id, old.id);
+        assert_eq!(result[0].reason, PurgeReason::TooOld);
+    }
+
+    #[tokio::test]
+    async fn list_purgeable_runs_ignores_non_terminal_states() {
+        let store = InMemoryStore::new();
+
+        // Pending
+        let pending = store
+            .create_run(new_run_req("deploy"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .set_run_created_at(pending.id, Utc::now() - chrono::Duration::days(200))
+            .await;
+
+        // Running
+        let running = store
+            .create_run(new_run_req("deploy"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(running.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .set_run_created_at(running.id, Utc::now() - chrono::Duration::days(200))
+            .await;
+
+        let policy = PurgePolicy {
+            max_age_days: 90,
+            max_runs_per_workflow: 1,
+            dry_run: false,
+        };
+        let result = store.list_purgeable_runs(&policy, 100).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_purgeable_runs_returns_excess_per_workflow() {
+        let store = InMemoryStore::new();
+        let r1 = create_terminal_run(&store, "deploy", RunStatus::Completed).await;
+        store
+            .set_run_created_at(r1.id, Utc::now() - chrono::Duration::days(10))
+            .await;
+        let r2 = create_terminal_run(&store, "deploy", RunStatus::Completed).await;
+        store
+            .set_run_created_at(r2.id, Utc::now() - chrono::Duration::days(5))
+            .await;
+        let _r3 = create_terminal_run(&store, "deploy", RunStatus::Completed).await;
+
+        let policy = PurgePolicy {
+            max_age_days: 365,
+            max_runs_per_workflow: 2,
+            dry_run: false,
+        };
+        let result = store.list_purgeable_runs(&policy, 100).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].run_id, r1.id);
+        assert_eq!(result[0].reason, PurgeReason::ExceedsWorkflowLimit);
+    }
+
+    // ---- delete_run ----
+
+    #[tokio::test]
+    async fn delete_run_removes_run_and_associated_data() {
+        use crate::artifact_store::ArtifactStore;
+        use crate::entities::{NewStep, StepKind};
+
+        let store = InMemoryStore::new();
+        let run = create_terminal_run(&store, "deploy", RunStatus::Completed).await;
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                name: "build".to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+
+        let artifact_id = Uuid::now_v7();
+        store
+            .create_artifact(crate::entities::NewArtifact {
+                id: artifact_id,
+                run_id: run.id,
+                step_id: step.id,
+                name: "report.html".to_string(),
+                storage_key: format!("artifacts/{}/{}/{}", run.id, step.id, artifact_id),
+                content_type: "text/html".to_string(),
+                size_bytes: 42,
+                sha256: "0".repeat(64),
+            })
+            .await
+            .unwrap();
+
+        let keys = store.delete_run(run.id).await.unwrap();
+
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].contains(&artifact_id.to_string()));
+        assert!(store.get_run(run.id).await.unwrap().is_none());
+        assert!(store.list_steps(run.id).await.unwrap().is_empty());
+        assert!(
+            store
+                .list_artifacts_for_run(run.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_run_not_found() {
+        let store = InMemoryStore::new();
+        let err = store.delete_run(Uuid::now_v7()).await.unwrap_err();
+        assert!(matches!(err, StoreError::RunNotFound(_)));
     }
 }
