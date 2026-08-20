@@ -32,6 +32,12 @@ pub struct ApiKey {
     pub created_at: DateTime<Utc>,
     /// When the key was last updated.
     pub updated_at: DateTime<Utc>,
+    /// Optional per-key rate limit override (requests per minute).
+    ///
+    /// When set, the API uses this value instead of the global rate limit
+    /// for requests authenticated with this key. `None` means use the
+    /// server default. `Some(0)` disables rate limiting for this key.
+    pub rate_limit_override: Option<u32>,
 }
 
 /// Parameters for creating a new API key.
@@ -49,6 +55,9 @@ pub struct NewApiKey {
     pub scopes: Vec<ApiKeyScope>,
     /// Optional expiration date.
     pub expires_at: Option<DateTime<Utc>>,
+    /// Optional per-key rate limit override (requests per minute).
+    /// `None` uses the server default. `Some(0)` disables rate limiting.
+    pub rate_limit_override: Option<u32>,
 }
 
 /// Parameters for updating an API key.
@@ -62,6 +71,8 @@ pub struct ApiKeyUpdate {
     pub is_active: Option<bool>,
     /// New expiration date. `Some(None)` removes expiration.
     pub expires_at: Option<Option<DateTime<Utc>>>,
+    /// New rate limit override. `Some(None)` removes the override.
+    pub rate_limit_override: Option<Option<u32>>,
 }
 
 #[cfg(test)]
@@ -82,6 +93,7 @@ mod tests {
             last_used_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            rate_limit_override: None,
         };
 
         let json = serde_json::to_string(&key).expect("serialize");
@@ -97,5 +109,6 @@ mod tests {
         assert!(update.scopes.is_none());
         assert!(update.is_active.is_none());
         assert!(update.expires_at.is_none());
+        assert!(update.rate_limit_override.is_none());
     }
 }

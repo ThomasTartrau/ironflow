@@ -37,6 +37,10 @@ pub enum ApiKeyCommands {
         /// Expiration date (RFC 3339, e.g. `2026-12-31T23:59:59Z`).
         #[arg(long)]
         expires_at: Option<DateTime<Utc>>,
+        /// Per-key rate limit override (requests per minute). 0 disables
+        /// rate limiting for this key.
+        #[arg(long)]
+        rate_limit_override: Option<u32>,
     },
     /// List the scopes an API key can be granted.
     Scopes,
@@ -87,11 +91,16 @@ pub async fn execute(client: &IronflowClient, args: &ApiKeyArgs, json_mode: bool
             name,
             scopes,
             expires_at,
+            rate_limit_override,
         } => {
-            let request: CreateApiKeyRequest = CreateApiKeyRequest::builder()
+            let mut builder = CreateApiKeyRequest::builder()
                 .name(name.clone())
                 .scopes(scopes.clone())
-                .expires_at(*expires_at)
+                .expires_at(*expires_at);
+            if let Some(val) = rate_limit_override {
+                builder = builder.rate_limit_override(*val as i32);
+            }
+            let request: CreateApiKeyRequest = builder
                 .try_into()
                 .context("failed to build CreateApiKeyRequest")?;
 

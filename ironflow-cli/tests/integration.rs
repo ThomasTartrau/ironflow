@@ -1005,6 +1005,7 @@ async fn api_key_create_then_list_then_delete() {
             name: "ci-deploy".to_string(),
             scopes: vec![ApiKeyScope::RunsRead, ApiKeyScope::RunsWrite],
             expires_at: None,
+            rate_limit_override: None,
         },
     };
     commands::api_key::execute(&client, &create, false)
@@ -1048,6 +1049,7 @@ async fn api_key_list_never_exposes_a_raw_key() {
             name: "ci-deploy".to_string(),
             scopes: vec![ApiKeyScope::RunsRead],
             expires_at: None,
+            rate_limit_override: None,
         },
     };
     commands::api_key::execute(&client, &create, false)
@@ -1083,6 +1085,7 @@ async fn api_key_delete_without_confirmation_does_not_delete() {
             name: "ci-deploy".to_string(),
             scopes: vec![ApiKeyScope::RunsRead],
             expires_at: None,
+            rate_limit_override: None,
         },
     };
     commands::api_key::execute(&client, &create, false)

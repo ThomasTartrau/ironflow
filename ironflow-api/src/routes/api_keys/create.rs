@@ -27,6 +27,10 @@ pub struct CreateApiKeyRequest {
     pub scopes: Vec<ApiKeyScope>,
     /// Optional expiration date (ISO 8601).
     pub expires_at: Option<DateTime<Utc>>,
+    /// Optional per-key rate limit override (requests per minute).
+    /// When set, the server uses this value instead of the global rate
+    /// limit for requests authenticated with this key.
+    pub rate_limit_override: Option<u32>,
 }
 
 /// Response returned when creating an API key.
@@ -46,6 +50,8 @@ pub struct CreateApiKeyResponse {
     pub scopes: Vec<ApiKeyScope>,
     /// Expiration date.
     pub expires_at: Option<DateTime<Utc>>,
+    /// Per-key rate limit override (requests per minute), if set.
+    pub rate_limit_override: Option<u32>,
     /// Creation date.
     pub created_at: DateTime<Utc>,
 }
@@ -90,6 +96,14 @@ pub async fn create_api_key(
         return Err(ApiError::Forbidden);
     }
 
+    if let Some(override_val) = req.rate_limit_override
+        && override_val > 10_000
+    {
+        return Err(ApiError::BadRequest(
+            "rate_limit_override must be between 0 and 10000".to_string(),
+        ));
+    }
+
     let raw_key = generate_api_key();
     let key_prefix = raw_key[..API_KEY_PREFIX.len() + API_KEY_SUFFIX_LEN].to_string();
     let key_hash =
@@ -104,6 +118,7 @@ pub async fn create_api_key(
             key_prefix: key_prefix.clone(),
             scopes: req.scopes,
             expires_at: req.expires_at,
+            rate_limit_override: req.rate_limit_override,
         })
         .await
         .map_err(ApiError::from)?;
@@ -115,6 +130,7 @@ pub async fn create_api_key(
         name: api_key.name,
         scopes: api_key.scopes,
         expires_at: api_key.expires_at,
+        rate_limit_override: api_key.rate_limit_override,
         created_at: api_key.created_at,
     };
 
