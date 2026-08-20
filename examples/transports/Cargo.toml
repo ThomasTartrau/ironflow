@@ -1,0 +1,30 @@
+[package]
+name = "ironflow-example-transports"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Examples for SSH, Docker, and K8s transports"
+
+[dependencies]
+ironflow-core = { path = "../../ironflow-core", features = [
+    "transport-ssh",
+    "transport-docker",
+    "transport-k8s",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[bin]]
+name = "ssh-transport"
+path = "src/bin/ssh_transport.rs"
+
+[[bin]]
+name = "docker-transport"
+path = "src/bin/docker_transport.rs"
+
+[[bin]]
+name = "k8s-ephemeral"
+path = "src/bin/k8s_ephemeral.rs"
+
+[[bin]]
+name = "k8s-persistent"
+path = "src/bin/k8s_persistent.rs"

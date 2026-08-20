@@ -2731,6 +2731,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-example-transports"
+version = "0.1.0"
+dependencies = [
+ "ironflow-core",
+ "tokio",
+]
+
+[[package]]
 name = "ironflow-example-worker"
 version = "0.1.0"
 dependencies = [

@@ -31,10 +31,12 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Status;
 use kube::api::{Api, AttachParams, DeleteParams, PostParams};
 use kube::runtime::wait::{await_condition, conditions};
 use tokio::time;
@@ -42,7 +44,7 @@ use tokio::time;
 use tracing::{debug, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
+use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
@@ -50,6 +52,42 @@ use super::common::{
     DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig,
     build_credentials_prefix, build_pod_spec, create_client,
 };
+
+/// Extract the exit code from a K8s exec status object.
+///
+/// The exec API returns a [`Status`] object with a `status` field set to
+/// `"Success"` or `"Failure"`. On failure, `details.causes` may contain
+/// a cause with `reason: "ExitCode"` and the actual numeric code as
+/// `message`.
+///
+/// Falls back to a heuristic (empty stdout + non-empty stderr = 1) when no
+/// status is available. The K8s exec API does not always return a status
+/// (depends on the container runtime and K8s version), so a hard error
+/// here would break older clusters.
+fn extract_exit_code(status: &Option<Status>, stdout: &str, stderr: &str) -> i32 {
+    if let Some(s) = status {
+        if s.status.as_deref() == Some("Success") {
+            return 0;
+        }
+        if let Some(details) = &s.details
+            && let Some(causes) = &details.causes
+        {
+            for cause in causes {
+                if cause.reason.as_deref() == Some("ExitCode")
+                    && let Some(msg) = &cause.message
+                    && let Ok(code) = msg.parse::<i32>()
+                {
+                    return code;
+                }
+            }
+        }
+        return 1;
+    }
+    if stdout.is_empty() && !stderr.is_empty() {
+        return 1;
+    }
+    0
+}
 
 /// [`AgentProvider`] that reuses a persistent Kubernetes worker pod.
 ///
@@ -305,139 +343,172 @@ impl K8sPersistentProvider {
     }
 }
 
+impl K8sPersistentProvider {
+    /// Shared implementation for `invoke` and `invoke_with_logs`.
+    async fn invoke_inner(
+        &self,
+        config: &AgentConfig,
+        log_sink: Option<Arc<dyn LogSink>>,
+    ) -> Result<AgentOutput, AgentError> {
+        let forced = claude_common::force_verbose_for_streaming(config, log_sink.is_some());
+        let config = forced.as_ref().unwrap_or(config);
+
+        claude_common::validate_prompt_size(config)?;
+        let built = claude_common::build_command(config)?;
+
+        let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
+        let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
+        let full_cmd = match (&self.working_dir, &config.working_dir) {
+            (_, Some(dir)) | (Some(dir), None) => {
+                format!(
+                    "{creds_prefix}cd {} && {}",
+                    claude_common::build_shell_command(dir, &[]),
+                    claude_cmd
+                )
+            }
+            (None, None) => format!("{creds_prefix}{claude_cmd}"),
+        };
+
+        debug!(
+            pod = %self.pod_name,
+            namespace = %self.namespace,
+            model = %config.model,
+            "executing in persistent K8s pod"
+        );
+
+        let start = Instant::now();
+
+        let client = create_client(&self.cluster_config).await?;
+
+        let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
+
+        self.ensure_pod_running(&pods).await?;
+
+        let mut attach_params = AttachParams::default().stderr(true);
+        if built.stdin_prompt.is_some() {
+            attach_params = attach_params.stdin(true);
+        }
+
+        let mut attached = time::timeout(
+            Duration::from_secs(30),
+            pods.exec(&self.pod_name, vec!["sh", "-c", &full_cmd], &attach_params),
+        )
+        .await
+        .map_err(|_| AgentError::Timeout {
+            limit: Duration::from_secs(30),
+        })?
+        .map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("failed to exec in worker pod: {e}"),
+        })?;
+
+        let status_fut = attached.take_status();
+
+        if let (Some(prompt), Some(mut stdin)) = (&built.stdin_prompt, attached.stdin()) {
+            use tokio::io::AsyncWriteExt;
+            stdin
+                .write_all(prompt.as_bytes())
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to write prompt to K8s exec stdin: {e}"),
+                })?;
+            stdin
+                .shutdown()
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to close K8s exec stdin: {e}"),
+                })?;
+        }
+
+        let stdout_reader = attached.stdout();
+        let stderr_reader = attached.stderr();
+
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+        let mut exec_status = None;
+
+        let collect_result = time::timeout(self.timeout, async {
+            let stdout_fut = async {
+                if let Some(reader) = stdout_reader {
+                    let mut stream = tokio_util::io::ReaderStream::new(reader);
+                    while let Some(Ok(chunk)) = stream.next().await {
+                        claude_common::stream_lines(&chunk, "stdout", log_sink.as_ref());
+                        stdout_buf.extend_from_slice(&chunk);
+                    }
+                }
+            };
+            let stderr_fut = async {
+                if let Some(reader) = stderr_reader {
+                    let mut stream = tokio_util::io::ReaderStream::new(reader);
+                    while let Some(Ok(chunk)) = stream.next().await {
+                        claude_common::stream_lines(&chunk, "stderr", log_sink.as_ref());
+                        stderr_buf.extend_from_slice(&chunk);
+                    }
+                }
+            };
+            let status_wait = async {
+                if let Some(fut) = status_fut {
+                    exec_status = fut.await;
+                }
+            };
+            tokio::join!(stdout_fut, stderr_fut, status_wait);
+        })
+        .await;
+
+        if collect_result.is_err() {
+            warn!(timeout = ?self.timeout, "K8s exec timed out");
+            return Err(AgentError::Timeout {
+                limit: self.timeout,
+            });
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+
+        let exit_code = extract_exit_code(&exec_status, &stdout, &stderr);
+
+        if exit_code != 0 {
+            return claude_common::handle_nonzero_exit(
+                exit_code,
+                &stdout,
+                &stderr,
+                config,
+                duration_ms,
+                "persistent k8s",
+            );
+        }
+
+        debug!(
+            stdout_len = stdout.len(),
+            "persistent pod claude process completed"
+        );
+
+        claude_common::parse_output(&stdout, config, duration_ms)
+    }
+}
+
 impl AgentProvider for K8sPersistentProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
-        Box::pin(async move {
-            claude_common::validate_prompt_size(config)?;
-            let built = claude_common::build_command(config)?;
+        Box::pin(self.invoke_inner(config, None))
+    }
 
-            let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
-            let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
-            let full_cmd = match (&self.working_dir, &config.working_dir) {
-                (_, Some(dir)) | (Some(dir), None) => {
-                    format!(
-                        "{creds_prefix}cd {} && {}",
-                        claude_common::build_shell_command(dir, &[]),
-                        claude_cmd
-                    )
-                }
-                (None, None) => format!("{creds_prefix}{claude_cmd}"),
-            };
-
-            debug!(
-                pod = %self.pod_name,
-                namespace = %self.namespace,
-                model = %config.model,
-                "executing in persistent K8s pod"
-            );
-
-            let start = Instant::now();
-
-            let client = create_client(&self.cluster_config).await?;
-
-            let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
-
-            // Ensure pod is running
-            self.ensure_pod_running(&pods).await?;
-
-            let mut attach_params = AttachParams::default().stderr(true);
-            if built.stdin_prompt.is_some() {
-                attach_params = attach_params.stdin(true);
-            }
-
-            let mut attached = time::timeout(
-                Duration::from_secs(30),
-                pods.exec(&self.pod_name, vec!["sh", "-c", &full_cmd], &attach_params),
-            )
-            .await
-            .map_err(|_| AgentError::Timeout {
-                limit: Duration::from_secs(30),
-            })?
-            .map_err(|e| AgentError::ProcessFailed {
-                exit_code: -1,
-                stderr: format!("failed to exec in worker pod: {e}"),
-            })?;
-
-            if let (Some(prompt), Some(mut stdin)) = (&built.stdin_prompt, attached.stdin()) {
-                use tokio::io::AsyncWriteExt;
-                stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-                    AgentError::ProcessFailed {
-                        exit_code: -1,
-                        stderr: format!("failed to write prompt to K8s exec stdin: {e}"),
-                    }
-                })?;
-                stdin
-                    .shutdown()
-                    .await
-                    .map_err(|e| AgentError::ProcessFailed {
-                        exit_code: -1,
-                        stderr: format!("failed to close K8s exec stdin: {e}"),
-                    })?;
-            }
-
-            let stdout_reader = attached.stdout();
-            let stderr_reader = attached.stderr();
-
-            let mut stdout_buf = Vec::new();
-            let mut stderr_buf = Vec::new();
-
-            let collect_result = time::timeout(self.timeout, async {
-                let stdout_fut = async {
-                    if let Some(reader) = stdout_reader {
-                        let mut stream = tokio_util::io::ReaderStream::new(reader);
-                        while let Some(Ok(chunk)) = stream.next().await {
-                            stdout_buf.extend_from_slice(&chunk);
-                        }
-                    }
-                };
-                let stderr_fut = async {
-                    if let Some(reader) = stderr_reader {
-                        let mut stream = tokio_util::io::ReaderStream::new(reader);
-                        while let Some(Ok(chunk)) = stream.next().await {
-                            stderr_buf.extend_from_slice(&chunk);
-                        }
-                    }
-                };
-                tokio::join!(stdout_fut, stderr_fut);
-            })
-            .await;
-
-            if collect_result.is_err() {
-                warn!(timeout = ?self.timeout, "K8s exec timed out");
-                return Err(AgentError::Timeout {
-                    limit: self.timeout,
-                });
-            }
-
-            let duration_ms = start.elapsed().as_millis() as u64;
-
-            let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
-            let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
-
-            // K8s exec doesn't provide exit code directly; infer from parsability
-            if stdout.is_empty() && !stderr.is_empty() {
-                return claude_common::handle_nonzero_exit(
-                    1,
-                    &stdout,
-                    &stderr,
-                    config,
-                    duration_ms,
-                    "persistent k8s",
-                );
-            }
-
-            debug!(
-                stdout_len = stdout.len(),
-                "persistent pod claude process completed"
-            );
-
-            claude_common::parse_output(&stdout, config, duration_ms)
-        })
+    fn invoke_with_logs<'a>(
+        &'a self,
+        config: &'a AgentConfig,
+        log_sink: Arc<dyn LogSink>,
+    ) -> InvokeFuture<'a> {
+        Box::pin(self.invoke_inner(config, Some(log_sink)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{StatusCause, StatusDetails};
+
     use super::*;
 
     #[test]
@@ -513,5 +584,47 @@ mod tests {
         assert_eq!(provider.pod_labels.len(), 2);
         assert_eq!(provider.pod_labels["env"], "prod");
         assert_eq!(provider.pod_labels["team"], "infra");
+    }
+
+    #[test]
+    fn extract_exit_code_success_status() {
+        let status = Some(Status {
+            status: Some("Success".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(extract_exit_code(&status, "", ""), 0);
+    }
+
+    #[test]
+    fn extract_exit_code_failure_with_exit_code_cause() {
+        let status = Some(Status {
+            status: Some("Failure".to_string()),
+            details: Some(StatusDetails {
+                causes: Some(vec![StatusCause {
+                    reason: Some("ExitCode".to_string()),
+                    message: Some("42".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(extract_exit_code(&status, "", "error"), 42);
+    }
+
+    #[test]
+    fn extract_exit_code_failure_without_cause_returns_1() {
+        let status = Some(Status {
+            status: Some("Failure".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(extract_exit_code(&status, "out", "err"), 1);
+    }
+
+    #[test]
+    fn extract_exit_code_no_status_fallback_heuristic() {
+        assert_eq!(extract_exit_code(&None, "some output", ""), 0);
+        assert_eq!(extract_exit_code(&None, "", "some error"), 1);
+        assert_eq!(extract_exit_code(&None, "", ""), 0);
     }
 }

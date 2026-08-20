@@ -5,15 +5,18 @@
 //! and Kubernetes transports.
 
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 
 use crate::error::{AgentError, PartialUsage};
 use crate::operations::agent::PermissionMode;
-use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall, DebugToolResult};
+use crate::provider::{
+    AgentConfig, AgentOutput, DebugMessage, DebugToolCall, DebugToolResult, LogSink,
+};
 use crate::schema_transform::transform_schema;
 use crate::utils::estimate_tokens;
 
@@ -164,6 +167,30 @@ pub fn env_unset_shell_prefix() -> String {
         return String::new();
     }
     format!("unset {} 2>/dev/null; ", vars.join(" "))
+}
+
+/// Return a clone of `config` with `verbose` forced to `true` when streaming
+/// is active but verbose is off. Returns `None` when no override is needed.
+pub(super) fn force_verbose_for_streaming(
+    config: &AgentConfig,
+    streaming: bool,
+) -> Option<AgentConfig> {
+    if streaming && !config.verbose {
+        debug!("forcing verbose=true for log streaming (stream-json output required)");
+        Some(config.clone().verbose(true))
+    } else {
+        None
+    }
+}
+
+/// Forward raw output data to a [`LogSink`], splitting by line.
+pub(super) fn stream_lines(data: &[u8], stream: &str, sink: Option<&Arc<dyn LogSink>>) {
+    if let Some(sink) = sink {
+        let text = String::from_utf8_lossy(data);
+        for line in text.lines() {
+            sink.log(stream, line);
+        }
+    }
 }
 
 /// Push a CLI flag and its value onto the argument list.

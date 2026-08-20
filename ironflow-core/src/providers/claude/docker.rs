@@ -28,17 +28,19 @@
 //! # }
 //! ```
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bollard::Docker;
-use bollard::exec::{CreateExecOptions, StartExecResults};
+use bollard::container::LogOutput;
+use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time;
 use tracing::{debug, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
+use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
 
 use super::common::{self, DEFAULT_TIMEOUT};
 
@@ -132,167 +134,183 @@ impl DockerProvider {
     }
 }
 
-impl AgentProvider for DockerProvider {
-    fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
-        Box::pin(async move {
-            common::validate_prompt_size(config)?;
-            let built = common::build_command(config)?;
+impl DockerProvider {
+    /// Shared implementation for `invoke` and `invoke_with_logs`.
+    async fn invoke_inner(
+        &self,
+        config: &AgentConfig,
+        log_sink: Option<Arc<dyn LogSink>>,
+    ) -> Result<AgentOutput, AgentError> {
+        let forced = common::force_verbose_for_streaming(config, log_sink.is_some());
+        let config = forced.as_ref().unwrap_or(config);
 
-            let mut cmd: Vec<String> = vec![self.claude_path.clone()];
-            cmd.extend(built.args);
+        common::validate_prompt_size(config)?;
+        let built = common::build_command(config)?;
 
-            let work_dir = config
-                .working_dir
-                .as_deref()
-                .or(self.working_dir.as_deref());
+        let mut cmd: Vec<String> = vec![self.claude_path.clone()];
+        cmd.extend(built.args);
 
-            debug!(
-                container = %self.container,
-                model = %config.model,
-                working_dir = ?work_dir,
-                "creating docker exec"
-            );
+        let work_dir = config
+            .working_dir
+            .as_deref()
+            .or(self.working_dir.as_deref());
 
-            let start = Instant::now();
+        debug!(
+            container = %self.container,
+            model = %config.model,
+            working_dir = ?work_dir,
+            "creating docker exec"
+        );
 
-            let docker = self.connect()?;
+        let start = Instant::now();
 
-            // Clear all CLAUDE* and IRONFLOW_ALLOW_BYPASS env vars to prevent
-            // sub-agent mode interference inside the container.
-            let env_clear: Vec<String> = common::env_vars_to_remove()
-                .iter()
-                .map(|var| format!("{var}="))
-                .collect();
+        let docker = self.connect()?;
 
-            let needs_stdin = built.stdin_prompt.is_some();
+        let env_clear: Vec<String> = common::env_vars_to_remove()
+            .iter()
+            .map(|var| format!("{var}="))
+            .collect();
 
-            let exec_config = CreateExecOptions {
-                cmd: Some(cmd.iter().map(|s| s.as_str()).collect()),
-                attach_stdout: Some(true),
-                attach_stderr: Some(true),
-                attach_stdin: Some(needs_stdin),
-                tty: Some(false),
-                working_dir: work_dir,
-                user: self.user.as_deref(),
-                env: Some(env_clear.iter().map(|s| s.as_str()).collect()),
-                ..Default::default()
-            };
+        let needs_stdin = built.stdin_prompt.is_some();
 
-            let exec = docker
-                .create_exec(&self.container, exec_config)
-                .await
-                .map_err(|e| AgentError::ProcessFailed {
-                    exit_code: -1,
-                    stderr: format!("failed to create docker exec: {e}"),
-                })?;
+        let exec_config = CreateExecOptions {
+            cmd: Some(cmd.iter().map(|s| s.as_str()).collect()),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            attach_stdin: Some(needs_stdin),
+            tty: Some(false),
+            working_dir: work_dir,
+            user: self.user.as_deref(),
+            env: Some(env_clear.iter().map(|s| s.as_str()).collect()),
+            ..Default::default()
+        };
 
-            // Start exec and collect output
-            let start_result = docker
-                .start_exec(&exec.id, None::<bollard::exec::StartExecOptions>)
-                .await
-                .map_err(|e| AgentError::ProcessFailed {
-                    exit_code: -1,
-                    stderr: format!("failed to start docker exec: {e}"),
-                })?;
+        let exec = docker
+            .create_exec(&self.container, exec_config)
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to create docker exec: {e}"),
+            })?;
 
-            let mut stdout_buf = Vec::new();
-            let mut stderr_buf = Vec::new();
+        let start_result = docker
+            .start_exec(&exec.id, None::<StartExecOptions>)
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to start docker exec: {e}"),
+            })?;
 
-            let collect_result = time::timeout(self.timeout, async {
-                match start_result {
-                    StartExecResults::Attached {
-                        mut output,
-                        mut input,
-                    } => {
-                        if let Some(ref prompt) = built.stdin_prompt {
-                            input.write_all(prompt.as_bytes()).await.map_err(|e| {
-                                AgentError::ProcessFailed {
-                                    exit_code: -1,
-                                    stderr: format!(
-                                        "failed to write prompt to docker exec stdin: {e}"
-                                    ),
-                                }
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+
+        let collect_result = time::timeout(self.timeout, async {
+            match start_result {
+                StartExecResults::Attached {
+                    mut output,
+                    mut input,
+                } => {
+                    if let Some(ref prompt) = built.stdin_prompt {
+                        input.write_all(prompt.as_bytes()).await.map_err(|e| {
+                            AgentError::ProcessFailed {
+                                exit_code: -1,
+                                stderr: format!("failed to write prompt to docker exec stdin: {e}"),
+                            }
+                        })?;
+                        input
+                            .shutdown()
+                            .await
+                            .map_err(|e| AgentError::ProcessFailed {
+                                exit_code: -1,
+                                stderr: format!("failed to close docker exec stdin: {e}"),
                             })?;
-                            input
-                                .shutdown()
-                                .await
-                                .map_err(|e| AgentError::ProcessFailed {
-                                    exit_code: -1,
-                                    stderr: format!("failed to close docker exec stdin: {e}"),
-                                })?;
-                        }
-                        drop(input);
-                        while let Some(result) = output.next().await {
-                            match result {
-                                Ok(bollard::container::LogOutput::StdOut { message }) => {
-                                    stdout_buf.extend_from_slice(&message);
-                                }
-                                Ok(bollard::container::LogOutput::StdErr { message }) => {
-                                    stderr_buf.extend_from_slice(&message);
-                                }
-                                Ok(_) => {}
-                                Err(e) => {
-                                    warn!("docker exec stream error: {e}");
-                                    break;
-                                }
+                    }
+                    drop(input);
+                    while let Some(result) = output.next().await {
+                        match result {
+                            Ok(LogOutput::StdOut { message }) => {
+                                common::stream_lines(&message, "stdout", log_sink.as_ref());
+                                stdout_buf.extend_from_slice(&message);
+                            }
+                            Ok(LogOutput::StdErr { message }) => {
+                                common::stream_lines(&message, "stderr", log_sink.as_ref());
+                                stderr_buf.extend_from_slice(&message);
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!("docker exec stream error: {e}");
+                                break;
                             }
                         }
                     }
-                    StartExecResults::Detached => {
-                        return Err(AgentError::ProcessFailed {
-                            exit_code: -1,
-                            stderr: "docker exec returned Detached mode, cannot capture output"
-                                .to_string(),
-                        });
-                    }
                 }
-                Ok(())
-            })
-            .await;
-
-            match collect_result {
-                Err(_) => {
-                    warn!(timeout = ?self.timeout, "docker exec timed out");
-                    return Err(AgentError::Timeout {
-                        limit: self.timeout,
+                StartExecResults::Detached => {
+                    return Err(AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: "docker exec returned Detached mode, cannot capture output"
+                            .to_string(),
                     });
                 }
-                Ok(Err(e)) => return Err(e),
-                Ok(Ok(())) => {}
             }
-
-            let duration_ms = start.elapsed().as_millis() as u64;
-
-            // Inspect exec to get exit code
-            let inspect =
-                docker
-                    .inspect_exec(&exec.id)
-                    .await
-                    .map_err(|e| AgentError::ProcessFailed {
-                        exit_code: -1,
-                        stderr: format!("failed to inspect docker exec: {e}"),
-                    })?;
-
-            let exit_code = inspect.exit_code.unwrap_or(1) as i32;
-
-            let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
-            let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
-
-            if exit_code != 0 {
-                return common::handle_nonzero_exit(
-                    exit_code,
-                    &stdout,
-                    &stderr,
-                    config,
-                    duration_ms,
-                    "docker",
-                );
-            }
-
-            debug!(stdout_len = stdout.len(), "docker claude process completed");
-
-            common::parse_output(&stdout, config, duration_ms)
+            Ok(())
         })
+        .await;
+
+        match collect_result {
+            Err(_) => {
+                warn!(timeout = ?self.timeout, "docker exec timed out");
+                return Err(AgentError::Timeout {
+                    limit: self.timeout,
+                });
+            }
+            Ok(Err(e)) => return Err(e),
+            Ok(Ok(())) => {}
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        let inspect =
+            docker
+                .inspect_exec(&exec.id)
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to inspect docker exec: {e}"),
+                })?;
+
+        let exit_code = inspect.exit_code.unwrap_or(1) as i32;
+
+        let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+
+        if exit_code != 0 {
+            return common::handle_nonzero_exit(
+                exit_code,
+                &stdout,
+                &stderr,
+                config,
+                duration_ms,
+                "docker",
+            );
+        }
+
+        debug!(stdout_len = stdout.len(), "docker claude process completed");
+
+        common::parse_output(&stdout, config, duration_ms)
+    }
+}
+
+impl AgentProvider for DockerProvider {
+    fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
+        Box::pin(self.invoke_inner(config, None))
+    }
+
+    fn invoke_with_logs<'a>(
+        &'a self,
+        config: &'a AgentConfig,
+        log_sink: Arc<dyn LogSink>,
+    ) -> InvokeFuture<'a> {
+        Box::pin(self.invoke_inner(config, Some(log_sink)))
     }
 }
 
