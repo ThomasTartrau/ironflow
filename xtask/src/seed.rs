@@ -12,8 +12,8 @@ use ironflow_artifacts::local::LocalBlobStore;
 use ironflow_artifacts::stream_from_bytes;
 use ironflow_auth::password;
 use ironflow_store::entities::{
-    ApiKeyScope, NewApiKey, NewArtifact, NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind,
-    StepStatus, StepUpdate, TriggerKind,
+    ApiKeyScope, EventKind, NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep, NewUser,
+    RunActor, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind,
 };
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
@@ -127,6 +127,7 @@ pub async fn seed_store(store: &dyn Store, opts: &SeedOptions) -> anyhow::Result
     let runs = seed_runs(store, &users).await?;
     seed_api_keys(store, &users).await?;
     seed_secrets(store).await?;
+    seed_audit_logs(store, &users, &runs).await?;
 
     if let Some(ref dir) = opts.artifacts_dir {
         let blob_store = LocalBlobStore::new(dir);
@@ -741,6 +742,431 @@ async fn seed_artifacts(
             "created artifact"
         );
     }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Audit Logs
+// ---------------------------------------------------------------------------
+
+async fn seed_audit_logs(
+    store: &dyn Store,
+    users: &[SeededUser],
+    runs: &[SeededRun],
+) -> anyhow::Result<()> {
+    let admin = &users[0];
+    let alice = &users[1];
+    let bob = &users[2];
+
+    let all_runs: Vec<&SeededRun> = runs.iter().collect();
+    let completed_runs: Vec<&SeededRun> = runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Completed)
+        .collect();
+    let failed_run = runs.iter().find(|r| r.status == RunStatus::Failed);
+    let cancelled_run = runs.iter().find(|r| r.status == RunStatus::Cancelled);
+
+    let user_pool = [admin, alice, bob];
+    let workflows = [
+        "greeting",
+        "ci-pipeline",
+        "deploy-approval",
+        "system-audit",
+        "data-sync",
+    ];
+    let branches = [
+        "main",
+        "feat/new-feature",
+        "fix/hotfix",
+        "chore/deps",
+        "release/v2.1",
+    ];
+    let ips = [
+        "192.168.1.100",
+        "10.0.0.42",
+        "172.16.0.5",
+        "10.10.1.200",
+        "192.168.50.3",
+    ];
+    let user_agents = [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        "curl/8.4.0",
+        "ironflow-cli/2.0.0",
+        "Mozilla/5.0 (X11; Linux x86_64)",
+        "Python/3.12 httpx/0.27",
+    ];
+
+    struct AuditSpec {
+        event_type: EventKind,
+        payload: serde_json::Value,
+        run_id: Option<Uuid>,
+        step_id: Option<Uuid>,
+        user_id: Option<Uuid>,
+    }
+
+    let mut specs: Vec<AuditSpec> = Vec::with_capacity(101);
+
+    // --- Base events covering every EventKind (25 entries) ---
+
+    // RunCreated x5 (one per workflow)
+    for (i, wf) in workflows.iter().enumerate() {
+        let run = all_runs.get(i % all_runs.len());
+        specs.push(AuditSpec {
+            event_type: EventKind::RunCreated,
+            payload: json!({
+                "workflow": wf,
+                "trigger": if i % 2 == 0 { "manual" } else { "webhook" },
+                "labels": {"env": if i < 3 { "dev" } else { "production" }}
+            }),
+            run_id: run.map(|r| r.id),
+            step_id: None,
+            user_id: Some(user_pool[i % user_pool.len()].id),
+        });
+    }
+
+    // RunStatusChanged x8 (various transitions)
+    let transitions = [
+        ("pending", "running"),
+        ("running", "completed"),
+        ("pending", "running"),
+        ("running", "failed"),
+        ("pending", "cancelled"),
+        ("running", "completed"),
+        ("pending", "running"),
+        ("running", "completed"),
+    ];
+    for (i, (from, to)) in transitions.iter().enumerate() {
+        let run = all_runs.get(i % all_runs.len());
+        specs.push(AuditSpec {
+            event_type: EventKind::RunStatusChanged,
+            payload: json!({
+                "from": from,
+                "to": to,
+                "workflow": workflows[i % workflows.len()],
+                "duration_ms": (i + 1) * 500
+            }),
+            run_id: run.map(|r| r.id),
+            step_id: None,
+            user_id: None,
+        });
+    }
+
+    // RunFailed x3
+    for i in 0..3 {
+        let errors = [
+            "agent budget exceeded: $0.50 > $0.10 max",
+            "step timeout after 300s",
+            "shell exited with code 1",
+        ];
+        specs.push(AuditSpec {
+            event_type: EventKind::RunFailed,
+            payload: json!({
+                "workflow": workflows[i % workflows.len()],
+                "error": errors[i],
+                "step": if i == 0 { "say-hello" } else { "build" }
+            }),
+            run_id: failed_run.map(|r| r.id),
+            step_id: failed_run.and_then(|r| r.step_ids.first().copied()),
+            user_id: None,
+        });
+    }
+
+    // RunBudgetExceeded x2
+    for (i, workflow) in workflows.iter().enumerate().take(2) {
+        specs.push(AuditSpec {
+            event_type: EventKind::RunBudgetExceeded,
+            payload: json!({
+                "workflow": workflow,
+                "budget_usd": 0.10 + (i as f64) * 0.05,
+                "actual_usd": 0.50 + (i as f64) * 0.20
+            }),
+            run_id: failed_run.map(|r| r.id),
+            step_id: None,
+            user_id: None,
+        });
+    }
+
+    // StepCompleted x10
+    let step_names = [
+        "checkout",
+        "build",
+        "test",
+        "deploy",
+        "collect-metrics",
+        "analyze",
+        "notify",
+        "cleanup",
+        "validate",
+        "publish",
+    ];
+    for (i, step) in step_names.iter().enumerate() {
+        let run = completed_runs.get(i % completed_runs.len());
+        specs.push(AuditSpec {
+            event_type: EventKind::StepCompleted,
+            payload: json!({
+                "step": step,
+                "duration_ms": (i + 1) * 1000,
+                "exit_code": 0
+            }),
+            run_id: run.map(|r| r.id),
+            step_id: run.and_then(|r| r.step_ids.first().copied()),
+            user_id: None,
+        });
+    }
+
+    // StepFailed x4
+    let step_errors = [
+        ("say-hello", "agent budget exceeded"),
+        ("build", "compilation error: expected ; found }"),
+        ("test", "assertion failed: expected 200, got 500"),
+        ("deploy", "connection refused: 10.0.0.1:5432"),
+    ];
+    for (i, (step, error)) in step_errors.iter().enumerate() {
+        specs.push(AuditSpec {
+            event_type: EventKind::StepFailed,
+            payload: json!({
+                "step": step,
+                "error": error,
+                "duration_ms": (i + 1) * 400
+            }),
+            run_id: failed_run.map(|r| r.id),
+            step_id: failed_run.and_then(|r| r.step_ids.first().copied()),
+            user_id: None,
+        });
+    }
+
+    // ApprovalRequested x3
+    for i in 0..3 {
+        let plans = [
+            "Deploy v2.1.0 to production",
+            "Run data migration batch #47",
+            "Enable feature flag: new-billing",
+        ];
+        specs.push(AuditSpec {
+            event_type: EventKind::ApprovalRequested,
+            payload: json!({
+                "workflow": "deploy-approval",
+                "step": "approve",
+                "plan": plans[i]
+            }),
+            run_id: completed_runs.first().map(|r| r.id),
+            step_id: None,
+            user_id: Some(user_pool[i % user_pool.len()].id),
+        });
+    }
+
+    // ApprovalGranted x3
+    for i in 0..3 {
+        let comments = ["LGTM", "Approved after review", "Go ahead, staging passed"];
+        specs.push(AuditSpec {
+            event_type: EventKind::ApprovalGranted,
+            payload: json!({
+                "workflow": "deploy-approval",
+                "step": "approve",
+                "approved_by": user_pool[i % user_pool.len()].username,
+                "comment": comments[i]
+            }),
+            run_id: completed_runs.first().map(|r| r.id),
+            step_id: None,
+            user_id: Some(user_pool[i % user_pool.len()].id),
+        });
+    }
+
+    // ApprovalRejected x2
+    let reject_reasons = [
+        "Not ready for production, missing tests",
+        "Performance regression detected in staging",
+    ];
+    for (i, reason) in reject_reasons.iter().enumerate() {
+        specs.push(AuditSpec {
+            event_type: EventKind::ApprovalRejected,
+            payload: json!({
+                "workflow": "deploy-approval",
+                "step": "approve",
+                "rejected_by": user_pool[(i + 1) % user_pool.len()].username,
+                "reason": reason
+            }),
+            run_id: cancelled_run.map(|r| r.id),
+            step_id: None,
+            user_id: Some(user_pool[(i + 1) % user_pool.len()].id),
+        });
+    }
+
+    // LogLine x5
+    let log_messages = [
+        "Starting workflow execution",
+        "Fetching dependencies from registry",
+        "Running test suite: 142 tests",
+        "Uploading artifacts to blob store",
+        "Workflow completed successfully",
+    ];
+    for (i, msg) in log_messages.iter().enumerate() {
+        let run = all_runs.get(i % all_runs.len());
+        specs.push(AuditSpec {
+            event_type: EventKind::LogLine,
+            payload: json!({
+                "message": msg,
+                "level": if i < 3 { "info" } else { "debug" },
+                "stream": "stdout"
+            }),
+            run_id: run.map(|r| r.id),
+            step_id: run.and_then(|r| r.step_ids.first().copied()),
+            user_id: None,
+        });
+    }
+
+    // UserSignedIn x10
+    for i in 0..10 {
+        let user = user_pool[i % user_pool.len()];
+        specs.push(AuditSpec {
+            event_type: EventKind::UserSignedIn,
+            payload: json!({
+                "username": user.username,
+                "ip": ips[i % ips.len()],
+                "user_agent": user_agents[i % user_agents.len()],
+                "mfa": i % 3 == 0
+            }),
+            run_id: None,
+            step_id: None,
+            user_id: Some(user.id),
+        });
+    }
+
+    // UserSignedUp x3
+    let signups = [
+        ("bob", "bob@ironflow.dev"),
+        ("charlie", "charlie@ironflow.dev"),
+        ("dana", "dana@ironflow.dev"),
+    ];
+    for (i, (name, email)) in signups.iter().enumerate() {
+        specs.push(AuditSpec {
+            event_type: EventKind::UserSignedUp,
+            payload: json!({ "username": name, "email": email }),
+            run_id: None,
+            step_id: None,
+            user_id: Some(user_pool[i % user_pool.len()].id),
+        });
+    }
+
+    // UserSignedOut x5
+    for i in 0..5 {
+        let user = user_pool[i % user_pool.len()];
+        specs.push(AuditSpec {
+            event_type: EventKind::UserSignedOut,
+            payload: json!({
+                "username": user.username,
+                "session_duration_secs": (i + 1) * 900
+            }),
+            run_id: None,
+            step_id: None,
+            user_id: Some(user.id),
+        });
+    }
+
+    // SecretsRotated x3
+    for i in 0..3 {
+        specs.push(AuditSpec {
+            event_type: EventKind::SecretsRotated,
+            payload: json!({
+                "rotated": (i + 1) * 5,
+                "failed": if i == 2 { 1 } else { 0 },
+                "from_version": i + 1,
+                "to_version": i + 2
+            }),
+            run_id: None,
+            step_id: None,
+            user_id: Some(admin.id),
+        });
+    }
+
+    // RetryForced x4
+    let retry_reasons = [
+        "Transient network error",
+        "Database connection timeout",
+        "Rate limited by external API",
+        "Worker OOM, restarted",
+    ];
+    for (i, reason) in retry_reasons.iter().enumerate() {
+        specs.push(AuditSpec {
+            event_type: EventKind::RetryForced,
+            payload: json!({
+                "workflow": workflows[i % workflows.len()],
+                "reason": reason,
+                "attempt": i + 2
+            }),
+            run_id: failed_run.map(|r| r.id),
+            step_id: None,
+            user_id: Some(user_pool[i % user_pool.len()].id),
+        });
+    }
+
+    // --- Extra entries to reach 101 ---
+    // More run created + status changed for pagination diversity
+    for i in 0..(101 - specs.len()) {
+        let run = all_runs.get(i % all_runs.len());
+        let user = user_pool[i % user_pool.len()];
+        let event_type = match i % 5 {
+            0 => EventKind::RunCreated,
+            1 => EventKind::RunStatusChanged,
+            2 => EventKind::StepCompleted,
+            3 => EventKind::UserSignedIn,
+            _ => EventKind::LogLine,
+        };
+        let payload = match i % 5 {
+            0 => json!({
+                "workflow": workflows[i % workflows.len()],
+                "trigger": "cron",
+                "labels": {"env": "staging", "branch": branches[i % branches.len()]}
+            }),
+            1 => json!({
+                "from": "pending",
+                "to": "running",
+                "workflow": workflows[i % workflows.len()]
+            }),
+            2 => json!({
+                "step": step_names[i % step_names.len()],
+                "duration_ms": (i + 1) * 750,
+                "exit_code": 0
+            }),
+            3 => json!({
+                "username": user.username,
+                "ip": ips[i % ips.len()],
+                "user_agent": user_agents[i % user_agents.len()]
+            }),
+            _ => json!({
+                "message": format!("Processing batch {} of {}", i + 1, 101 - specs.len()),
+                "level": "info"
+            }),
+        };
+        specs.push(AuditSpec {
+            event_type,
+            payload,
+            run_id: if i % 5 <= 2 { run.map(|r| r.id) } else { None },
+            step_id: if i % 5 == 2 {
+                run.and_then(|r| r.step_ids.first().copied())
+            } else {
+                None
+            },
+            user_id: if i % 5 != 1 { Some(user.id) } else { None },
+        });
+    }
+
+    assert_eq!(specs.len(), 101);
+
+    for spec in &specs {
+        store
+            .append_audit_log(NewAuditLogEntry {
+                event_type: spec.event_type,
+                payload: spec.payload.clone(),
+                run_id: spec.run_id,
+                step_id: spec.step_id,
+                user_id: spec.user_id,
+            })
+            .await?;
+    }
+
+    info!(count = specs.len(), "created audit log entries");
 
     Ok(())
 }

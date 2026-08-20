@@ -58,6 +58,17 @@ export type WorkflowDetailResponse =
 	components["schemas"]["WorkflowDetailResponse"];
 export type SubWorkflowDetail = components["schemas"]["SubWorkflowDetail"];
 
+// -- Audit Logs --
+export type AuditLogEntry = components["schemas"]["AuditLogEntry"];
+export type ListAuditLogsQuery = components["schemas"]["ListAuditLogsQuery"];
+
+// -- Secret key management --
+export type KeyVersionsResponse = components["schemas"]["KeyVersionsResponse"];
+export type RotateSecretsRequest =
+	components["schemas"]["RotateSecretsRequest"];
+export type RotateSecretsResponse =
+	components["schemas"]["RotateSecretsResponse"];
+
 // -- Secrets --
 export type SecretResponse = {
 	id: string;

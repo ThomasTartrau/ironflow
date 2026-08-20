@@ -5,6 +5,7 @@ import {
 	LayoutDashboard,
 	LockKeyhole,
 	Play,
+	ScrollText,
 	Settings,
 	Users,
 	Workflow,
@@ -81,6 +82,11 @@ const adminNavItem: NavItem = {
 			title: "Users",
 			url: "/users",
 			icon: Users,
+		},
+		{
+			title: "Audit Logs",
+			url: "/audit-logs",
+			icon: ScrollText,
 		},
 	],
 };
