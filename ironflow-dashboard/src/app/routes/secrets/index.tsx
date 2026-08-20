@@ -1,11 +1,25 @@
 import { useState } from "react";
 import { useLoaderData, useNavigate, useRevalidator } from "react-router";
-import { Plus, Trash2, Pencil, LockKeyhole, TriangleAlert } from "lucide-react";
+import {
+	Plus,
+	Trash2,
+	Pencil,
+	LockKeyhole,
+	TriangleAlert,
+	RotateCw,
+	KeyRound,
+} from "lucide-react";
 import { api } from "@/app/lib/api";
-import type { SecretResponse } from "@/app/lib/types";
+import type {
+	SecretResponse,
+	KeyVersionsResponse,
+	RotateSecretsResponse,
+} from "@/app/lib/types";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
+import { useAppSelector } from "@/app/store";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
 	Table,
 	TableBody,
@@ -16,7 +30,12 @@ import {
 } from "@/components/ui/table";
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { withToast } from "@/app/lib/api-toast";
-import { deleteSecret, updateSecret } from "./_actions/actions";
+import {
+	deleteSecret,
+	updateSecret,
+	rotateSecrets,
+	getKeyVersions,
+} from "./_actions/actions";
 import {
 	Dialog,
 	DialogContent,
@@ -36,6 +55,8 @@ export function Component() {
 	const { secrets } = useLoaderData() as { secrets: SecretResponse[] };
 	const navigate = useNavigate();
 	const revalidator = useRevalidator();
+	const auth = useAppSelector((state) => state.auth);
+	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
 	const [deletingKey, setDeletingKey] = useState<string | null>(null);
 	const [pendingDeleteKey, setPendingDeleteKey] = useState<string | null>(null);
 	const [editingSecret, setEditingSecret] = useState<SecretResponse | null>(
@@ -43,6 +64,12 @@ export function Component() {
 	);
 	const [editValue, setEditValue] = useState("");
 	const [editPending, setEditPending] = useState(false);
+	const [rotating, setRotating] = useState(false);
+	const [versionsOpen, setVersionsOpen] = useState(false);
+	const [keyVersions, setKeyVersions] = useState<KeyVersionsResponse | null>(
+		null,
+	);
+	const [versionsLoading, setVersionsLoading] = useState(false);
 
 	useDocumentMeta({
 		title: "Secrets",
@@ -98,16 +125,89 @@ export function Component() {
 			.finally(() => setEditPending(false));
 	}
 
+	async function handleRotate() {
+		setRotating(true);
+		let afterId: string | null = null;
+		let totalRotated = 0;
+		let totalFailed = 0;
+
+		const doRotation = async (): Promise<RotateSecretsResponse> => {
+			const body = afterId ? { after_id: afterId } : {};
+			return rotateSecrets(body);
+		};
+
+		await withToast(
+			(async () => {
+				let batch = await doRotation();
+				totalRotated += batch.rotated;
+				totalFailed += batch.failed;
+
+				while (batch.remaining > 0 && batch.last_id) {
+					afterId = batch.last_id;
+					batch = await doRotation();
+					totalRotated += batch.rotated;
+					totalFailed += batch.failed;
+				}
+
+				return { rotated: totalRotated, failed: totalFailed };
+			})(),
+			{
+				loading: "Rotating secrets...",
+				success: `Rotation complete: ${totalRotated} rotated, ${totalFailed} failed`,
+			},
+		).catch(() => {});
+
+		setRotating(false);
+		revalidator.revalidate();
+	}
+
+	async function handleOpenVersions() {
+		setVersionsOpen(true);
+		setVersionsLoading(true);
+		try {
+			const data = await getKeyVersions();
+			setKeyVersions(data);
+		} catch {
+			setKeyVersions(null);
+		} finally {
+			setVersionsLoading(false);
+		}
+	}
+
 	return (
 		<>
 			<HeaderApp
 				title="Secrets"
 				description="Encrypted secrets accessible from workflows."
 				titleItem={
-					<Button onClick={() => navigate("/secrets/new")}>
-						<Plus className="h-4 w-4 mr-1" />
-						New Secret
-					</Button>
+					<div className="flex gap-2">
+						{isAdmin && (
+							<>
+								<Button
+									variant="outline"
+									onClick={handleOpenVersions}
+									disabled={versionsLoading}
+								>
+									<KeyRound className="h-4 w-4 mr-1" />
+									Key Versions
+								</Button>
+								<Button
+									variant="outline"
+									onClick={handleRotate}
+									disabled={rotating}
+								>
+									<RotateCw
+										className={`h-4 w-4 mr-1 ${rotating ? "animate-spin" : ""}`}
+									/>
+									{rotating ? "Rotating..." : "Rotate"}
+								</Button>
+							</>
+						)}
+						<Button onClick={() => navigate("/secrets/new")}>
+							<Plus className="h-4 w-4 mr-1" />
+							New Secret
+						</Button>
+					</div>
 				}
 			>
 				<div className="space-y-6">
@@ -226,6 +326,83 @@ export function Component() {
 							type="button"
 						>
 							Delete
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Key versions dialog */}
+			<Dialog
+				open={versionsOpen}
+				onOpenChange={(open) => {
+					if (!open) {
+						setVersionsOpen(false);
+						setKeyVersions(null);
+					}
+				}}
+			>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Key Versions</DialogTitle>
+						<DialogDescription>
+							Encryption key ring status for stored secrets.
+						</DialogDescription>
+					</DialogHeader>
+					{versionsLoading ? (
+						<p className="text-sm text-muted-foreground py-4">Loading...</p>
+					) : keyVersions ? (
+						<div className="space-y-3 text-sm">
+							<div className="flex items-center gap-2">
+								<span className="font-medium">Active version:</span>
+								<Badge variant="outline">{keyVersions.active}</Badge>
+							</div>
+							<div>
+								<span className="font-medium">Configured:</span>{" "}
+								<span className="font-mono text-xs">
+									{keyVersions.configured.join(", ")}
+								</span>
+							</div>
+							<div>
+								<span className="font-medium">In use:</span>{" "}
+								<span className="font-mono text-xs">
+									{keyVersions.in_use.join(", ") || "none"}
+								</span>
+							</div>
+							<div>
+								<span className="font-medium">Retirable:</span>{" "}
+								<span className="font-mono text-xs">
+									{keyVersions.retirable.join(", ") || "none"}
+								</span>
+							</div>
+							{keyVersions.missing.length > 0 && (
+								<div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-destructive/10 text-destructive text-xs">
+									<TriangleAlert className="size-4 shrink-0 mt-0.5" />
+									<div>
+										<p className="font-medium">Missing key versions</p>
+										<p>
+											Versions {keyVersions.missing.join(", ")} are used by
+											stored secrets but not in the configured key ring. These
+											secrets cannot be decrypted.
+										</p>
+									</div>
+								</div>
+							)}
+						</div>
+					) : (
+						<p className="text-sm text-destructive py-4">
+							Failed to load key versions.
+						</p>
+					)}
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => {
+								setVersionsOpen(false);
+								setKeyVersions(null);
+							}}
+							type="button"
+						>
+							Close
 						</Button>
 					</DialogFooter>
 				</DialogContent>

@@ -4,6 +4,9 @@ import type {
 	SetSecretRequest,
 	UpdateSecretRequest,
 	ListSecretsQuery,
+	KeyVersionsResponse,
+	RotateSecretsRequest,
+	RotateSecretsResponse,
 } from "@/app/lib/types";
 
 export function listSecrets(query?: ListSecretsQuery) {
@@ -38,4 +41,18 @@ export function deleteSecret(key: string): Promise<void> {
 	return api
 		.del<void>(`/secrets/${encodeURIComponent(key)}`)
 		.then(() => undefined);
+}
+
+export function rotateSecrets(
+	body: RotateSecretsRequest = {},
+): Promise<RotateSecretsResponse> {
+	return api
+		.post<RotateSecretsResponse>("/secrets/rotate", body)
+		.then((res) => res.data);
+}
+
+export function getKeyVersions(): Promise<KeyVersionsResponse> {
+	return api
+		.get<KeyVersionsResponse>("/secrets/key-versions")
+		.then((res) => res.data);
 }
