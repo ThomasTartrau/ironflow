@@ -167,6 +167,31 @@ impl InMemoryStore {
     pub fn set_key_ring(&mut self, ring: crate::crypto::KeyRing) {
         self.key_ring = Some(Arc::new(ring));
     }
+
+    /// Override a run's `created_at` timestamp for testing retention policies.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use chrono::{Utc, TimeDelta};
+    /// use ironflow_store::memory::InMemoryStore;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example(store: &InMemoryStore, run_id: Uuid) {
+    /// let old = Utc::now() - TimeDelta::days(100);
+    /// store.set_run_created_at(run_id, old).await;
+    /// # }
+    /// ```
+    pub async fn set_run_created_at(
+        &self,
+        run_id: Uuid,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let mut state = self.state.write().await;
+        if let Some(run) = state.runs.get_mut(&run_id) {
+            run.created_at = created_at;
+        }
+    }
 }
 
 impl Default for InMemoryStore {

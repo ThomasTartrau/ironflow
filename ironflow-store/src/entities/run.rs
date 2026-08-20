@@ -1,6 +1,7 @@
 //! [`Run`] entity and related request/update types.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -416,6 +417,87 @@ pub struct RunUpdate {
     /// When the run should next be picked up. Used to arm the retry backoff.
     #[serde(default)]
     pub scheduled_at: Option<DateTime<Utc>>,
+}
+
+/// Retention policy for purging old runs.
+///
+/// Runs are eligible for purging when they are in a terminal state
+/// ([`RunStatus::is_terminal`]) **and** exceed either the age limit or the
+/// per-workflow count limit.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::PurgePolicy;
+///
+/// let policy = PurgePolicy {
+///     max_age_days: 90,
+///     max_runs_per_workflow: 1000,
+///     dry_run: false,
+/// };
+/// assert_eq!(policy.max_age_days, 90);
+/// ```
+#[derive(Debug, Clone)]
+pub struct PurgePolicy {
+    /// Runs older than this many days are eligible for purging.
+    pub max_age_days: u32,
+    /// When a workflow has more runs than this, the oldest terminal runs are
+    /// eligible for purging.
+    pub max_runs_per_workflow: u32,
+    /// When `true`, the purger logs what would be deleted but does not delete.
+    pub dry_run: bool,
+}
+
+/// Why a run was selected for purging.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::PurgeReason;
+///
+/// let reason = PurgeReason::TooOld;
+/// assert_eq!(format!("{reason}"), "too_old");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurgeReason {
+    /// The run exceeded [`PurgePolicy::max_age_days`].
+    TooOld,
+    /// The workflow exceeded [`PurgePolicy::max_runs_per_workflow`].
+    ExceedsWorkflowLimit,
+}
+
+impl fmt::Display for PurgeReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PurgeReason::TooOld => f.write_str("too_old"),
+            PurgeReason::ExceedsWorkflowLimit => f.write_str("exceeds_workflow_limit"),
+        }
+    }
+}
+
+/// A run selected for purging by [`RunStore::list_purgeable_runs`](crate::store::RunStore::list_purgeable_runs).
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::{PurgeReason, PurgeableRun};
+/// use uuid::Uuid;
+///
+/// let purgeable = PurgeableRun {
+///     run_id: Uuid::now_v7(),
+///     workflow_name: "deploy".to_string(),
+///     reason: PurgeReason::TooOld,
+/// };
+/// assert_eq!(purgeable.reason, PurgeReason::TooOld);
+/// ```
+#[derive(Debug, Clone)]
+pub struct PurgeableRun {
+    /// The run to purge.
+    pub run_id: Uuid,
+    /// Workflow the run belongs to.
+    pub workflow_name: String,
+    /// Why this run was selected.
+    pub reason: PurgeReason,
 }
 
 #[cfg(test)]

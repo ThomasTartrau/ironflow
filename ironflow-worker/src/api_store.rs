@@ -15,9 +15,9 @@ use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
     ApiKey, ApiKeyUpdate, Artifact, ArtifactLookup, AuditLogEntry, AuditLogFilter,
     KeyVersionStatus, LeaseRequest, NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep,
-    NewStepDependency, NewUser, Page, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation,
-    RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency,
-    StepUpdate, User,
+    NewStepDependency, NewUser, Page, PurgePolicy, PurgeableRun, ReapedRun, RotationBatch,
+    RotationRequest, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Secret,
+    SecretMetadata, Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::secret_store::SecretStore;
@@ -253,6 +253,20 @@ impl RunStore for ApiRunStore {
     fn reap_expired_leases(&self, _limit: u32) -> StoreFuture<'_, Vec<ReapedRun>> {
         // Recovery is an API-server responsibility: the worker has no route for
         // it and must never requeue runs it does not own.
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    fn list_purgeable_runs(
+        &self,
+        _policy: &PurgePolicy,
+        _batch_size: u32,
+    ) -> StoreFuture<'_, Vec<PurgeableRun>> {
+        // Purging is an API-server responsibility.
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    fn delete_run(&self, _id: Uuid) -> StoreFuture<'_, Vec<String>> {
+        // Purging is an API-server responsibility.
         Box::pin(async move { Ok(Vec::new()) })
     }
 

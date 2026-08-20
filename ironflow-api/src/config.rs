@@ -19,6 +19,10 @@
 //! | `RATE_LIMIT_GENERAL` | no | `60` | General rate limit (req/min/IP). `0` = disabled |
 //! | `ARTIFACTS_DIR` | no | - | Filesystem root for artifact blobs. Unset disables artifacts |
 //! | `ARTIFACT_MAX_BYTES` | no | `104857600` | Maximum size of a single artifact |
+//! | `PURGE_MAX_AGE_DAYS` | no | `90` | Runs older than this are purged |
+//! | `PURGE_MAX_RUNS_PER_WORKFLOW` | no | `1000` | Max terminal runs kept per workflow |
+//! | `PURGE_DRY_RUN` | no | `false` | Log what would be purged without deleting |
+//! | `PURGE_INTERVAL_SECS` | no | `86400` | Seconds between purge ticks (min 60) |
 //!
 //! # Examples
 //!
@@ -82,6 +86,22 @@ pub struct ServerConfig {
     ///
     /// Read from `ARTIFACT_MAX_BYTES`, defaulting to 100 MiB.
     pub artifact_max_bytes: u64,
+    /// Maximum age of a run before it becomes eligible for purging, in days.
+    ///
+    /// Read from `PURGE_MAX_AGE_DAYS`, defaulting to 90.
+    pub purge_max_age_days: u32,
+    /// Maximum number of terminal runs to keep per workflow.
+    ///
+    /// Read from `PURGE_MAX_RUNS_PER_WORKFLOW`, defaulting to 1000.
+    pub purge_max_runs_per_workflow: u32,
+    /// When `true`, the purger logs what would be deleted but does not delete.
+    ///
+    /// Read from `PURGE_DRY_RUN`, defaulting to `false`.
+    pub purge_dry_run: bool,
+    /// Interval between purge ticks, in seconds.
+    ///
+    /// Read from `PURGE_INTERVAL_SECS`, defaulting to 86400 (once per day).
+    pub purge_interval_secs: u64,
     /// Whether the server is running in production mode.
     pub is_production: bool,
     /// Rate limit for auth credential routes (sign-in, sign-up) in requests
@@ -242,6 +262,45 @@ impl ServerConfig {
             None => DEFAULT_MAX_ARTIFACT_BYTES,
         };
 
+        let purge_max_age_days = match env::var("PURGE_MAX_AGE_DAYS").ok() {
+            Some(raw) => raw.parse::<u32>().unwrap_or_else(|_| {
+                errors.push(format!(
+                    "PURGE_MAX_AGE_DAYS must be a valid u32, got: {raw}"
+                ));
+                90
+            }),
+            None => 90,
+        };
+        let purge_max_runs_per_workflow = match env::var("PURGE_MAX_RUNS_PER_WORKFLOW").ok() {
+            Some(raw) => raw.parse::<u32>().unwrap_or_else(|_| {
+                errors.push(format!(
+                    "PURGE_MAX_RUNS_PER_WORKFLOW must be a valid u32, got: {raw}"
+                ));
+                1000
+            }),
+            None => 1000,
+        };
+        let purge_dry_run = env::var("PURGE_DRY_RUN")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        let purge_interval_secs = match env::var("PURGE_INTERVAL_SECS").ok() {
+            Some(raw) => {
+                let parsed = raw.parse::<u64>().unwrap_or_else(|_| {
+                    errors.push(format!(
+                        "PURGE_INTERVAL_SECS must be a valid u64, got: {raw}"
+                    ));
+                    86400
+                });
+                if parsed < 60 {
+                    errors.push(format!(
+                        "PURGE_INTERVAL_SECS must be at least 60, got: {parsed}"
+                    ));
+                }
+                parsed
+            }
+            None => 86400,
+        };
+
         if !errors.is_empty() {
             return Err(ConfigError::new(errors));
         }
@@ -259,6 +318,10 @@ impl ServerConfig {
             rate_limit_general,
             artifacts_dir,
             artifact_max_bytes,
+            purge_max_age_days,
+            purge_max_runs_per_workflow,
+            purge_dry_run,
+            purge_interval_secs,
         })
     }
 }
@@ -287,6 +350,10 @@ mod tests {
             env::remove_var("WEBHOOK_URL");
             env::remove_var("RATE_LIMIT_AUTH");
             env::remove_var("RATE_LIMIT_GENERAL");
+            env::remove_var("PURGE_MAX_AGE_DAYS");
+            env::remove_var("PURGE_MAX_RUNS_PER_WORKFLOW");
+            env::remove_var("PURGE_DRY_RUN");
+            env::remove_var("PURGE_INTERVAL_SECS");
         }
     }
 
@@ -417,5 +484,58 @@ mod tests {
         assert!(err.errors.iter().any(|e| e.contains("RATE_LIMIT_AUTH")));
 
         unsafe { env::remove_var("RATE_LIMIT_AUTH") };
+    }
+
+    #[test]
+    fn default_purge_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { clear_env() };
+
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.purge_max_age_days, 90);
+        assert_eq!(config.purge_max_runs_per_workflow, 1000);
+        assert!(!config.purge_dry_run);
+        assert_eq!(config.purge_interval_secs, 86400);
+    }
+
+    #[test]
+    fn custom_purge_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            clear_env();
+            env::set_var("PURGE_MAX_AGE_DAYS", "30");
+            env::set_var("PURGE_MAX_RUNS_PER_WORKFLOW", "500");
+            env::set_var("PURGE_DRY_RUN", "true");
+            env::set_var("PURGE_INTERVAL_SECS", "3600");
+        }
+
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.purge_max_age_days, 30);
+        assert_eq!(config.purge_max_runs_per_workflow, 500);
+        assert!(config.purge_dry_run);
+        assert_eq!(config.purge_interval_secs, 3600);
+
+        unsafe {
+            env::remove_var("PURGE_MAX_AGE_DAYS");
+            env::remove_var("PURGE_MAX_RUNS_PER_WORKFLOW");
+            env::remove_var("PURGE_DRY_RUN");
+            env::remove_var("PURGE_INTERVAL_SECS");
+        }
+    }
+
+    #[test]
+    fn invalid_purge_max_age_days_returns_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            clear_env();
+            env::set_var("PURGE_MAX_AGE_DAYS", "not-a-number");
+        }
+
+        let result = ServerConfig::from_env();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.errors.iter().any(|e| e.contains("PURGE_MAX_AGE_DAYS")));
+
+        unsafe { env::remove_var("PURGE_MAX_AGE_DAYS") };
     }
 }

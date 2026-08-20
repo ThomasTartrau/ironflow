@@ -15,8 +15,8 @@ use crate::api_key_store::ApiKeyStore;
 use crate::artifact_store::ArtifactStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
-    LeaseRequest, NewRun, NewStep, NewStepDependency, Page, ReapedRun, Run, RunCreation, RunFilter,
-    RunStats, RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
+    LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeableRun, ReapedRun,
+    Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::secret_store::SecretStore;
@@ -186,6 +186,59 @@ pub trait RunStore: Send + Sync {
     /// Returns every edge where either `step_id` or `depends_on` belongs
     /// to the run. Ordered by `created_at` ascending.
     fn list_step_dependencies(&self, run_id: Uuid) -> StoreFuture<'_, Vec<StepDependency>>;
+
+    /// List runs eligible for purging according to the given policy.
+    ///
+    /// A run is eligible when it is in a terminal state ([`RunStatus::is_terminal`])
+    /// **and** either older than `policy.max_age_days` or exceeding
+    /// `policy.max_runs_per_workflow` for its workflow (oldest first).
+    ///
+    /// Runs in non-terminal states (`Pending`, `Running`, `Retrying`,
+    /// `AwaitingApproval`) are never returned.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::entities::PurgePolicy;
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// let policy = PurgePolicy { max_age_days: 90, max_runs_per_workflow: 1000, dry_run: false };
+    /// let purgeable = store.list_purgeable_runs(&policy, 100).await?;
+    /// for p in &purgeable {
+    ///     println!("purge {} ({}): {}", p.run_id, p.workflow_name, p.reason);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn list_purgeable_runs(
+        &self,
+        policy: &PurgePolicy,
+        batch_size: u32,
+    ) -> StoreFuture<'_, Vec<PurgeableRun>>;
+
+    /// Delete a run and all its associated data (steps, step dependencies).
+    ///
+    /// Returns the `storage_key` of every artifact that belonged to the run,
+    /// so the caller can delete the corresponding blobs from the blob store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::RunNotFound`] if the run does not exist.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::store::RunStore;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example(store: &dyn RunStore, run_id: Uuid) -> Result<(), ironflow_store::error::StoreError> {
+    /// let storage_keys = store.delete_run(run_id).await?;
+    /// // Caller deletes blobs from the blob store using these keys.
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn delete_run(&self, id: Uuid) -> StoreFuture<'_, Vec<String>>;
 
     /// Apply a partial update to a run and return the updated run.
     ///

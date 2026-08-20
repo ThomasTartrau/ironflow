@@ -75,6 +75,7 @@ pub mod error;
 pub mod middleware;
 #[cfg(feature = "openapi")]
 pub mod openapi;
+pub mod purger;
 pub mod rate_limit;
 pub mod reaper;
 pub mod response;
