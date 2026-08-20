@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.4.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-auth-v2.3.24...ironflow-auth-v2.4.0) - 2026-08-20
+
+### Added
+
+- #41 identity-aware rate limiting with per-API-key overrides
+
 ## [2.3.8](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-auth-v2.3.7...ironflow-auth-v2.3.8) - 2026-04-28
 
 ### Fixed
