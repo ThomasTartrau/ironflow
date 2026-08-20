@@ -326,6 +326,28 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/runs/{id}/logs": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Retrieve persisted log lines for a run with cursor-based pagination.
+		 * @description Returns log entries ordered by time (UUID v7 ascending). Use the
+		 *     `cursor` query parameter with the last entry's `id` to fetch the
+		 *     next page.
+		 */
+		get: operations["get_run_logs"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/runs/{id}/reject": {
 		parameters: {
 			query?: never;
@@ -1351,6 +1373,25 @@ export interface components {
 			| "user_signed_out"
 			| "secrets_rotated"
 			| "retry_forced";
+		/** @description Query parameters for listing run logs. */
+		GetRunLogsQuery: {
+			/**
+			 * Format: uuid
+			 * @description Cursor for pagination (last entry ID from previous page).
+			 */
+			cursor?: string | null;
+			/**
+			 * Format: int32
+			 * @description Number of entries to return (default: 100, max: 1000).
+			 */
+			limit?: number | null;
+			/**
+			 * Format: uuid
+			 * @description Filter by step ID.
+			 */
+			step_id?: string | null;
+			stream?: null | components["schemas"]["LogStream"];
+		};
 		/** @description How the configured key ring lines up with the stored secrets. */
 		KeyVersionsResponse: {
 			/**
@@ -1457,13 +1498,76 @@ export interface components {
 			/** @description Optional case-insensitive partial match on workflow name. */
 			name?: string | null;
 		};
+		/** @description Cursor-based pagination metadata for log entries. */
+		LogCursorMeta: {
+			/** @description Whether more entries exist after this page. */
+			has_more: boolean;
+			/**
+			 * Format: uuid
+			 * @description Cursor to pass for the next page. `None` when there are no more entries.
+			 */
+			next_cursor?: string | null;
+		};
 		/**
-		 * @description Output stream for a [`LogLine`](Event::LogLine) event.
+		 * @description A persisted log line from step execution.
+		 *
+		 *     Each entry records a single line of output alongside its metadata.
+		 *     Entries are ordered by [`id`](LogEntry::id) (UUID v7, time-ordered).
 		 *
 		 *     # Examples
 		 *
 		 *     ```
-		 *     use ironflow_engine::notify::LogStream;
+		 *     use ironflow_store::entities::{LogEntry, LogStream};
+		 *     use uuid::Uuid;
+		 *     use chrono::Utc;
+		 *
+		 *     let entry = LogEntry {
+		 *         id: Uuid::now_v7(),
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         step_name: "build".to_string(),
+		 *         stream: LogStream::Stdout,
+		 *         line: "Compiling ironflow v0.1.0".to_string(),
+		 *         created_at: Utc::now(),
+		 *     };
+		 *     assert_eq!(entry.stream, LogStream::Stdout);
+		 *     ```
+		 */
+		LogEntry: {
+			/**
+			 * Format: date-time
+			 * @description When the line was recorded.
+			 */
+			created_at: string;
+			/**
+			 * Format: uuid
+			 * @description Unique entry ID (UUID v7, time-ordered).
+			 */
+			id: string;
+			/** @description The log line content. */
+			line: string;
+			/**
+			 * Format: uuid
+			 * @description Run that produced this log line.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description Step that produced this log line.
+			 */
+			step_id: string;
+			/** @description Human-readable step name. */
+			step_name: string;
+			/** @description Output stream. */
+			stream: components["schemas"]["LogStream"];
+		};
+		/**
+		 * @description Output stream for a log line.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::LogStream;
 		 *
 		 *     let stream: LogStream = "stdout".parse().unwrap();
 		 *     assert_eq!(stream.as_str(), "stdout");
@@ -2665,6 +2769,52 @@ export interface operations {
 			};
 			/** @description Forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	get_run_logs: {
+		parameters: {
+			query?: {
+				/** @description Filter by step ID. */
+				step_id?: string | null;
+				/** @description Filter by output stream (`stdout`, `stderr`, `system`). */
+				stream?: null | components["schemas"]["LogStream"];
+				/** @description Cursor for pagination (last entry ID from previous page). */
+				cursor?: string | null;
+				/** @description Number of entries to return (default: 100, max: 1000). */
+				limit?: number | null;
+			};
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Log entries with cursor-based pagination */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["LogEntry"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
 				headers: {
 					[name: string]: unknown;
 				};
