@@ -57,6 +57,8 @@ pub const IDEMPOTENCY_CONFLICT: &str = "conflict";
 pub const STEPS_TOTAL: &str = "ironflow_steps_total";
 /// Histogram: step duration in seconds (label: kind).
 pub const STEP_DURATION_SECONDS: &str = "ironflow_step_duration_seconds";
+/// Counter: total step-level retries (labels: kind, outcome).
+pub const STEP_RETRIES_TOTAL: &str = "ironflow_step_retries_total";
 
 // ── Worker metrics ─────────────────────────────────────────────────
 /// Gauge: number of currently active worker tasks.

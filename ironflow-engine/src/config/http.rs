@@ -1,5 +1,6 @@
 //! [`HttpConfig`] — serializable configuration for an HTTP step.
 
+use ironflow_core::retry::RetryPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,6 +28,9 @@ pub struct HttpConfig {
     /// When `true`, a failure of this step does not fail the run.
     #[serde(default)]
     pub allow_failure: bool,
+    /// Optional step-level retry policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
 }
 
 impl HttpConfig {
@@ -72,6 +76,7 @@ impl HttpConfig {
             body: None,
             timeout_secs: None,
             allow_failure: false,
+            retry: None,
         }
     }
 
@@ -107,6 +112,23 @@ impl HttpConfig {
         self.allow_failure = true;
         self
     }
+
+    /// Set a step-level retry policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::retry::RetryPolicy;
+    /// use ironflow_engine::config::HttpConfig;
+    ///
+    /// let config = HttpConfig::get("https://api.example.com")
+    ///     .retry_policy(RetryPolicy::new(5));
+    /// assert!(config.retry.is_some());
+    /// ```
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry = Some(policy);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +155,24 @@ mod tests {
         assert_eq!(config.headers.len(), 1);
         assert!(config.body.is_some());
         assert_eq!(config.timeout_secs, Some(10));
+    }
+
+    #[test]
+    fn a_config_predating_retry_still_deserializes() {
+        let config: HttpConfig = serde_json::from_str(
+            r#"{"url":"http://x","method":"GET","headers":[],"body":null,"timeout_secs":null}"#,
+        )
+        .expect("deserialize");
+        assert!(config.retry.is_none());
+    }
+
+    #[test]
+    fn retry_policy_roundtrip() {
+        use ironflow_core::retry::RetryPolicy;
+
+        let config = HttpConfig::get("http://api").retry_policy(RetryPolicy::new(3));
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: HttpConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.retry.as_ref().unwrap().max_retries(), 3);
     }
 }
