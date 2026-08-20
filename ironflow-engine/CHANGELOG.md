@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.24.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.23.2...ironflow-engine-v2.24.0) - 2026-08-20
+
+### Added
+
+- #38 step-level retry with exponential backoff
+
 ## [2.23.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.22.0...ironflow-engine-v2.23.0) - 2026-08-17
 
 ### Added
