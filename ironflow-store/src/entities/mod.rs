@@ -9,6 +9,8 @@ mod artifact;
 mod audit_log;
 mod event_kind;
 mod fsm_state;
+mod log_entry;
+mod log_stream;
 mod page;
 mod run;
 mod run_actor;
@@ -28,6 +30,8 @@ pub use artifact::{Artifact, ArtifactLookup, NewArtifact};
 pub use audit_log::{AuditLogEntry, AuditLogFilter, NewAuditLogEntry};
 pub use event_kind::EventKind;
 pub use fsm_state::FsmState;
+pub use log_entry::{LogEntry, LogFilter, NewLogEntries};
+pub use log_stream::LogStream;
 pub use page::Page;
 pub use run::{
     IDEMPOTENCY_WINDOW, LeaseRequest, MAX_IDEMPOTENCY_KEY_LEN, NewRun, ReapedRun, Run, RunCreation,

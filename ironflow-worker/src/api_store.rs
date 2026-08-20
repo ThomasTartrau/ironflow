@@ -14,12 +14,13 @@ use ironflow_store::artifact_store::ArtifactStore;
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
     ApiKey, ApiKeyUpdate, Artifact, ArtifactLookup, AuditLogEntry, AuditLogFilter,
-    KeyVersionStatus, LeaseRequest, NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep,
-    NewStepDependency, NewUser, Page, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation,
-    RunFilter, RunStats, RunStatus, RunUpdate, Secret, SecretMetadata, Step, StepDependency,
-    StepUpdate, User,
+    KeyVersionStatus, LeaseRequest, LogEntry, LogFilter, NewApiKey, NewArtifact, NewAuditLogEntry,
+    NewLogEntries, NewRun, NewStep, NewStepDependency, NewUser, Page, ReapedRun, RotationBatch,
+    RotationRequest, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Secret,
+    SecretMetadata, Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
+use ironflow_store::log_store::LogStore;
 use ironflow_store::secret_store::SecretStore;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
@@ -567,6 +568,27 @@ impl SecretStore for ApiRunStore {
         Box::pin(async move {
             Err(StoreError::Database(
                 "SecretStore not available in worker".to_string(),
+            ))
+        })
+    }
+}
+
+impl LogStore for ApiRunStore {
+    fn append_logs(&self, _entries: NewLogEntries) -> StoreFuture<'_, ()> {
+        // Log persistence is handled by the API server via push_logs.
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn get_logs(
+        &self,
+        _run_id: Uuid,
+        _filter: LogFilter,
+        _cursor: Option<Uuid>,
+        _limit: u32,
+    ) -> StoreFuture<'_, Vec<LogEntry>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "LogStore not available in worker".to_string(),
             ))
         })
     }

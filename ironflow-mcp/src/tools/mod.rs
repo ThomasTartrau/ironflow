@@ -12,7 +12,7 @@ pub mod stats;
 pub mod workflows;
 
 pub use actions::{ApproveRunTool, CancelRunTool, RejectRunTool, RetryRunTool};
-pub use runs::{CreateRunTool, GetRunTool, ListRunsTool};
+pub use runs::{CreateRunTool, GetRunLogsTool, GetRunTool, ListRunsTool};
 pub use stats::GetStatsTool;
 pub use workflows::{GetWorkflowTool, ListWorkflowsTool};
 
@@ -24,6 +24,7 @@ rust_mcp_sdk::tool_box!(
         CreateRunTool,
         ListRunsTool,
         GetRunTool,
+        GetRunLogsTool,
         CancelRunTool,
         ApproveRunTool,
         RejectRunTool,

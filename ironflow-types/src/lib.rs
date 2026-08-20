@@ -8,6 +8,8 @@
 //!
 //! - **`openapi`** -- derive [`utoipa::ToSchema`] for OpenAPI spec generation.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -31,6 +33,10 @@ pub struct ApiMeta {
     pub per_page: Option<u32>,
     /// Total number of items matching the filter.
     pub total: Option<u64>,
+    /// Additional metadata fields (e.g. cursor-based pagination).
+    #[serde(flatten)]
+    #[cfg_attr(feature = "openapi", schema(additional_properties))]
+    pub extra: HashMap<String, Value>,
 }
 
 impl ApiMeta {
@@ -40,6 +46,7 @@ impl ApiMeta {
             page: None,
             per_page: None,
             total: None,
+            extra: HashMap::new(),
         }
     }
 
@@ -49,6 +56,7 @@ impl ApiMeta {
             page: Some(page),
             per_page: Some(per_page),
             total: Some(total),
+            extra: HashMap::new(),
         }
     }
 }

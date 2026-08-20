@@ -5,11 +5,13 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use uuid::Uuid;
 
 use serde_json::json;
 
 use ironflow_engine::notify::{Event, LogStream};
+use ironflow_store::entities::NewLogEntries;
 
 use crate::error::ApiError;
 use crate::response::ok;
@@ -66,7 +68,22 @@ pub async fn push_logs(
         let _ = state.event_sender.send(event);
     }
 
-    Ok(ok(json!({ "accepted": req.lines.len() })))
+    let accepted = req.lines.len();
+
+    if accepted > 0 {
+        let entries = NewLogEntries {
+            run_id,
+            step_id: req.step_id,
+            step_name: req.step_name,
+            stream: req.stream,
+            lines: req.lines,
+        };
+        if let Err(e) = state.store.append_logs(entries).await {
+            warn!(run_id = %run_id, error = %e, "failed to persist log lines");
+        }
+    }
+
+    Ok(ok(json!({ "accepted": accepted })))
 }
 
 #[cfg(test)]
@@ -86,7 +103,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::{Event, LogStream};
-    use ironflow_store::entities::{NewStep, StepKind};
+    use ironflow_store::entities::{LogFilter, NewStep, StepKind};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
 
@@ -233,6 +250,61 @@ mod tests {
         let resp_body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = from_slice(&resp_body).unwrap();
         assert_eq!(json_val["data"]["accepted"], 0);
+    }
+
+    #[tokio::test]
+    async fn push_logs_persists_to_store() {
+        let state = test_state();
+        let run = state
+            .store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        let step_id = Uuid::now_v7();
+        let app = create_router(state.clone(), RouterConfig::default());
+
+        let body = PushLogsRequest {
+            step_id,
+            step_name: "build".to_string(),
+            stream: LogStream::Stdout,
+            lines: vec!["line 1".to_string(), "line 2".to_string()],
+        };
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/internal/runs/{}/logs", run.id))
+            .header("authorization", "Bearer test-worker-token")
+            .header("content-type", "application/json")
+            .body(Body::from(to_string(&body).unwrap()))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let logs = state
+            .store
+            .get_logs(run.id, LogFilter::default(), None, 100)
+            .await
+            .unwrap();
+
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].line, "line 1");
+        assert_eq!(logs[1].line, "line 2");
+        assert_eq!(logs[0].step_id, step_id);
+        assert_eq!(logs[0].step_name, "build");
     }
 
     #[tokio::test]

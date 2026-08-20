@@ -19,6 +19,7 @@ use crate::entities::{
     RunStats, RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
+use crate::log_store::LogStore;
 use crate::secret_store::SecretStore;
 use crate::user_store::UserStore;
 
@@ -244,11 +245,11 @@ pub trait RunStore: Send + Sync {
 /// # }
 /// ```
 pub trait Store:
-    RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore + ArtifactStore
+    RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore + ArtifactStore + LogStore
 {
 }
 
-impl<T: RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore + ArtifactStore> Store
-    for T
+impl<T: RunStore + UserStore + ApiKeyStore + SecretStore + AuditLogStore + ArtifactStore + LogStore>
+    Store for T
 {
 }

@@ -7,59 +7,8 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use ironflow_store::entities::LogStream;
 use ironflow_store::models::{RunStatus, StepKind};
-
-/// Output stream for a [`LogLine`](Event::LogLine) event.
-///
-/// # Examples
-///
-/// ```
-/// use ironflow_engine::notify::LogStream;
-///
-/// let stream: LogStream = "stdout".parse().unwrap();
-/// assert_eq!(stream.as_str(), "stdout");
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum LogStream {
-    /// Standard output.
-    Stdout,
-    /// Standard error.
-    Stderr,
-    /// System-level messages (e.g. step start/stop notifications).
-    System,
-}
-
-impl LogStream {
-    /// Returns the wire-format string for this stream.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Stdout => "stdout",
-            Self::Stderr => "stderr",
-            Self::System => "system",
-        }
-    }
-}
-
-impl std::fmt::Display for LogStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for LogStream {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "stdout" => Ok(Self::Stdout),
-            "stderr" => Ok(Self::Stderr),
-            "system" => Ok(Self::System),
-            _ => Err(format!("unknown log stream: {s}")),
-        }
-    }
-}
 
 /// A domain event emitted by the ironflow system.
 ///

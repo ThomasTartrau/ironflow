@@ -9,6 +9,7 @@ pub mod create_run;
 pub mod download_artifact;
 pub mod events;
 pub mod get_run;
+pub mod get_run_logs;
 pub mod get_stats;
 pub mod get_workflow;
 pub mod health_check;
@@ -210,6 +211,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             get(list_runs::list_runs).post(create_run::create_run),
         )
         .route("/runs/{id}", get(get_run::get_run))
+        .route("/runs/{id}/logs", get(get_run_logs::get_run_logs))
         .route("/runs/{id}/cancel", post(cancel_run::cancel_run))
         .route("/runs/{id}/approve", post(approve_run::approve_run))
         .route("/runs/{id}/reject", post(approve_run::reject_run))
