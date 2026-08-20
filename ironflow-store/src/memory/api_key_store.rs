@@ -28,6 +28,7 @@ impl ApiKeyStore for InMemoryStore {
                 last_used_at: None,
                 created_at: now,
                 updated_at: now,
+                rate_limit_override: req.rate_limit_override,
             };
             state.api_keys.insert(id, key.clone());
             Ok(key)
@@ -85,6 +86,9 @@ impl ApiKeyStore for InMemoryStore {
             if let Some(expires_at) = update.expires_at {
                 key.expires_at = expires_at;
             }
+            if let Some(rate_limit_override) = update.rate_limit_override {
+                key.rate_limit_override = rate_limit_override;
+            }
             key.updated_at = Utc::now();
             Ok(())
         })
@@ -128,6 +132,7 @@ mod tests {
                 key_prefix: "sk_prod_abc123".to_string(),
                 scopes: vec![ApiKeyScope::WorkflowsRead],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -151,6 +156,7 @@ mod tests {
                 key_prefix: "sk_test_xyz".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -188,6 +194,7 @@ mod tests {
                 key_prefix: "sk_inactive".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -201,6 +208,7 @@ mod tests {
                     scopes: None,
                     is_active: Some(false),
                     expires_at: None,
+                    rate_limit_override: None,
                 },
             )
             .await
@@ -224,6 +232,7 @@ mod tests {
                 key_prefix: "sk_test".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -259,6 +268,7 @@ mod tests {
                 key_prefix: "sk_1".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -271,6 +281,7 @@ mod tests {
                 key_prefix: "sk_2".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -283,6 +294,7 @@ mod tests {
                 key_prefix: "sk_3".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -305,6 +317,7 @@ mod tests {
                 key_prefix: "sk_test".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -317,6 +330,7 @@ mod tests {
                     scopes: None,
                     is_active: None,
                     expires_at: None,
+                    rate_limit_override: None,
                 },
             )
             .await
@@ -340,6 +354,7 @@ mod tests {
                 key_prefix: "sk_test".to_string(),
                 scopes: vec![ApiKeyScope::WorkflowsRead],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -354,6 +369,7 @@ mod tests {
                     scopes: Some(new_scopes.clone()),
                     is_active: None,
                     expires_at: None,
+                    rate_limit_override: None,
                 },
             )
             .await
@@ -377,6 +393,7 @@ mod tests {
                 key_prefix: "sk_test".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -403,6 +420,7 @@ mod tests {
                 key_prefix: "sk_test".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -419,5 +437,84 @@ mod tests {
         let store = InMemoryStore::new();
         let result = store.delete_api_key(Uuid::now_v7()).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn create_api_key_with_rate_limit_override() {
+        let store = InMemoryStore::new();
+        let user_id = Uuid::now_v7();
+
+        let key = store
+            .create_api_key(NewApiKey {
+                user_id,
+                name: "high-volume".to_string(),
+                key_hash: "hash".to_string(),
+                key_prefix: "sk_hv".to_string(),
+                scopes: vec![],
+                expires_at: None,
+                rate_limit_override: Some(500),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(key.rate_limit_override, Some(500));
+
+        let found = store.find_api_key_by_id(key.id).await.unwrap().unwrap();
+        assert_eq!(found.rate_limit_override, Some(500));
+    }
+
+    #[tokio::test]
+    async fn update_api_key_rate_limit_override() {
+        let store = InMemoryStore::new();
+        let user_id = Uuid::now_v7();
+
+        let created = store
+            .create_api_key(NewApiKey {
+                user_id,
+                name: "test".to_string(),
+                key_hash: "hash".to_string(),
+                key_prefix: "sk_rl".to_string(),
+                scopes: vec![],
+                expires_at: None,
+                rate_limit_override: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(created.rate_limit_override.is_none());
+
+        store
+            .update_api_key(
+                created.id,
+                ApiKeyUpdate {
+                    name: None,
+                    scopes: None,
+                    is_active: None,
+                    expires_at: None,
+                    rate_limit_override: Some(Some(200)),
+                },
+            )
+            .await
+            .unwrap();
+
+        let updated = store.find_api_key_by_id(created.id).await.unwrap().unwrap();
+        assert_eq!(updated.rate_limit_override, Some(200));
+
+        store
+            .update_api_key(
+                created.id,
+                ApiKeyUpdate {
+                    name: None,
+                    scopes: None,
+                    is_active: None,
+                    expires_at: None,
+                    rate_limit_override: Some(None),
+                },
+            )
+            .await
+            .unwrap();
+
+        let cleared = store.find_api_key_by_id(created.id).await.unwrap().unwrap();
+        assert!(cleared.rate_limit_override.is_none());
     }
 }

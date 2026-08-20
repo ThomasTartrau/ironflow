@@ -144,6 +144,7 @@ mod tests {
                 key_prefix: "sk_".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();
@@ -225,6 +226,7 @@ mod tests {
                 key_prefix: "sk_".to_string(),
                 scopes: vec![],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap();

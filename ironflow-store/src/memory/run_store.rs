@@ -2967,6 +2967,7 @@ mod tests {
                 key_prefix: "irfl_0000".to_string(),
                 scopes: vec![ApiKeyScope::RunsWrite],
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await
             .unwrap()

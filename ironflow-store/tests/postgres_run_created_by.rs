@@ -69,6 +69,7 @@ async fn seed_api_key(store: &PostgresStore, user_id: Uuid, name: &str) -> Uuid 
             key_prefix: format!("irfl_{}", &Uuid::now_v7().simple().to_string()[..8]),
             scopes: vec![ApiKeyScope::RunsWrite],
             expires_at: None,
+            rate_limit_override: None,
         })
         .await
         .expect("create api key")

@@ -635,6 +635,7 @@ async fn seed_api_keys(store: &dyn Store, users: &[SeededUser]) -> anyhow::Resul
                 key_prefix: prefix,
                 scopes: scopes.clone(),
                 expires_at: None,
+                rate_limit_override: None,
             })
             .await?;
 
