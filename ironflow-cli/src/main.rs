@@ -12,9 +12,11 @@
 //! 2. Environment variables (`IRONFLOW_URL`, `IRONFLOW_API_KEY`)
 //! 3. TOML file at `~/.ironflow.toml`
 
+use std::io;
+
 use anyhow::Result;
 use clap::Parser;
-use ironflow_cli::cli::{Cli, Commands, dispatch};
+use ironflow_cli::cli::{Cli, Commands, dispatch, generate_completions, generate_man_page};
 use ironflow_cli::commands;
 use ironflow_cli::config;
 use ironflow_sdk::IronflowClient;
@@ -28,8 +30,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Commands::Template(args) = &cli.command {
-        return commands::template::execute(args);
+    match &cli.command {
+        Commands::Template(args) => return commands::template::execute(args),
+        Commands::Completions { shell } => return generate_completions(*shell, &mut io::stdout()),
+        Commands::Man => return generate_man_page(&mut io::stdout()),
+        _ => {}
     }
 
     let config = config::load(cli.url.as_deref(), cli.api_key.as_deref())?;
