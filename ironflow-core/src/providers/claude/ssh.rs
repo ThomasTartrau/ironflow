@@ -29,16 +29,18 @@
 //! # }
 //! ```
 
+use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use russh::ChannelMsg;
-use russh::keys::PrivateKeyWithHashAlg;
+use russh::keys::{HashAlg, PrivateKeyWithHashAlg, check_known_hosts_path};
 use tokio::time;
 use tracing::{debug, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentProvider, InvokeFuture};
+use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
 
 use super::common::{self, DEFAULT_TIMEOUT};
 
@@ -57,8 +59,8 @@ enum SshAuth {
 /// Policy for verifying the remote SSH server's host key.
 ///
 /// Controls how [`SshProvider`] handles the server's public key during the
-/// SSH handshake. The default is [`AcceptAll`](Self::AcceptAll), which is
-/// convenient for development but **insecure** for production.
+/// SSH handshake. The default is [`RejectAll`](Self::RejectAll), forcing
+/// callers to make an explicit security decision.
 ///
 /// # Examples
 ///
@@ -66,8 +68,21 @@ enum SshAuth {
 /// use ironflow_core::providers::claude::SshProvider;
 /// use ironflow_core::providers::claude::ssh::HostKeyPolicy;
 ///
+/// // Development only (INSECURE): accept all keys
 /// let provider = SshProvider::new("host.example.com", "deploy")
-///     .host_key_policy(HostKeyPolicy::RejectAll)
+///     .host_key_policy(HostKeyPolicy::AcceptAll)
+///     .password("s3cret");
+///
+/// // Production: verify against a known fingerprint
+/// let provider = SshProvider::new("host.example.com", "deploy")
+///     .host_key_policy(HostKeyPolicy::Fingerprint(
+///         "SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog".to_string(),
+///     ))
+///     .password("s3cret");
+///
+/// // Production: verify against a known_hosts file
+/// let provider = SshProvider::new("host.example.com", "deploy")
+///     .host_key_policy(HostKeyPolicy::KnownHostsFile("/home/deploy/.ssh/known_hosts".into()))
 ///     .password("s3cret");
 /// ```
 #[derive(Clone, Default, Debug)]
@@ -76,18 +91,49 @@ pub enum HostKeyPolicy {
     ///
     /// Suitable only for development and testing. A warning is logged
     /// every time a connection is made with this policy.
-    #[default]
     AcceptAll,
     /// Reject all server keys unconditionally.
     ///
-    /// Useful for testing error paths or as a safeguard when no
-    /// verification mechanism is configured yet.
+    /// This is the default policy, forcing callers to make an explicit
+    /// security decision before connecting.
+    ///
+    #[default]
     RejectAll,
+    /// Accept only if the server key's SHA-256 fingerprint matches.
+    ///
+    /// The fingerprint string must be in the standard `SHA256:<base64>`
+    /// format (e.g. `"SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog"`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::ssh::HostKeyPolicy;
+    ///
+    /// let policy = HostKeyPolicy::Fingerprint(
+    ///     "SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog".to_string(),
+    /// );
+    /// ```
+    Fingerprint(String),
+    /// Verify the server key against a known_hosts file.
+    ///
+    /// Uses the OpenSSH `known_hosts` file format. The key must be present
+    /// and match; unknown or changed keys are rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::ssh::HostKeyPolicy;
+    ///
+    /// let policy = HostKeyPolicy::KnownHostsFile("/home/deploy/.ssh/known_hosts".into());
+    /// ```
+    KnownHostsFile(PathBuf),
 }
 
 /// SSH client handler that applies a [`HostKeyPolicy`] during the handshake.
 struct SshHandler {
     policy: HostKeyPolicy,
+    host: String,
+    port: u16,
 }
 
 impl russh::client::Handler for SshHandler {
@@ -95,16 +141,54 @@ impl russh::client::Handler for SshHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::PublicKey,
+        server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        match self.policy {
+        match &self.policy {
             HostKeyPolicy::AcceptAll => {
-                debug!("accepting SSH server key without verification (HostKeyPolicy::AcceptAll)");
+                warn!("accepting SSH server key without verification (HostKeyPolicy::AcceptAll)");
                 Ok(true)
             }
             HostKeyPolicy::RejectAll => {
                 warn!("rejecting SSH server key (HostKeyPolicy::RejectAll)");
                 Ok(false)
+            }
+            HostKeyPolicy::Fingerprint(expected) => {
+                let actual = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+                if actual == *expected {
+                    debug!(fingerprint = %actual, "SSH server key fingerprint matches");
+                    Ok(true)
+                } else {
+                    warn!(
+                        expected = %expected,
+                        actual = %actual,
+                        "SSH server key fingerprint mismatch"
+                    );
+                    Ok(false)
+                }
+            }
+            HostKeyPolicy::KnownHostsFile(path) => {
+                match check_known_hosts_path(&self.host, self.port, server_public_key, path) {
+                    Ok(true) => {
+                        debug!(path = %path.display(), "SSH server key verified against known_hosts");
+                        Ok(true)
+                    }
+                    Ok(false) => {
+                        warn!(
+                            path = %path.display(),
+                            host = %self.host,
+                            "SSH server key not found in known_hosts"
+                        );
+                        Ok(false)
+                    }
+                    Err(e) => {
+                        warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "known_hosts verification failed"
+                        );
+                        Ok(false)
+                    }
+                }
             }
         }
     }
@@ -209,7 +293,7 @@ impl SshProvider {
         self
     }
 
-    /// Set the host key verification policy (default: [`HostKeyPolicy::AcceptAll`]).
+    /// Set the host key verification policy (default: [`HostKeyPolicy::RejectAll`]).
     ///
     /// # Examples
     ///
@@ -283,160 +367,183 @@ impl SshProvider {
     }
 }
 
-impl AgentProvider for SshProvider {
-    fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
-        Box::pin(async move {
-            common::validate_prompt_size(config)?;
-            let built = common::build_command(config)?;
+impl SshProvider {
+    /// Shared implementation for `invoke` and `invoke_with_logs`.
+    async fn invoke_inner(
+        &self,
+        config: &AgentConfig,
+        log_sink: Option<Arc<dyn LogSink>>,
+    ) -> Result<AgentOutput, AgentError> {
+        let forced = common::force_verbose_for_streaming(config, log_sink.is_some());
+        let config = forced.as_ref().unwrap_or(config);
 
-            let claude_cmd = common::build_shell_command(&self.claude_path, &built.args);
-            let env_prefix = common::env_unset_shell_prefix();
-            let remote_cmd = match (&self.working_dir, &config.working_dir) {
-                (_, Some(dir)) | (Some(dir), None) => {
-                    format!(
-                        "{env_prefix}cd {} && {}",
-                        common::build_shell_command(dir, &[]),
-                        claude_cmd
-                    )
-                }
-                (None, None) => format!("{env_prefix}{claude_cmd}"),
-            };
+        common::validate_prompt_size(config)?;
+        let built = common::build_command(config)?;
 
-            debug!(
-                host = %self.host,
-                port = self.port,
-                username = %self.username,
-                model = %config.model,
-                "connecting via SSH"
-            );
+        let claude_cmd = common::build_shell_command(&self.claude_path, &built.args);
+        let env_prefix = common::env_unset_shell_prefix();
+        let remote_cmd = match (&self.working_dir, &config.working_dir) {
+            (_, Some(dir)) | (Some(dir), None) => {
+                format!(
+                    "{env_prefix}cd {} && {}",
+                    common::build_shell_command(dir, &[]),
+                    claude_cmd
+                )
+            }
+            (None, None) => format!("{env_prefix}{claude_cmd}"),
+        };
 
-            let start = Instant::now();
+        debug!(
+            host = %self.host,
+            port = self.port,
+            username = %self.username,
+            model = %config.model,
+            "connecting via SSH"
+        );
 
-            // Connect
-            let ssh_config = Arc::new(russh::client::Config::default());
-            let handler = SshHandler {
-                policy: self.host_key_policy.clone(),
-            };
-            let mut session = time::timeout(
-                Duration::from_secs(30),
-                russh::client::connect(ssh_config, (&*self.host, self.port), handler),
-            )
-            .await
-            .map_err(|_| AgentError::Timeout {
-                limit: Duration::from_secs(30),
-            })?
-            .map_err(|e| AgentError::ProcessFailed {
-                exit_code: -1,
-                stderr: format!("SSH connection failed: {e}"),
-            })?;
+        let start = Instant::now();
 
-            // Authenticate
-            self.authenticate(&mut session).await?;
+        // Connect
+        let ssh_config = Arc::new(russh::client::Config::default());
+        let handler = SshHandler {
+            policy: self.host_key_policy.clone(),
+            host: self.host.clone(),
+            port: self.port,
+        };
+        let mut session = time::timeout(
+            Duration::from_secs(30),
+            russh::client::connect(ssh_config, (&*self.host, self.port), handler),
+        )
+        .await
+        .map_err(|_| AgentError::Timeout {
+            limit: Duration::from_secs(30),
+        })?
+        .map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("SSH connection failed: {e}"),
+        })?;
 
-            // Open channel and execute
-            let mut channel =
-                session
-                    .channel_open_session()
-                    .await
-                    .map_err(|e| AgentError::ProcessFailed {
-                        exit_code: -1,
-                        stderr: format!("failed to open SSH session channel: {e}"),
-                    })?;
+        // Authenticate
+        self.authenticate(&mut session).await?;
 
-            debug!(
-                remote_cmd_len = remote_cmd.len(),
-                "executing remote command"
-            );
-
-            channel
-                .exec(true, remote_cmd.as_bytes())
+        // Open channel and execute
+        let mut channel =
+            session
+                .channel_open_session()
                 .await
                 .map_err(|e| AgentError::ProcessFailed {
                     exit_code: -1,
-                    stderr: format!("failed to exec remote command: {e}"),
+                    stderr: format!("failed to open SSH session channel: {e}"),
                 })?;
 
-            if let Some(ref prompt) = built.stdin_prompt {
-                let cursor = std::io::Cursor::new(prompt.as_bytes());
-                channel
-                    .data(cursor)
-                    .await
-                    .map_err(|e| AgentError::ProcessFailed {
-                        exit_code: -1,
-                        stderr: format!("failed to write prompt to SSH stdin: {e}"),
-                    })?;
-            }
+        debug!(
+            remote_cmd_len = remote_cmd.len(),
+            "executing remote command"
+        );
 
-            channel.eof().await.map_err(|e| AgentError::ProcessFailed {
+        channel
+            .exec(true, remote_cmd.as_bytes())
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
                 exit_code: -1,
-                stderr: format!("failed to send EOF on SSH channel: {e}"),
+                stderr: format!("failed to exec remote command: {e}"),
             })?;
 
-            // Collect stdout/stderr
-            let mut stdout_buf = Vec::new();
-            let mut stderr_buf = Vec::new();
-            let mut exit_code: Option<u32> = None;
+        if let Some(ref prompt) = built.stdin_prompt {
+            let cursor = Cursor::new(prompt.as_bytes());
+            channel
+                .data(cursor)
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to write prompt to SSH stdin: {e}"),
+                })?;
+        }
 
-            let collect_result = time::timeout(self.timeout, async {
-                loop {
-                    let msg = channel.wait().await;
-                    let Some(msg) = msg else { break };
-                    match msg {
-                        ChannelMsg::Data { ref data } => {
-                            stdout_buf.extend_from_slice(data);
-                        }
-                        ChannelMsg::ExtendedData { ref data, ext } => {
-                            if ext == 1 {
-                                stderr_buf.extend_from_slice(data);
-                            }
-                        }
-                        ChannelMsg::ExitStatus { exit_status } => {
-                            exit_code = Some(exit_status);
-                        }
-                        _ => {}
+        channel.eof().await.map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("failed to send EOF on SSH channel: {e}"),
+        })?;
+
+        // Collect stdout/stderr
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+        let mut exit_code: Option<u32> = None;
+
+        let collect_result = time::timeout(self.timeout, async {
+            loop {
+                let msg = channel.wait().await;
+                let Some(msg) = msg else { break };
+                match msg {
+                    ChannelMsg::Data { ref data } => {
+                        common::stream_lines(data, "stdout", log_sink.as_ref());
+                        stdout_buf.extend_from_slice(data);
                     }
+                    ChannelMsg::ExtendedData { ref data, ext } => {
+                        if ext == 1 {
+                            common::stream_lines(data, "stderr", log_sink.as_ref());
+                            stderr_buf.extend_from_slice(data);
+                        }
+                    }
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        exit_code = Some(exit_status);
+                    }
+                    _ => {}
                 }
-            })
+            }
+        })
+        .await;
+
+        // Disconnect gracefully (best-effort)
+        let _ = session
+            .disconnect(russh::Disconnect::ByApplication, "", "")
             .await;
 
-            // Disconnect gracefully (best-effort)
-            let _ = session
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
+        if collect_result.is_err() {
+            warn!(timeout = ?self.timeout, "SSH command timed out");
+            return Err(AgentError::Timeout {
+                limit: self.timeout,
+            });
+        }
 
-            if collect_result.is_err() {
-                warn!(timeout = ?self.timeout, "SSH command timed out");
-                return Err(AgentError::Timeout {
-                    limit: self.timeout,
-                });
-            }
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let code = exit_code.unwrap_or(1) as i32;
 
-            let duration_ms = start.elapsed().as_millis() as u64;
-            let code = exit_code.unwrap_or(1) as i32;
+        let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
 
-            let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
-            let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+        if code != 0 {
+            return common::handle_nonzero_exit(code, &stdout, &stderr, config, duration_ms, "ssh");
+        }
 
-            if code != 0 {
-                return common::handle_nonzero_exit(
-                    code,
-                    &stdout,
-                    &stderr,
-                    config,
-                    duration_ms,
-                    "ssh",
-                );
-            }
+        debug!(stdout_len = stdout.len(), "remote claude process completed");
 
-            debug!(stdout_len = stdout.len(), "remote claude process completed");
+        common::parse_output(&stdout, config, duration_ms)
+    }
+}
 
-            common::parse_output(&stdout, config, duration_ms)
-        })
+impl AgentProvider for SshProvider {
+    fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
+        Box::pin(self.invoke_inner(config, None))
+    }
+
+    fn invoke_with_logs<'a>(
+        &'a self,
+        config: &'a AgentConfig,
+        log_sink: Arc<dyn LogSink>,
+    ) -> InvokeFuture<'a> {
+        Box::pin(self.invoke_inner(config, Some(log_sink)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    use russh::client::Handler;
+    use russh::keys::HashAlg;
+    use tempfile::NamedTempFile;
+
     use super::*;
 
     #[test]
@@ -449,7 +556,7 @@ mod tests {
         assert!(provider.working_dir.is_none());
         assert_eq!(provider.timeout, DEFAULT_TIMEOUT);
         assert!(provider.auth.is_none());
-        assert!(matches!(provider.host_key_policy, HostKeyPolicy::AcceptAll));
+        assert!(matches!(provider.host_key_policy, HostKeyPolicy::RejectAll));
     }
 
     #[test]
@@ -502,9 +609,9 @@ mod tests {
     }
 
     #[test]
-    fn host_key_policy_default_is_accept_all() {
+    fn host_key_policy_default_is_reject_all() {
         let policy = HostKeyPolicy::default();
-        assert!(matches!(policy, HostKeyPolicy::AcceptAll));
+        assert!(matches!(policy, HostKeyPolicy::RejectAll));
     }
 
     #[test]
@@ -513,34 +620,116 @@ mod tests {
         assert!(matches!(provider.host_key_policy, HostKeyPolicy::RejectAll));
     }
 
-    /// A valid Ed25519 public key in OpenSSH format for testing.
-    const TEST_PUBKEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBOZMtGiPyW0pMN+JJuYjIGJfqyO5MHBsFkzseVSp60M test@example";
+    /// A valid Ed25519 public key base64 for testing.
+    const TEST_PUBKEY_B64: &str =
+        "AAAAC3NzaC1lZDI1NTE5AAAAIBOZMtGiPyW0pMN+JJuYjIGJfqyO5MHBsFkzseVSp60M";
 
     fn test_public_key() -> russh::keys::PublicKey {
-        russh::keys::PublicKey::from_openssh(TEST_PUBKEY).expect("parse test public key")
+        russh::keys::parse_public_key_base64(TEST_PUBKEY_B64).expect("parse test public key")
+    }
+
+    fn make_handler(policy: HostKeyPolicy) -> SshHandler {
+        SshHandler {
+            policy,
+            host: "host.example.com".to_string(),
+            port: 22,
+        }
     }
 
     #[tokio::test]
     async fn host_key_policy_accept_all_returns_true() {
-        use russh::client::Handler;
-
-        let mut handler = SshHandler {
-            policy: HostKeyPolicy::AcceptAll,
-        };
-        let key = test_public_key();
-        let result = handler.check_server_key(&key).await;
-        assert!(result.unwrap());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut handler = make_handler(HostKeyPolicy::AcceptAll);
+            let key = test_public_key();
+            let result = handler.check_server_key(&key).await;
+            assert!(result.unwrap());
+        })
+        .await
+        .expect("test timed out");
     }
 
     #[tokio::test]
     async fn host_key_policy_reject_all_returns_false() {
-        use russh::client::Handler;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut handler = make_handler(HostKeyPolicy::RejectAll);
+            let key = test_public_key();
+            let result = handler.check_server_key(&key).await;
+            assert!(!result.unwrap());
+        })
+        .await
+        .expect("test timed out");
+    }
 
-        let mut handler = SshHandler {
-            policy: HostKeyPolicy::RejectAll,
-        };
-        let key = test_public_key();
-        let result = handler.check_server_key(&key).await;
-        assert!(!result.unwrap());
+    #[tokio::test]
+    async fn host_key_policy_fingerprint_match() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let key = test_public_key();
+            let expected = key.fingerprint(HashAlg::Sha256).to_string();
+            let mut handler = make_handler(HostKeyPolicy::Fingerprint(expected));
+            let result = handler.check_server_key(&key).await;
+            assert!(result.unwrap());
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn host_key_policy_fingerprint_mismatch() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let key = test_public_key();
+            let mut handler = make_handler(HostKeyPolicy::Fingerprint(
+                "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            ));
+            let result = handler.check_server_key(&key).await;
+            assert!(!result.unwrap());
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn host_key_policy_known_hosts_match() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let key = test_public_key();
+            let mut file = NamedTempFile::new().unwrap();
+            writeln!(file, "host.example.com ssh-ed25519 {TEST_PUBKEY_B64}").unwrap();
+
+            let mut handler =
+                make_handler(HostKeyPolicy::KnownHostsFile(file.path().to_path_buf()));
+            let result = handler.check_server_key(&key).await;
+            assert!(result.unwrap());
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn host_key_policy_known_hosts_reject() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let key = test_public_key();
+            let mut file = NamedTempFile::new().unwrap();
+            writeln!(file, "other-host.example.com ssh-ed25519 {TEST_PUBKEY_B64}").unwrap();
+
+            let mut handler =
+                make_handler(HostKeyPolicy::KnownHostsFile(file.path().to_path_buf()));
+            let result = handler.check_server_key(&key).await;
+            assert!(!result.unwrap());
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn host_key_policy_known_hosts_missing_file() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let key = test_public_key();
+            let mut handler = make_handler(HostKeyPolicy::KnownHostsFile(PathBuf::from(
+                "/nonexistent/path/known_hosts",
+            )));
+            let result = handler.check_server_key(&key).await;
+            assert!(!result.unwrap());
+        })
+        .await
+        .expect("test timed out");
     }
 }
