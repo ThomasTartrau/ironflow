@@ -5,21 +5,33 @@
 //! and Kubernetes transports.
 
 use std::env;
-#[cfg(any(feature = "transport-ssh", feature = "transport-docker", feature = "transport-k8s"))]
+#[cfg(any(
+    feature = "transport-ssh",
+    feature = "transport-docker",
+    feature = "transport-k8s"
+))]
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-#[cfg(any(feature = "transport-ssh", feature = "transport-docker", feature = "transport-k8s"))]
+#[cfg(any(
+    feature = "transport-ssh",
+    feature = "transport-docker",
+    feature = "transport-k8s"
+))]
 use tracing::debug;
 use tracing::{trace, warn};
 
 use crate::error::{AgentError, PartialUsage};
 use crate::operations::agent::PermissionMode;
-use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall, DebugToolResult};
-#[cfg(any(feature = "transport-ssh", feature = "transport-docker", feature = "transport-k8s"))]
+#[cfg(any(
+    feature = "transport-ssh",
+    feature = "transport-docker",
+    feature = "transport-k8s"
+))]
 use crate::provider::LogSink;
+use crate::provider::{AgentConfig, AgentOutput, DebugMessage, DebugToolCall, DebugToolResult};
 use crate::schema_transform::transform_schema;
 use crate::utils::estimate_tokens;
 
@@ -174,7 +186,11 @@ pub fn env_unset_shell_prefix() -> String {
 
 /// Return a clone of `config` with `verbose` forced to `true` when streaming
 /// is active but verbose is off. Returns `None` when no override is needed.
-#[cfg(any(feature = "transport-ssh", feature = "transport-docker", feature = "transport-k8s"))]
+#[cfg(any(
+    feature = "transport-ssh",
+    feature = "transport-docker",
+    feature = "transport-k8s"
+))]
 pub(super) fn force_verbose_for_streaming(
     config: &AgentConfig,
     streaming: bool,
@@ -188,7 +204,11 @@ pub(super) fn force_verbose_for_streaming(
 }
 
 /// Forward raw output data to a [`LogSink`], splitting by line.
-#[cfg(any(feature = "transport-ssh", feature = "transport-docker", feature = "transport-k8s"))]
+#[cfg(any(
+    feature = "transport-ssh",
+    feature = "transport-docker",
+    feature = "transport-k8s"
+))]
 pub(super) fn stream_lines(data: &[u8], stream: &str, sink: Option<&Arc<dyn LogSink>>) {
     if let Some(sink) = sink {
         let text = String::from_utf8_lossy(data);
