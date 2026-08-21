@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use serde_json::json;
-use tempfile::TempDir;
 use tokio::time::timeout;
 
 use ironflow_core::providers::http::tools::ToolRegistry;
@@ -49,44 +48,21 @@ while IFS= read -r line; do
 done
 "#;
 
-/// Writes the echo server script to a directory of its own and spawns it.
+/// Spawns the echo MCP server by passing the script inline to `bash -c`.
 ///
-/// Every test gets its own script path: tests run in parallel and a shared path
-/// means one test rewrites the script while another is executing it, which the
-/// kernel rejects with `ETXTBSY` ("Text file busy").
-///
-/// The returned [`TempDir`] owns the script and must be kept alive for as long
-/// as the connection is used.
-async fn spawn_echo_server() -> (McpConnection, TempDir) {
-    let dir = TempDir::new().expect("failed to create temp dir for test MCP server");
-    let script = dir.path().join("ironflow_test_mcp_server.sh");
-    {
-        use std::io::Write;
-        let mut f =
-            std::fs::File::create(&script).expect("failed to create test MCP server script");
-        f.write_all(ECHO_MCP_SERVER.as_bytes())
-            .expect("failed to write test MCP server script");
-        f.sync_all().expect("failed to sync test MCP server script");
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(&script, perms).expect("failed to set permissions");
-    }
-
-    let conn = McpConnection::stdio(script.to_str().unwrap(), &[], &[])
+/// This avoids writing a temporary file, which eliminates `ETXTBSY` races
+/// that occur when the kernel has not fully released the file descriptor
+/// before `exec` (especially under Docker + Rosetta emulation).
+async fn spawn_echo_server() -> McpConnection {
+    McpConnection::stdio("bash", &["-c", ECHO_MCP_SERVER], &[])
         .await
-        .expect("failed to spawn echo MCP server");
-
-    (conn, dir)
+        .expect("failed to spawn echo MCP server")
 }
 
 #[tokio::test]
 async fn initialize_and_list_tools() {
     timeout(Duration::from_secs(10), async {
-        let (mut conn, _script_dir) = spawn_echo_server().await;
+        let mut conn = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let tools = conn.list_tools().await.expect("list_tools should succeed");
@@ -102,7 +78,7 @@ async fn initialize_and_list_tools() {
 #[tokio::test]
 async fn call_tool_echo() {
     timeout(Duration::from_secs(10), async {
-        let (mut conn, _script_dir) = spawn_echo_server().await;
+        let mut conn = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let result = conn
@@ -119,7 +95,7 @@ async fn call_tool_echo() {
 #[tokio::test]
 async fn call_tool_add() {
     timeout(Duration::from_secs(10), async {
-        let (mut conn, _script_dir) = spawn_echo_server().await;
+        let mut conn = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let result = conn
@@ -136,7 +112,7 @@ async fn call_tool_add() {
 #[tokio::test]
 async fn call_unknown_tool_returns_error() {
     timeout(Duration::from_secs(10), async {
-        let (mut conn, _script_dir) = spawn_echo_server().await;
+        let mut conn = spawn_echo_server().await;
         conn.initialize().await.expect("initialize should succeed");
 
         let result = conn.call_tool("nonexistent", json!({})).await;
@@ -149,7 +125,7 @@ async fn call_unknown_tool_returns_error() {
 #[tokio::test]
 async fn register_mcp_tools_populates_registry() {
     timeout(Duration::from_secs(10), async {
-        let (conn, _script_dir) = spawn_echo_server().await;
+        let conn = spawn_echo_server().await;
         let registry = ToolRegistry::new();
 
         let registry = register_mcp_tools(registry, conn, "test")
@@ -167,7 +143,7 @@ async fn register_mcp_tools_populates_registry() {
 #[tokio::test]
 async fn bridge_tool_execute_via_registry() {
     timeout(Duration::from_secs(10), async {
-        let (conn, _script_dir) = spawn_echo_server().await;
+        let conn = spawn_echo_server().await;
         let registry = register_mcp_tools(ToolRegistry::new(), conn, "srv")
             .await
             .expect("register should succeed");
