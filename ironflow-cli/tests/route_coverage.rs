@@ -49,6 +49,11 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         Coverage::Command(&["run", "get", UUID]),
     ),
     (
+        "GET",
+        "/api/v1/runs/{id}/logs",
+        Coverage::Command(&["logs", UUID]),
+    ),
+    (
         "POST",
         "/api/v1/runs/{id}/cancel",
         Coverage::Command(&["run", "cancel", UUID]),

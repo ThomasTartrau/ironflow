@@ -11,16 +11,18 @@ use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse}
 use crate::routes::api_keys::list::ApiKeyResponse;
 use crate::routes::audit_logs::ListAuditLogsQuery;
 use crate::routes::events::EventKind;
+use crate::routes::get_run_logs::{GetRunLogsQuery, LogCursorMeta};
 use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
 use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
 use crate::routes::secrets::update::UpdateSecretRequest;
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approve_run, audit_logs, auth, cancel_run, create_run, download_artifact, get_run,
-    get_stats, get_workflow, health_check, list_runs, list_workflows, retry_run, secrets, users,
+    get_run_logs, get_stats, get_workflow, health_check, list_runs, list_workflows, retry_run,
+    secrets, users,
 };
 use ironflow_engine::notify::Event;
-use ironflow_store::entities::AuditLogEntry;
+use ironflow_store::entities::{AuditLogEntry, LogEntry, LogStream};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
@@ -89,6 +91,7 @@ mod with_signup {
             secrets::rotate::rotate_secrets,
             secrets::key_versions::secret_key_versions,
             audit_logs::list_audit_logs,
+            get_run_logs::get_run_logs,
         ),
         components(
             schemas(
@@ -126,6 +129,10 @@ mod with_signup {
                 Event,
                 AuditLogEntry,
                 ListAuditLogsQuery,
+                LogEntry,
+                LogStream,
+                GetRunLogsQuery,
+                LogCursorMeta,
             )
         ),
         tags(
@@ -138,6 +145,7 @@ mod with_signup {
             (name = "users", description = "User management (admin only)"),
             (name = "secrets", description = "Encrypted secret management (admin only)"),
             (name = "audit", description = "Audit log (admin only)"),
+            (name = "logs", description = "Run/step log persistence and retrieval"),
         )
     )]
     pub struct ApiDoc;
@@ -188,6 +196,7 @@ mod without_signup {
             secrets::rotate::rotate_secrets,
             secrets::key_versions::secret_key_versions,
             audit_logs::list_audit_logs,
+            get_run_logs::get_run_logs,
         ),
         components(
             schemas(
@@ -224,6 +233,10 @@ mod without_signup {
                 Event,
                 AuditLogEntry,
                 ListAuditLogsQuery,
+                LogEntry,
+                LogStream,
+                GetRunLogsQuery,
+                LogCursorMeta,
             )
         ),
         tags(
@@ -236,6 +249,7 @@ mod without_signup {
             (name = "users", description = "User management (admin only)"),
             (name = "secrets", description = "Encrypted secret management (admin only)"),
             (name = "audit", description = "Audit log (admin only)"),
+            (name = "logs", description = "Run/step log persistence and retrieval"),
         )
     )]
     pub struct ApiDoc;

@@ -52,6 +52,7 @@ impl ServerHandler for IronflowHandler {
             IronflowTools::CreateRunTool(t) => t.run(&self.client).await,
             IronflowTools::ListRunsTool(t) => t.run(&self.client).await,
             IronflowTools::GetRunTool(t) => t.run(&self.client).await,
+            IronflowTools::GetRunLogsTool(t) => t.run(&self.client).await,
             IronflowTools::CancelRunTool(t) => t.run(&self.client).await,
             IronflowTools::ApproveRunTool(t) => t.run(&self.client).await,
             IronflowTools::RejectRunTool(t) => t.run(&self.client).await,

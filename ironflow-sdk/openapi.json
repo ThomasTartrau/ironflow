@@ -998,6 +998,36 @@
         ],
         "type": "string"
       },
+      "GetRunLogsQuery": {
+        "description": "Query parameters for listing run logs.",
+        "properties": {
+          "cursor": {
+            "description": "Cursor for pagination (last entry ID from previous page).",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "limit": {
+            "description": "Number of entries to return (default: 100, max: 1000).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "step_id": {
+            "description": "Filter by step ID.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "stream": {
+            "$ref": "#/components/schemas/LogStream",
+            "description": "Filter by output stream (`stdout`, `stderr`, `system`).",
+            "nullable": true
+          }
+        },
+        "type": "object"
+      },
       "KeyVersionsResponse": {
         "description": "How the configured key ring lines up with the stored secrets.",
         "properties": {
@@ -1173,8 +1203,74 @@
         },
         "type": "object"
       },
+      "LogCursorMeta": {
+        "description": "Cursor-based pagination metadata for log entries.",
+        "properties": {
+          "has_more": {
+            "description": "Whether more entries exist after this page.",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "description": "Cursor to pass for the next page. `None` when there are no more entries.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "LogEntry": {
+        "description": "A persisted log line from step execution.\n\nEach entry records a single line of output alongside its metadata.\nEntries are ordered by [`id`](LogEntry::id) (UUID v7, time-ordered).\n\n# Examples\n\n```\nuse ironflow_store::entities::{LogEntry, LogStream};\nuse uuid::Uuid;\nuse chrono::Utc;\n\nlet entry = LogEntry {\n    id: Uuid::now_v7(),\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"build\".to_string(),\n    stream: LogStream::Stdout,\n    line: \"Compiling ironflow v0.1.0\".to_string(),\n    created_at: Utc::now(),\n};\nassert_eq!(entry.stream, LogStream::Stdout);\n```",
+        "properties": {
+          "created_at": {
+            "description": "When the line was recorded.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Unique entry ID (UUID v7, time-ordered).",
+            "format": "uuid",
+            "type": "string"
+          },
+          "line": {
+            "description": "The log line content.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run that produced this log line.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Step that produced this log line.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          },
+          "stream": {
+            "$ref": "#/components/schemas/LogStream",
+            "description": "Output stream."
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "step_id",
+          "step_name",
+          "stream",
+          "line",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "LogStream": {
-        "description": "Output stream for a [`LogLine`](Event::LogLine) event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::LogStream;\n\nlet stream: LogStream = \"stdout\".parse().unwrap();\nassert_eq!(stream.as_str(), \"stdout\");\n```",
+        "description": "Output stream for a log line.\n\n# Examples\n\n```\nuse ironflow_store::entities::LogStream;\n\nlet stream: LogStream = \"stdout\".parse().unwrap();\nassert_eq!(stream.as_str(), \"stdout\");\n```",
         "enum": [
           "stdout",
           "stderr",
@@ -2872,6 +2968,94 @@
         ]
       }
     },
+    "/api/v1/runs/{id}/logs": {
+      "get": {
+        "description": "Returns log entries ordered by time (UUID v7 ascending). Use the\n`cursor` query parameter with the last entry's `id` to fetch the\nnext page.",
+        "operationId": "get_run_logs",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by step ID.",
+            "in": "query",
+            "name": "step_id",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by output stream (`stdout`, `stderr`, `system`).",
+            "in": "query",
+            "name": "stream",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LogStream"
+            }
+          },
+          {
+            "description": "Cursor for pagination (last entry ID from previous page).",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Number of entries to return (default: 100, max: 1000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogEntry"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Log entries with cursor-based pagination"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Retrieve persisted log lines for a run with cursor-based pagination.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/api/v1/runs/{id}/reject": {
       "post": {
         "description": "Transitions the run from `AwaitingApproval` to `Failed`.\nReturns 400 if the run is not in `AwaitingApproval` state.",
@@ -3790,6 +3974,10 @@
     {
       "description": "Audit log (admin only)",
       "name": "audit"
+    },
+    {
+      "description": "Run/step log persistence and retrieval",
+      "name": "logs"
     }
   ]
 }

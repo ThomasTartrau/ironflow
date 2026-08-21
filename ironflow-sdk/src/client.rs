@@ -80,6 +80,36 @@ pub struct ListRunsFilter<'a> {
     pub created_by: Option<Uuid>,
 }
 
+/// Filtering options for [`IronflowClient::get_run_logs`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_sdk::client::ListRunLogsFilter;
+/// use uuid::Uuid;
+///
+/// let filter = ListRunLogsFilter {
+///     step_id: Some(Uuid::nil()),
+///     stream: Some("stderr"),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ListRunLogsFilter<'a> {
+    /// Filter by step ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<Uuid>,
+    /// Filter by output stream (`stdout`, `stderr`, `system`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<&'a str>,
+    /// Cursor for pagination (last entry ID from previous page).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Uuid>,
+    /// Number of entries to return (default: 100, max: 1000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
 /// Filtering options for [`IronflowClient::list_audit_logs_filtered`].
 ///
 /// # Examples
@@ -700,6 +730,43 @@ impl IronflowClient {
     ) -> Result<ApiResponse<types::KeyVersionsResponse>, Error> {
         self.send_envelope(self.get("/api/v1/secrets/key-versions"))
             .await
+    }
+
+    // ── Run Logs ───────────────────────────────────────────────────
+
+    /// `GET /api/v1/runs/:id/logs` -- Retrieve persisted log lines for a run.
+    ///
+    /// Returns log entries with cursor-based pagination. Pass the
+    /// `next_cursor` from a previous response to fetch the next page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 404 (run not found) or 401.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::IronflowClient;
+    /// use ironflow_sdk::client::ListRunLogsFilter;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example() -> Result<(), ironflow_sdk::Error> {
+    /// let client = IronflowClient::new("https://ironflow.example.com", "key");
+    /// let run_id = Uuid::nil();
+    /// let logs = client.get_run_logs(run_id, &ListRunLogsFilter::default()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_run_logs(
+        &self,
+        run_id: Uuid,
+        filter: &ListRunLogsFilter<'_>,
+    ) -> Result<ApiResponse<Vec<types::LogEntry>>, Error> {
+        self.send_envelope(
+            self.get(&format!("/api/v1/runs/{run_id}/logs"))
+                .query(filter),
+        )
+        .await
     }
 
     // ── Audit Logs (admin) ─────────────────────────────────────────
