@@ -62,7 +62,8 @@ async fn spawn_echo_server() -> (McpConnection, TempDir) {
     let script = dir.path().join("ironflow_test_mcp_server.sh");
     {
         use std::io::Write;
-        let mut f = std::fs::File::create(&script).expect("failed to create test MCP server script");
+        let mut f =
+            std::fs::File::create(&script).expect("failed to create test MCP server script");
         f.write_all(ECHO_MCP_SERVER.as_bytes())
             .expect("failed to write test MCP server script");
         f.sync_all().expect("failed to sync test MCP server script");
