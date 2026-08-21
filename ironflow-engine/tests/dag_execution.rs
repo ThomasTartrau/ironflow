@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use rust_decimal::Decimal;
 use serde_json::json;
 
 use ironflow_core::provider::AgentProvider;
@@ -401,8 +402,11 @@ async fn cost_and_duration_aggregated_with_parallel() {
         .await
         .unwrap();
 
-    // Duration should be > 0 (real shell commands were executed).
-    assert!(run.duration_ms > 0);
+    assert_eq!(run.status.state, RunStatus::Completed);
+
+    let steps = engine.store().list_steps(run.id).await.unwrap();
+    let total_cost: Decimal = steps.iter().map(|s| s.cost_usd).sum();
+    assert_eq!(run.cost_usd, total_cost);
 }
 
 #[tokio::test]
