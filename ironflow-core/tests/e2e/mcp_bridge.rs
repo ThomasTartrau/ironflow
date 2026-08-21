@@ -60,9 +60,13 @@ done
 async fn spawn_echo_server() -> (McpConnection, TempDir) {
     let dir = TempDir::new().expect("failed to create temp dir for test MCP server");
     let script = dir.path().join("ironflow_test_mcp_server.sh");
-    tokio::fs::write(&script, ECHO_MCP_SERVER)
-        .await
-        .expect("failed to write test MCP server script");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&script).expect("failed to create test MCP server script");
+        f.write_all(ECHO_MCP_SERVER.as_bytes())
+            .expect("failed to write test MCP server script");
+        f.sync_all().expect("failed to sync test MCP server script");
+    }
 
     #[cfg(unix)]
     {
