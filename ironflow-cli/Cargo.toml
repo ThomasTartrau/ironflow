@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-cli"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -15,9 +15,9 @@ name = "ironflow-cli"
 path = "src/main.rs"
 
 [dependencies]
-ironflow-sdk = { version = "0.1.13", path = "../ironflow-sdk" }
+ironflow-sdk = { version = "0.1.14", path = "../ironflow-sdk" }
 ironflow-templates = { version = "0.1.1", path = "../ironflow-templates" }
-ironflow-types = { version = "0.2.0", path = "../ironflow-types" }
+ironflow-types = { version = "0.2.1", path = "../ironflow-types" }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 clap_mangen = "0.2"
