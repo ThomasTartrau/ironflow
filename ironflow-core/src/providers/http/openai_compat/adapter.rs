@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::AgentError;
 use crate::operations::agent::Model;
-use crate::pricing::{CostBreakdown, PricingSource, StaticPricing};
+use crate::pricing::{CostBreakdown, StaticPricing};
 use crate::provider::AgentConfig;
 use crate::providers::http::adapter::{HttpAgentAdapter, HttpToolCall, HttpUsage, TurnResult};
 use crate::providers::http::sse::SseDelta;
