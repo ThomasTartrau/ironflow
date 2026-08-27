@@ -51,7 +51,7 @@ use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::artifact::DirectArtifactSink;
 use ironflow_engine::budget::BudgetConfig;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::notify::{Event, WebhookSubscriber};
+use ironflow_engine::notify::{Event, WebhookSubscriber, WorkflowEventBus};
 use ironflow_store::crypto::{KeyRing, SECRET_KEYS_ENV};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
@@ -176,6 +176,9 @@ async fn main() {
     let event_sender = sse_broadcaster.sender();
     engine.subscribe(sse_broadcaster, Event::ALL);
 
+    let event_bus = WorkflowEventBus::new();
+    engine.set_event_bus(event_bus.clone());
+
     let engine = Arc::new(engine);
 
     let cors = build_cors(&config);
@@ -186,7 +189,8 @@ async fn main() {
         jwt_config,
         config.worker_token.clone(),
         event_sender,
-    );
+    )
+    .with_event_bus(event_bus);
     if let Some(blob) = blob_store {
         state = state.with_blob_store(blob);
     }

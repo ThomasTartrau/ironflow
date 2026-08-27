@@ -22,9 +22,12 @@ thiserror = "2"
 tracing = "0.1"
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], optional = true }
 
-# Encryption (SecretStore)
+# Encryption (SecretStore + WorkflowSecrets)
 aes-gcm = { version = "0.10", optional = true }
 rand = { version = "0.8", optional = true }
+hkdf = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
 
 # PostgreSQL (Phase 2)
 sqlx = { version = "0.8", features = [
@@ -41,7 +44,7 @@ sqlx = { version = "0.8", features = [
 default = ["store-memory"]
 store-memory = []
 store-postgres = ["sqlx"]
-secret-store = ["aes-gcm", "rand"]
+secret-store = ["aes-gcm", "rand", "hkdf", "sha2", "base64"]
 openapi = ["utoipa"]
 
 [dev-dependencies]

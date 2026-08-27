@@ -87,6 +87,7 @@ pub(crate) type HandlerResolver =
 /// ```
 pub struct WorkflowContext {
     run_id: Uuid,
+    workflow_name: String,
     store: Arc<dyn Store>,
     provider: Arc<dyn AgentProvider>,
     handler_resolver: Option<HandlerResolver>,
@@ -147,10 +148,16 @@ impl WorkflowContext {
     ///
     /// Not typically called directly — the [`Engine`](crate::engine::Engine)
     /// creates this when executing a [`WorkflowHandler`].
-    pub fn new(run_id: Uuid, store: Arc<dyn Store>, provider: Arc<dyn AgentProvider>) -> Self {
+    pub fn new(
+        run_id: Uuid,
+        workflow_name: String,
+        store: Arc<dyn Store>,
+        provider: Arc<dyn AgentProvider>,
+    ) -> Self {
         let trace_context = WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
+            workflow_name,
             store,
             provider,
             handler_resolver: None,
@@ -182,6 +189,7 @@ impl WorkflowContext {
     /// look up registered handlers by name.
     pub(crate) fn with_handler_resolver(
         run_id: Uuid,
+        workflow_name: String,
         store: Arc<dyn Store>,
         provider: Arc<dyn AgentProvider>,
         resolver: HandlerResolver,
@@ -189,6 +197,7 @@ impl WorkflowContext {
         let trace_context = WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
+            workflow_name,
             store,
             provider,
             handler_resolver: Some(resolver),
@@ -609,6 +618,11 @@ impl WorkflowContext {
         self.run_id
     }
 
+    /// The workflow name this run belongs to.
+    pub fn workflow_name(&self) -> &str {
+        &self.workflow_name
+    }
+
     /// Accumulated cost across all executed steps so far.
     pub fn total_cost_usd(&self) -> Decimal {
         self.total_cost_usd
@@ -627,6 +641,36 @@ impl WorkflowContext {
     /// Enriched results of all completed steps in execution order.
     pub fn step_results(&self) -> &[StepResult] {
         &self.step_results
+    }
+
+    /// Return a [`ScopedSecretStore`] scoped to this workflow.
+    ///
+    /// Secrets are namespaced under `workflows/<uuid>/` where the UUID is
+    /// deterministically derived from the workflow name (UUID v5). This means
+    /// all runs of the same workflow share the same secret namespace.
+    ///
+    /// Requires the `secret-store` feature.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &WorkflowContext) -> Result<(), EngineError> {
+    /// let secrets = ctx.secrets();
+    /// secrets.set("api_token", "sk-ant-12345").await.map_err(EngineError::Store)?;
+    /// let token = secrets.get("api_token").await.map_err(EngineError::Store)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "secret-store")]
+    pub fn secrets(&self) -> ironflow_store::workflow_secrets::ScopedSecretStore {
+        let workflow_uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, self.workflow_name.as_bytes());
+        ironflow_store::workflow_secrets::ScopedSecretStore::for_workflow(
+            workflow_uuid,
+            self.store.clone(),
+        )
     }
 
     /// Persist a partial snapshot of the run after a step transition.
@@ -922,6 +966,23 @@ impl WorkflowContext {
                         step_name,
                         &output,
                     ));
+
+                    if let Some(ref bus) = self.event_bus
+                        && matches!(step_config, StepConfig::Agent(_))
+                    {
+                        let tokens = output
+                            .input_tokens
+                            .unwrap_or(0)
+                            .saturating_add(output.output_tokens.unwrap_or(0));
+                        bus.publish(
+                            self.run_id,
+                            crate::notify::WorkflowEvent::AgentStepTokensUsed {
+                                step_name: step_name.clone(),
+                                tokens,
+                                cost_usd: output.cost_usd,
+                            },
+                        );
+                    }
 
                     info!(
                         run_id = %self.run_id,
@@ -1270,6 +1331,17 @@ impl WorkflowContext {
             .await?;
 
         self.last_step_ids = vec![step.id];
+
+        if let Some(ref bus) = self.event_bus {
+            bus.publish(
+                self.run_id,
+                crate::notify::WorkflowEvent::ApprovalRequired {
+                    step_name: name.to_string(),
+                    step_index: position,
+                    approval_id: step.id,
+                },
+            );
+        }
 
         Err(EngineError::ApprovalRequired {
             run_id: self.run_id,
@@ -1766,6 +1838,7 @@ impl WorkflowContext {
         let run_start = Instant::now();
         let mut child_ctx = WorkflowContext {
             run_id: child_run_id,
+            workflow_name: config.workflow_name.clone(),
             store: self.store.clone(),
             provider: self.provider.clone(),
             handler_resolver: self.handler_resolver.clone(),
@@ -2088,6 +2161,21 @@ impl WorkflowContext {
                             output_summary: None,
                         },
                     );
+
+                    if matches!(config, StepConfig::Agent(_)) {
+                        let tokens = output
+                            .input_tokens
+                            .unwrap_or(0)
+                            .saturating_add(output.output_tokens.unwrap_or(0));
+                        bus.publish(
+                            self.run_id,
+                            crate::notify::WorkflowEvent::AgentStepTokensUsed {
+                                step_name: name.to_string(),
+                                tokens,
+                                cost_usd: output.cost_usd,
+                            },
+                        );
+                    }
                 }
 
                 self.last_step_ids = vec![step.id];
@@ -2740,7 +2828,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let provider = create_test_provider();
         let run_id = Uuid::now_v7();
-        WorkflowContext::new(run_id, store, provider)
+        WorkflowContext::new(run_id, "test".to_string(), store, provider)
     }
 
     #[test]
@@ -2759,7 +2847,7 @@ mod tests {
         let run_id = Uuid::now_v7();
         let store = Arc::new(InMemoryStore::new());
         let provider = create_test_provider();
-        let ctx = WorkflowContext::new(run_id, store, provider);
+        let ctx = WorkflowContext::new(run_id, "test".to_string(), store, provider);
         assert_eq!(ctx.run_id(), run_id);
     }
 
@@ -2789,7 +2877,13 @@ mod tests {
             None
         });
 
-        let ctx = WorkflowContext::with_handler_resolver(run_id, store, provider, resolver);
+        let ctx = WorkflowContext::with_handler_resolver(
+            run_id,
+            "test".to_string(),
+            store,
+            provider,
+            resolver,
+        );
 
         assert_eq!(ctx.run_id(), run_id);
         assert!(ctx.handler_resolver.is_some());
@@ -2833,7 +2927,8 @@ mod tests {
             .expect("failed to list runs");
         let created_run_id = runs.items[0].id;
 
-        let mut ctx = WorkflowContext::new(created_run_id, store.clone(), provider);
+        let mut ctx =
+            WorkflowContext::new(created_run_id, "test".to_string(), store.clone(), provider);
         let initial_position = ctx.position;
 
         ctx.skip("skip-step", "condition not met")
@@ -2897,8 +2992,13 @@ mod tests {
             _ => None,
         });
 
-        let mut ctx =
-            WorkflowContext::with_handler_resolver(parent.id, store.clone(), provider, resolver);
+        let mut ctx = WorkflowContext::with_handler_resolver(
+            parent.id,
+            "parent".to_string(),
+            store.clone(),
+            provider,
+            resolver,
+        );
         ctx.workflow(&NoopSubWorkflow, json!({}))
             .await
             .expect("sub-workflow failed");
@@ -2968,7 +3068,8 @@ mod tests {
             .expect("failed to list runs");
         let created_run_id = runs.items[0].id;
 
-        let mut ctx = WorkflowContext::new(created_run_id, store.clone(), provider);
+        let mut ctx =
+            WorkflowContext::new(created_run_id, "test".to_string(), store.clone(), provider);
 
         let result = ctx
             .approval(
@@ -3061,7 +3162,8 @@ mod tests {
             .expect("failed to update step to AwaitingApproval");
 
         // Create context and load replay steps
-        let mut ctx = WorkflowContext::new(created_run_id, store.clone(), provider);
+        let mut ctx =
+            WorkflowContext::new(created_run_id, "test".to_string(), store.clone(), provider);
         ctx.load_replay_steps()
             .await
             .expect("failed to load replay steps");
@@ -3165,7 +3267,7 @@ mod tests {
             .expect("failed to create step");
 
         // Load replay steps
-        let mut ctx = WorkflowContext::new(created_run_id, store, provider);
+        let mut ctx = WorkflowContext::new(created_run_id, "test".to_string(), store, provider);
         ctx.load_replay_steps()
             .await
             .expect("failed to load replay steps");
@@ -3207,7 +3309,7 @@ mod tests {
             .expect("failed to list runs");
         let created_run_id = runs.items[0].id;
 
-        let ctx = WorkflowContext::new(created_run_id, store, provider);
+        let ctx = WorkflowContext::new(created_run_id, "test".to_string(), store, provider);
         let payload = ctx.payload().await.expect("failed to get payload");
 
         assert_eq!(payload, test_payload);
@@ -3219,7 +3321,7 @@ mod tests {
         let provider = create_test_provider();
         let run_id = Uuid::now_v7();
 
-        let ctx = WorkflowContext::new(run_id, store, provider);
+        let ctx = WorkflowContext::new(run_id, "test".to_string(), store, provider);
         let result = ctx.payload().await;
 
         assert!(result.is_err());
@@ -3270,7 +3372,7 @@ mod tests {
             .expect("failed to list runs");
         let created_run_id = runs.items[0].id;
 
-        let mut ctx = WorkflowContext::new(created_run_id, store, provider);
+        let mut ctx = WorkflowContext::new(created_run_id, "test".to_string(), store, provider);
         assert!(ctx.last_step_ids.is_empty());
 
         ctx.skip("step1", "reason").await.expect("skip failed");

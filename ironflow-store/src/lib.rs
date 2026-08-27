@@ -52,6 +52,9 @@ pub mod user_store;
 #[cfg(feature = "secret-store")]
 pub mod crypto;
 
+#[cfg(feature = "secret-store")]
+pub mod workflow_secrets;
+
 /// Backward-compatible alias -- prefer `entities` for new code.
 pub use entities as models;
 
@@ -72,6 +75,9 @@ pub mod prelude {
     pub use crate::secret_store::SecretStore;
     pub use crate::store::{RunStore, Store};
     pub use crate::user_store::UserStore;
+
+    #[cfg(feature = "secret-store")]
+    pub use crate::workflow_secrets::{ScopedSecretStore, SecretsError, WorkflowSecrets};
 
     #[cfg(feature = "store-memory")]
     pub use crate::memory::InMemoryStore;
