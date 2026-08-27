@@ -4,9 +4,9 @@ use serde_json::{Value, json};
 
 use crate::error::AgentError;
 use crate::operations::agent::Model;
+use crate::pricing::{CostBreakdown, StaticPricing};
 use crate::provider::AgentConfig;
 use crate::providers::http::adapter::{HttpAgentAdapter, HttpToolCall, HttpUsage, TurnResult};
-use crate::providers::http::cost::ANTHROPIC_COSTS;
 use crate::providers::http::sse::SseDelta;
 use crate::schema_transform::transform_schema;
 
@@ -336,7 +336,9 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
     }
 
     fn compute_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
-        ANTHROPIC_COSTS.compute(model, input_tokens, output_tokens)
+        let pricing = StaticPricing::new();
+        let bd = CostBreakdown::compute(&pricing, model, input_tokens, output_tokens);
+        Some(bd.total_usd)
     }
 
     fn resolve_model(&self, model: &str) -> String {

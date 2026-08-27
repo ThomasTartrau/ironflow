@@ -4,14 +4,9 @@ use serde_json::{Map, Value, json};
 
 use crate::error::AgentError;
 use crate::operations::agent::Model;
+use crate::pricing::{CostBreakdown, PricingSource, StaticPricing};
 use crate::provider::AgentConfig;
 use crate::providers::http::adapter::{HttpAgentAdapter, HttpToolCall, HttpUsage, TurnResult};
-#[cfg(feature = "provider-mistral")]
-use crate::providers::http::cost::MISTRAL_COSTS;
-#[cfg(feature = "provider-nvidia")]
-use crate::providers::http::cost::NVIDIA_COSTS;
-#[cfg(feature = "provider-openai")]
-use crate::providers::http::cost::OPENAI_COSTS;
 use crate::providers::http::sse::SseDelta;
 use crate::schema_transform::transform_schema;
 
@@ -287,15 +282,9 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
     }
 
     fn compute_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
-        match self.config.provider_name() {
-            #[cfg(feature = "provider-openai")]
-            "openai" => OPENAI_COSTS.compute(model, input_tokens, output_tokens),
-            #[cfg(feature = "provider-mistral")]
-            "mistral" => MISTRAL_COSTS.compute(model, input_tokens, output_tokens),
-            #[cfg(feature = "provider-nvidia")]
-            "nvidia" => NVIDIA_COSTS.compute(model, input_tokens, output_tokens),
-            _ => None,
-        }
+        let pricing = StaticPricing::new();
+        let bd = CostBreakdown::compute(&pricing, model, input_tokens, output_tokens);
+        Some(bd.total_usd)
     }
 
     fn resolve_model(&self, model: &str) -> String {

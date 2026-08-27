@@ -9,7 +9,6 @@
 //! `provider-gemini`, `provider-anthropic-api`, `provider-nvidia`.
 
 pub mod adapter;
-pub mod cost;
 pub mod sse;
 pub mod tools;
 
