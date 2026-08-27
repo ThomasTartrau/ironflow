@@ -2209,6 +2209,188 @@
         ],
         "type": "object"
       },
+      "WorkflowEvent": {
+        "description": "A granular step-level event for real-time workflow monitoring.\n\nUnlike [`Event`](super::Event) which covers the full system lifecycle\n(runs, auth, audit), `WorkflowEvent` tracks individual step transitions\nwithin a single run. Serialized with a `type` discriminant for UI\nconsumption.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowEvent;\nuse chrono::Utc;\n\nlet event = WorkflowEvent::StepStarted {\n    step_name: \"deploy\".to_string(),\n    step_index: 0,\n    timestamp: Utc::now(),\n};\nassert_eq!(event.event_type(), \"step_started\");\n\nlet json = serde_json::to_string(&event).unwrap();\nassert!(json.contains(\"\\\"type\\\":\\\"step_started\\\"\"));\n```",
+        "oneOf": [
+          {
+            "description": "A step began execution.",
+            "properties": {
+              "step_index": {
+                "description": "Zero-based position in the workflow.",
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "timestamp": {
+                "description": "When the step started.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "step_started"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step_name",
+              "step_index",
+              "timestamp",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A step completed successfully.",
+            "properties": {
+              "duration_ms": {
+                "description": "Step duration in milliseconds.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "output_summary": {
+                "description": "Optional summary of the step output.",
+                "nullable": true,
+                "type": "string"
+              },
+              "step_index": {
+                "description": "Zero-based position in the workflow.",
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "step_completed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step_name",
+              "step_index",
+              "duration_ms",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A step failed.",
+            "properties": {
+              "duration_ms": {
+                "description": "Step duration in milliseconds.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "error": {
+                "description": "Error description.",
+                "type": "string"
+              },
+              "step_index": {
+                "description": "Zero-based position in the workflow.",
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "step_failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step_name",
+              "step_index",
+              "error",
+              "duration_ms",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A step requires human approval before the run can continue.",
+            "properties": {
+              "approval_id": {
+                "description": "Identifier of the approval gate.",
+                "format": "uuid",
+                "type": "string"
+              },
+              "step_index": {
+                "description": "Zero-based position in the workflow.",
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "approval_required"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step_name",
+              "step_index",
+              "approval_id",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Token usage report for an agent step.",
+            "properties": {
+              "cost_usd": {
+                "description": "Estimated cost in USD.",
+                "format": "double",
+                "type": "number"
+              },
+              "step_name": {
+                "description": "Human-readable step name.",
+                "type": "string"
+              },
+              "tokens": {
+                "description": "Total tokens consumed.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "enum": [
+                  "agent_step_tokens_used"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step_name",
+              "tokens",
+              "cost_usd",
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "WorkflowSummary": {
         "description": "Summary entry returned by `GET /api/v1/workflows`.",
         "properties": {
@@ -2969,6 +3151,53 @@
           }
         ],
         "summary": "Cancel a pending or running run.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/events": {
+      "get": {
+        "description": "Streams [`WorkflowEvent`]s for a specific workflow run in real time.\nSupports optional filtering via `?types=step_started,step_completed`.\n\nEach SSE message has:\n- `event:` set to the event type (e.g. `step_started`)\n- `data:` JSON-serialized event payload\n\nA keep-alive comment is sent every 30 seconds.\n\n# Errors\n\nReturns 401 if the request is not authenticated.\nReturns 404 if the run does not exist.",
+        "operationId": "run_events",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated workflow event types to filter (e.g. step_started,step_completed)",
+            "in": "query",
+            "name": "types",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of workflow events"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "`GET /api/v1/runs/{id}/events` -- per-run Server-Sent Events stream.",
         "tags": [
           "runs"
         ]
