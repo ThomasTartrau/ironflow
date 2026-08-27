@@ -7,6 +7,7 @@ use rust_decimal::Decimal;
 use tracing::{info, warn};
 
 use ironflow_core::operations::agent::Agent;
+use ironflow_core::pricing::{CostBreakdown, StaticPricing, spawn_log};
 use ironflow_core::provider::{AgentConfig, AgentProvider, LogSink};
 
 use crate::error::EngineError;
@@ -79,6 +80,15 @@ impl StepExecutor for AgentExecutor<'_> {
             duration_ms,
             "agent step completed"
         );
+
+        let pricing = StaticPricing::new();
+        let breakdown = CostBreakdown::compute(
+            &pricing,
+            &self.config.model,
+            input_tokens.unwrap_or(0),
+            output_tokens.unwrap_or(0),
+        );
+        spawn_log("agent", &self.config.model, breakdown);
 
         #[cfg(feature = "prometheus")]
         {

@@ -38,7 +38,7 @@ use crate::error::EngineError;
 use crate::executor::StepResult;
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
-use crate::notify::{Event, EventPublisher, EventSubscriber};
+use crate::notify::{Event, EventPublisher, EventSubscriber, WorkflowEventBus};
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
 
@@ -158,6 +158,7 @@ pub struct Engine {
     log_sender: Option<LogSender>,
     budget: BudgetConfig,
     artifact_sink: Option<Arc<dyn ArtifactSink>>,
+    event_bus: Option<WorkflowEventBus>,
 }
 
 /// Validate a workflow category path.
@@ -221,6 +222,7 @@ impl Engine {
             log_sender: None,
             budget: BudgetConfig::new(),
             artifact_sink: None,
+            event_bus: None,
         }
     }
 
@@ -289,6 +291,31 @@ impl Engine {
         self.artifact_sink.as_ref()
     }
 
+    /// Attach a [`WorkflowEventBus`] for per-run real-time monitoring.
+    ///
+    /// When set, all workflow contexts created by this engine will publish
+    /// step-level events (`StepStarted`, `StepCompleted`, `StepFailed`)
+    /// to the bus.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::notify::WorkflowEventBus;
+    ///
+    /// # fn example(engine: &mut Engine) {
+    /// engine.set_event_bus(WorkflowEventBus::new());
+    /// # }
+    /// ```
+    pub fn set_event_bus(&mut self, bus: WorkflowEventBus) {
+        self.event_bus = Some(bus);
+    }
+
+    /// The workflow event bus attached to this engine, if any.
+    pub fn event_bus(&self) -> Option<&WorkflowEventBus> {
+        self.event_bus.as_ref()
+    }
+
     /// Returns a reference to the backing store.
     pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
@@ -324,6 +351,9 @@ impl Engine {
         }
         if let Some(ref sink) = self.artifact_sink {
             ctx.set_artifact_sink(sink.clone());
+        }
+        if let Some(ref bus) = self.event_bus {
+            ctx.set_event_bus(bus.clone());
         }
         ctx
     }

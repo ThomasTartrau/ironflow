@@ -27,6 +27,7 @@ use tracing::info;
 use crate::operations::agent::AgentResult;
 use crate::operations::http::HttpOutput;
 use crate::operations::shell::ShellOutput;
+use crate::pricing::CostBreakdown;
 
 /// Default maximum number of steps kept in the tracker.
 /// Older steps are evicted when this limit is reached.
@@ -52,6 +53,7 @@ struct StepRecord {
     cost_usd: Option<f64>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    cost_breakdown: Option<CostBreakdown>,
 }
 
 enum StepKind {
@@ -111,6 +113,7 @@ impl WorkflowTracker {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+            cost_breakdown: None,
         });
     }
 
@@ -126,6 +129,7 @@ impl WorkflowTracker {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+            cost_breakdown: None,
         });
     }
 
@@ -140,6 +144,50 @@ impl WorkflowTracker {
             cost_usd: result.cost_usd(),
             input_tokens: result.input_tokens(),
             output_tokens: result.output_tokens(),
+            cost_breakdown: None,
+        });
+    }
+
+    /// Record a completed agent step with a detailed cost breakdown.
+    ///
+    /// Like [`record_agent`](Self::record_agent) but also stores a
+    /// [`CostBreakdown`] with the prompt/completion split. The breakdown
+    /// is included in the [`summary`](Self::summary) log output.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::tracker::WorkflowTracker;
+    /// use ironflow_core::pricing::{CostBreakdown, StaticPricing};
+    /// use ironflow_core::operations::agent::AgentResult;
+    ///
+    /// # fn example(result: &AgentResult) {
+    /// let pricing = StaticPricing::new();
+    /// let bd = CostBreakdown::compute(
+    ///     &pricing,
+    ///     result.model().unwrap_or("sonnet"),
+    ///     result.input_tokens().unwrap_or(0),
+    ///     result.output_tokens().unwrap_or(0),
+    /// );
+    ///
+    /// let mut tracker = WorkflowTracker::new("my-workflow");
+    /// tracker.record_agent_with_breakdown("review", result, bd);
+    /// # }
+    /// ```
+    pub fn record_agent_with_breakdown(
+        &mut self,
+        name: &str,
+        result: &AgentResult,
+        breakdown: CostBreakdown,
+    ) {
+        self.push_step(StepRecord {
+            name: name.to_string(),
+            kind: StepKind::Agent,
+            duration_ms: result.duration_ms(),
+            cost_usd: result.cost_usd(),
+            input_tokens: result.input_tokens(),
+            output_tokens: result.output_tokens(),
+            cost_breakdown: Some(breakdown),
         });
     }
 
@@ -192,16 +240,31 @@ impl WorkflowTracker {
         );
 
         for step in &self.steps {
-            info!(
-                workflow = %self.name,
-                step = %step.name,
-                kind = %step.kind,
-                duration_ms = step.duration_ms,
-                cost_usd = step.cost_usd,
-                input_tokens = step.input_tokens,
-                output_tokens = step.output_tokens,
-                "step detail"
-            );
+            if let Some(ref bd) = step.cost_breakdown {
+                info!(
+                    workflow = %self.name,
+                    step = %step.name,
+                    kind = %step.kind,
+                    duration_ms = step.duration_ms,
+                    cost_usd = step.cost_usd,
+                    prompt_usd = bd.prompt_usd,
+                    completion_usd = bd.completion_usd,
+                    input_tokens = step.input_tokens,
+                    output_tokens = step.output_tokens,
+                    "step detail"
+                );
+            } else {
+                info!(
+                    workflow = %self.name,
+                    step = %step.name,
+                    kind = %step.kind,
+                    duration_ms = step.duration_ms,
+                    cost_usd = step.cost_usd,
+                    input_tokens = step.input_tokens,
+                    output_tokens = step.output_tokens,
+                    "step detail"
+                );
+            }
         }
     }
 }
@@ -364,5 +427,32 @@ mod tests {
             tracker.record_agent(&format!("step-{i}"), &r);
         }
         assert_eq!(tracker.step_count(), 42);
+    }
+
+    #[test]
+    fn record_agent_with_breakdown_stores_cost_split() {
+        let mut tracker = WorkflowTracker::new("test");
+        let result = make_agent_result(Some(0.05), Some(1000), Some(500));
+        let bd = CostBreakdown {
+            prompt_usd: 0.003,
+            completion_usd: 0.047,
+            total_usd: 0.05,
+        };
+        tracker.record_agent_with_breakdown("a1", &result, bd);
+        assert_eq!(tracker.step_count(), 1);
+        assert_eq!(tracker.total_cost_usd(), 0.05);
+    }
+
+    #[test]
+    fn summary_does_not_panic_with_breakdown() {
+        let mut tracker = WorkflowTracker::new("test");
+        let result = make_agent_result(Some(0.01), Some(100), Some(50));
+        let bd = CostBreakdown {
+            prompt_usd: 0.003,
+            completion_usd: 0.007,
+            total_usd: 0.01,
+        };
+        tracker.record_agent_with_breakdown("a1", &result, bd);
+        tracker.summary();
     }
 }
