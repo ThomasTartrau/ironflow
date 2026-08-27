@@ -148,8 +148,7 @@ impl WorkflowContext {
     /// Not typically called directly — the [`Engine`](crate::engine::Engine)
     /// creates this when executing a [`WorkflowHandler`].
     pub fn new(run_id: Uuid, store: Arc<dyn Store>, provider: Arc<dyn AgentProvider>) -> Self {
-        let trace_context =
-            WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
+        let trace_context = WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
             store,
@@ -187,8 +186,7 @@ impl WorkflowContext {
         provider: Arc<dyn AgentProvider>,
         resolver: HandlerResolver,
     ) -> Self {
-        let trace_context =
-            WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
+        let trace_context = WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
             store,

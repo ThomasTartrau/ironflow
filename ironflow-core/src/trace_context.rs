@@ -356,7 +356,11 @@ mod tests {
     fn from_workflow_run_id_deterministic() {
         let a = WorkflowTraceContext::from_workflow_run_id("run-abc-123");
         let b = WorkflowTraceContext::from_workflow_run_id("run-abc-123");
-        assert_eq!(a.trace_id(), b.trace_id(), "same run_id must produce same trace_id");
+        assert_eq!(
+            a.trace_id(),
+            b.trace_id(),
+            "same run_id must produce same trace_id"
+        );
         assert_eq!(a.trace_id().len(), 32);
         assert!(a.trace_id().chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -457,7 +461,10 @@ mod tests {
     #[test]
     fn from_traceparent_invalid_too_few_fields() {
         let err = WorkflowTraceContext::from_traceparent("00-abc").unwrap_err();
-        assert!(matches!(err, TraceContextError::InvalidFormat { field_count: 2 }));
+        assert!(matches!(
+            err,
+            TraceContextError::InvalidFormat { field_count: 2 }
+        ));
     }
 
     #[test]
@@ -477,10 +484,9 @@ mod tests {
 
     #[test]
     fn from_traceparent_invalid_span_id_length() {
-        let err = WorkflowTraceContext::from_traceparent(
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-abc-01",
-        )
-        .unwrap_err();
+        let err =
+            WorkflowTraceContext::from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-abc-01")
+                .unwrap_err();
         assert!(matches!(err, TraceContextError::InvalidSpanId { .. }));
     }
 

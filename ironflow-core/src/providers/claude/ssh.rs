@@ -383,7 +383,10 @@ impl SshProvider {
         let claude_cmd = common::build_shell_command(&self.claude_path, &built.args);
         let mut env_prefix = common::env_unset_shell_prefix();
         if let Some(ref ctx) = config.trace_context {
-            env_prefix = format!("export TRACEPARENT='{}'; {env_prefix}", ctx.to_traceparent());
+            env_prefix = format!(
+                "export TRACEPARENT='{}'; {env_prefix}",
+                ctx.to_traceparent()
+            );
         }
         let remote_cmd = match (&self.working_dir, &config.working_dir) {
             (_, Some(dir)) | (Some(dir), None) => {
