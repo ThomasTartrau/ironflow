@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.26.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.25.0...ironflow-engine-v2.26.0) - 2026-08-27
+
+### Added
+
+- #45 granular step tracking with deterministic trace IDs
+
+
+### Fixed
+
+- #45 flaky duration_ms assertions in step_tracking tests
+
+
+### Merge
+
+- resolve conflicts with main (event_bus + step_results)
+
 ## [2.25.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.24.1...ironflow-engine-v2.25.0) - 2026-08-27
 
 ### Added
