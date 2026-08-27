@@ -103,7 +103,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::{Event, LogStream};
-    use ironflow_store::entities::{LogFilter, NewStep, StepKind};
+    use ironflow_store::entities::{LogFilter, NewStep, StepKind, step_trace_id};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
 
@@ -158,6 +158,7 @@ mod tests {
                 .store
                 .create_step(NewStep {
                     run_id: run.id,
+                    trace_id: step_trace_id(run.id, "build", 0),
                     name: "build".to_string(),
                     kind: StepKind::Shell,
                     position: 0,

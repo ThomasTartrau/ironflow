@@ -35,11 +35,38 @@ use crate::artifact::ArtifactSink;
 use crate::budget::{BudgetConfig, month_start};
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+use crate::executor::StepResult;
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
 use crate::notify::{Event, EventPublisher, EventSubscriber, WorkflowEventBus};
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
+
+/// Result of a workflow execution, carrying the final [`Run`] and per-step
+/// metrics collected during execution.
+///
+/// Returned by [`Engine::run_handler`], [`Engine::execute_handler_run`],
+/// [`Engine::execute_run`], and [`Engine::resume_run`].
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_engine::engine::WorkflowResult;
+///
+/// # fn example(result: WorkflowResult) {
+/// println!("run {} finished with {} steps", result.run.id, result.steps.len());
+/// for step in &result.steps {
+///     println!("  {} ({:?}): {}ms", step.name, step.status, step.duration_ms);
+/// }
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct WorkflowResult {
+    /// The finalized run record.
+    pub run: Run,
+    /// Per-step results in execution order.
+    pub steps: Vec<StepResult>,
+}
 
 /// Optional settings for [`Engine::enqueue_handler_with_options`].
 ///
@@ -118,8 +145,8 @@ pub struct EnqueueOptions {
 /// let mut engine = Engine::new(store, provider);
 /// engine.register(CiWorkflow)?;
 ///
-/// let run = engine.run_handler("ci", TriggerKind::Manual, json!({})).await?;
-/// tracing::info!(run_id = %run.id, status = ?run.status, "run completed");
+/// let result = engine.run_handler("ci", TriggerKind::Manual, json!({})).await?;
+/// tracing::info!(run_id = %result.run.id, status = ?result.run.status, steps = result.steps.len(), "run completed");
 /// # Ok(())
 /// # }
 /// ```
@@ -578,7 +605,7 @@ impl Engine {
         handler_name: &str,
         trigger: TriggerKind,
         payload: Value,
-    ) -> Result<Run, EngineError> {
+    ) -> Result<WorkflowResult, EngineError> {
         let handler = self
             .handlers
             .get(handler_name)
@@ -775,7 +802,7 @@ impl Engine {
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
     #[tracing::instrument(name = "engine.execute_handler_run", skip_all, fields(run_id = %run_id))]
-    pub async fn execute_handler_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
+    pub async fn execute_handler_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
             .store
             .get_run(run_id)
@@ -825,7 +852,7 @@ impl Engine {
     ///
     /// Returns [`EngineError`] if the run is not found or execution fails.
     #[tracing::instrument(name = "engine.execute_run", skip_all, fields(run_id = %run_id))]
-    pub async fn execute_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
+    pub async fn execute_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         self.execute_handler_run(run_id).await
     }
 
@@ -843,7 +870,7 @@ impl Engine {
     /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
     /// Returns [`EngineError`] if execution fails or hits another approval.
     #[tracing::instrument(name = "engine.resume_run", skip_all, fields(run_id = %run_id))]
-    pub async fn resume_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
+    pub async fn resume_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
             .store
             .get_run(run_id)
@@ -1066,7 +1093,7 @@ impl Engine {
         ctx: &WorkflowContext,
         run_start: Instant,
         run_labels: HashMap<String, String>,
-    ) -> Result<Run, EngineError> {
+    ) -> Result<WorkflowResult, EngineError> {
         // Covers the whole run: previous attempts plus this one, so a retried
         // run reports the time it really consumed.
         let total_duration = ctx.carried_duration_ms() + run_start.elapsed().as_millis() as u64;
@@ -1212,7 +1239,10 @@ impl Engine {
         #[cfg(feature = "prometheus")]
         self.emit_run_metrics(workflow_name, final_status, total_duration, ctx);
 
-        Ok(final_run)
+        Ok(WorkflowResult {
+            run: final_run,
+            steps: ctx.step_results().to_vec(),
+        })
     }
 
     /// Emit Prometheus metrics for a completed run.
@@ -1735,7 +1765,8 @@ mod tests {
         let run = engine
             .run_handler("echo-workflow", TriggerKind::Manual, json!({}))
             .await
-            .unwrap();
+            .unwrap()
+            .run;
 
         assert!(run.created_by.is_none());
     }
@@ -1876,7 +1907,8 @@ mod tests {
         let run = engine
             .run_handler("operation-workflow", TriggerKind::Manual, json!({}))
             .await
-            .unwrap();
+            .unwrap()
+            .run;
 
         assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -1919,7 +1951,8 @@ mod tests {
         let run = engine
             .run_handler("mixed-workflow", TriggerKind::Manual, json!({}))
             .await
-            .unwrap();
+            .unwrap()
+            .run;
 
         assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -1987,7 +2020,8 @@ mod tests {
         let run = engine
             .run_handler("single-approval", TriggerKind::Manual, json!({}))
             .await
-            .unwrap();
+            .unwrap()
+            .run;
 
         assert_eq!(run.status.state, RunStatus::AwaitingApproval);
 
@@ -2008,7 +2042,8 @@ mod tests {
         let run = engine
             .run_handler("single-approval", TriggerKind::Manual, json!({}))
             .await
-            .unwrap();
+            .unwrap()
+            .run;
         assert_eq!(run.status.state, RunStatus::AwaitingApproval);
 
         // Simulate approval: transition to Running
@@ -2019,7 +2054,7 @@ mod tests {
             .unwrap();
 
         // Resume: replays build, skips approval, executes deploy
-        let resumed = engine.resume_run(run.id).await.unwrap();
+        let resumed = engine.resume_run(run.id).await.unwrap().run;
         assert_eq!(resumed.status.state, RunStatus::Completed);
 
         let steps = engine.store().list_steps(run.id).await.unwrap();
@@ -2042,7 +2077,8 @@ mod tests {
         let run = engine
             .run_handler("double-approval", TriggerKind::Manual, json!({}))
             .await
-            .unwrap();
+            .unwrap()
+            .run;
         assert_eq!(run.status.state, RunStatus::AwaitingApproval);
 
         let steps = engine.store().list_steps(run.id).await.unwrap();
@@ -2055,7 +2091,7 @@ mod tests {
             .await
             .unwrap();
 
-        let resumed = engine.resume_run(run.id).await.unwrap();
+        let resumed = engine.resume_run(run.id).await.unwrap().run;
         assert_eq!(resumed.status.state, RunStatus::AwaitingApproval);
 
         let steps = engine.store().list_steps(run.id).await.unwrap();
@@ -2068,7 +2104,7 @@ mod tests {
             .await
             .unwrap();
 
-        let final_run = engine.resume_run(run.id).await.unwrap();
+        let final_run = engine.resume_run(run.id).await.unwrap().run;
         assert_eq!(final_run.status.state, RunStatus::Completed);
 
         let steps = engine.store().list_steps(run.id).await.unwrap();
@@ -2088,7 +2124,7 @@ mod tests {
     // fail_orphaned_steps tests
     // -----------------------------------------------------------------------
 
-    use ironflow_store::models::{NewStep, StepUpdate};
+    use ironflow_store::models::{NewStep, StepUpdate, step_trace_id};
 
     async fn create_step_with_status(
         store: &Arc<dyn Store>,
@@ -2100,6 +2136,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id,
+                trace_id: step_trace_id(run_id, name, position),
                 name: name.to_string(),
                 kind: StepKind::Shell,
                 position,

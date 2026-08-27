@@ -99,7 +99,7 @@ mod tests {
     use ironflow_artifacts::blob_store::BlobStore;
     use ironflow_artifacts::local::LocalBlobStore;
     use ironflow_artifacts::stream_from_bytes;
-    use ironflow_store::models::{NewArtifact, NewStep, StepKind};
+    use ironflow_store::models::{NewArtifact, NewStep, StepKind, step_trace_id};
     use tempfile::TempDir;
     use tower::ServiceExt;
 
@@ -124,6 +124,7 @@ mod tests {
             .store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

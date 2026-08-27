@@ -25,6 +25,7 @@ fn new_run(name: &str) -> NewRun {
 fn new_step(run_id: Uuid, name: &str, position: u32) -> NewStep {
     NewStep {
         run_id,
+        trace_id: step_trace_id(run_id, name, position),
         name: name.to_string(),
         kind: StepKind::Shell,
         position,
@@ -483,6 +484,7 @@ async fn list_steps_returns_steps_ordered_by_position() {
     store
         .create_step(NewStep {
             run_id: run.id,
+            trace_id: step_trace_id(run.id, "step3", 2),
             name: "step3".to_string(),
             kind: StepKind::Shell,
             position: 2,
@@ -495,6 +497,7 @@ async fn list_steps_returns_steps_ordered_by_position() {
     store
         .create_step(NewStep {
             run_id: run.id,
+            trace_id: step_trace_id(run.id, "step1", 0),
             name: "step1".to_string(),
             kind: StepKind::Shell,
             position: 0,
@@ -507,6 +510,7 @@ async fn list_steps_returns_steps_ordered_by_position() {
     store
         .create_step(NewStep {
             run_id: run.id,
+            trace_id: step_trace_id(run.id, "step2", 1),
             name: "step2".to_string(),
             kind: StepKind::Shell,
             position: 1,

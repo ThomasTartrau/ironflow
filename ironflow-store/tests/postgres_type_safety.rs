@@ -29,6 +29,7 @@ fn new_run(name: &str) -> NewRun {
 fn new_step(run_id: Uuid, name: &str, position: u32) -> NewStep {
     NewStep {
         run_id,
+        trace_id: step_trace_id(run_id, name, position),
         name: name.to_string(),
         kind: StepKind::Shell,
         position,

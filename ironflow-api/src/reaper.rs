@@ -200,6 +200,7 @@ mod tests {
     use ironflow_engine::notify::{EventSubscriber, SubscriberFuture};
     use ironflow_store::entities::{
         LeaseRequest, NewRun, NewStep, RunFilter, StepKind, StepStatus, StepUpdate, TriggerKind,
+        step_trace_id,
     };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::RunStore;
@@ -349,6 +350,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id,
+                trace_id: step_trace_id(run_id, "step-1", 0),
                 name: "step-1".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

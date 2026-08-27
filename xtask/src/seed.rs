@@ -13,7 +13,7 @@ use ironflow_artifacts::stream_from_bytes;
 use ironflow_auth::password;
 use ironflow_store::entities::{
     ApiKeyScope, EventKind, NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep, NewUser,
-    RunActor, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind,
+    RunActor, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind, step_trace_id,
 };
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
@@ -497,12 +497,14 @@ async fn seed_runs(store: &dyn Store, users: &[SeededUser]) -> anyhow::Result<Ve
         let mut total_cost = Decimal::ZERO;
 
         for (pos, step_spec) in spec.steps.iter().enumerate() {
+            let position = pos as u32;
             let step = store
                 .create_step(NewStep {
                     run_id,
+                    trace_id: step_trace_id(run_id, step_spec.name, position),
                     name: step_spec.name.to_string(),
                     kind: step_spec.kind.clone(),
-                    position: pos as u32,
+                    position,
                     input: Some(json!({"seed": true})),
                     is_error_handler: false,
                 })

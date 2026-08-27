@@ -80,7 +80,7 @@ mod tests {
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
-        NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind, TriggerKind,
+        NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind, TriggerKind, step_trace_id,
     };
     use ironflow_store::store::RunStore;
     use ironflow_store::user_store::UserStore;
@@ -243,6 +243,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: r.id,
+                trace_id: step_trace_id(r.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

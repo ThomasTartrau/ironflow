@@ -60,7 +60,8 @@ async fn run_completion_emits_metrics() {
     let run = engine
         .run_handler("metrics-test", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(
         run.status.state,
