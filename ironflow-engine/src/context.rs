@@ -896,6 +896,23 @@ impl WorkflowContext {
                         &output,
                     ));
 
+                    if let Some(ref bus) = self.event_bus
+                        && matches!(step_config, StepConfig::Agent(_))
+                    {
+                        let tokens = output
+                            .input_tokens
+                            .unwrap_or(0)
+                            .saturating_add(output.output_tokens.unwrap_or(0));
+                        bus.publish(
+                            self.run_id,
+                            crate::notify::WorkflowEvent::AgentStepTokensUsed {
+                                step_name: step_name.clone(),
+                                tokens,
+                                cost_usd: output.cost_usd,
+                            },
+                        );
+                    }
+
                     info!(
                         run_id = %self.run_id,
                         step = %step_name,
@@ -1243,6 +1260,17 @@ impl WorkflowContext {
             .await?;
 
         self.last_step_ids = vec![step.id];
+
+        if let Some(ref bus) = self.event_bus {
+            bus.publish(
+                self.run_id,
+                crate::notify::WorkflowEvent::ApprovalRequired {
+                    step_name: name.to_string(),
+                    step_index: position,
+                    approval_id: step.id,
+                },
+            );
+        }
 
         Err(EngineError::ApprovalRequired {
             run_id: self.run_id,
@@ -2048,6 +2076,21 @@ impl WorkflowContext {
                             output_summary: None,
                         },
                     );
+
+                    if matches!(config, StepConfig::Agent(_)) {
+                        let tokens = output
+                            .input_tokens
+                            .unwrap_or(0)
+                            .saturating_add(output.output_tokens.unwrap_or(0));
+                        bus.publish(
+                            self.run_id,
+                            crate::notify::WorkflowEvent::AgentStepTokensUsed {
+                                step_name: name.to_string(),
+                                tokens,
+                                cost_usd: output.cost_usd,
+                            },
+                        );
+                    }
                 }
 
                 self.last_step_ids = vec![step.id];
