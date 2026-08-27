@@ -66,7 +66,9 @@ pub mod prelude {
     pub use crate::error::EngineError;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};
-    pub use crate::notify::{Event, EventPublisher, EventSubscriber, WebhookSubscriber};
+    pub use crate::notify::{
+        Event, EventPublisher, EventSubscriber, WebhookSubscriber, WorkflowEvent, WorkflowEventBus,
+    };
     pub use crate::operation::Operation;
     pub use crate::run_creator::{CreateRunOpts, RunCreator};
     pub use crate::schedule::CronSchedule;

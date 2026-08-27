@@ -122,6 +122,8 @@ pub struct WorkflowContext {
     has_allowed_failure: bool,
     /// Error handlers registered via [`on_error`](Self::on_error).
     error_handlers: Vec<OnErrorHandler>,
+    /// Optional event bus for per-run real-time monitoring.
+    event_bus: Option<crate::notify::WorkflowEventBus>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.
@@ -155,6 +157,7 @@ impl WorkflowContext {
             artifact_sink: None,
             has_allowed_failure: false,
             error_handlers: Vec::new(),
+            event_bus: None,
         }
     }
 
@@ -187,6 +190,7 @@ impl WorkflowContext {
             artifact_sink: None,
             has_allowed_failure: false,
             error_handlers: Vec::new(),
+            event_bus: None,
         }
     }
 
@@ -216,6 +220,15 @@ impl WorkflowContext {
     /// ```
     pub fn set_artifact_sink(&mut self, sink: Arc<dyn ArtifactSink>) {
         self.artifact_sink = Some(sink);
+    }
+
+    /// Attach a [`WorkflowEventBus`](crate::notify::WorkflowEventBus) for
+    /// per-run real-time monitoring.
+    ///
+    /// When set, step transitions automatically publish
+    /// [`WorkflowEvent`](crate::notify::WorkflowEvent)s to the bus.
+    pub fn set_event_bus(&mut self, bus: crate::notify::WorkflowEventBus) {
+        self.event_bus = Some(bus);
     }
 
     /// The artifact backend, or an explicit error when none is configured.
@@ -1490,6 +1503,7 @@ impl WorkflowContext {
             artifact_sink: self.artifact_sink.clone(),
             has_allowed_failure: false,
             error_handlers: Vec::new(),
+            event_bus: self.event_bus.clone(),
         };
 
         let result = handler.execute(&mut child_ctx).await;
@@ -1650,6 +1664,17 @@ impl WorkflowContext {
 
         self.start_step(step.id, Utc::now()).await?;
 
+        if let Some(ref bus) = self.event_bus {
+            bus.publish(
+                self.run_id,
+                crate::notify::WorkflowEvent::StepStarted {
+                    step_name: name.to_string(),
+                    step_index: position,
+                    timestamp: Utc::now(),
+                },
+            );
+        }
+
         // Inputs must exist before the command runs. A failure here fails the
         // step: the command would otherwise run against missing files.
         if let Err(err) = self.prepare_step_inputs(&config, position).await {
@@ -1727,6 +1752,18 @@ impl WorkflowContext {
                     "step completed"
                 );
 
+                if let Some(ref bus) = self.event_bus {
+                    bus.publish(
+                        self.run_id,
+                        crate::notify::WorkflowEvent::StepCompleted {
+                            step_name: name.to_string(),
+                            step_index: position,
+                            duration_ms: output.duration_ms,
+                            output_summary: None,
+                        },
+                    );
+                }
+
                 self.last_step_ids = vec![step.id];
 
                 Ok(output)
@@ -1769,6 +1806,19 @@ impl WorkflowContext {
                 }
 
                 let err_duration = partial.as_ref().and_then(|p| p.duration_ms).unwrap_or(0);
+
+                if let Some(ref bus) = self.event_bus {
+                    bus.publish(
+                        self.run_id,
+                        crate::notify::WorkflowEvent::StepFailed {
+                            step_name: name.to_string(),
+                            step_index: position,
+                            error: err.to_string(),
+                            duration_ms: err_duration,
+                        },
+                    );
+                }
+
                 self.fire_error_handlers(name, &err.to_string(), err_duration)
                     .await;
 

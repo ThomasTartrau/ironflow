@@ -34,6 +34,7 @@
 mod audit_log;
 mod betterstack;
 mod event;
+mod event_bus;
 mod formatter;
 mod publisher;
 mod retry;
@@ -43,6 +44,7 @@ mod webhook;
 pub use audit_log::AuditLogSubscriber;
 pub use betterstack::BetterStackSubscriber;
 pub use event::{Event, LogStream};
+pub use event_bus::{WorkflowEvent, WorkflowEventBus};
 pub use formatter::{FormattedMessage, MessageFormatter};
 pub use publisher::EventPublisher;
 pub use retry::{RetryConfig, deliver_with_retry, is_accepted_202, is_success_2xx};
