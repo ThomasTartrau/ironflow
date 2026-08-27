@@ -38,6 +38,7 @@ use uuid::Uuid;
 
 use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::AgentProvider;
+use ironflow_core::trace_context::WorkflowTraceContext;
 use ironflow_store::models::{
     ArtifactLookup, NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind,
     StepStatus, StepUpdate, TriggerKind, step_trace_id,
@@ -131,6 +132,8 @@ pub struct WorkflowContext {
     step_results: Vec<StepResult>,
     /// Optional event bus for per-run real-time monitoring.
     event_bus: Option<crate::notify::WorkflowEventBus>,
+    /// W3C trace context for distributed tracing propagation.
+    trace_context: WorkflowTraceContext,
 }
 
 /// A registered error handler that fires when a subsequent step fails.
@@ -145,6 +148,8 @@ impl WorkflowContext {
     /// Not typically called directly — the [`Engine`](crate::engine::Engine)
     /// creates this when executing a [`WorkflowHandler`].
     pub fn new(run_id: Uuid, store: Arc<dyn Store>, provider: Arc<dyn AgentProvider>) -> Self {
+        let trace_context =
+            WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
             store,
@@ -168,6 +173,7 @@ impl WorkflowContext {
             guard_config: None,
             step_results: Vec::new(),
             event_bus: None,
+            trace_context,
         }
     }
 
@@ -181,6 +187,8 @@ impl WorkflowContext {
         provider: Arc<dyn AgentProvider>,
         resolver: HandlerResolver,
     ) -> Self {
+        let trace_context =
+            WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
             store,
@@ -204,6 +212,7 @@ impl WorkflowContext {
             guard_config: None,
             step_results: Vec::new(),
             event_bus: None,
+            trace_context,
         }
     }
 
@@ -233,6 +242,15 @@ impl WorkflowContext {
     /// ```
     pub fn set_artifact_sink(&mut self, sink: Arc<dyn ArtifactSink>) {
         self.artifact_sink = Some(sink);
+    }
+
+    /// Return the W3C trace context for this workflow run.
+    ///
+    /// The trace context is derived from the run ID and can be used to
+    /// correlate spans across distributed services. Each step automatically
+    /// receives a [`child`](WorkflowTraceContext::child) context.
+    pub fn trace_context(&self) -> &WorkflowTraceContext {
+        &self.trace_context
     }
 
     /// Attach a workflow guard configuration and shared state.
@@ -741,7 +759,18 @@ impl WorkflowContext {
                 continue;
             }
 
-            step_records.push((step.id, trace_id, name.to_string(), config.clone()));
+            let mut config_with_trace = config.clone();
+            let step_trace = self.trace_context.child();
+            match config_with_trace {
+                StepConfig::Agent(ref mut agent_config) => {
+                    agent_config.trace_context = Some(step_trace);
+                }
+                StepConfig::Http(ref mut http_config) => {
+                    http_config.trace_context = Some(step_trace);
+                }
+                _ => {}
+            }
+            step_records.push((step.id, trace_id, name.to_string(), config_with_trace));
         }
 
         let mut join_set = JoinSet::new();
@@ -1765,6 +1794,7 @@ impl WorkflowContext {
             guard_config: self.guard_config.clone(),
             step_results: Vec::new(),
             event_bus: self.event_bus.clone(),
+            trace_context: self.trace_context.child(),
         };
 
         let result = handler.execute(&mut child_ctx).await;
@@ -1967,6 +1997,18 @@ impl WorkflowContext {
                 });
             }
             return Err(err);
+        }
+
+        let mut config = config;
+        let step_trace = self.trace_context.child();
+        match config {
+            StepConfig::Agent(ref mut agent_config) => {
+                agent_config.trace_context = Some(step_trace);
+            }
+            StepConfig::Http(ref mut http_config) => {
+                http_config.trace_context = Some(step_trace);
+            }
+            _ => {}
         }
 
         let step_log_sender = self

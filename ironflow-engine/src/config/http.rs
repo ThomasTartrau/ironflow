@@ -1,6 +1,7 @@
 //! [`HttpConfig`] — serializable configuration for an HTTP step.
 
 use ironflow_core::retry::RetryPolicy;
+use ironflow_core::trace_context::WorkflowTraceContext;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -31,6 +32,9 @@ pub struct HttpConfig {
     /// Optional step-level retry policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryPolicy>,
+    /// Optional W3C trace context for distributed tracing propagation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<WorkflowTraceContext>,
 }
 
 impl HttpConfig {
@@ -77,6 +81,7 @@ impl HttpConfig {
             timeout_secs: None,
             allow_failure: false,
             retry: None,
+            trace_context: None,
         }
     }
 

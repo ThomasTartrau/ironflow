@@ -358,15 +358,20 @@ impl K8sPersistentProvider {
 
         let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
         let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
+        let trace_prefix = config
+            .trace_context
+            .as_ref()
+            .map(|ctx| format!("export TRACEPARENT='{}'; ", ctx.to_traceparent()))
+            .unwrap_or_default();
         let full_cmd = match (&self.working_dir, &config.working_dir) {
             (_, Some(dir)) | (Some(dir), None) => {
                 format!(
-                    "{creds_prefix}cd {} && {}",
+                    "{trace_prefix}{creds_prefix}cd {} && {}",
                     claude_common::build_shell_command(dir, &[]),
                     claude_cmd
                 )
             }
-            (None, None) => format!("{creds_prefix}{claude_cmd}"),
+            (None, None) => format!("{trace_prefix}{creds_prefix}{claude_cmd}"),
         };
 
         debug!(

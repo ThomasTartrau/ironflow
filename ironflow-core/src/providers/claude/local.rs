@@ -193,6 +193,10 @@ impl AgentProvider for ClaudeCodeProvider {
                 cmd.env_remove(&var);
             }
 
+            if let Some(ref ctx) = config.trace_context {
+                cmd.env("TRACEPARENT", ctx.to_traceparent());
+            }
+
             if let Some(ref dir) = config.working_dir {
                 cmd.current_dir(dir);
             }

@@ -350,6 +350,12 @@ impl K8sEphemeralProvider {
         let mut prompt_configmap_name: Option<String> = None;
         let configmaps: Api<ConfigMap> = Api::namespaced(client, &self.namespace);
 
+        let trace_prefix = config
+            .trace_context
+            .as_ref()
+            .map(|ctx| format!("export TRACEPARENT='{}'; ", ctx.to_traceparent()))
+            .unwrap_or_default();
+
         let full_cmd = if let Some(ref prompt) = built.stdin_prompt {
             let cm_name = format!("{pod_name}-prompt");
             let cm: ConfigMap = serde_json::from_value(json!({
@@ -396,23 +402,23 @@ impl K8sEphemeralProvider {
             match (&self.working_dir, &config.working_dir) {
                 (_, Some(dir)) | (Some(dir), None) => {
                     format!(
-                        "{creds_prefix}cd {} && {pipe_prefix}{claude_cmd}",
+                        "{trace_prefix}{creds_prefix}cd {} && {pipe_prefix}{claude_cmd}",
                         claude_common::build_shell_command(dir, &[]),
                     )
                 }
-                (None, None) => format!("{creds_prefix}{pipe_prefix}{claude_cmd}"),
+                (None, None) => format!("{trace_prefix}{creds_prefix}{pipe_prefix}{claude_cmd}"),
             }
         } else {
             let claude_cmd = claude_common::build_shell_command(&self.claude_path, &built.args);
             match (&self.working_dir, &config.working_dir) {
                 (_, Some(dir)) | (Some(dir), None) => {
                     format!(
-                        "{creds_prefix}cd {} && {}",
+                        "{trace_prefix}{creds_prefix}cd {} && {}",
                         claude_common::build_shell_command(dir, &[]),
                         claude_cmd
                     )
                 }
-                (None, None) => format!("{creds_prefix}{claude_cmd}"),
+                (None, None) => format!("{trace_prefix}{creds_prefix}{claude_cmd}"),
             }
         };
 

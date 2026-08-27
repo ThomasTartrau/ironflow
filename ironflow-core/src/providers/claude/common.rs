@@ -1671,6 +1671,7 @@ mod tests {
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,
+            trace_context: None,
             _marker: PhantomData,
         };
 

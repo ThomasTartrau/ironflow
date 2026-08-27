@@ -40,6 +40,7 @@ use crate::error::OperationError;
 use crate::metric_names;
 use crate::provider::{AgentConfig, AgentOutput, AgentProvider, DebugMessage, LogSink};
 use crate::retry::RetryPolicy;
+use crate::trace_context::WorkflowTraceContext;
 
 /// Provider-agnostic model identifiers.
 ///
@@ -495,6 +496,35 @@ impl Agent {
     /// ```
     pub fn log_sink(mut self, sink: Arc<dyn LogSink>) -> Self {
         self.log_sink = Some(sink);
+        self
+    }
+
+    /// Attach a [`WorkflowTraceContext`] for distributed tracing.
+    ///
+    /// When set, the trace context is stored in the [`AgentConfig`] and
+    /// made available to providers for injecting `traceparent` headers
+    /// into outgoing HTTP requests.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    /// use ironflow_core::trace_context::WorkflowTraceContext;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let ctx = WorkflowTraceContext::new_root();
+    ///
+    /// let result = Agent::new()
+    ///     .prompt("Analyze the code")
+    ///     .trace_context(ctx)
+    ///     .run(&provider)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn trace_context(mut self, ctx: WorkflowTraceContext) -> Self {
+        self.config.trace_context = Some(ctx);
         self
     }
 

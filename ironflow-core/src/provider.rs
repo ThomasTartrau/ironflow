@@ -28,6 +28,7 @@ use serde_json::Value;
 use crate::error::AgentError;
 use crate::operations::agent::{Model, PermissionMode};
 use crate::retry::RetryPolicy;
+use crate::trace_context::WorkflowTraceContext;
 
 /// Boxed future returned by [`AgentProvider::invoke`].
 pub type InvokeFuture<'a> =
@@ -255,6 +256,14 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryPolicy>,
 
+    /// Optional W3C trace context for distributed tracing propagation.
+    ///
+    /// When set, providers can inject the `traceparent` header into
+    /// outgoing HTTP requests (LLM APIs, MCP servers) to correlate
+    /// workflow spans with downstream service spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<WorkflowTraceContext>,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -290,6 +299,7 @@ impl AgentConfig {
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,
+            trace_context: None,
             _marker: PhantomData,
         }
     }
@@ -522,6 +532,28 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Attach a [`WorkflowTraceContext`] for distributed tracing.
+    ///
+    /// When set, providers can inject the `traceparent` header into
+    /// outgoing HTTP requests to correlate workflow spans with
+    /// downstream service spans.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    /// use ironflow_core::trace_context::WorkflowTraceContext;
+    ///
+    /// let ctx = WorkflowTraceContext::new_root();
+    /// let config = AgentConfig::new("classify this")
+    ///     .trace_context(ctx);
+    /// assert!(config.trace_context.is_some());
+    /// ```
+    pub fn trace_context(mut self, ctx: WorkflowTraceContext) -> Self {
+        self.trace_context = Some(ctx);
+        self
+    }
+
     /// Declare an external input that the provider must materialize on the
     /// agent's filesystem before invocation.
     ///
@@ -574,6 +606,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             inputs: self.inputs,
             allow_failure: self.allow_failure,
             retry: self.retry,
+            trace_context: self.trace_context,
             _marker: PhantomData,
         }
     }
@@ -1046,6 +1079,7 @@ mod tests {
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,
+            trace_context: None,
             _marker: PhantomData,
         }
     }
@@ -1089,6 +1123,7 @@ mod tests {
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,
+            trace_context: None,
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();
