@@ -133,8 +133,8 @@ async fn register_mcp_tools_populates_registry() {
             .expect("register should succeed");
 
         assert_eq!(registry.len(), 2);
-        assert!(registry.has_tool("test.echo"));
-        assert!(registry.has_tool("test.add"));
+        assert!(registry.has_tool("test__echo"));
+        assert!(registry.has_tool("test__add"));
     })
     .await
     .expect("test timed out");
@@ -149,13 +149,44 @@ async fn bridge_tool_execute_via_registry() {
             .expect("register should succeed");
 
         let result = registry
-            .execute("srv.echo", json!({"message": "ping"}))
+            .execute("srv__echo", json!({"message": "ping"}))
             .await
             .expect("tool should exist")
             .expect("execution should succeed");
 
         assert_eq!(result.content, "ping");
         assert!(!result.is_error);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn register_mcp_tools_uses_double_underscore_separator() {
+    timeout(Duration::from_secs(10), async {
+        let conn = spawn_echo_server().await;
+        let registry = register_mcp_tools(ToolRegistry::new(), conn, "myprefix")
+            .await
+            .expect("register should succeed");
+
+        assert!(registry.has_tool("myprefix__echo"));
+        assert!(registry.has_tool("myprefix__add"));
+        assert!(!registry.has_tool("myprefix.echo"));
+        assert!(!registry.has_tool("myprefix.add"));
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn register_mcp_tools_tracks_connector() {
+    timeout(Duration::from_secs(10), async {
+        let conn = spawn_echo_server().await;
+        let registry = register_mcp_tools(ToolRegistry::new(), conn, "grafana")
+            .await
+            .expect("register should succeed");
+
+        assert!(registry.connectors().contains("grafana"));
     })
     .await
     .expect("test timed out");

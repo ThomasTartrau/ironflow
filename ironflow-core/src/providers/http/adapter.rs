@@ -13,6 +13,7 @@ use crate::provider::{
 };
 use crate::providers::http::sse::{SseDelta, collect_sse_stream};
 use crate::providers::http::tools::ToolRegistry;
+use crate::providers::http::tools::routing::route_tool_call;
 
 /// Normalized result of one API turn (one HTTP request/response cycle).
 #[derive(Debug)]
@@ -445,12 +446,30 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
                         "executing tool call"
                     );
 
-                    let (content, is_error) =
+                    let connectors = registry.connectors();
+                    let (content, is_error) = if !connectors.is_empty() {
+                        match route_tool_call(&tc.name, connectors) {
+                            Ok(routed) => {
+                                match registry
+                                    .execute(&routed.registry_key, tc.input.clone())
+                                    .await
+                                {
+                                    Some(Ok(output)) => (output.content, output.is_error),
+                                    Some(Err(err)) => {
+                                        (format!("Tool execution error: {err}"), true)
+                                    }
+                                    None => (format!("Unknown tool: {}", tc.name), true),
+                                }
+                            }
+                            Err(routing_err) => (routing_err.to_string(), true),
+                        }
+                    } else {
                         match registry.execute(&tc.name, tc.input.clone()).await {
                             Some(Ok(output)) => (output.content, output.is_error),
                             Some(Err(err)) => (format!("Tool execution error: {err}"), true),
                             None => (format!("Unknown tool: {}", tc.name), true),
-                        };
+                        }
+                    };
 
                     messages.push(json!({
                         "role": "tool",

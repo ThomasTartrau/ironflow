@@ -1,6 +1,6 @@
 //! Tool registry: stores tools and converts them to OpenAI format.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 
@@ -26,6 +26,7 @@ use super::tool_trait::{Tool, ToolError, ToolOutput};
 pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
     index: HashMap<String, usize>,
+    connectors: HashSet<String>,
 }
 
 impl ToolRegistry {
@@ -34,6 +35,7 @@ impl ToolRegistry {
         Self {
             tools: Vec::new(),
             index: HashMap::new(),
+            connectors: HashSet::new(),
         }
     }
 
@@ -106,6 +108,20 @@ impl ToolRegistry {
     /// Check if a tool with the given name is registered.
     pub fn has_tool(&self, name: &str) -> bool {
         self.index.contains_key(name)
+    }
+
+    /// Register a connector name for MCP prefix routing.
+    ///
+    /// Called by `register_mcp_tools` to track which prefixes are valid for
+    /// tool call routing.
+    pub fn register_connector(mut self, name: &str) -> Self {
+        self.connectors.insert(name.to_string());
+        self
+    }
+
+    /// Returns the set of registered MCP connector prefixes.
+    pub fn connectors(&self) -> &HashSet<String> {
+        &self.connectors
     }
 }
 

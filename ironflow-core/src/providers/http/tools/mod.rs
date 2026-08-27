@@ -25,6 +25,7 @@ pub mod bash;
 pub mod mcp;
 #[cfg(feature = "tool-read-file")]
 pub mod read_file;
+pub mod routing;
 #[cfg(feature = "tool-web-fetch")]
 pub mod web_fetch;
 #[cfg(feature = "tool-web-search")]
