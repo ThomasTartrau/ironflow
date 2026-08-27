@@ -55,6 +55,7 @@ use serde_json::Value;
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+use crate::guard::WorkflowGuardConfig;
 use crate::run_creator::{CreateRunOpts, RunCreator, RunCreatorFuture};
 use crate::schedule::CronSchedule;
 
@@ -284,6 +285,37 @@ pub trait WorkflowHandler: Send + Sync {
     /// assert_eq!(ExpensiveAnalysis.default_max_cost_usd(), Some(Decimal::new(500, 2)));
     /// ```
     fn default_max_cost_usd(&self) -> Option<Decimal> {
+        None
+    }
+
+    /// Optional guard configuration for this workflow.
+    ///
+    /// When present, overrides the engine's global guard configuration
+    /// for runs of this handler. The default is `None` (use the engine's
+    /// global configuration).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::guard::WorkflowGuardConfig;
+    ///
+    /// struct StrictWorkflow;
+    ///
+    /// impl WorkflowHandler for StrictWorkflow {
+    ///     fn name(&self) -> &str { "strict" }
+    ///     fn guard_config(&self) -> Option<WorkflowGuardConfig> {
+    ///         Some(WorkflowGuardConfig::new().with_max_depth(2))
+    ///     }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(StrictWorkflow.guard_config().unwrap().max_depth, 2);
+    /// ```
+    fn guard_config(&self) -> Option<WorkflowGuardConfig> {
         None
     }
 

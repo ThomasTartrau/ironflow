@@ -57,6 +57,7 @@ use crate::config::{
 };
 use crate::error::EngineError;
 use crate::executor::{ParallelStepResult, StepOutput, execute_step_config};
+use crate::guard::{SharedGuardState, WorkflowGuardConfig, WorkflowRejection};
 use crate::handler::WorkflowHandler;
 use crate::log_sender::{LogSender, StepLogSender};
 use crate::operation::Operation;
@@ -122,6 +123,10 @@ pub struct WorkflowContext {
     has_allowed_failure: bool,
     /// Error handlers registered via [`on_error`](Self::on_error).
     error_handlers: Vec<OnErrorHandler>,
+    /// Shared guard state for workflow execution limits.
+    guard_state: Option<SharedGuardState>,
+    /// Guard configuration for this workflow run.
+    guard_config: Option<WorkflowGuardConfig>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.
@@ -155,6 +160,8 @@ impl WorkflowContext {
             artifact_sink: None,
             has_allowed_failure: false,
             error_handlers: Vec::new(),
+            guard_state: None,
+            guard_config: None,
         }
     }
 
@@ -187,6 +194,8 @@ impl WorkflowContext {
             artifact_sink: None,
             has_allowed_failure: false,
             error_handlers: Vec::new(),
+            guard_state: None,
+            guard_config: None,
         }
     }
 
@@ -216,6 +225,32 @@ impl WorkflowContext {
     /// ```
     pub fn set_artifact_sink(&mut self, sink: Arc<dyn ArtifactSink>) {
         self.artifact_sink = Some(sink);
+    }
+
+    /// Attach a workflow guard configuration and shared state.
+    ///
+    /// When set, the guard is checked before every sub-workflow invocation.
+    /// The shared state is propagated to child workflows so that limits
+    /// apply globally across the entire run tree.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::guard::{WorkflowGuardConfig, new_shared_guard_state};
+    ///
+    /// # fn example(ctx: &mut WorkflowContext) {
+    /// ctx.set_guard(WorkflowGuardConfig::default(), new_shared_guard_state());
+    /// # }
+    /// ```
+    pub fn set_guard(&mut self, config: WorkflowGuardConfig, state: SharedGuardState) {
+        self.guard_config = Some(config);
+        self.guard_state = Some(state);
+    }
+
+    /// The current guard configuration, if any.
+    pub fn guard_config(&self) -> Option<&WorkflowGuardConfig> {
+        self.guard_config.as_ref()
     }
 
     /// The artifact backend, or an explicit error when none is configured.
@@ -601,6 +636,9 @@ impl WorkflowContext {
             return Ok(Vec::new());
         }
 
+        // Guard timeout: checked before launching the wave.
+        self.check_guard_timeout()?;
+
         // Cost cap: the whole wave is charged at once. Refused before any step
         // record is created, so nothing in the wave starts.
         let wave_budget: Decimal = steps
@@ -657,6 +695,7 @@ impl WorkflowContext {
 
         let mut join_set = JoinSet::new();
         let mut task_index: HashMap<Id, usize> = HashMap::new();
+        let parallel_timeout = self.guard_remaining_timeout();
         for (idx, (step_id, step_name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
             let config = config.clone();
@@ -665,10 +704,26 @@ impl WorkflowContext {
                 .as_ref()
                 .map(|s| StepLogSender::new(s.clone(), self.run_id, *step_id, step_name.clone()));
             let handle = join_set.spawn(async move {
-                (
-                    idx,
-                    execute_step_config(&config, &provider, step_log_sender).await,
-                )
+                let result = match parallel_timeout {
+                    Some(dur) => {
+                        match tokio::time::timeout(
+                            dur,
+                            execute_step_config(&config, &provider, step_log_sender),
+                        )
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_elapsed) => {
+                                Err(EngineError::from(WorkflowRejection::WorkflowTimeout {
+                                    elapsed_secs: 0,
+                                    max: 0,
+                                }))
+                            }
+                        }
+                    }
+                    None => execute_step_config(&config, &provider, step_log_sender).await,
+                };
+                (idx, result)
             });
             task_index.insert(handle.id(), idx);
         }
@@ -746,6 +801,24 @@ impl WorkflowContext {
                 Ok(output) => {
                     self.total_cost_usd += output.cost_usd;
                     self.total_duration_ms += output.duration_ms;
+
+                    // Record token usage in the guard for agent steps.
+                    if matches!(step_config, StepConfig::Agent(_)) {
+                        let tokens = output
+                            .input_tokens
+                            .unwrap_or(0)
+                            .saturating_add(output.output_tokens.unwrap_or(0));
+                        if tokens > 0
+                            && let Err(guard_err) = self.guard_record_tokens(tokens)
+                        {
+                            if first_error.is_none() {
+                                first_error = Some(guard_err);
+                            }
+                            if fail_fast {
+                                join_set.abort_all();
+                            }
+                        }
+                    }
 
                     let debug_messages_json = output.debug_messages_json();
 
@@ -1338,6 +1411,14 @@ impl WorkflowContext {
         handler: &dyn WorkflowHandler,
         payload: Value,
     ) -> Result<StepOutput, EngineError> {
+        // Guard check: verify limits before creating the step.
+        if let (Some(guard_config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
+            let state = guard_state
+                .lock()
+                .map_err(|_| WorkflowRejection::GuardUnavailable)?;
+            state.check(guard_config, handler.name())?;
+        }
+
         let config = WorkflowStepConfig::new(handler.name(), payload);
         let position = self.position;
         self.position += 1;
@@ -1355,6 +1436,14 @@ impl WorkflowContext {
             .await?;
 
         self.start_step(step.id, Utc::now()).await?;
+
+        // Record invocation in guard state (fail-closed).
+        if let Some(guard_state) = &self.guard_state {
+            let mut state = guard_state
+                .lock()
+                .map_err(|_| WorkflowRejection::GuardUnavailable)?;
+            state.record_invocation(handler.name());
+        }
 
         match self.execute_child_workflow(&config).await {
             Ok((output, child_had_allowed_failure)) => {
@@ -1388,6 +1477,7 @@ impl WorkflowContext {
 
                 self.last_step_ids = vec![step.id];
 
+                self.guard_record_return();
                 Ok(output)
             }
             Err(err) => {
@@ -1408,9 +1498,107 @@ impl WorkflowContext {
                     error!(step_id = %step.id, error = %store_err, "failed to persist step failure");
                 }
 
+                self.guard_record_return();
                 Err(err)
             }
         }
+    }
+
+    /// Decrement guard state after a sub-workflow returns (success or failure).
+    ///
+    /// Logs on poison rather than propagating, because this runs on error
+    /// paths where the workflow is already failing.
+    fn guard_record_return(&self) {
+        if let Some(guard_state) = &self.guard_state {
+            match guard_state.lock() {
+                Ok(mut state) => state.record_return(),
+                Err(_) => {
+                    error!(
+                        run_id = %self.run_id,
+                        "guard state mutex poisoned in record_return"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Wrap step execution with the guard's remaining timeout.
+    ///
+    /// When no guard is configured the step runs without a timeout wrapper.
+    async fn execute_with_guard_timeout(
+        &self,
+        config: &StepConfig,
+        step_log_sender: Option<StepLogSender>,
+    ) -> Result<StepOutput, EngineError> {
+        let remaining = self.guard_remaining_timeout();
+        match remaining {
+            Some(dur) => {
+                use tokio::time::timeout;
+                match timeout(
+                    dur,
+                    execute_step_config(config, &self.provider, step_log_sender),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_elapsed) => {
+                        let config_secs = self
+                            .guard_config
+                            .as_ref()
+                            .map_or(0, |c| c.workflow_timeout_secs);
+                        Err(WorkflowRejection::WorkflowTimeout {
+                            elapsed_secs: config_secs,
+                            max: config_secs,
+                        }
+                        .into())
+                    }
+                }
+            }
+            None => execute_step_config(config, &self.provider, step_log_sender).await,
+        }
+    }
+
+    /// Compute the remaining timeout duration from the guard, if any.
+    fn guard_remaining_timeout(&self) -> Option<std::time::Duration> {
+        let config = self.guard_config.as_ref()?;
+        let guard_state = self.guard_state.as_ref()?;
+        let state = guard_state.lock().ok()?;
+        let elapsed = state.elapsed_secs();
+        let max = config.workflow_timeout_secs;
+        if elapsed >= max {
+            Some(std::time::Duration::ZERO)
+        } else {
+            Some(std::time::Duration::from_secs(max - elapsed))
+        }
+    }
+
+    /// Check the guard timeout before every step.
+    fn check_guard_timeout(&self) -> Result<(), EngineError> {
+        if let (Some(config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
+            let state = guard_state
+                .lock()
+                .map_err(|_| WorkflowRejection::GuardUnavailable)?;
+            let elapsed = state.elapsed_secs();
+            if elapsed >= config.workflow_timeout_secs {
+                return Err(WorkflowRejection::WorkflowTimeout {
+                    elapsed_secs: elapsed,
+                    max: config.workflow_timeout_secs,
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Record token usage from an agent step in the guard state.
+    fn guard_record_tokens(&self, tokens: u64) -> Result<(), EngineError> {
+        if let (Some(config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
+            let mut state = guard_state
+                .lock()
+                .map_err(|_| WorkflowRejection::GuardUnavailable)?;
+            state.record_tokens(config, tokens)?;
+        }
+        Ok(())
     }
 
     /// Execute a child workflow and return aggregated output plus whether
@@ -1490,6 +1678,8 @@ impl WorkflowContext {
             artifact_sink: self.artifact_sink.clone(),
             has_allowed_failure: false,
             error_handlers: Vec::new(),
+            guard_state: self.guard_state.clone(),
+            guard_config: self.guard_config.clone(),
         };
 
         let result = handler.execute(&mut child_ctx).await;
@@ -1621,6 +1811,9 @@ impl WorkflowContext {
         };
         Span::current().record("step.kind", kind_str);
 
+        // Guard timeout: checked before every step, not just sub-workflows.
+        self.check_guard_timeout()?;
+
         let position = self.position;
         self.position += 1;
 
@@ -1681,7 +1874,9 @@ impl WorkflowContext {
             .as_ref()
             .map(|s| StepLogSender::new(s.clone(), self.run_id, step.id, name.to_string()));
 
-        let execution = execute_step_config(&config, &self.provider, step_log_sender).await;
+        let execution = self
+            .execute_with_guard_timeout(&config, step_log_sender)
+            .await;
 
         let execution = self
             .retry_step_if_configured(name, kind_str, &config, step.id, execution)
@@ -1699,6 +1894,17 @@ impl WorkflowContext {
             Ok(output) => {
                 self.total_cost_usd += output.cost_usd;
                 self.total_duration_ms += output.duration_ms;
+
+                // Record token usage in the guard for agent steps.
+                if matches!(config, StepConfig::Agent(_)) {
+                    let tokens = output
+                        .input_tokens
+                        .unwrap_or(0)
+                        .saturating_add(output.output_tokens.unwrap_or(0));
+                    if tokens > 0 {
+                        self.guard_record_tokens(tokens)?;
+                    }
+                }
 
                 let debug_messages_json = output.debug_messages_json();
 

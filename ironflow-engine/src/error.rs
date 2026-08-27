@@ -7,6 +7,8 @@ use ironflow_artifacts::error::ArtifactError;
 use ironflow_core::error::OperationError;
 use ironflow_store::error::StoreError;
 
+use crate::guard::{WORKFLOW_GUARD_REJECTED_CODE, WorkflowRejection};
+
 /// Business error code carried by [`EngineError::RunBudgetExceeded`].
 pub const RUN_BUDGET_EXCEEDED_CODE: &str = "RUN_BUDGET_EXCEEDED";
 
@@ -113,6 +115,14 @@ pub enum EngineError {
         /// The approval message.
         message: String,
     },
+
+    /// A workflow invocation was rejected by the [workflow guard](crate::guard).
+    ///
+    /// The run is transitioned to
+    /// [`Cancelled`](ironflow_store::entities::RunStatus::Cancelled) when this
+    /// error is raised.
+    #[error("{WORKFLOW_GUARD_REJECTED_CODE}: {0}")]
+    WorkflowGuardRejected(#[from] WorkflowRejection),
 }
 
 #[cfg(test)]
@@ -210,5 +220,30 @@ mod tests {
         let serde_err = serde_json::from_str::<String>("not json").unwrap_err();
         let engine_err = EngineError::from(serde_err);
         assert!(engine_err.to_string().contains("serialization error"));
+    }
+
+    #[test]
+    fn workflow_guard_rejected_display_carries_code_and_detail() {
+        use crate::guard::WorkflowRejection;
+
+        let rejection = WorkflowRejection::MaxDepthExceeded { depth: 6, max: 5 };
+        let err = EngineError::from(rejection);
+
+        let msg = err.to_string();
+        assert!(msg.contains(WORKFLOW_GUARD_REJECTED_CODE));
+        assert!(msg.contains("max call depth exceeded"));
+        assert!(msg.contains("6/5"));
+    }
+
+    #[test]
+    fn workflow_guard_rejected_from_conversion() {
+        use crate::guard::WorkflowRejection;
+
+        let rejection = WorkflowRejection::CycleDetected {
+            target: "wf-b".to_string(),
+            chain: vec!["wf-a".to_string(), "wf-b".to_string()],
+        };
+        let engine_err = EngineError::from(rejection);
+        assert!(engine_err.to_string().contains("cycle detected"));
     }
 }
