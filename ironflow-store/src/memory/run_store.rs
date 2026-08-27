@@ -524,6 +524,7 @@ impl RunStore for InMemoryStore {
             let now = Utc::now();
             let step = Step {
                 id: Uuid::now_v7(),
+                trace_id: req.trace_id,
                 run_id: req.run_id,
                 name: req.name,
                 kind: req.kind,
@@ -752,11 +753,12 @@ mod tests {
     use crate::memory::tests::{create_terminal_run, new_run_req};
     use crate::store::RunStore;
 
-    use crate::entities::StepKind;
+    use crate::entities::{StepKind, step_trace_id};
 
     fn new_step_req(run_id: Uuid, name: &str, position: u32) -> NewStep {
         NewStep {
             run_id,
+            trace_id: step_trace_id(run_id, name, position),
             name: name.to_string(),
             kind: StepKind::Shell,
             position,
@@ -1408,6 +1410,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -1429,6 +1432,7 @@ mod tests {
         let result = store
             .create_step(NewStep {
                 run_id: Uuid::nil(),
+                trace_id: step_trace_id(Uuid::nil(), "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -1453,6 +1457,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -1517,6 +1522,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "deploy", 2),
                 name: "deploy".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 2,
@@ -1528,6 +1534,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -1539,6 +1546,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "test", 1),
                 name: "test".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
@@ -1866,6 +1874,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Agent,
                 position: 0,
@@ -1890,6 +1899,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -1951,6 +1961,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2083,6 +2094,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run_with.id,
+                trace_id: step_trace_id(run_with.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2110,6 +2122,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run_with.id,
+                trace_id: step_trace_id(run_with.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2145,6 +2158,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run_with.id,
+                trace_id: step_trace_id(run_with.id, "build", 0),
                 name: "build".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2344,6 +2358,7 @@ mod tests {
         let step1 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2356,6 +2371,7 @@ mod tests {
         let step2 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step2", 1),
                 name: "step2".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
@@ -2392,6 +2408,7 @@ mod tests {
         let step1 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2404,6 +2421,7 @@ mod tests {
         let step2 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step2", 1),
                 name: "step2".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
@@ -2440,6 +2458,7 @@ mod tests {
         let step1 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2471,6 +2490,7 @@ mod tests {
         let step1 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2502,6 +2522,7 @@ mod tests {
         let step1 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2514,6 +2535,7 @@ mod tests {
         let step2 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step2", 1),
                 name: "step2".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
@@ -2526,6 +2548,7 @@ mod tests {
         let step3 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step3", 2),
                 name: "step3".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 2,
@@ -2568,6 +2591,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2598,6 +2622,7 @@ mod tests {
         let step1_run1 = store
             .create_step(NewStep {
                 run_id: run1.id,
+                trace_id: step_trace_id(run1.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2610,6 +2635,7 @@ mod tests {
         let step2_run1 = store
             .create_step(NewStep {
                 run_id: run1.id,
+                trace_id: step_trace_id(run1.id, "step2", 1),
                 name: "step2".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
@@ -2622,6 +2648,7 @@ mod tests {
         let step1_run2 = store
             .create_step(NewStep {
                 run_id: run2.id,
+                trace_id: step_trace_id(run2.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2634,6 +2661,7 @@ mod tests {
         let step2_run2 = store
             .create_step(NewStep {
                 run_id: run2.id,
+                trace_id: step_trace_id(run2.id, "step2", 1),
                 name: "step2".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
@@ -2688,6 +2716,7 @@ mod tests {
         let step1 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 0,
@@ -2700,6 +2729,7 @@ mod tests {
         let step2 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step2", 1),
                 name: "step2".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 1,
@@ -2712,6 +2742,7 @@ mod tests {
         let step3 = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step3", 2),
                 name: "step3".to_string(),
                 kind: crate::entities::StepKind::Shell,
                 position: 2,
@@ -3309,6 +3340,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

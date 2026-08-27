@@ -44,7 +44,7 @@ pub use secret::{
     RotationRequest, Secret, SecretMetadata,
 };
 pub use stats::RunStats;
-pub use step::{NewStep, Step, StepUpdate};
+pub use step::{NewStep, Step, StepUpdate, step_trace_id};
 pub use step_dependency::{NewStepDependency, StepDependency};
 pub use step_kind::StepKind;
 pub use step_status::StepStatus;

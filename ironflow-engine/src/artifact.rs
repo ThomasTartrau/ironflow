@@ -375,7 +375,7 @@ mod tests {
     use futures_util::TryStreamExt;
     use ironflow_artifacts::local::LocalBlobStore;
     use ironflow_artifacts::stream_from_bytes;
-    use ironflow_store::entities::{NewRun, NewStep, StepKind, TriggerKind};
+    use ironflow_store::entities::{NewRun, NewStep, StepKind, TriggerKind, step_trace_id};
     use ironflow_store::memory::InMemoryStore;
     use serde_json::json;
     use tempfile::TempDir;
@@ -407,6 +407,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

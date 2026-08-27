@@ -43,7 +43,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{NewStep, StepKind};
+    use ironflow_store::entities::{NewStep, StepKind, step_trace_id};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
     use serde_json::{Value as JsonValue, from_slice, json};
@@ -100,6 +100,7 @@ mod tests {
             .store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "step1", 0),
                 name: "step1".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

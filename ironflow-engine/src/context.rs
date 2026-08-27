@@ -40,7 +40,7 @@ use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::models::{
     ArtifactLookup, NewRun, NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind,
-    StepStatus, StepUpdate, TriggerKind,
+    StepStatus, StepUpdate, TriggerKind, step_trace_id,
 };
 use ironflow_store::store::Store;
 
@@ -56,7 +56,7 @@ use crate::config::{
     AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig,
 };
 use crate::error::EngineError;
-use crate::executor::{ParallelStepResult, StepOutput, execute_step_config};
+use crate::executor::{ParallelStepResult, StepOutput, StepResult, execute_step_config};
 use crate::guard::{SharedGuardState, WorkflowGuardConfig, WorkflowRejection};
 use crate::handler::WorkflowHandler;
 use crate::log_sender::{LogSender, StepLogSender};
@@ -127,6 +127,8 @@ pub struct WorkflowContext {
     guard_state: Option<SharedGuardState>,
     /// Guard configuration for this workflow run.
     guard_config: Option<WorkflowGuardConfig>,
+    /// Accumulated step results for post-execution inspection.
+    step_results: Vec<StepResult>,
     /// Optional event bus for per-run real-time monitoring.
     event_bus: Option<crate::notify::WorkflowEventBus>,
 }
@@ -164,6 +166,7 @@ impl WorkflowContext {
             error_handlers: Vec::new(),
             guard_state: None,
             guard_config: None,
+            step_results: Vec::new(),
             event_bus: None,
         }
     }
@@ -199,6 +202,7 @@ impl WorkflowContext {
             error_handlers: Vec::new(),
             guard_state: None,
             guard_config: None,
+            step_results: Vec::new(),
             event_bus: None,
         }
     }
@@ -604,6 +608,37 @@ impl WorkflowContext {
         self.total_duration_ms
     }
 
+    /// Enriched results of all completed steps in execution order.
+    pub fn step_results(&self) -> &[StepResult] {
+        &self.step_results
+    }
+
+    /// Persist a partial snapshot of the run after a step transition.
+    ///
+    /// Updates the run record with the cumulative cost and duration so far,
+    /// making intermediate state available for debug and recovery without
+    /// waiting for `finalize_run`.
+    async fn persist_progress(&self) {
+        if let Err(err) = self
+            .store
+            .update_run(
+                self.run_id,
+                RunUpdate {
+                    cost_usd: Some(self.total_cost_usd),
+                    duration_ms: Some(self.total_duration_ms),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+        {
+            warn!(
+                run_id = %self.run_id,
+                error = %err,
+                "failed to persist run progress snapshot"
+            );
+        }
+    }
+
     /// Execute multiple steps concurrently (wait-all model).
     ///
     /// All steps in the batch execute in parallel via `tokio::JoinSet`.
@@ -668,14 +703,17 @@ impl WorkflowContext {
         self.position += 1;
 
         let now = Utc::now();
-        let mut step_records: Vec<(Uuid, String, StepConfig)> = Vec::with_capacity(steps.len());
+        let mut step_records: Vec<(Uuid, Uuid, String, StepConfig)> =
+            Vec::with_capacity(steps.len());
 
         for (name, config) in &steps {
             let kind = config.kind();
+            let trace_id = step_trace_id(self.run_id, name, wave_position);
             let step = self
                 .store
                 .create_step(NewStep {
                     run_id: self.run_id,
+                    trace_id,
                     name: name.to_string(),
                     kind,
                     position: wave_position,
@@ -703,13 +741,13 @@ impl WorkflowContext {
                 continue;
             }
 
-            step_records.push((step.id, name.to_string(), config.clone()));
+            step_records.push((step.id, trace_id, name.to_string(), config.clone()));
         }
 
         let mut join_set = JoinSet::new();
         let mut task_index: HashMap<Id, usize> = HashMap::new();
         let parallel_timeout = self.guard_remaining_timeout();
-        for (idx, (step_id, step_name, config)) in step_records.iter().enumerate() {
+        for (idx, (step_id, _trace_id, step_name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
             let config = config.clone();
             let step_log_sender = self
@@ -752,7 +790,7 @@ impl WorkflowContext {
                 Err(e) => {
                     let error_msg = format!("join error: {e}");
                     if let Some(&idx) = task_index.get(&e.id()) {
-                        let (step_id, step_name, _) = &step_records[idx];
+                        let (step_id, _, step_name, _) = &step_records[idx];
                         let completed_at = Utc::now();
                         error!(
                             run_id = %self.run_id,
@@ -792,7 +830,7 @@ impl WorkflowContext {
                 }
             };
 
-            let (step_id, step_name, step_config) = &step_records[idx];
+            let (step_id, step_trace, step_name, step_config) = &step_records[idx];
             let completed_at = Utc::now();
 
             if let Err(err) = self
@@ -852,9 +890,16 @@ impl WorkflowContext {
                         )
                         .await?;
 
+                    self.step_results.push(StepResult::from_success(
+                        *step_trace,
+                        step_name,
+                        &output,
+                    ));
+
                     info!(
                         run_id = %self.run_id,
                         step = %step_name,
+                        trace_id = %step_trace,
                         duration_ms = output.duration_ms,
                         "parallel step completed"
                     );
@@ -902,6 +947,19 @@ impl WorkflowContext {
                         );
                     }
 
+                    let err_duration = partial.as_ref().and_then(|p| p.duration_ms).unwrap_or(0);
+                    let err_cost = partial
+                        .as_ref()
+                        .and_then(|p| p.cost_usd)
+                        .unwrap_or(Decimal::ZERO);
+                    self.step_results.push(StepResult::from_failure(
+                        *step_trace,
+                        step_name,
+                        &err_msg,
+                        err_duration,
+                        err_cost,
+                    ));
+
                     if step_config.allow_failure() {
                         self.has_allowed_failure = true;
                         info!(
@@ -934,13 +992,15 @@ impl WorkflowContext {
             return Err(err);
         }
 
-        self.last_step_ids = step_records.iter().map(|(id, _, _)| *id).collect();
+        self.persist_progress().await;
+
+        self.last_step_ids = step_records.iter().map(|(id, _, _, _)| *id).collect();
 
         // Build results in original order.
         let results: Vec<ParallelStepResult> = step_records
             .iter()
             .enumerate()
-            .map(|(idx, (step_id, name, _))| {
+            .map(|(idx, (step_id, _trace_id, name, _))| {
                 let output = match indexed_results[idx].take() {
                     Some(Ok(o)) => o,
                     _ => unreachable!("all steps succeeded if no error returned"),
@@ -1113,10 +1173,12 @@ impl WorkflowContext {
         // attempt. Record a fresh step in the current attempt so that each
         // attempt keeps a complete, self-contained DAG, and continue.
         if let Some(&granted_in) = self.granted_approvals.get(&position) {
+            let trace_id = step_trace_id(self.run_id, name, position);
             let step = self
                 .store
                 .create_step(NewStep {
                     run_id: self.run_id,
+                    trace_id,
                     name: name.to_string(),
                     kind: StepKind::Approval,
                     position,
@@ -1152,10 +1214,12 @@ impl WorkflowContext {
         }
 
         // First execution: create the approval step and suspend.
+        let trace_id = step_trace_id(self.run_id, name, position);
         let step = self
             .store
             .create_step(NewStep {
                 run_id: self.run_id,
+                trace_id,
                 name: name.to_string(),
                 kind: StepKind::Approval,
                 position,
@@ -1219,10 +1283,12 @@ impl WorkflowContext {
         let position = self.position;
         self.position += 1;
 
+        let trace_id = step_trace_id(self.run_id, name, position);
         let step = self
             .store
             .create_step(NewStep {
                 run_id: self.run_id,
+                trace_id,
                 name: name.to_string(),
                 kind: StepKind::Custom("skip".to_string()),
                 position,
@@ -1314,10 +1380,12 @@ impl WorkflowContext {
         let position = self.position;
         self.position += 1;
 
+        let trace_id = step_trace_id(self.run_id, name, position);
         let step = self
             .store
             .create_step(NewStep {
                 run_id: self.run_id,
+                trace_id,
                 name: name.to_string(),
                 kind,
                 position,
@@ -1436,10 +1504,12 @@ impl WorkflowContext {
         let position = self.position;
         self.position += 1;
 
+        let trace_id = step_trace_id(self.run_id, &config.workflow_name, position);
         let step = self
             .store
             .create_step(NewStep {
                 run_id: self.run_id,
+                trace_id,
                 name: config.workflow_name.clone(),
                 kind: StepKind::Workflow,
                 position,
@@ -1693,6 +1763,7 @@ impl WorkflowContext {
             error_handlers: Vec::new(),
             guard_state: self.guard_state.clone(),
             guard_config: self.guard_config.clone(),
+            step_results: Vec::new(),
             event_bus: self.event_bus.clone(),
         };
 
@@ -1807,6 +1878,7 @@ impl WorkflowContext {
             step.name = %name,
             step.kind,
             step.position = self.position,
+            step.trace_id,
         )
     )]
     async fn execute_step(
@@ -1843,10 +1915,13 @@ impl WorkflowContext {
         }
 
         // Create step record in Pending.
+        let trace_id = step_trace_id(self.run_id, name, position);
+        Span::current().record("step.trace_id", trace_id.to_string().as_str());
         let step = self
             .store
             .create_step(NewStep {
                 run_id: self.run_id,
+                trace_id,
                 name: name.to_string(),
                 kind,
                 position,
@@ -1951,9 +2026,14 @@ impl WorkflowContext {
                     )
                     .await?;
 
+                self.step_results
+                    .push(StepResult::from_success(trace_id, name, &output));
+                self.persist_progress().await;
+
                 info!(
                     run_id = %self.run_id,
                     step = %name,
+                    trace_id = %trace_id,
                     duration_ms = output.duration_ms,
                     "step completed"
                 );
@@ -2012,6 +2092,18 @@ impl WorkflowContext {
                 }
 
                 let err_duration = partial.as_ref().and_then(|p| p.duration_ms).unwrap_or(0);
+                let err_cost = partial
+                    .as_ref()
+                    .and_then(|p| p.cost_usd)
+                    .unwrap_or(Decimal::ZERO);
+                self.step_results.push(StepResult::from_failure(
+                    trace_id,
+                    name,
+                    &err.to_string(),
+                    err_duration,
+                    err_cost,
+                ));
+                self.persist_progress().await;
 
                 if let Some(ref bus) = self.event_bus {
                     bus.publish(
@@ -2310,10 +2402,12 @@ impl WorkflowContext {
             let position = self.position;
             self.position += 1;
 
+            let trace_id = step_trace_id(self.run_id, &handler.name, position);
             let step = match self
                 .store
                 .create_step(NewStep {
                     run_id: self.run_id,
+                    trace_id,
                     name: handler.name.clone(),
                     kind: config.kind(),
                     position,
@@ -2892,6 +2986,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: created_run_id,
+                trace_id: step_trace_id(created_run_id, "approval", 0),
                 name: "approval".to_string(),
                 kind: StepKind::Approval,
                 position: 0,
@@ -2981,6 +3076,7 @@ mod tests {
         let completed_step = store
             .create_step(NewStep {
                 run_id: created_run_id,
+                trace_id: step_trace_id(created_run_id, "completed", 0),
                 name: "completed".to_string(),
                 kind: StepKind::Shell,
                 position: 0,
@@ -3018,6 +3114,7 @@ mod tests {
         let _pending_step = store
             .create_step(NewStep {
                 run_id: created_run_id,
+                trace_id: step_trace_id(created_run_id, "pending", 1),
                 name: "pending".to_string(),
                 kind: StepKind::Shell,
                 position: 1,

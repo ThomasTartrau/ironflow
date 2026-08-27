@@ -14,6 +14,33 @@ fn default_attempt() -> u32 {
     1
 }
 
+/// Generate a deterministic trace ID for a step.
+///
+/// Uses UUIDv5 with `NAMESPACE_OID` and the input
+/// `"{run_id}:{name}:{position}"`, so the same run replayed with the same
+/// steps always produces the same trace IDs.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::step_trace_id;
+/// use uuid::Uuid;
+///
+/// let run_id = Uuid::nil();
+/// let id1 = step_trace_id(run_id, "build", 0);
+/// let id2 = step_trace_id(run_id, "build", 0);
+/// assert_eq!(id1, id2);
+///
+/// let id3 = step_trace_id(run_id, "test", 1);
+/// assert_ne!(id1, id3);
+/// ```
+pub fn step_trace_id(run_id: Uuid, name: &str, position: u32) -> Uuid {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("{run_id}:{name}:{position}").as_bytes(),
+    )
+}
+
 /// A single operation within a run.
 ///
 /// Steps are executed sequentially in order of [`position`](Step::position).
@@ -30,6 +57,11 @@ fn default_attempt() -> u32 {
 pub struct Step {
     /// Unique identifier (UUIDv7).
     pub id: Uuid,
+    /// Deterministic trace ID for log correlation.
+    ///
+    /// Generated as `UUIDv5(NAMESPACE_OID, "{run_id}:{name}:{position}")` so
+    /// the same run replayed with the same steps always produces the same IDs.
+    pub trace_id: Uuid,
     /// The run this step belongs to.
     pub run_id: Uuid,
     /// Human-readable step name (e.g. "build", "test", "review").
@@ -86,12 +118,14 @@ pub struct Step {
 /// # Examples
 ///
 /// ```
-/// use ironflow_store::entities::{NewStep, StepKind};
+/// use ironflow_store::entities::{NewStep, StepKind, step_trace_id};
 /// use serde_json::json;
 /// use uuid::Uuid;
 ///
+/// let run_id = Uuid::nil();
 /// let req = NewStep {
-///     run_id: Uuid::nil(),
+///     run_id,
+///     trace_id: step_trace_id(run_id, "build", 0),
 ///     name: "build".to_string(),
 ///     kind: StepKind::Shell,
 ///     position: 0,
@@ -103,6 +137,8 @@ pub struct Step {
 pub struct NewStep {
     /// The run this step belongs to.
     pub run_id: Uuid,
+    /// Deterministic trace ID for log correlation.
+    pub trace_id: Uuid,
     /// Step name.
     pub name: String,
     /// Operation type.
@@ -165,6 +201,7 @@ mod tests {
     fn newstep_serde_roundtrip() {
         let new_step = NewStep {
             run_id: Uuid::nil(),
+            trace_id: step_trace_id(Uuid::nil(), "build", 0),
             name: "build".to_string(),
             kind: StepKind::Shell,
             position: 0,
@@ -188,9 +225,11 @@ mod tests {
         use chrono::Utc;
 
         let now = Utc::now();
+        let run_id = Uuid::now_v7();
         let step = Step {
             id: Uuid::now_v7(),
-            run_id: Uuid::now_v7(),
+            trace_id: step_trace_id(run_id, "test-step", 1),
+            run_id,
             name: "test-step".to_string(),
             kind: StepKind::Agent,
             position: 1,
@@ -269,5 +308,32 @@ mod tests {
         assert_eq!(back.cost_usd, update.cost_usd);
         assert_eq!(back.input_tokens, update.input_tokens);
         assert_eq!(back.output_tokens, update.output_tokens);
+    }
+
+    #[test]
+    fn trace_id_is_deterministic() {
+        let run_id = Uuid::nil();
+        let id1 = step_trace_id(run_id, "build", 0);
+        let id2 = step_trace_id(run_id, "build", 0);
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn trace_id_differs_for_different_inputs() {
+        let run_id = Uuid::nil();
+        let a = step_trace_id(run_id, "build", 0);
+        let b = step_trace_id(run_id, "test", 0);
+        let c = step_trace_id(run_id, "build", 1);
+        let d = step_trace_id(Uuid::max(), "build", 0);
+
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, d);
+    }
+
+    #[test]
+    fn trace_id_is_uuid_v5() {
+        let id = step_trace_id(Uuid::nil(), "build", 0);
+        assert_eq!(id.get_version_num(), 5);
     }
 }

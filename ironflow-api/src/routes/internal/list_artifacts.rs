@@ -29,7 +29,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use ironflow_store::models::{NewArtifact, NewStep, StepKind};
+    use ironflow_store::models::{NewArtifact, NewStep, StepKind, step_trace_id};
     use serde_json::Value;
     use tower::ServiceExt;
 
@@ -54,6 +54,7 @@ mod tests {
             .store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

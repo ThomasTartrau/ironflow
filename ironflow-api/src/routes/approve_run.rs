@@ -169,7 +169,9 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewStep, RunStatus, StepKind, StepStatus, TriggerKind};
+    use ironflow_store::models::{
+        NewRun, NewStep, RunStatus, StepKind, StepStatus, TriggerKind, step_trace_id,
+    };
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
@@ -414,6 +416,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "gate", 0),
                 name: "gate".to_string(),
                 kind: StepKind::Approval,
                 position: 0,

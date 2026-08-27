@@ -122,7 +122,7 @@ impl ArtifactStore for InMemoryStore {
 mod tests {
     use serde_json::json;
 
-    use crate::entities::{NewStep, StepKind};
+    use crate::entities::{NewStep, StepKind, step_trace_id};
     use crate::store::RunStore;
 
     use super::super::tests::new_run_req;
@@ -138,6 +138,7 @@ mod tests {
         let step = store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, step_name, position),
                 name: step_name.to_string(),
                 kind: StepKind::Shell,
                 position,
@@ -236,6 +237,7 @@ mod tests {
         let second = store
             .create_step(NewStep {
                 run_id,
+                trace_id: step_trace_id(run_id, "test", 1),
                 name: "test".to_string(),
                 kind: StepKind::Shell,
                 position: 1,
@@ -352,6 +354,7 @@ mod tests {
         let second = store
             .create_step(NewStep {
                 run_id,
+                trace_id: step_trace_id(run_id, "build", 1),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 1,

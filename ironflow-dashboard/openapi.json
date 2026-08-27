@@ -3638,6 +3638,7 @@
         "description": "Step response DTO — public API representation of a step.\n\n# Examples\n\n```\nuse ironflow_store::models::Step;\nuse ironflow_api::entities::StepResponse;\n```",
         "required": [
           "id",
+          "trace_id",
           "run_id",
           "name",
           "kind",
@@ -3781,6 +3782,11 @@
           "status": {
             "$ref": "#/components/schemas/StepStatus",
             "description": "Current status."
+          },
+          "trace_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Deterministic trace ID for log correlation."
           },
           "updated_at": {
             "type": "string",

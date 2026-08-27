@@ -1829,6 +1829,11 @@
             "$ref": "#/components/schemas/StepStatus",
             "description": "Current status."
           },
+          "trace_id": {
+            "description": "Deterministic trace ID for log correlation.",
+            "format": "uuid",
+            "type": "string"
+          },
           "updated_at": {
             "description": "When updated.",
             "format": "date-time",
@@ -1837,6 +1842,7 @@
         },
         "required": [
           "id",
+          "trace_id",
           "run_id",
           "name",
           "kind",

@@ -16,6 +16,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use ironflow_core::provider::{AgentProvider, DebugMessage};
+use ironflow_store::entities::StepStatus;
 
 use crate::config::StepConfig;
 use crate::error::EngineError;
@@ -69,6 +70,104 @@ pub struct ParallelStepResult {
     pub output: StepOutput,
     /// The step ID in the store (for dependency tracking).
     pub step_id: Uuid,
+}
+
+/// Enriched result of a completed step, for post-execution inspection.
+///
+/// Collects the step's trace ID, status, metrics, and a truncated output
+/// summary into a single struct that the [`WorkflowContext`](crate::context::WorkflowContext)
+/// accumulates over the run.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::executor::StepResult;
+/// use ironflow_store::entities::StepStatus;
+/// use rust_decimal::Decimal;
+/// use uuid::Uuid;
+///
+/// let result = StepResult {
+///     trace_id: Uuid::nil(),
+///     name: "build".to_string(),
+///     status: StepStatus::Completed,
+///     duration_ms: 1200,
+///     cost_usd: Decimal::ZERO,
+///     input_tokens: None,
+///     output_tokens: None,
+///     error: None,
+///     output_summary: Some("ok".to_string()),
+/// };
+/// assert_eq!(result.status, StepStatus::Completed);
+/// ```
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StepResult {
+    /// Deterministic trace ID for log correlation.
+    pub trace_id: Uuid,
+    /// Step name.
+    pub name: String,
+    /// Terminal status.
+    pub status: StepStatus,
+    /// Wall-clock duration in milliseconds.
+    pub duration_ms: u64,
+    /// Cost in USD.
+    pub cost_usd: Decimal,
+    /// Input token count (agent steps only).
+    pub input_tokens: Option<u64>,
+    /// Output token count (agent steps only).
+    pub output_tokens: Option<u64>,
+    /// Error message if the step failed.
+    pub error: Option<String>,
+    /// First 500 characters of the serialized output.
+    pub output_summary: Option<String>,
+}
+
+/// Maximum length of [`StepResult::output_summary`].
+const OUTPUT_SUMMARY_MAX_LEN: usize = 500;
+
+impl StepResult {
+    /// Build from a completed step's output.
+    pub fn from_success(trace_id: Uuid, name: &str, output: &StepOutput) -> Self {
+        Self {
+            trace_id,
+            name: name.to_string(),
+            status: StepStatus::Completed,
+            duration_ms: output.duration_ms,
+            cost_usd: output.cost_usd,
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            error: None,
+            output_summary: summarize_output(&output.output),
+        }
+    }
+
+    /// Build from a failed step.
+    pub fn from_failure(
+        trace_id: Uuid,
+        name: &str,
+        error: &str,
+        duration_ms: u64,
+        cost_usd: Decimal,
+    ) -> Self {
+        Self {
+            trace_id,
+            name: name.to_string(),
+            status: StepStatus::Failed,
+            duration_ms,
+            cost_usd,
+            input_tokens: None,
+            output_tokens: None,
+            error: Some(error.to_string()),
+            output_summary: None,
+        }
+    }
+}
+
+fn summarize_output(value: &Value) -> Option<String> {
+    let raw = value.to_string();
+    match raw.char_indices().nth(OUTPUT_SUMMARY_MAX_LEN) {
+        None => Some(raw),
+        Some((byte_idx, _)) => Some(raw[..byte_idx].to_string()),
+    }
 }
 
 /// Trait for step executors.
@@ -347,5 +446,64 @@ mod tests {
         assert_eq!(output.output["status"], "success");
         assert_eq!(output.output["data"]["items"][0], 1);
         assert_eq!(output.output["data"]["nested"]["key"], "value");
+    }
+
+    #[test]
+    fn step_result_from_success_captures_all_fields() {
+        let trace_id = Uuid::nil();
+        let output = StepOutput {
+            output: json!({"stdout": "ok"}),
+            duration_ms: 1500,
+            cost_usd: Decimal::new(42, 2),
+            input_tokens: Some(100),
+            output_tokens: Some(200),
+            model: Some("claude-sonnet".to_string()),
+            debug_messages: None,
+        };
+
+        let result = StepResult::from_success(trace_id, "build", &output);
+
+        assert_eq!(result.trace_id, trace_id);
+        assert_eq!(result.name, "build");
+        assert_eq!(result.status, StepStatus::Completed);
+        assert_eq!(result.duration_ms, 1500);
+        assert_eq!(result.cost_usd, Decimal::new(42, 2));
+        assert_eq!(result.input_tokens, Some(100));
+        assert_eq!(result.output_tokens, Some(200));
+        assert!(result.error.is_none());
+        assert!(result.output_summary.is_some());
+        assert!(result.output_summary.unwrap().contains("stdout"));
+    }
+
+    #[test]
+    fn step_result_from_failure_captures_error() {
+        let trace_id = Uuid::nil();
+        let result =
+            StepResult::from_failure(trace_id, "deploy", "connection refused", 500, Decimal::ZERO);
+
+        assert_eq!(result.trace_id, trace_id);
+        assert_eq!(result.name, "deploy");
+        assert_eq!(result.status, StepStatus::Failed);
+        assert_eq!(result.duration_ms, 500);
+        assert_eq!(result.error, Some("connection refused".to_string()));
+        assert!(result.output_summary.is_none());
+    }
+
+    #[test]
+    fn step_result_output_summary_truncates_long_output() {
+        let long_value = json!({"data": "x".repeat(1000)});
+        let output = StepOutput {
+            output: long_value,
+            duration_ms: 0,
+            cost_usd: Decimal::ZERO,
+            input_tokens: None,
+            output_tokens: None,
+            model: None,
+            debug_messages: None,
+        };
+
+        let result = StepResult::from_success(Uuid::nil(), "test", &output);
+        let summary = result.output_summary.unwrap();
+        assert_eq!(summary.len(), 500);
     }
 }

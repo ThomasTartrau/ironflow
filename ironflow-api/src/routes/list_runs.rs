@@ -80,7 +80,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
         ApiKeyScope, NewApiKey, NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind,
-        TriggerKind,
+        TriggerKind, step_trace_id,
     };
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
@@ -333,6 +333,7 @@ mod tests {
             .store
             .create_step(NewStep {
                 run_id: run_with.id,
+                trace_id: step_trace_id(run_with.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,
@@ -371,6 +372,7 @@ mod tests {
             .store
             .create_step(NewStep {
                 run_id: run_with.id,
+                trace_id: step_trace_id(run_with.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,

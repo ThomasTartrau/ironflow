@@ -2002,6 +2002,11 @@ export interface components {
 			/** @description Current status. */
 			status: components["schemas"]["StepStatus"];
 			/**
+			 * Format: uuid
+			 * @description Deterministic trace ID for log correlation.
+			 */
+			trace_id: string;
+			/**
 			 * Format: date-time
 			 * @description When updated.
 			 */

@@ -235,7 +235,8 @@ async fn parallel_three_shells_all_succeed() {
     let run = engine
         .run_handler("parallel-echo", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -267,7 +268,8 @@ async fn parallel_empty_vec_returns_empty() {
     let run = engine
         .run_handler("parallel-empty", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -308,7 +310,8 @@ async fn branching_only_executes_taken_branch() {
     let run = engine
         .run_handler("branching", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -330,7 +333,8 @@ async fn sequential_then_parallel_then_sequential_positions() {
     let run = engine
         .run_handler("seq-then-parallel", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -360,7 +364,8 @@ async fn dependencies_recorded_correctly() {
     let run = engine
         .run_handler("seq-then-parallel", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     let steps = engine.store().list_steps(run.id).await.unwrap();
     let deps = engine.store().list_step_dependencies(run.id).await.unwrap();
@@ -400,7 +405,8 @@ async fn cost_and_duration_aggregated_with_parallel() {
     let run = engine
         .run_handler("parallel-echo", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -417,7 +423,8 @@ async fn skip_creates_step_with_skipped_status() {
     let run = engine
         .run_handler("skip-only", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -442,7 +449,8 @@ async fn skip_step_visible_in_dag_with_dependencies() {
     let run = engine
         .run_handler("skip-then-continue", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -482,7 +490,8 @@ async fn skip_in_branch_shows_skipped_step() {
     let run = engine
         .run_handler("skip-step", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -597,7 +606,8 @@ async fn allow_failure_step_continues_run_with_warning() {
     let run = engine
         .run_handler("allow-failure", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Warning);
 
@@ -619,7 +629,8 @@ async fn allow_failure_step_succeeds_run_is_completed() {
     let run = engine
         .run_handler("allow-failure-success", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 
@@ -638,7 +649,8 @@ async fn allow_failure_parallel_does_not_trigger_fail_fast() {
     let run = engine
         .run_handler("allow-failure-parallel", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Warning);
 
