@@ -29,6 +29,7 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::retry::RetryPolicy;
+use crate::trace_context::WorkflowTraceContext;
 
 /// Default timeout for HTTP requests (30 seconds).
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -287,6 +288,31 @@ impl Http {
     pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
         self.retry_policy = Some(policy);
         self
+    }
+
+    /// Attach a [`WorkflowTraceContext`] to this request.
+    ///
+    /// When set, the `traceparent` header is automatically injected into
+    /// the request using the context's [`to_traceparent`](WorkflowTraceContext::to_traceparent)
+    /// value. This enables distributed tracing correlation with downstream
+    /// services.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::operations::http::Http;
+    /// use ironflow_core::trace_context::WorkflowTraceContext;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+    /// let ctx = WorkflowTraceContext::new_root();
+    /// let output = Http::get("https://api.example.com/data")
+    ///     .trace_context(&ctx)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn trace_context(self, ctx: &WorkflowTraceContext) -> Self {
+        self.header("traceparent", &ctx.to_traceparent())
     }
 
     /// Enable or disable dry-run mode for this specific operation.

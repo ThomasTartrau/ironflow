@@ -166,10 +166,13 @@ impl DockerProvider {
 
         let docker = self.connect()?;
 
-        let env_clear: Vec<String> = common::env_vars_to_remove()
+        let mut env_clear: Vec<String> = common::env_vars_to_remove()
             .iter()
             .map(|var| format!("{var}="))
             .collect();
+        if let Some(ref ctx) = config.trace_context {
+            env_clear.push(format!("TRACEPARENT={}", ctx.to_traceparent()));
+        }
 
         let needs_stdin = built.stdin_prompt.is_some();
 

@@ -49,6 +49,9 @@ impl StepExecutor for HttpExecutor<'_> {
         for (name, value) in &self.config.headers {
             http = http.header(name, value);
         }
+        if let Some(ref ctx) = self.config.trace_context {
+            http = http.trace_context(ctx);
+        }
         if let Some(ref body) = self.config.body {
             http = http.json(body.clone());
         }

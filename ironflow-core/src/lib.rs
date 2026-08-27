@@ -80,6 +80,7 @@ pub mod schema_transform;
 pub mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod trace_context;
 pub mod tracker;
 pub mod utils;
 
@@ -103,6 +104,7 @@ pub mod prelude {
     pub use crate::providers::claude::ClaudeCodeProvider;
     pub use crate::providers::record_replay::RecordReplayProvider;
     pub use crate::retry::RetryPolicy;
+    pub use crate::trace_context::WorkflowTraceContext;
     pub use crate::tracker::WorkflowTracker;
     pub use schemars::JsonSchema;
     pub use serde::{Deserialize, Serialize};

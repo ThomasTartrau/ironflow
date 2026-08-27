@@ -381,7 +381,13 @@ impl SshProvider {
         let built = common::build_command(config)?;
 
         let claude_cmd = common::build_shell_command(&self.claude_path, &built.args);
-        let env_prefix = common::env_unset_shell_prefix();
+        let mut env_prefix = common::env_unset_shell_prefix();
+        if let Some(ref ctx) = config.trace_context {
+            env_prefix = format!(
+                "export TRACEPARENT='{}'; {env_prefix}",
+                ctx.to_traceparent()
+            );
+        }
         let remote_cmd = match (&self.working_dir, &config.working_dir) {
             (_, Some(dir)) | (Some(dir), None) => {
                 format!(

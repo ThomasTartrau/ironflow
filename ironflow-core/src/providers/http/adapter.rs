@@ -163,6 +163,9 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
         for (key, value) in &headers {
             req = req.header(key, value);
         }
+        if let Some(ref ctx) = config.trace_context {
+            req = req.header("traceparent", ctx.to_traceparent());
+        }
 
         let response = tokio::time::timeout(self.timeout, req.send())
             .await
