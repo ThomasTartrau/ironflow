@@ -212,7 +212,7 @@ async fn depth_within_limit_succeeds() {
         .unwrap();
 
     assert_eq!(
-        run.status.state,
+        run.run.status.state,
         RunStatus::Completed,
         "run should succeed with max_depth=5 (chain is only 2 deep)"
     );
@@ -279,7 +279,7 @@ async fn fan_out_within_limit_succeeds() {
         .unwrap();
 
     assert_eq!(
-        run.status.state,
+        run.run.status.state,
         RunStatus::Completed,
         "run should succeed with max_fan_out=10 (only 3 invocations)"
     );
@@ -327,7 +327,7 @@ async fn handler_guard_config_more_permissive_than_global() {
         .unwrap();
 
     assert_eq!(
-        run.status.state,
+        run.run.status.state,
         RunStatus::Completed,
         "handler guard_config (max_depth=10) should override global (max_depth=1)"
     );
@@ -349,7 +349,7 @@ async fn no_guard_config_allows_everything() {
         .unwrap();
 
     assert_eq!(
-        run.status.state,
+        run.run.status.state,
         RunStatus::Completed,
         "without guard config, no limits are enforced"
     );
@@ -493,7 +493,7 @@ async fn token_budget_within_limit_succeeds() {
         .await
         .unwrap();
 
-    assert_eq!(run.status.state, RunStatus::Completed);
+    assert_eq!(run.run.status.state, RunStatus::Completed);
 }
 
 #[tokio::test]
@@ -578,5 +578,5 @@ async fn workflow_timeout_allows_fast_step() {
         .await
         .unwrap();
 
-    assert_eq!(run.status.state, RunStatus::Completed);
+    assert_eq!(run.run.status.state, RunStatus::Completed);
 }
