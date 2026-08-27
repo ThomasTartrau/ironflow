@@ -36,6 +36,7 @@ use crate::budget::{BudgetConfig, month_start};
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
 use crate::executor::StepResult;
+use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
 use crate::notify::{Event, EventPublisher, EventSubscriber, WorkflowEventBus};
@@ -158,6 +159,7 @@ pub struct Engine {
     log_sender: Option<LogSender>,
     budget: BudgetConfig,
     artifact_sink: Option<Arc<dyn ArtifactSink>>,
+    guard_config: Option<WorkflowGuardConfig>,
     event_bus: Option<WorkflowEventBus>,
 }
 
@@ -222,6 +224,7 @@ impl Engine {
             log_sender: None,
             budget: BudgetConfig::new(),
             artifact_sink: None,
+            guard_config: None,
             event_bus: None,
         }
     }
@@ -254,6 +257,37 @@ impl Engine {
     /// Returns the cost guardrails applied by this engine.
     pub fn budget_config(&self) -> &BudgetConfig {
         &self.budget
+    }
+
+    /// Apply workflow guard configuration to this engine.
+    ///
+    /// When set, every workflow run created by this engine is protected
+    /// by the guard. Handlers can override this via
+    /// [`WorkflowHandler::guard_config`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::guard::WorkflowGuardConfig;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// )
+    /// .with_guard_config(WorkflowGuardConfig::default());
+    /// ```
+    pub fn with_guard_config(mut self, config: WorkflowGuardConfig) -> Self {
+        self.guard_config = Some(config);
+        self
+    }
+
+    /// Returns the workflow guard configuration, if any.
+    pub fn guard_config(&self) -> Option<&WorkflowGuardConfig> {
+        self.guard_config.as_ref()
     }
 
     /// Attach a log sender for real-time step output streaming.
@@ -354,6 +388,24 @@ impl Engine {
         }
         if let Some(ref bus) = self.event_bus {
             ctx.set_event_bus(bus.clone());
+        }
+        ctx
+    }
+
+    /// Build a context with the guard attached.
+    ///
+    /// Uses the handler's `guard_config()` if present, otherwise falls back
+    /// to the engine's global configuration. Creates a fresh shared state
+    /// for each top-level run.
+    fn build_context_with_guard(
+        &self,
+        run: &Run,
+        handler: &dyn WorkflowHandler,
+    ) -> WorkflowContext {
+        let mut ctx = self.build_context(run);
+        let guard_config = handler.guard_config().or_else(|| self.guard_config.clone());
+        if let Some(config) = guard_config {
+            ctx.set_guard(config, new_shared_guard_state());
         }
         ctx
     }
@@ -648,7 +700,7 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => handler_name.to_string()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(&run);
+        let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
 
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, handler_name, result, &ctx, run_start, run.labels)
@@ -824,7 +876,7 @@ impl Engine {
         gauge!(RUNS_ACTIVE, "workflow" => run.workflow_name.clone()).increment(1.0);
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(&run);
+        let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
 
         // On a retry the whole run is replayed from the start, but an approval a
         // human already granted must not be asked again.
@@ -891,7 +943,7 @@ impl Engine {
         info!(run_id = %run_id, workflow = %run.workflow_name, "resuming run after approval");
 
         let run_start = Instant::now();
-        let mut ctx = self.build_context(&run);
+        let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
         ctx.load_replay_steps().await?;
 
         let result = handler.execute(&mut ctx).await;
@@ -1158,12 +1210,15 @@ impl Engine {
                 );
             }
             Err(err) => {
-                // A budget refusal is a deliberate guardrail stop, not a
-                // breakage: the run is cancelled, never failed and never
-                // replayed.
-                let budget_exceeded = matches!(err, EngineError::RunBudgetExceeded { .. });
+                // A guardrail stop (budget or workflow guard) is deliberate,
+                // not a breakage: the run is cancelled, never failed and
+                // never replayed.
+                let guardrail_stop = matches!(
+                    err,
+                    EngineError::RunBudgetExceeded { .. } | EngineError::WorkflowGuardRejected(_)
+                );
 
-                final_status = if budget_exceeded {
+                final_status = if guardrail_stop {
                     if let Err(store_err) = self
                         .store
                         .update_run(
@@ -1182,7 +1237,7 @@ impl Engine {
                         error!(run_id = %run_id, store_error = %store_err, "failed to persist run cancellation");
                     }
                     if let Err(cleanup_err) = self
-                        .fail_orphaned_steps(run_id, "run stopped: cost cap reached")
+                        .fail_orphaned_steps(run_id, "run stopped: guardrail limit reached")
                         .await
                     {
                         error!(run_id = %run_id, store_error = %cleanup_err, "failed to cleanup orphaned steps");
@@ -1203,7 +1258,7 @@ impl Engine {
                     })
                 };
 
-                if budget_exceeded {
+                if matches!(err, EngineError::RunBudgetExceeded { .. }) {
                     self.on_run_budget_exceeded(workflow_name, run_id, &err);
                 }
 

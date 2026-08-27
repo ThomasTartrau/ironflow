@@ -48,6 +48,7 @@ pub mod engine;
 pub mod error;
 pub mod executor;
 pub mod fsm;
+pub mod guard;
 pub mod handler;
 pub mod log_sender;
 pub mod notify;
@@ -66,6 +67,7 @@ pub mod prelude {
     pub use crate::error::EngineError;
     pub use crate::executor::StepResult;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
+    pub use crate::guard::{WorkflowGuardConfig, WorkflowGuardState, WorkflowRejection};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};
     pub use crate::notify::{
         Event, EventPublisher, EventSubscriber, WebhookSubscriber, WorkflowEvent, WorkflowEventBus,
