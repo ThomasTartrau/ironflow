@@ -2842,11 +2842,14 @@ name = "ironflow-store"
 version = "2.23.0"
 dependencies = [
  "aes-gcm 0.10.3",
+ "base64",
  "chrono",
+ "hkdf 0.12.4",
  "rand 0.8.6",
  "rust_decimal",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "thiserror 2.0.18",

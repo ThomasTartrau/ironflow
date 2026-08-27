@@ -41,7 +41,7 @@ async fn run_ctx() -> (WorkflowContext, Arc<dyn Store>) {
         .unwrap()
         .into_run();
 
-    let ctx = WorkflowContext::new(run.id, store.clone(), provider());
+    let ctx = WorkflowContext::new(run.id, "test".to_string(), store.clone(), provider());
     (ctx, store)
 }
 

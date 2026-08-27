@@ -71,7 +71,7 @@ impl Fixture {
             .expect("create run")
             .into_run();
 
-        let mut ctx = WorkflowContext::new(run.id, store.clone(), provider);
+        let mut ctx = WorkflowContext::new(run.id, "test".to_string(), store.clone(), provider);
         if with_artifacts {
             let blob: Arc<dyn BlobStore> = Arc::new(LocalBlobStore::new(blob_dir.path()));
             let sink: Arc<dyn ArtifactSink> =

@@ -374,6 +374,7 @@ impl Engine {
             Arc::new(move |name: &str| handlers.get(name).cloned());
         let mut ctx = WorkflowContext::with_handler_resolver(
             run.id,
+            run.workflow_name.clone(),
             self.store.clone(),
             self.provider.clone(),
             resolver,

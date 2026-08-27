@@ -42,6 +42,7 @@ default = []
 prometheus = ["metrics", "ironflow-core/prometheus"]
 opentelemetry = ["ironflow-core/opentelemetry"]
 openapi = ["utoipa", "ironflow-store/openapi"]
+secret-store = ["ironflow-store/secret-store"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

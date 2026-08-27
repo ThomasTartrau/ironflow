@@ -3,7 +3,7 @@
 The CI pipeline compiles the workspace with a specific feature set:
 
 ```
-IRONFLOW_FEATURES="prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh"
+IRONFLOW_FEATURES="prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh,secret-store"
 ```
 
 Features like `sign-up` gate API routes behind `#[cfg(feature = "...")]`. The OpenAPI
