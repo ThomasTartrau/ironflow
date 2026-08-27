@@ -23,7 +23,7 @@ openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi", "ironf
 ironflow-store = { version = "2.22.1", path = "../ironflow-store" }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
 ironflow-engine = { version = "2.25.0", path = "../ironflow-engine" }
-ironflow-core = { version = "3.8.1", path = "../ironflow-core" }
+ironflow-core = { version = "3.9.0", path = "../ironflow-core" }
 ironflow-auth = { version = "2.4.1", path = "../ironflow-auth" }
 ironflow-types = { version = "0.2.1", path = "../ironflow-types" }
 
