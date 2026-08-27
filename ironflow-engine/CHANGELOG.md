@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.25.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.24.1...ironflow-engine-v2.25.0) - 2026-08-27
+
+### Added
+
+- #43 add WorkflowEventBus for per-run real-time monitoring
+
 ## [2.24.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.24.0...ironflow-engine-v2.24.1) - 2026-08-21
 
 ### Fixed

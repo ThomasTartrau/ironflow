@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [3.9.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.8.1...ironflow-core-v3.9.0) - 2026-08-27
+
+### Added
+
+- #44 unified LLM cost attribution per step and workflow
+
 ## [3.8.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.8.0...ironflow-core-v3.8.1) - 2026-08-21
 
 ### Fixed
