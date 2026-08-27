@@ -55,7 +55,7 @@ async fn persist_progress_updates_run_after_step() {
     assert_eq!(run_before.duration_ms, 0);
 
     // Execute a shell step
-    ctx.shell("echo_hello", ShellConfig::new("echo hello"))
+    ctx.shell("wait_step", ShellConfig::new("sleep 0.01"))
         .await
         .unwrap();
 
@@ -130,8 +130,8 @@ async fn workflow_result_carries_step_results() {
         }
         fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
             Box::pin(async move {
-                ctx.shell("step_a", ShellConfig::new("echo a")).await?;
-                ctx.shell("step_b", ShellConfig::new("echo b")).await?;
+                ctx.shell("step_a", ShellConfig::new("sleep 0.01")).await?;
+                ctx.shell("step_b", ShellConfig::new("sleep 0.01")).await?;
                 Ok(())
             })
         }
