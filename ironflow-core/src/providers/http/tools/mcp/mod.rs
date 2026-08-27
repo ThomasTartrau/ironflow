@@ -14,8 +14,8 @@
 //! ToolRegistry
 //!     |-- WebSearchTool
 //!     |-- WebFetchTool
-//!     |-- McpBridgeTool("grafana.query_dashboards")
-//!     |-- McpBridgeTool("grafana.list_alerts")
+//!     |-- McpBridgeTool("grafana__query_dashboards")
+//!     |-- McpBridgeTool("grafana__list_alerts")
 //! ```
 //!
 //! # Examples
@@ -51,11 +51,12 @@ pub use connection::McpConnection;
 pub use error::McpError;
 
 use super::ToolRegistry;
+use super::routing::CONNECTOR_SEPARATOR;
 
 /// Connect to an MCP server and register all its tools into a [`ToolRegistry`].
 ///
-/// Each tool name is prefixed with `{prefix}.` to avoid collisions with other
-/// tools or MCP servers (e.g., `grafana.query_dashboards`).
+/// Each tool name is prefixed with `{prefix}__` (double underscore) to avoid
+/// collisions with other tools or MCP servers (e.g., `grafana__query_dashboards`).
 ///
 /// # Errors
 ///
@@ -90,7 +91,7 @@ pub async fn register_mcp_tools(
     );
 
     for tool_def in tools {
-        let registry_name = format!("{}.{}", prefix, tool_def.name);
+        let registry_name = format!("{}{CONNECTOR_SEPARATOR}{}", prefix, tool_def.name);
         let bridge = McpBridgeTool::new(
             conn.clone(),
             registry_name,
@@ -100,6 +101,8 @@ pub async fn register_mcp_tools(
         );
         registry = registry.register(bridge);
     }
+
+    registry = registry.register_connector(prefix);
 
     Ok(registry)
 }

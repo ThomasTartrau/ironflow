@@ -29,7 +29,7 @@ use crate::providers::http::tools::{Tool, ToolError, ToolOutput};
 ///
 /// let tool = McpBridgeTool::new(
 ///     Arc::new(conn),
-///     "srv.search".to_string(),
+///     "srv__search".to_string(),
 ///     "search".to_string(),
 ///     "Search for documents".to_string(),
 ///     json!({"type": "object", "properties": {"query": {"type": "string"}}}),
@@ -48,7 +48,7 @@ pub struct McpBridgeTool {
 impl McpBridgeTool {
     /// Create a new MCP bridge tool.
     ///
-    /// `registry_name` is the prefixed name used in the tool registry (e.g. `grafana.echo`).
+    /// `registry_name` is the prefixed name used in the tool registry (e.g. `grafana__echo`).
     /// `mcp_name` is the original tool name as known by the MCP server (e.g. `echo`).
     ///
     /// # Examples
@@ -63,12 +63,12 @@ impl McpBridgeTool {
     /// let conn = Arc::new(McpConnection::stdio("mcp-server", &[], &[]).await?);
     /// let tool = McpBridgeTool::new(
     ///     conn,
-    ///     "srv.echo".to_string(),
+    ///     "srv__echo".to_string(),
     ///     "echo".to_string(),
     ///     "Echo tool".to_string(),
     ///     json!({"type": "object", "properties": {}}),
     /// );
-    /// assert_eq!(tool.name(), "srv.echo");
+    /// assert_eq!(tool.name(), "srv__echo");
     /// # Ok(())
     /// # }
     /// ```
