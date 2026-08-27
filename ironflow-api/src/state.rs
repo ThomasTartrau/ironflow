@@ -15,7 +15,7 @@ use uuid::Uuid;
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, WorkflowEventBus};
 use ironflow_store::entities::Run;
 use ironflow_store::store::Store;
 
@@ -64,6 +64,12 @@ pub struct AppState {
     pub worker_token: String,
     /// Broadcast sender for SSE event streaming.
     pub event_sender: broadcast::Sender<Event>,
+    /// Per-run event bus for real-time workflow monitoring.
+    ///
+    /// When set, the `GET /api/v1/runs/{id}/events` route subscribes to this
+    /// bus and streams [`WorkflowEvent`](ironflow_engine::notify::WorkflowEvent)s
+    /// via SSE. `None` when the engine was not configured with a bus.
+    pub event_bus: Option<WorkflowEventBus>,
     /// Where artifact bytes live, when artifacts are enabled.
     ///
     /// `None` on a deployment that has not configured artifact storage: the
@@ -116,6 +122,7 @@ impl AppState {
             jwt_config,
             worker_token,
             event_sender,
+            event_bus: None,
             blob_store: None,
             #[cfg(feature = "prometheus")]
             prometheus_handle: Self::global_prometheus_handle(),
@@ -140,6 +147,27 @@ impl AppState {
     /// ```
     pub fn with_blob_store(mut self, blob_store: Arc<dyn BlobStore>) -> Self {
         self.blob_store = Some(blob_store);
+        self
+    }
+
+    /// Attach a [`WorkflowEventBus`] for per-run SSE streaming.
+    ///
+    /// When set, `GET /api/v1/runs/{id}/events` streams step-level events
+    /// for a specific workflow run. When absent the route returns an empty
+    /// SSE stream (with keep-alive).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_api::state::AppState;
+    /// use ironflow_engine::notify::WorkflowEventBus;
+    ///
+    /// # fn example(state: AppState) -> AppState {
+    /// state.with_event_bus(WorkflowEventBus::new())
+    /// # }
+    /// ```
+    pub fn with_event_bus(mut self, bus: WorkflowEventBus) -> Self {
+        self.event_bus = Some(bus);
         self
     }
 

@@ -326,6 +326,38 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/runs/{id}/events": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * `GET /api/v1/runs/{id}/events` -- per-run Server-Sent Events stream.
+		 * @description Streams [`WorkflowEvent`]s for a specific workflow run in real time.
+		 *     Supports optional filtering via `?types=step_started,step_completed`.
+		 *
+		 *     Each SSE message has:
+		 *     - `event:` set to the event type (e.g. `step_started`)
+		 *     - `data:` JSON-serialized event payload
+		 *
+		 *     A keep-alive comment is sent every 30 seconds.
+		 *
+		 *     # Errors
+		 *
+		 *     Returns 401 if the request is not authenticated.
+		 *     Returns 404 if the run does not exist.
+		 */
+		get: operations["run_events"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/runs/{id}/logs": {
 		parameters: {
 			query?: never;
@@ -2179,6 +2211,116 @@ export interface components {
 			/** @description Current handler version. */
 			version?: string | null;
 		};
+		/**
+		 * @description A granular step-level event for real-time workflow monitoring.
+		 *
+		 *     Unlike [`Event`](super::Event) which covers the full system lifecycle
+		 *     (runs, auth, audit), `WorkflowEvent` tracks individual step transitions
+		 *     within a single run. Serialized with a `type` discriminant for UI
+		 *     consumption.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::WorkflowEvent;
+		 *     use chrono::Utc;
+		 *
+		 *     let event = WorkflowEvent::StepStarted {
+		 *         step_name: "deploy".to_string(),
+		 *         step_index: 0,
+		 *         timestamp: Utc::now(),
+		 *     };
+		 *     assert_eq!(event.event_type(), "step_started");
+		 *
+		 *     let json = serde_json::to_string(&event).unwrap();
+		 *     assert!(json.contains("\"type\":\"step_started\""));
+		 *     ```
+		 */
+		WorkflowEvent:
+			| {
+					/**
+					 * Format: int32
+					 * @description Zero-based position in the workflow.
+					 */
+					step_index: number;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/**
+					 * Format: date-time
+					 * @description When the step started.
+					 */
+					timestamp: string;
+					/** @enum {string} */
+					type: "step_started";
+			  }
+			| {
+					/**
+					 * Format: int64
+					 * @description Step duration in milliseconds.
+					 */
+					duration_ms: number;
+					/** @description Optional summary of the step output. */
+					output_summary?: string | null;
+					/**
+					 * Format: int32
+					 * @description Zero-based position in the workflow.
+					 */
+					step_index: number;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/** @enum {string} */
+					type: "step_completed";
+			  }
+			| {
+					/**
+					 * Format: int64
+					 * @description Step duration in milliseconds.
+					 */
+					duration_ms: number;
+					/** @description Error description. */
+					error: string;
+					/**
+					 * Format: int32
+					 * @description Zero-based position in the workflow.
+					 */
+					step_index: number;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/** @enum {string} */
+					type: "step_failed";
+			  }
+			| {
+					/**
+					 * Format: uuid
+					 * @description Identifier of the approval gate.
+					 */
+					approval_id: string;
+					/**
+					 * Format: int32
+					 * @description Zero-based position in the workflow.
+					 */
+					step_index: number;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/** @enum {string} */
+					type: "approval_required";
+			  }
+			| {
+					/**
+					 * Format: double
+					 * @description Estimated cost in USD.
+					 */
+					cost_usd: number;
+					/** @description Human-readable step name. */
+					step_name: string;
+					/**
+					 * Format: int64
+					 * @description Total tokens consumed.
+					 */
+					tokens: number;
+					/** @enum {string} */
+					type: "agent_step_tokens_used";
+			  };
 		/** @description Summary entry returned by `GET /api/v1/workflows`. */
 		WorkflowSummary: {
 			/** @description Optional `/`-separated category path. */
@@ -2791,6 +2933,44 @@ export interface operations {
 			};
 			/** @description Forbidden */
 			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	run_events: {
+		parameters: {
+			query?: {
+				/** @description Comma-separated workflow event types to filter (e.g. step_started,step_completed) */
+				types?: string;
+			};
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description SSE stream of workflow events */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
 				headers: {
 					[name: string]: unknown;
 				};

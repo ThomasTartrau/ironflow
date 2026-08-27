@@ -19,9 +19,9 @@ use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approve_run, audit_logs, auth, cancel_run, create_run, download_artifact, get_run,
     get_run_logs, get_stats, get_workflow, health_check, list_runs, list_workflows, retry_run,
-    secrets, users,
+    run_events, secrets, users,
 };
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, WorkflowEvent};
 use ironflow_store::entities::{AuditLogEntry, LogEntry, LogStream};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -92,6 +92,7 @@ mod with_signup {
             secrets::key_versions::secret_key_versions,
             audit_logs::list_audit_logs,
             get_run_logs::get_run_logs,
+            run_events::run_events,
         ),
         components(
             schemas(
@@ -127,6 +128,7 @@ mod with_signup {
                 KeyVersionsResponse,
                 EventKind,
                 Event,
+                WorkflowEvent,
                 AuditLogEntry,
                 ListAuditLogsQuery,
                 LogEntry,
@@ -197,6 +199,7 @@ mod without_signup {
             secrets::key_versions::secret_key_versions,
             audit_logs::list_audit_logs,
             get_run_logs::get_run_logs,
+            run_events::run_events,
         ),
         components(
             schemas(
@@ -231,6 +234,7 @@ mod without_signup {
                 KeyVersionsResponse,
                 EventKind,
                 Event,
+                WorkflowEvent,
                 AuditLogEntry,
                 ListAuditLogsQuery,
                 LogEntry,

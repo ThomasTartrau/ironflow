@@ -777,6 +777,53 @@
         ]
       }
     },
+    "/api/v1/runs/{id}/events": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /api/v1/runs/{id}/events` -- per-run Server-Sent Events stream.",
+        "description": "Streams [`WorkflowEvent`]s for a specific workflow run in real time.\nSupports optional filtering via `?types=step_started,step_completed`.\n\nEach SSE message has:\n- `event:` set to the event type (e.g. `step_started`)\n- `data:` JSON-serialized event payload\n\nA keep-alive comment is sent every 30 seconds.\n\n# Errors\n\nReturns 401 if the request is not authenticated.\nReturns 404 if the run does not exist.",
+        "operationId": "run_events",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "description": "Comma-separated workflow event types to filter (e.g. step_started,step_completed)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of workflow events"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/runs/{id}/logs": {
       "get": {
         "tags": [
@@ -4158,6 +4205,190 @@
             "description": "Current handler version."
           }
         }
+      },
+      "WorkflowEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step began execution.",
+            "required": [
+              "step_name",
+              "step_index",
+              "timestamp",
+              "type"
+            ],
+            "properties": {
+              "step_index": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Zero-based position in the workflow.",
+                "minimum": 0
+              },
+              "step_name": {
+                "type": "string",
+                "description": "Human-readable step name."
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the step started."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "step_started"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A step completed successfully.",
+            "required": [
+              "step_name",
+              "step_index",
+              "duration_ms",
+              "type"
+            ],
+            "properties": {
+              "duration_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Step duration in milliseconds.",
+                "minimum": 0
+              },
+              "output_summary": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional summary of the step output."
+              },
+              "step_index": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Zero-based position in the workflow.",
+                "minimum": 0
+              },
+              "step_name": {
+                "type": "string",
+                "description": "Human-readable step name."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "step_completed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A step failed.",
+            "required": [
+              "step_name",
+              "step_index",
+              "error",
+              "duration_ms",
+              "type"
+            ],
+            "properties": {
+              "duration_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Step duration in milliseconds.",
+                "minimum": 0
+              },
+              "error": {
+                "type": "string",
+                "description": "Error description."
+              },
+              "step_index": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Zero-based position in the workflow.",
+                "minimum": 0
+              },
+              "step_name": {
+                "type": "string",
+                "description": "Human-readable step name."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "step_failed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A step requires human approval before the run can continue.",
+            "required": [
+              "step_name",
+              "step_index",
+              "approval_id",
+              "type"
+            ],
+            "properties": {
+              "approval_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Identifier of the approval gate."
+              },
+              "step_index": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Zero-based position in the workflow.",
+                "minimum": 0
+              },
+              "step_name": {
+                "type": "string",
+                "description": "Human-readable step name."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "approval_required"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Token usage report for an agent step.",
+            "required": [
+              "step_name",
+              "tokens",
+              "cost_usd",
+              "type"
+            ],
+            "properties": {
+              "cost_usd": {
+                "type": "number",
+                "format": "double",
+                "description": "Estimated cost in USD."
+              },
+              "step_name": {
+                "type": "string",
+                "description": "Human-readable step name."
+              },
+              "tokens": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Total tokens consumed.",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "agent_step_tokens_used"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A granular step-level event for real-time workflow monitoring.\n\nUnlike [`Event`](super::Event) which covers the full system lifecycle\n(runs, auth, audit), `WorkflowEvent` tracks individual step transitions\nwithin a single run. Serialized with a `type` discriminant for UI\nconsumption.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowEvent;\nuse chrono::Utc;\n\nlet event = WorkflowEvent::StepStarted {\n    step_name: \"deploy\".to_string(),\n    step_index: 0,\n    timestamp: Utc::now(),\n};\nassert_eq!(event.event_type(), \"step_started\");\n\nlet json = serde_json::to_string(&event).unwrap();\nassert!(json.contains(\"\\\"type\\\":\\\"step_started\\\"\"));\n```"
       },
       "WorkflowSummary": {
         "type": "object",
