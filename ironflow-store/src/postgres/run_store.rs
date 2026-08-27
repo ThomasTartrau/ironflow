@@ -956,13 +956,14 @@ impl RunStore for PostgresStore {
             let kind_str = super::helpers::step_kind_to_str(&req.kind);
             sqlx::query(
                 r#"
-                INSERT INTO ironflow.steps (id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt, is_error_handler)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                        (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $2),
-                        $10)
+                INSERT INTO ironflow.steps (id, trace_id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt, is_error_handler)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $3),
+                        $11)
                 "#,
             )
             .bind(id)
+            .bind(req.trace_id)
             .bind(req.run_id)
             .bind(&req.name)
             .bind(kind_str.as_ref())

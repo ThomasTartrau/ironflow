@@ -96,7 +96,8 @@ async fn on_error_does_not_fire_on_success() {
     let run = engine
         .run_handler("success-with-cleanup", TriggerKind::Manual, json!({}))
         .await
-        .unwrap();
+        .unwrap()
+        .run;
 
     assert_eq!(run.status.state, RunStatus::Completed);
 

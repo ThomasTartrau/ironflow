@@ -173,6 +173,7 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
 
     Ok(Step {
         id: row.get("id"),
+        trace_id: row.get("trace_id"),
         run_id: row.get("run_id"),
         name: row.get("name"),
         kind: parse_step_kind(kind_str)?,

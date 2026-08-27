@@ -22,6 +22,8 @@ use super::ArtifactResponse;
 pub struct StepResponse {
     /// Unique step identifier.
     pub id: Uuid,
+    /// Deterministic trace ID for log correlation.
+    pub trace_id: Uuid,
     /// Parent run ID.
     pub run_id: Uuid,
     /// Step name.
@@ -96,6 +98,7 @@ impl StepResponse {
     ) -> Self {
         StepResponse {
             id: step.id,
+            trace_id: step.trace_id,
             run_id: step.run_id,
             name: step.name,
             kind: step.kind,
@@ -131,7 +134,7 @@ mod tests {
     use std::collections::HashMap;
 
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewStep, TriggerKind};
+    use ironflow_store::models::{NewRun, NewStep, TriggerKind, step_trace_id};
     use ironflow_store::store::RunStore;
     use serde_json::json;
 
@@ -161,6 +164,7 @@ mod tests {
         store
             .create_step(NewStep {
                 run_id: run.id,
+                trace_id: step_trace_id(run.id, "build", 0),
                 name: "build".to_string(),
                 kind: StepKind::Shell,
                 position: 0,
@@ -201,5 +205,17 @@ mod tests {
     async fn artifacts_serialize_as_a_json_array() {
         let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
         assert!(body["artifacts"].is_array());
+    }
+
+    #[tokio::test]
+    async fn trace_id_is_exposed_in_step_response() {
+        let s = step().await;
+        let expected_trace_id = s.trace_id;
+        let response = StepResponse::from(s);
+
+        assert_eq!(response.trace_id, expected_trace_id);
+
+        let body = serde_json::to_value(&response).expect("serialize");
+        assert!(body["trace_id"].is_string());
     }
 }

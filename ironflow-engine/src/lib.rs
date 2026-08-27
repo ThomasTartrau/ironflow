@@ -62,8 +62,9 @@ pub mod prelude {
     pub use crate::budget::BudgetConfig;
     pub use crate::config::{AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig};
     pub use crate::context::WorkflowContext;
-    pub use crate::engine::{Engine, EnqueueOptions};
+    pub use crate::engine::{Engine, EnqueueOptions, WorkflowResult};
     pub use crate::error::EngineError;
+    pub use crate::executor::StepResult;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};
     pub use crate::notify::{Event, EventPublisher, EventSubscriber, WebhookSubscriber};
