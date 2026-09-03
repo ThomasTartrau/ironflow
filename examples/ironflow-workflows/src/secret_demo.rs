@@ -1,8 +1,7 @@
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
-use std::collections::HashMap;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
 pub struct SecretDemo;
 
@@ -11,22 +10,18 @@ impl WorkflowHandler for SecretDemo {
         "secret-demo"
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Demonstrates reading a secret from the encrypted store \
-                          and using it in a workflow step. Expects a secret with \
-                          key 'demo/api-key' to be configured via the dashboard."
-                .to_string(),
-            source_code: Some(include_str!("secret_demo.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: Some("examples".to_string()),
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Demonstrates reading a secret from the encrypted store \
+         and using it in a workflow step. Expects a secret with \
+         key 'demo/api-key' to be configured via the dashboard."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("secret_demo.rs"))
+    }
+
+    fn category(&self) -> Option<&str> {
+        Some("examples")
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo, input_schema_for};
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, input_schema_for};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -52,28 +52,18 @@ impl WorkflowHandler for Greeting {
         HashMap::from([("project".to_string(), "ironflow".to_string())])
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "A demo workflow that greets someone. \
-                          Shows how input_schema generates a dynamic form in the dashboard."
-                .to_string(),
-            source_code: Some(include_str!("greeting.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: self.category().map(str::to_string),
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: self.input_schema(),
-            default_labels: self.default_labels(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "A demo workflow that greets someone. \
+         Shows how input_schema generates a dynamic form in the dashboard."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("greeting.rs"))
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            let payload = ctx.payload().await?;
-            let input: GreetingInput = serde_json::from_value(payload)
-                .map_err(|e| ironflow_engine::error::EngineError::StepConfig(e.to_string()))?;
+            let input: GreetingInput = ctx.input().await?;
 
             let greeting = match input.language.as_str() {
                 "fr" => format!("Bonjour, {} !", input.name),

@@ -2,8 +2,7 @@
 
 use ironflow_engine::config::{ShellConfig, StepConfig};
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
-use std::collections::HashMap;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
 /// Simulated CI pipeline that demonstrates DAG features:
 ///
@@ -17,21 +16,13 @@ impl WorkflowHandler for CiPipeline {
         "ci-pipeline"
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Simulated CI pipeline with parallel tests and conditional deploy. \
-                          Demonstrates ctx.parallel() and native Rust if/else branching."
-                .to_string(),
-            source_code: Some(include_str!("ci_pipeline.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: None,
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Simulated CI pipeline with parallel tests and conditional deploy. \
+         Demonstrates ctx.parallel() and native Rust if/else branching."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("ci_pipeline.rs"))
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
@@ -46,14 +37,7 @@ impl WorkflowHandler for CiPipeline {
                 )
                 .await?;
 
-            let build_ok = build
-                .output
-                .get("exit_code")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(1)
-                == 0;
-
-            if !build_ok {
+            if !build.is_success() {
                 ctx.shell(
                     "notify-build-failure",
                     ShellConfig::new("echo 'BUILD FAILED - notifying team'"),
@@ -90,14 +74,7 @@ impl WorkflowHandler for CiPipeline {
                 .await?;
 
             // Step 3: Conditional deploy
-            let all_passed = results.iter().all(|r| {
-                r.output
-                    .output
-                    .get("exit_code")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(1)
-                    == 0
-            });
+            let all_passed = results.iter().all(|r| r.output.is_success());
 
             if all_passed {
                 ctx.shell(

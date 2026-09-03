@@ -19,6 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_worker::WorkerBuilder;
+use ironflow_workflows::handlers;
 
 #[tokio::main]
 async fn main() {
@@ -46,20 +47,10 @@ async fn main() {
         .concurrency(concurrency)
         .poll_interval(Duration::from_secs(poll_interval));
 
-    // Register all example workflows
-    builder = builder
-        .register(ironflow_workflows::WeatherReport)
-        .register(ironflow_workflows::SystemAudit)
-        .register(ironflow_workflows::GitInsight)
-        .register(ironflow_workflows::Collect)
-        .register(ironflow_workflows::Enrich)
-        .register(ironflow_workflows::Report)
-        .register(ironflow_workflows::CiPipeline)
-        .register(ironflow_workflows::DeployApproval)
-        .register(ironflow_workflows::NotifiedPipeline)
-        .register(ironflow_workflows::AgentShowcase)
-        .register(ironflow_workflows::SecretDemo)
-        .register(ironflow_workflows::Greeting);
+    // Same list as the server: one source of truth for both binaries.
+    for handler in handlers() {
+        builder = builder.register(handler);
+    }
 
     let worker = builder.build().expect("failed to build worker");
 

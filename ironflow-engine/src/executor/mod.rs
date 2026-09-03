@@ -12,7 +12,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use rust_decimal::Decimal;
-use serde_json::Value;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, from_value};
 use uuid::Uuid;
 
 use ironflow_core::provider::{AgentProvider, DebugMessage};
@@ -58,6 +59,221 @@ impl StepOutput {
         self.debug_messages
             .as_ref()
             .and_then(|msgs| serde_json::to_value(msgs).ok())
+    }
+
+    /// Exit code of a shell step.
+    ///
+    /// Returns `None` for non-shell steps or when the field is absent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::StepOutput;
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let output = StepOutput {
+    ///     output: json!({"stdout": "ok\n", "stderr": "", "exit_code": 0}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    /// };
+    /// assert_eq!(output.exit_code(), Some(0));
+    /// ```
+    pub fn exit_code(&self) -> Option<i64> {
+        self.output.get("exit_code").and_then(Value::as_i64)
+    }
+
+    /// Standard output of a shell step, or an empty string for other kinds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::StepOutput;
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let output = StepOutput {
+    ///     output: json!({"stdout": "42 tests passed\n", "stderr": "", "exit_code": 0}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    /// };
+    /// assert!(output.stdout().contains("42 tests"));
+    /// ```
+    pub fn stdout(&self) -> &str {
+        self.output
+            .get("stdout")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    }
+
+    /// Standard error of a shell step, or an empty string for other kinds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::StepOutput;
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let output = StepOutput {
+    ///     output: json!({"stdout": "", "stderr": "warning: unused", "exit_code": 0}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    /// };
+    /// assert_eq!(output.stderr(), "warning: unused");
+    /// ```
+    pub fn stderr(&self) -> &str {
+        self.output
+            .get("stderr")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    }
+
+    /// HTTP status code of an HTTP step.
+    ///
+    /// Returns `None` for non-HTTP steps or when the field is absent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::StepOutput;
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let output = StepOutput {
+    ///     output: json!({"status": 204, "body": ""}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    /// };
+    /// assert_eq!(output.status(), Some(204));
+    /// ```
+    pub fn status(&self) -> Option<u16> {
+        self.output
+            .get("status")
+            .and_then(Value::as_u64)
+            .and_then(|s| u16::try_from(s).ok())
+    }
+
+    /// Response body of an HTTP step, or an empty string for other kinds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::StepOutput;
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let output = StepOutput {
+    ///     output: json!({"status": 200, "body": "{\"ok\":true}"}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    /// };
+    /// assert_eq!(output.body(), "{\"ok\":true}");
+    /// ```
+    pub fn body(&self) -> &str {
+        self.output
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    }
+
+    /// Whether the step succeeded from the point of view of its own kind.
+    ///
+    /// - Shell step: the exit code is `0`.
+    /// - HTTP step: the status is in the `2xx` range.
+    /// - Any other kind: `false`, since no success marker is recorded.
+    ///
+    /// Mostly useful after a step configured with `allow_failure()`, since a
+    /// failing step otherwise returns an error from the context method.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::StepOutput;
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let shell = StepOutput {
+    ///     output: json!({"stdout": "", "stderr": "", "exit_code": 1}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    /// };
+    /// assert!(!shell.is_success());
+    ///
+    /// let http = StepOutput { output: json!({"status": 201, "body": ""}), ..shell.clone() };
+    /// assert!(http.is_success());
+    /// ```
+    pub fn is_success(&self) -> bool {
+        if let Some(code) = self.exit_code() {
+            return code == 0;
+        }
+        if let Some(status) = self.status() {
+            return (200..300).contains(&status);
+        }
+        false
+    }
+
+    /// Deserialize the step output into `T`.
+    ///
+    /// Intended for agent steps constrained by a JSON schema, and for custom
+    /// operations that return structured JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Serialization`] when the output does not match `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::StepOutput;
+    /// use rust_decimal::Decimal;
+    /// use serde::Deserialize;
+    /// use serde_json::json;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Review {
+    ///     score: u8,
+    /// }
+    ///
+    /// let output = StepOutput {
+    ///     output: json!({"score": 8}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    /// };
+    /// let review: Review = output.json()?;
+    /// assert_eq!(review.score, 8);
+    /// # Ok::<(), ironflow_engine::error::EngineError>(())
+    /// ```
+    pub fn json<T: DeserializeOwned>(&self) -> Result<T, EngineError> {
+        from_value(self.output.clone()).map_err(EngineError::Serialization)
     }
 }
 
@@ -505,5 +721,113 @@ mod tests {
         let result = StepResult::from_success(Uuid::nil(), "test", &output);
         let summary = result.output_summary.unwrap();
         assert_eq!(summary.len(), 500);
+    }
+}
+
+#[cfg(test)]
+mod output_helper_tests {
+    use super::*;
+    use serde::Deserialize;
+    use serde_json::json;
+
+    fn output(value: Value) -> StepOutput {
+        StepOutput {
+            output: value,
+            duration_ms: 1,
+            cost_usd: Decimal::ZERO,
+            input_tokens: None,
+            output_tokens: None,
+            model: None,
+            debug_messages: None,
+        }
+    }
+
+    #[test]
+    fn shell_helpers_read_shell_fields() {
+        let out = output(json!({"stdout": "hi\n", "stderr": "warn", "exit_code": 0}));
+        assert_eq!(out.exit_code(), Some(0));
+        assert_eq!(out.stdout(), "hi\n");
+        assert_eq!(out.stderr(), "warn");
+        assert!(out.is_success());
+        assert_eq!(out.status(), None);
+        assert_eq!(out.body(), "");
+    }
+
+    #[test]
+    fn shell_non_zero_exit_is_not_success() {
+        let out = output(json!({"stdout": "", "stderr": "", "exit_code": 127}));
+        assert_eq!(out.exit_code(), Some(127));
+        assert!(!out.is_success());
+    }
+
+    #[test]
+    fn http_helpers_read_http_fields() {
+        let out = output(json!({"status": 200, "body": "{\"ok\":true}"}));
+        assert_eq!(out.status(), Some(200));
+        assert_eq!(out.body(), "{\"ok\":true}");
+        assert!(out.is_success());
+        assert_eq!(out.exit_code(), None);
+        assert_eq!(out.stdout(), "");
+    }
+
+    #[test]
+    fn http_error_status_is_not_success() {
+        assert!(!output(json!({"status": 500, "body": ""})).is_success());
+        assert!(!output(json!({"status": 199, "body": ""})).is_success());
+        assert!(output(json!({"status": 299, "body": ""})).is_success());
+    }
+
+    #[test]
+    fn status_out_of_u16_range_is_none() {
+        assert_eq!(output(json!({"status": 70000})).status(), None);
+        assert_eq!(output(json!({"status": "200"})).status(), None);
+    }
+
+    #[test]
+    fn agent_output_without_markers_is_not_success() {
+        let out = output(json!({"summary": "fine"}));
+        assert!(!out.is_success());
+        assert_eq!(out.exit_code(), None);
+        assert_eq!(out.stdout(), "");
+        assert_eq!(out.body(), "");
+    }
+
+    #[test]
+    fn json_deserializes_structured_output() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Review {
+            score: u8,
+            summary: String,
+        }
+        let out = output(json!({"score": 9, "summary": "good"}));
+        let review: Review = out.json().expect("matches schema");
+        assert_eq!(
+            review,
+            Review {
+                score: 9,
+                summary: "good".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn json_reports_mismatch_as_serialization_error() {
+        #[derive(Deserialize, Debug)]
+        struct Review {
+            #[allow(dead_code)]
+            score: u8,
+        }
+        let out = output(json!({"score": "nine"}));
+        let err = out.json::<Review>().expect_err("type mismatch");
+        assert!(matches!(err, EngineError::Serialization(_)));
+    }
+
+    #[test]
+    fn helpers_tolerate_non_object_output() {
+        let out = output(json!("plain text"));
+        assert_eq!(out.exit_code(), None);
+        assert_eq!(out.status(), None);
+        assert_eq!(out.stdout(), "");
+        assert!(!out.is_success());
     }
 }

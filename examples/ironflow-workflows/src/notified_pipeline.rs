@@ -2,8 +2,7 @@
 
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
-use std::collections::HashMap;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
 /// Build-and-deploy pipeline that demonstrates outbound notifications.
 ///
@@ -33,21 +32,13 @@ impl WorkflowHandler for NotifiedPipeline {
         "notified-pipeline"
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Build/test/deploy pipeline with outbound webhook notifications. \
-                          Demonstrates Engine::subscribe() with WebhookSubscriber."
-                .to_string(),
-            source_code: Some(include_str!("notified_pipeline.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: None,
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Build/test/deploy pipeline with outbound webhook notifications. \
+         Demonstrates Engine::subscribe() with WebhookSubscriber."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("notified_pipeline.rs"))
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {

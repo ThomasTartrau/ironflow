@@ -1,7 +1,6 @@
 use ironflow_engine::config::{AgentStepConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
-use std::collections::HashMap;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
 pub struct GitInsight;
 
@@ -10,21 +9,13 @@ impl WorkflowHandler for GitInsight {
         "git-insight"
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Collects git log and contributor data, then asks an AI \
-                          agent to analyze repository activity and team dynamics."
-                .to_string(),
-            source_code: Some(include_str!("git_insight.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: None,
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Collects git log and contributor data, then asks an AI \
+         agent to analyze repository activity and team dynamics."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("git_insight.rs"))
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {

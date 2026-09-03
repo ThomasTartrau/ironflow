@@ -1,0 +1,19 @@
+{
+  "name": "ironflow",
+  "version": "0.1.0",
+  "description": "Set up an Ironflow project, write workflows and custom operations, test them end to end, and review handlers for replay and secret pitfalls",
+  "author": {
+    "name": "Thomas Tartrau",
+    "url": "https://gitlab.com/ThomasTartrau"
+  },
+  "homepage": "https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/plugins/ironflow",
+  "repository": "https://gitlab.com/ThomasTartrau/ironflow",
+  "license": "MIT",
+  "keywords": [
+    "ironflow",
+    "workflow",
+    "rust",
+    "orchestration",
+    "agents"
+  ]
+}

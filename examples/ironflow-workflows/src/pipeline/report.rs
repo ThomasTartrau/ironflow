@@ -1,8 +1,7 @@
 use ironflow_engine::config::AgentStepConfig;
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use serde_json::json;
-use std::collections::HashMap;
 
 use super::Enrich;
 
@@ -21,22 +20,18 @@ impl WorkflowHandler for Report {
         Some("examples/pipeline")
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Full system report pipeline: collect → enrich → report. \
-                          Calls pipeline-enrich (which calls pipeline-collect), \
-                          then produces a human-readable report."
-                .to_string(),
-            source_code: Some(include_str!("report.rs").to_string()),
-            sub_workflows: vec!["pipeline-enrich".to_string()],
-            category: Some("examples/pipeline".to_string()),
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Full system report pipeline: collect → enrich → report. \
+         Calls pipeline-enrich (which calls pipeline-collect), \
+         then produces a human-readable report."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("report.rs"))
+    }
+
+    fn sub_workflows(&self) -> Vec<String> {
+        vec!["pipeline-enrich".to_string()]
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {

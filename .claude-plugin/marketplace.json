@@ -1,0 +1,21 @@
+{
+  "name": "ironflow",
+  "description": "Skills and agents for building on the Ironflow workflow engine",
+  "owner": {
+    "name": "Thomas Tartrau"
+  },
+  "plugins": [
+    {
+      "name": "ironflow",
+      "description": "Set up an Ironflow project, write workflows and custom operations, test them, and review handlers",
+      "source": "./plugins/ironflow",
+      "keywords": [
+        "ironflow",
+        "workflow",
+        "rust",
+        "orchestration"
+      ],
+      "license": "MIT"
+    }
+  ]
+}

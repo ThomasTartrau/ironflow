@@ -586,6 +586,30 @@ Or declare it in `.mcp.json`:
 Exposed tools: `list_workflows`, `get_workflow`, `list_runs`, `get_run`, `create_run`,
 `approve_run`, `reject_run`, `cancel_run`, `retry_run`, `get_stats`.
 
+### Claude Code plugin
+
+Skills that teach Claude Code how to build on Ironflow: scaffold a project, write a
+handler, write a custom operation, test it end to end, and review a handler for the
+pitfalls the compiler cannot catch (side effects around approval gates, unstable step
+names, leaked secrets).
+
+```bash
+claude marketplace add https://gitlab.com/ThomasTartrau/ironflow.git
+claude plugin install ironflow@ironflow
+```
+
+```text
+/ironflow setup              # workspace: workflows lib, server, worker, hello workflow, e2e test
+/ironflow workflow deploy    # a WorkflowHandler with a typed input schema, registered
+/ironflow operation slack    # a custom Operation tracked as a step
+/ironflow test deploy        # Engine + InMemoryStore + record/replay test
+/ironflow review             # the workflow reviewer agent
+```
+
+Every Rust snippet in the plugin is compiled in CI, and the project template is
+scaffolded and built against each release. Details in
+[`plugins/ironflow/README.md`](plugins/ironflow/README.md).
+
 ---
 
 ## 🚩 Feature Flags
