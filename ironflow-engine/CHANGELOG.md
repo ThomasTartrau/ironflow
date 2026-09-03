@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.30.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.29.1...ironflow-engine-v2.30.0) - 2026-09-03
+
+### Added
+
+- add Claude Code plugin with skills and workflow reviewer agent
+
 ## [2.29.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.28.1...ironflow-engine-v2.29.0) - 2026-08-27
 
 ### Added
