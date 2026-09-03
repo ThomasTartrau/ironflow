@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["workflows", "server", "worker"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"

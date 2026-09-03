@@ -15,7 +15,14 @@ ironflow/
 ├── ironflow-sdk/        # Type-safe Rust SDK (generated types from OpenAPI + hand-written client)
 ├── ironflow-cli/        # CLI tool (clap v4, consumes ironflow-sdk)
 ├── ironflow-mcp/        # MCP server (consumes ironflow-sdk)
+├── ironflow-artifacts/  # Blob storage for step artifacts (local filesystem backend)
+├── ironflow-templates/  # Fetch/install workflow templates from Git repositories
+├── ironflow-dashboard/  # React + Vite web UI (pnpm), embedded into ironflow-api
+├── examples/            # Example workflows, server, worker, README and plugin snippet tests
+├── plugins/ironflow/    # Claude Code plugin: skills + workflow reviewer agent for Ironflow users
 ```
+
+`.claude-plugin/marketplace.json` at the root publishes `plugins/ironflow` as a marketplace.
 
 ## Build & Test Commands
 
@@ -26,7 +33,13 @@ cargo test -p ironflow-core        # Core tests only
 cargo test -p ironflow-runtime     # Runtime tests only
 cargo doc --no-deps                # Build docs, check for warnings
 cargo doc --no-deps --open         # Build and open in browser
+cargo test -p ironflow-plugin-tests --doc   # Compile every Rust snippet of the Claude Code plugin
+scripts/check-plugin-template.sh            # Scaffold and build the plugin's project template
 ```
+
+CI runs `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and
+`cargo test --workspace` with `--exclude ironflow-example-server` and the feature set listed
+in `.claude/rules/openapi-snapshots.md`. Match it before pushing.
 
 ## Documentation Rules
 
@@ -151,8 +164,9 @@ When a change touches the API surface (new route, modified response, new field),
 3. **`ironflow-sdk`** -- copy the updated `openapi.json` into `ironflow-sdk/openapi.json`. Types are auto-generated from it at build time via progenitor. If the new route needs an ergonomic client method, add it to `client.rs`.
 4. **`ironflow-cli`** -- if the change adds a new command or modifies output, update the corresponding `commands/*.rs` and `output.rs` (table columns, colors, etc.)
 5. **`ironflow-mcp`** -- if the change adds a new tool or modifies an existing one, update `ironflow-mcp/src/tools.rs`
+6. **`plugins/ironflow`** -- if the change touches what a workflow author writes (`WorkflowHandler`, `WorkflowContext` methods, step configs, `Operation`, `StepOutput`, provider constructors, server or worker wiring), update the skills and the template under `plugins/ironflow/skills/`, then run `cargo test -p ironflow-plugin-tests --doc` and `scripts/check-plugin-template.sh`
 
-**Rule:** a PR that adds or changes an API route without updating SDK + CLI is incomplete.
+**Rule:** a PR that adds or changes an API route without updating SDK + CLI is incomplete. A PR that changes the workflow-author API without updating the plugin is incomplete too.
 
 ## Roadmap & Implementation Notes
 
@@ -180,4 +194,4 @@ Checklist for every PR:
 4. Run `cargo doc --no-deps` - zero warnings
 5. Run `cargo test` - all tests pass
 6. Move the entry in `ROADMAP.md` once the issue is merged into `main` (see **Roadmap & Implementation Notes** above)
-7. Propagate API changes to SDK, CLI, and MCP (see **SDK & CLI Propagation** above)
+7. Propagate API changes to SDK, CLI, MCP, and the Claude Code plugin (see **SDK & CLI Propagation** above)

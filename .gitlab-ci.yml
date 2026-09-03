@@ -159,6 +159,20 @@ doc-tests:
   script:
     - cargo test --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES" --doc
 
+# The Claude Code plugin ships a project template (plugins/ironflow/skills/setup/assets).
+# Scaffold it against this checkout and make sure it builds and its tests pass.
+check-plugin-template:
+  extends: .only-mr
+  stage: test
+  image: rust:1.94.0
+  <<: *rust-cache
+  needs:
+    - cargo-clippy
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - scripts/check-plugin-template.sh
+
 check-openapi-types:
   extends: .only-mr
   stage: test

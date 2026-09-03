@@ -1,7 +1,6 @@
 use ironflow_engine::config::AgentStepConfig;
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
-use std::collections::HashMap;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
 /// Showcase workflow that exercises the full verbose agent timeline:
 /// thinking blocks, multiple tool calls, tool results, and per-turn tokens.
@@ -16,22 +15,14 @@ impl WorkflowHandler for AgentShowcase {
         "agent-showcase"
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Demo workflow that forces the agent to use Bash and \
-                          Read tools and think about its plan, producing a rich \
-                          verbose trace for the dashboard timeline."
-                .to_string(),
-            source_code: Some(include_str!("agent_showcase.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: None,
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Demo workflow that forces the agent to use Bash and \
+         Read tools and think about its plan, producing a rich \
+         verbose trace for the dashboard timeline."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("agent_showcase.rs"))
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {

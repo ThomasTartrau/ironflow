@@ -93,7 +93,28 @@ pub type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<(), EngineError>
 ///
 /// Contains a human-readable description and optional Rust source code
 /// for display in the dashboard.
-#[derive(Debug, Clone, Serialize)]
+///
+/// Most handlers never build this struct by hand: override
+/// [`WorkflowHandler::description`] and [`WorkflowHandler::source_code`] and
+/// the default [`WorkflowHandler::describe`] assembles it from the other
+/// trait methods. The builder below exists for handlers that override
+/// `describe` entirely.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::handler::WorkflowInfo;
+///
+/// let info = WorkflowInfo::new("Deploy to production")
+///     .with_category("ops")
+///     .with_version("2.0.0")
+///     .with_sub_workflows(["build"]);
+///
+/// assert_eq!(info.description, "Deploy to production");
+/// assert_eq!(info.category.as_deref(), Some("ops"));
+/// assert_eq!(info.sub_workflows, vec!["build".to_string()]);
+/// ```
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkflowInfo {
     /// Human-readable description of what the workflow does.
     pub description: String,
@@ -132,6 +153,177 @@ pub struct WorkflowInfo {
     /// the server-wide default. `None` means the handler declares no default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_max_cost_usd: Option<Decimal>,
+}
+
+impl WorkflowInfo {
+    /// Create metadata with a description and every other field at its default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let info = WorkflowInfo::new("Nightly backup");
+    /// assert_eq!(info.description, "Nightly backup");
+    /// assert!(info.source_code.is_none());
+    /// assert!(info.sub_workflows.is_empty());
+    /// ```
+    pub fn new(description: impl Into<String>) -> Self {
+        Self {
+            description: description.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Attach the handler source code, typically via `include_str!`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let info = WorkflowInfo::new("Demo").with_source_code("struct Demo;");
+    /// assert_eq!(info.source_code.as_deref(), Some("struct Demo;"));
+    /// ```
+    pub fn with_source_code(mut self, source: impl Into<String>) -> Self {
+        self.source_code = Some(source.into());
+        self
+    }
+
+    /// Declare the sub-workflows this handler invokes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let info = WorkflowInfo::new("Report").with_sub_workflows(["collect", "enrich"]);
+    /// assert_eq!(info.sub_workflows, vec!["collect".to_string(), "enrich".to_string()]);
+    /// ```
+    pub fn with_sub_workflows<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.sub_workflows = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the `/`-separated category path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let info = WorkflowInfo::new("ETL").with_category("data/etl");
+    /// assert_eq!(info.category.as_deref(), Some("data/etl"));
+    /// ```
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
+        self
+    }
+
+    /// Set the handler version.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let info = WorkflowInfo::new("Deploy").with_version("1.2.0");
+    /// assert_eq!(info.version.as_deref(), Some("1.2.0"));
+    /// ```
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = Some(version.into());
+        self
+    }
+
+    /// Set the versions accepted for replay without `force`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let info = WorkflowInfo::new("Deploy").with_compatible_versions(["1.0.0"]);
+    /// assert_eq!(info.compatible_versions, vec!["1.0.0".to_string()]);
+    /// ```
+    pub fn with_compatible_versions<I, S>(mut self, versions: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.compatible_versions = versions.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the JSON Schema of the expected input payload.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    /// use serde_json::json;
+    ///
+    /// let info = WorkflowInfo::new("Greet").with_input_schema(json!({"type": "object"}));
+    /// assert_eq!(info.input_schema.unwrap()["type"], "object");
+    /// ```
+    pub fn with_input_schema(mut self, schema: Value) -> Self {
+        self.input_schema = Some(schema);
+        self
+    }
+
+    /// Set the labels applied to every run of this workflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let labels = HashMap::from([("team".to_string(), "core".to_string())]);
+    /// let info = WorkflowInfo::new("Sync").with_default_labels(labels);
+    /// assert_eq!(info.default_labels["team"], "core");
+    /// ```
+    pub fn with_default_labels(mut self, labels: HashMap<String, String>) -> Self {
+        self.default_labels = labels;
+        self
+    }
+
+    /// Set the cron schedule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    /// use ironflow_engine::schedule::CronSchedule;
+    ///
+    /// let schedule = CronSchedule::new("0 0 * * *")?;
+    /// let info = WorkflowInfo::new("Nightly").with_schedule(schedule);
+    /// assert!(info.schedule.is_some());
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn with_schedule(mut self, schedule: CronSchedule) -> Self {
+        self.schedule = Some(schedule);
+        self
+    }
+
+    /// Set the default cumulative cost cap in USD.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    /// use rust_decimal::Decimal;
+    ///
+    /// let info = WorkflowInfo::new("Analysis").with_default_max_cost_usd(Decimal::new(500, 2));
+    /// assert_eq!(info.default_max_cost_usd, Some(Decimal::new(500, 2)));
+    /// ```
+    pub fn with_default_max_cost_usd(mut self, cap: Decimal) -> Self {
+        self.default_max_cost_usd = Some(cap);
+        self
+    }
 }
 
 /// A dynamic workflow handler with context-aware step chaining.
@@ -191,6 +383,85 @@ pub trait WorkflowHandler: Send + Sync {
     /// ```
     fn compatible_versions(&self) -> &[&str] {
         &[]
+    }
+
+    /// Human-readable description shown in the dashboard and the CLI.
+    ///
+    /// The default is an empty string. Override this rather than
+    /// [`describe`](Self::describe): the default `describe` picks it up.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// struct Backup;
+    ///
+    /// impl WorkflowHandler for Backup {
+    ///     fn name(&self) -> &str { "backup" }
+    ///     fn description(&self) -> &str { "Nightly database backup" }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Backup.describe().description, "Nightly database backup");
+    /// ```
+    fn description(&self) -> &str {
+        ""
+    }
+
+    /// Rust source of the handler, displayed in the dashboard.
+    ///
+    /// Return `Some(include_str!("this_file.rs"))` to show the code next to
+    /// the run. The default is `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// struct Backup;
+    ///
+    /// impl WorkflowHandler for Backup {
+    ///     fn name(&self) -> &str { "backup" }
+    ///     fn source_code(&self) -> Option<&str> { Some("struct Backup;") }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Backup.describe().source_code.as_deref(), Some("struct Backup;"));
+    /// ```
+    fn source_code(&self) -> Option<&str> {
+        None
+    }
+
+    /// Names of the sub-workflows this handler invokes through
+    /// [`WorkflowContext::workflow`](crate::context::WorkflowContext::workflow).
+    ///
+    /// Purely informational: the dashboard uses it to draw the call graph.
+    /// The default is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// struct Report;
+    ///
+    /// impl WorkflowHandler for Report {
+    ///     fn name(&self) -> &str { "report" }
+    ///     fn sub_workflows(&self) -> Vec<String> { vec!["collect".to_string()] }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Report.describe().sub_workflows, vec!["collect".to_string()]);
+    /// ```
+    fn sub_workflows(&self) -> Vec<String> {
+        Vec::new()
     }
 
     /// Optional `/`-separated category path used to group workflows in the UI tree.
@@ -361,20 +632,24 @@ pub trait WorkflowHandler: Send + Sync {
         self.compatible_versions().contains(&rv)
     }
 
-    /// Return metadata about this workflow (description, source code).
+    /// Return metadata about this workflow.
     ///
-    /// Override this to provide a description and source code for the
-    /// dashboard UI. The default returns an empty description with no source
-    /// but propagates [`WorkflowHandler::category`],
-    /// [`WorkflowHandler::version`], [`WorkflowHandler::input_schema`],
-    /// [`WorkflowHandler::default_labels`],
-    /// [`WorkflowHandler::compatible_versions`],
-    /// and [`WorkflowHandler::schedule`].
+    /// The default assembles a [`WorkflowInfo`] from every other trait
+    /// method: [`description`](Self::description),
+    /// [`source_code`](Self::source_code),
+    /// [`sub_workflows`](Self::sub_workflows), [`category`](Self::category),
+    /// [`version`](Self::version),
+    /// [`compatible_versions`](Self::compatible_versions),
+    /// [`input_schema`](Self::input_schema),
+    /// [`default_labels`](Self::default_labels), [`schedule`](Self::schedule)
+    /// and [`default_max_cost_usd`](Self::default_max_cost_usd). Override
+    /// those instead of this method; override `describe` only when the
+    /// metadata cannot be expressed through them.
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
-            description: String::new(),
-            source_code: None,
-            sub_workflows: Vec::new(),
+            description: self.description().to_string(),
+            source_code: self.source_code().map(str::to_string),
+            sub_workflows: self.sub_workflows(),
             category: self.category().map(str::to_string),
             version: self.version().map(str::to_string),
             compatible_versions: self
@@ -445,6 +720,108 @@ pub trait WorkflowHandler: Send + Sync {
     /// Return [`EngineError`] if any step fails. The engine will mark
     /// the run as `Failed` and record the error.
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a>;
+}
+
+/// A boxed handler is a handler.
+///
+/// Lets a single `Vec<Box<dyn WorkflowHandler>>` feed both
+/// [`Engine::register`](crate::engine::Engine::register) and a worker
+/// builder, so the API server and the workers cannot drift apart in the
+/// list of workflows they know.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+/// use ironflow_engine::context::WorkflowContext;
+///
+/// struct Hello;
+///
+/// impl WorkflowHandler for Hello {
+///     fn name(&self) -> &str { "hello" }
+///     fn description(&self) -> &str { "Says hello" }
+///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+///         Box::pin(async move { Ok(()) })
+///     }
+/// }
+///
+/// fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
+///     vec![Box::new(Hello)]
+/// }
+///
+/// for handler in handlers() {
+///     assert_eq!(handler.name(), "hello");
+///     assert_eq!(handler.describe().description, "Says hello");
+/// }
+/// ```
+impl<T: WorkflowHandler + ?Sized> WorkflowHandler for Box<T> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn version(&self) -> Option<&str> {
+        (**self).version()
+    }
+
+    fn compatible_versions(&self) -> &[&str] {
+        (**self).compatible_versions()
+    }
+
+    fn description(&self) -> &str {
+        (**self).description()
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        (**self).source_code()
+    }
+
+    fn sub_workflows(&self) -> Vec<String> {
+        (**self).sub_workflows()
+    }
+
+    fn category(&self) -> Option<&str> {
+        (**self).category()
+    }
+
+    fn input_schema(&self) -> Option<Value> {
+        (**self).input_schema()
+    }
+
+    fn default_labels(&self) -> HashMap<String, String> {
+        (**self).default_labels()
+    }
+
+    fn schedule(&self) -> Option<&CronSchedule> {
+        (**self).schedule()
+    }
+
+    fn default_max_cost_usd(&self) -> Option<Decimal> {
+        (**self).default_max_cost_usd()
+    }
+
+    fn guard_config(&self) -> Option<WorkflowGuardConfig> {
+        (**self).guard_config()
+    }
+
+    fn is_version_compatible(&self, run_version: Option<&str>) -> bool {
+        (**self).is_version_compatible(run_version)
+    }
+
+    fn describe(&self) -> WorkflowInfo {
+        (**self).describe()
+    }
+
+    fn create_run<'a>(
+        &self,
+        creator: &'a dyn RunCreator,
+        opts: CreateRunOpts,
+    ) -> RunCreatorFuture<'a> {
+        (**self).create_run(creator, opts)
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        (**self).execute(ctx)
+    }
 }
 
 #[cfg(test)]
@@ -802,5 +1179,166 @@ mod tests {
         assert_eq!(run.workflow_name, "minimal");
         assert_eq!(run.handler_version, Some("1".to_string()));
         assert_eq!(run.max_cost_usd, None);
+    }
+
+    struct Documented;
+
+    impl WorkflowHandler for Documented {
+        fn name(&self) -> &str {
+            "documented"
+        }
+
+        fn description(&self) -> &str {
+            "A documented handler"
+        }
+
+        fn source_code(&self) -> Option<&str> {
+            Some("struct Documented;")
+        }
+
+        fn sub_workflows(&self) -> Vec<String> {
+            vec!["child".to_string()]
+        }
+
+        fn category(&self) -> Option<&str> {
+            Some("tests/handlers")
+        }
+
+        fn version(&self) -> Option<&str> {
+            Some("3.1.0")
+        }
+
+        fn compatible_versions(&self) -> &[&str] {
+            &["3.0.0"]
+        }
+
+        fn input_schema(&self) -> Option<Value> {
+            Some(input_schema_for::<TestInput>())
+        }
+
+        fn default_labels(&self) -> HashMap<String, String> {
+            HashMap::from([("team".to_string(), "core".to_string())])
+        }
+
+        fn default_max_cost_usd(&self) -> Option<Decimal> {
+            Some(Decimal::new(250, 2))
+        }
+
+        fn guard_config(&self) -> Option<WorkflowGuardConfig> {
+            Some(WorkflowGuardConfig::new().with_max_depth(4))
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn default_describe_propagates_every_trait_method() {
+        let info = Documented.describe();
+        assert_eq!(info.description, "A documented handler");
+        assert_eq!(info.source_code.as_deref(), Some("struct Documented;"));
+        assert_eq!(info.sub_workflows, vec!["child".to_string()]);
+        assert_eq!(info.category.as_deref(), Some("tests/handlers"));
+        assert_eq!(info.version.as_deref(), Some("3.1.0"));
+        assert_eq!(info.compatible_versions, vec!["3.0.0".to_string()]);
+        assert!(info.input_schema.is_some());
+        assert_eq!(info.default_labels["team"], "core");
+        assert_eq!(info.default_max_cost_usd, Some(Decimal::new(250, 2)));
+    }
+
+    #[test]
+    fn minimal_handler_describe_uses_defaults() {
+        let info = MinimalHandler.describe();
+        assert_eq!(info.description, "");
+        assert!(info.source_code.is_none());
+        assert!(info.sub_workflows.is_empty());
+        assert!(info.category.is_none());
+        assert_eq!(info.version.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn workflow_info_builder_sets_every_field() {
+        let schedule = CronSchedule::new("0 0 * * *").expect("valid cron");
+        let info = WorkflowInfo::new("desc")
+            .with_source_code("code")
+            .with_sub_workflows(["a", "b"])
+            .with_category("cat/sub")
+            .with_version("2")
+            .with_compatible_versions(["1"])
+            .with_input_schema(serde_json::json!({"type": "object"}))
+            .with_default_labels(HashMap::from([("k".to_string(), "v".to_string())]))
+            .with_schedule(schedule)
+            .with_default_max_cost_usd(Decimal::ONE);
+
+        assert_eq!(info.description, "desc");
+        assert_eq!(info.source_code.as_deref(), Some("code"));
+        assert_eq!(info.sub_workflows, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(info.category.as_deref(), Some("cat/sub"));
+        assert_eq!(info.version.as_deref(), Some("2"));
+        assert_eq!(info.compatible_versions, vec!["1".to_string()]);
+        assert_eq!(info.input_schema.unwrap()["type"], "object");
+        assert_eq!(info.default_labels["k"], "v");
+        assert!(info.schedule.is_some());
+        assert_eq!(info.default_max_cost_usd, Some(Decimal::ONE));
+    }
+
+    #[test]
+    fn workflow_info_new_matches_default_for_other_fields() {
+        let info = WorkflowInfo::new("only description");
+        let default = WorkflowInfo::default();
+        assert_eq!(info.description, "only description");
+        assert_eq!(default.description, "");
+        assert_eq!(info.source_code, default.source_code);
+        assert_eq!(info.sub_workflows, default.sub_workflows);
+        assert_eq!(info.category, default.category);
+        assert_eq!(info.version, default.version);
+        assert_eq!(info.default_max_cost_usd, default.default_max_cost_usd);
+    }
+
+    #[test]
+    fn boxed_handler_delegates_every_method() {
+        let boxed: Box<dyn WorkflowHandler> = Box::new(Documented);
+        assert_eq!(boxed.name(), "documented");
+        assert_eq!(boxed.version(), Some("3.1.0"));
+        assert_eq!(boxed.compatible_versions(), &["3.0.0"]);
+        assert_eq!(boxed.description(), "A documented handler");
+        assert_eq!(boxed.source_code(), Some("struct Documented;"));
+        assert_eq!(boxed.sub_workflows(), vec!["child".to_string()]);
+        assert_eq!(boxed.category(), Some("tests/handlers"));
+        assert!(boxed.input_schema().is_some());
+        assert_eq!(boxed.default_labels()["team"], "core");
+        assert!(boxed.schedule().is_none());
+        assert_eq!(boxed.default_max_cost_usd(), Some(Decimal::new(250, 2)));
+        assert_eq!(boxed.guard_config().map(|g| g.max_depth), Some(4));
+        assert!(boxed.is_version_compatible(Some("3.0.0")));
+        assert!(!boxed.is_version_compatible(Some("0.1.0")));
+        assert_eq!(boxed.describe().description, "A documented handler");
+    }
+
+    #[test]
+    fn boxed_handler_is_accepted_by_generic_register() {
+        fn takes_handler(handler: impl WorkflowHandler + 'static) -> String {
+            handler.name().to_string()
+        }
+        let boxed: Box<dyn WorkflowHandler> = Box::new(MinimalHandler);
+        assert_eq!(takes_handler(boxed), "minimal");
+    }
+
+    #[tokio::test]
+    async fn boxed_handler_create_run_delegates_metadata() {
+        use ironflow_store::memory::InMemoryStore;
+        use ironflow_store::models::TriggerKind;
+
+        let store = InMemoryStore::new();
+        let boxed: Box<dyn WorkflowHandler> = Box::new(Documented);
+        let run = boxed
+            .create_run(&store, CreateRunOpts::new().trigger(TriggerKind::Manual))
+            .await
+            .expect("run created")
+            .into_run();
+        assert_eq!(run.workflow_name, "documented");
+        assert_eq!(run.handler_version.as_deref(), Some("3.1.0"));
+        assert_eq!(run.max_cost_usd, Some(Decimal::new(250, 2)));
     }
 }

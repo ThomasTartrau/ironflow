@@ -2,8 +2,7 @@
 
 use ironflow_engine::config::{ApprovalConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
-use std::collections::HashMap;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
 /// Deploy pipeline that requires human approval before shipping to production.
 ///
@@ -27,21 +26,13 @@ impl WorkflowHandler for DeployApproval {
         "deploy-approval"
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Deploy pipeline with human approval gate before production. \
-                          Demonstrates ctx.approval() for human-in-the-loop workflows."
-                .to_string(),
-            source_code: Some(include_str!("deploy_approval.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: None,
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Deploy pipeline with human approval gate before production. \
+         Demonstrates ctx.approval() for human-in-the-loop workflows."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("deploy_approval.rs"))
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {

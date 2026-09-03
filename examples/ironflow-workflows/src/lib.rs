@@ -27,6 +27,28 @@ pub use weather_report::WeatherReport;
 
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
+use ironflow_engine::handler::WorkflowHandler;
+
+/// Every example workflow handler, boxed.
+///
+/// This is the single list both the API server and the worker consume, so
+/// the two binaries cannot disagree on which workflows exist.
+pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
+    vec![
+        Box::new(WeatherReport),
+        Box::new(SystemAudit),
+        Box::new(GitInsight),
+        Box::new(Collect),
+        Box::new(Enrich),
+        Box::new(Report),
+        Box::new(CiPipeline),
+        Box::new(DeployApproval),
+        Box::new(NotifiedPipeline),
+        Box::new(AgentShowcase),
+        Box::new(SecretDemo),
+        Box::new(Greeting),
+    ]
+}
 
 /// Register all example workflow handlers in the engine.
 ///
@@ -35,17 +57,8 @@ use ironflow_engine::error::EngineError;
 /// Returns [`EngineError::InvalidWorkflow`] if a handler with the same name
 /// is already registered.
 pub fn register_all(engine: &mut Engine) -> Result<(), EngineError> {
-    engine.register(WeatherReport)?;
-    engine.register(SystemAudit)?;
-    engine.register(GitInsight)?;
-    engine.register(Collect)?;
-    engine.register(Enrich)?;
-    engine.register(Report)?;
-    engine.register(CiPipeline)?;
-    engine.register(DeployApproval)?;
-    engine.register(NotifiedPipeline)?;
-    engine.register(AgentShowcase)?;
-    engine.register(SecretDemo)?;
-    engine.register(Greeting)?;
+    for handler in handlers() {
+        engine.register(handler)?;
+    }
     Ok(())
 }

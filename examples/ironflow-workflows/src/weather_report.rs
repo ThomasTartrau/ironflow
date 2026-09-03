@@ -1,7 +1,6 @@
 use ironflow_engine::config::{AgentStepConfig, HttpConfig};
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, WorkflowInfo};
-use std::collections::HashMap;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
 pub struct WeatherReport;
 
@@ -10,21 +9,13 @@ impl WorkflowHandler for WeatherReport {
         "weather-report"
     }
 
-    fn describe(&self) -> WorkflowInfo {
-        WorkflowInfo {
-            description: "Fetches live weather data for Paris via HTTP, \
-                          then asks an AI agent to produce a human-readable summary."
-                .to_string(),
-            source_code: Some(include_str!("weather_report.rs").to_string()),
-            sub_workflows: Vec::new(),
-            category: None,
-            version: self.version().map(str::to_string),
-            compatible_versions: Vec::new(),
-            input_schema: None,
-            default_labels: HashMap::new(),
-            schedule: None,
-            default_max_cost_usd: None,
-        }
+    fn description(&self) -> &str {
+        "Fetches live weather data for Paris via HTTP, \
+         then asks an AI agent to produce a human-readable summary."
+    }
+
+    fn source_code(&self) -> Option<&str> {
+        Some(include_str!("weather_report.rs"))
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
