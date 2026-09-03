@@ -121,6 +121,8 @@ impl Model {
 
     /// Claude Fable 5 - most capable widely released model, 1M token context native.
     pub const FABLE_5: &str = "claude-fable-5";
+    /// Claude Fable 5.1 - latest Fable iteration, improved reasoning, 1M token context native.
+    pub const FABLE_51: &str = "claude-fable-5-1";
     /// Claude Mythos 5 - Fable 5 capabilities, limited availability (Project Glasswing).
     pub const MYTHOS_5: &str = "claude-mythos-5";
     /// Claude Opus 5 - current flagship for agentic coding, 1M token context native.
@@ -945,6 +947,7 @@ mod tests {
         assert_eq!(Model::OPUS_48, "claude-opus-4-8");
         assert_eq!(Model::OPUS_48_1M, "claude-opus-4-8[1m]");
         assert_eq!(Model::FABLE_5, "claude-fable-5");
+        assert_eq!(Model::FABLE_51, "claude-fable-5-1");
         assert_eq!(Model::MYTHOS_5, "claude-mythos-5");
         assert_eq!(Model::OPUS_5, "claude-opus-5");
         assert_eq!(Model::OPUS_5_1M, "claude-opus-5[1m]");
