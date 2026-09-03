@@ -16,6 +16,8 @@ pub struct AnthropicModel;
 impl AnthropicModel {
     /// Claude Fable 5 - most capable widely released model (1M context).
     pub const FABLE_5: &str = "claude-fable-5";
+    /// Claude Fable 5.1 - latest Fable iteration, improved reasoning (1M context).
+    pub const FABLE_5_1: &str = "claude-fable-5-1";
     /// Claude Mythos 5 - Fable 5 capabilities, limited availability (Project Glasswing, 1M context).
     pub const MYTHOS_5: &str = "claude-mythos-5";
     /// Claude Opus 5 - flagship for complex agentic coding and enterprise work (1M context).
