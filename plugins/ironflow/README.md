@@ -6,7 +6,10 @@ the workflow engine where workflows are plain async Rust.
 ## Install
 
 ```bash
-claude marketplace add https://gitlab.com/ThomasTartrau/ironflow.git
+# 1. Register the Ironflow repository as a plugin marketplace
+claude plugin marketplace add https://gitlab.com/ThomasTartrau/ironflow.git
+
+# 2. Install the plugin
 claude plugin install ironflow@ironflow
 ```
 
