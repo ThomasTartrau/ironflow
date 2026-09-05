@@ -31,8 +31,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::{PgPool, Row};
 use tracing::info;
 use uuid::Uuid;
 
@@ -182,7 +182,7 @@ impl PostgresStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         // Verify connection is actually usable (not just pooled)
-        sqlx::query("SELECT 1 as ok")
+        sqlx::query!("SELECT 1 as ok")
             .fetch_one(&pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -303,7 +303,7 @@ impl PostgresStore {
     /// # }
     /// ```
     pub async fn test_connection(&self) -> Result<(), StoreError> {
-        sqlx::query("SELECT 1 as ok")
+        sqlx::query!("SELECT 1 as ok")
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -312,15 +312,15 @@ impl PostgresStore {
 
     /// Fetch a machine ID by name from the database.
     async fn fetch_machine_id(pool: &PgPool, name: &str) -> Result<Uuid, StoreError> {
-        let row = sqlx::query(
-            "SELECT abstract_machine__id FROM lib_fsm.abstract_state_machine WHERE name = $1",
+        let id = sqlx::query_scalar!(
+            r#"SELECT abstract_machine__id as "abstract_machine__id!" FROM lib_fsm.abstract_state_machine WHERE name = $1"#,
+            name,
         )
-        .bind(name)
         .fetch_one(pool)
         .await
         .map_err(|e| StoreError::Database(format!("failed to get {name} FSM: {e}")))?;
 
-        Ok(row.get("abstract_machine__id"))
+        Ok(id)
     }
 
     /// Get the cached abstract machine ID for run_lifecycle FSM.
@@ -368,24 +368,23 @@ impl PostgresStore {
         update: &RunUpdate,
     ) -> Result<(), StoreError> {
         if let Some(new_status) = update.status {
-            let row = sqlx::query(
+            let row = sqlx::query!(
                 r#"
-                SELECT ast.name as state_name, r.state_machine__id
+                SELECT ast.name as "state_name!", r.state_machine__id as "state_machine__id!"
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
                 WHERE r.id = $1
                 FOR UPDATE
                 "#,
+                id,
             )
-            .bind(id)
             .fetch_optional(&mut **tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?
             .ok_or(StoreError::RunNotFound(id))?;
 
-            let current_state_name: &str = row.get("state_name");
-            let current = helpers::parse_run_status(current_state_name)?;
+            let current = helpers::parse_run_status(&row.state_name)?;
 
             if !current.can_transition_to(&new_status) {
                 return Err(StoreError::InvalidTransition {
@@ -396,14 +395,15 @@ impl PostgresStore {
 
             if !(current == new_status && new_status.is_terminal()) {
                 let event = Self::run_status_to_event(current, new_status)?;
-                let state_machine_id: Uuid = row.get("state_machine__id");
 
-                sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
-                    .bind(state_machine_id)
-                    .bind(event)
-                    .fetch_one(&mut **tx)
-                    .await
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                sqlx::query!(
+                    "SELECT lib_fsm.state_machine_transition($1, $2)",
+                    row.state_machine__id,
+                    event,
+                )
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
             }
         }
 

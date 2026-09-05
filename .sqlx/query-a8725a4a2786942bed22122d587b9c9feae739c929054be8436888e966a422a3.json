@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                INSERT INTO iam.users (id, email, username, password_hash, is_admin, created_at, updated_at)\n                VALUES ($1, $2, $3, $4, FALSE, $5, $6)\n                RETURNING id, email, username, password_hash, is_admin, created_at, updated_at\n                ",
+  "query": "\n                INSERT INTO iam.users (id, email, username, password_hash, is_admin, created_at, updated_at)\n                VALUES ($1, $2, $3, $4, $5, $6, $7)\n                RETURNING id, email, username, password_hash, is_admin, created_at, updated_at\n                ",
   "describe": {
     "columns": [
       {
@@ -45,6 +45,7 @@
         "Varchar",
         "Varchar",
         "Text",
+        "Bool",
         "Timestamptz",
         "Timestamptz"
       ]
@@ -59,5 +60,5 @@
       false
     ]
   },
-  "hash": "d7444a186d550d9a4274500b8f8241ef3ce74e89748eb5f61042cd20ee71a6e6"
+  "hash": "a8725a4a2786942bed22122d587b9c9feae739c929054be8436888e966a422a3"
 }

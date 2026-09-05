@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        UPDATE ironflow.runs\n                        SET retry_count = retry_count + 1,\n                            worker_id = NULL,\n                            lease_expires_at = NULL,\n                            error = $1,\n                            completed_at = COALESCE(completed_at, NOW()),\n                            updated_at = NOW()\n                        WHERE id = $2\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "40f78902270a60fefb4bf6b9584a681abbacce2aaa1bf4b2be8dbdf5b8d6b2a7"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        UPDATE ironflow.secrets\n                        SET encrypted_value = $1, nonce = $2, key_version = $3\n                        WHERE id = $4 AND key_version = $5\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea",
+        "Int4",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71aa072ca68930935215e78ba77451e21d4a744ed6e2952545d62ba1639a9c2a"
+}

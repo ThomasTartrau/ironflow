@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO ironflow.step_artifacts\n                    (id, run_id, step_id, name, storage_key, content_type, size_bytes, sha256)\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n                RETURNING id, run_id, step_id, name, storage_key, content_type, size_bytes, sha256, created_at, updated_at\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "step_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "content_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "size_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "sha256",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Int8",
+        "Bpchar"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2f8af673ac42041e0da48fc58d252a7f7b9aed58cc46c6ee9aa289bed5f3b7b2"
+}

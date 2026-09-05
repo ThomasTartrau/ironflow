@@ -129,53 +129,57 @@ impl RunStore for PostgresStore {
             // the unique index does not reject a legitimate reuse. No-op when the
             // key is absent or still within its window.
             if let Some(ref key) = req.idempotency_key {
-                sqlx::query(
+                sqlx::query!(
                     r#"
                     UPDATE ironflow.runs
                     SET idempotency_key = NULL, updated_at = $3
                     WHERE idempotency_key = $1 AND created_at <= $2
                     "#,
+                    key,
+                    window_start,
+                    now,
                 )
-                .bind(key)
-                .bind(window_start)
-                .bind(now)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
             }
 
             // Create FSM instance at initial state (pending)
-            let row = sqlx::query("SELECT lib_fsm.state_machine_create($1) as state_machine__id")
-                .bind(fsm_machine_id)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
-            let state_machine_id: Uuid = row.get("state_machine__id");
+            let state_machine_id = sqlx::query_scalar!(
+                r#"SELECT lib_fsm.state_machine_create($1) as "state_machine__id!""#,
+                fsm_machine_id,
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
 
             // Insert run with FSM reference. A concurrent insert holding the same
             // key wins the unique index and this one becomes a no-op.
-            let inserted = sqlx::query(
+            let labels_json = serde_json::to_value(&req.labels).unwrap_or_default();
+            let created_by_user_id = req.created_by.as_ref().map(RunActor::user_id);
+            let created_by_api_key_id = req.created_by.as_ref().and_then(RunActor::api_key_id);
+            let inserted = sqlx::query!(
                 r#"
                 INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
                 "#,
+                id,
+                &req.workflow_name,
+                state_machine_id,
+                &trigger_json,
+                req.payload as _,
+                req.max_retries as i32,
+                req.handler_version.as_deref(),
+                &labels_json,
+                req.scheduled_at,
+                created_by_user_id,
+                created_by_api_key_id,
+                req.idempotency_key.as_deref(),
+                req.max_cost_usd,
+                now,
+                now,
             )
-            .bind(id)
-            .bind(&req.workflow_name)
-            .bind(state_machine_id)
-            .bind(&trigger_json)
-            .bind(&req.payload)
-            .bind(req.max_retries as i32)
-            .bind(&req.handler_version)
-            .bind(serde_json::to_value(&req.labels).unwrap_or_default())
-            .bind(req.scheduled_at)
-            .bind(req.created_by.as_ref().map(RunActor::user_id))
-            .bind(req.created_by.as_ref().and_then(RunActor::api_key_id))
-            .bind(&req.idempotency_key)
-            .bind(req.max_cost_usd)
-            .bind(now)
-            .bind(now)
             .execute(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -337,24 +341,23 @@ impl RunStore for PostgresStore {
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
             // Get current state and state_machine__id in one query
-            let row = sqlx::query(
+            let row = sqlx::query!(
                 r#"
-                SELECT ast.name as state_name, r.state_machine__id
+                SELECT ast.name as "state_name!", r.state_machine__id as "state_machine__id!"
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
                 WHERE r.id = $1
                 FOR UPDATE
                 "#,
+                id,
             )
-            .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?
             .ok_or(StoreError::RunNotFound(id))?;
 
-            let current_state_name: &str = row.get("state_name");
-            let current = super::helpers::parse_run_status(current_state_name)?;
+            let current = super::helpers::parse_run_status(&row.state_name)?;
 
             if !current.can_transition_to(&new_status) {
                 return Err(StoreError::InvalidTransition {
@@ -370,15 +373,15 @@ impl RunStore for PostgresStore {
             let event = PostgresStore::run_status_to_event(current, new_status)?;
             let now = Utc::now();
 
-            let state_machine_id: Uuid = row.get("state_machine__id");
-
             // Perform FSM transition
-            sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
-                .bind(state_machine_id)
-                .bind(event)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            sqlx::query!(
+                "SELECT lib_fsm.state_machine_transition($1, $2)",
+                row.state_machine__id,
+                event,
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
             // Update timestamps with dynamic bind indices
             let mut sql = String::from("UPDATE ironflow.runs SET updated_at = $1");
@@ -489,9 +492,13 @@ impl RunStore for PostgresStore {
             // Find a run waiting for execution and transition it. `retrying` runs
             // are runs whose automatic retry backoff has been armed: they become
             // eligible again once `scheduled_at` has passed.
-            let run_row = sqlx::query(
+            // Lock exactly the two per-run rows. A bare FOR UPDATE would
+            // also lock `ast`, whose 'pending' row is shared by every run,
+            // so SKIP LOCKED would make concurrent workers skip the whole
+            // queue. Locking `sm` is what makes the pick exclusive.
+            let run_row = sqlx::query!(
                 r#"
-                SELECT r.id, r.state_machine__id, ast.name as state_name
+                SELECT r.id, r.state_machine__id as "state_machine__id!", ast.name as "state_name!"
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
@@ -499,11 +506,6 @@ impl RunStore for PostgresStore {
                   AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
                 ORDER BY r.created_at ASC
                 LIMIT 1
-                -- Lock exactly the two per-run rows. A bare FOR UPDATE would
-                -- also lock `ast`, whose 'pending' row is shared by every run,
-                -- so SKIP LOCKED would make concurrent workers skip the whole
-                -- queue. Locking `sm` is what makes the pick exclusive: the
-                -- status lives there, and the FSM transition updates it.
                 FOR UPDATE OF r, sm SKIP LOCKED
                 "#,
             )
@@ -512,11 +514,10 @@ impl RunStore for PostgresStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             if let Some(run_row) = run_row {
-                let run_id: Uuid = run_row.get("id");
-                let state_machine_id: Uuid = run_row.get("state_machine__id");
-                let state_name: &str = run_row.get("state_name");
+                let run_id = run_row.id;
+                let state_machine_id = run_row.state_machine__id;
                 let event = PostgresStore::run_status_to_event(
-                    parse_run_status(state_name)?,
+                    parse_run_status(&run_row.state_name)?,
                     RunStatus::Running,
                 )?;
 
@@ -533,7 +534,7 @@ impl RunStore for PostgresStore {
                 // server clock: worker clock skew cannot shorten or extend a lease.
                 match lease {
                     Some(lease) => {
-                        sqlx::query(
+                        sqlx::query!(
                             r#"
                             UPDATE ironflow.runs
                             SET started_at = COALESCE(started_at, $1),
@@ -542,17 +543,17 @@ impl RunStore for PostgresStore {
                                 lease_expires_at = NOW() + make_interval(secs => $3)
                             WHERE id = $4
                             "#,
+                            now,
+                            &lease.worker_id,
+                            lease.ttl.as_secs_f64(),
+                            run_id,
                         )
-                        .bind(now)
-                        .bind(&lease.worker_id)
-                        .bind(lease.ttl.as_secs_f64())
-                        .bind(run_id)
                         .execute(&mut *tx)
                         .await
                         .map_err(|e| StoreError::Database(e.to_string()))?;
                     }
                     None => {
-                        sqlx::query(
+                        sqlx::query!(
                             r#"
                             UPDATE ironflow.runs
                             SET started_at = COALESCE(started_at, $1),
@@ -561,9 +562,9 @@ impl RunStore for PostgresStore {
                                 lease_expires_at = NULL
                             WHERE id = $2
                             "#,
+                            now,
+                            run_id,
                         )
-                        .bind(now)
-                        .bind(run_id)
                         .execute(&mut *tx)
                         .await
                         .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -609,52 +610,47 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            let row = sqlx::query(
+            // Lock `sm` too, so the status read here cannot be a stale
+            // snapshot of a run another transaction is transitioning.
+            let row = sqlx::query!(
                 r#"
-                SELECT r.worker_id, ast.name as state_name
+                SELECT r.worker_id, ast.name as "state_name!"
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
                 WHERE r.id = $1
-                -- Lock `sm` too, so the status read here cannot be a stale
-                -- snapshot of a run another transaction is transitioning.
                 FOR UPDATE OF r, sm
                 "#,
+                id,
             )
-            .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?
             .ok_or(StoreError::RunNotFound(id))?;
 
-            let state_name: &str = row.get("state_name");
-            let held_by: Option<String> = row.get("worker_id");
-
-            if parse_run_status(state_name)? != RunStatus::Running
-                || held_by.as_deref() != Some(lease.worker_id.as_str())
+            if parse_run_status(&row.state_name)? != RunStatus::Running
+                || row.worker_id.as_deref() != Some(lease.worker_id.as_str())
             {
                 return Err(StoreError::LeaseLost {
                     run_id: id,
-                    held_by,
+                    held_by: row.worker_id,
                 });
             }
 
-            let updated = sqlx::query(
+            let expires_at = sqlx::query_scalar!(
                 r#"
                 UPDATE ironflow.runs
                 SET lease_expires_at = NOW() + make_interval(secs => $1),
                     updated_at = NOW()
                 WHERE id = $2
-                RETURNING lease_expires_at
+                RETURNING lease_expires_at as "lease_expires_at!"
                 "#,
+                lease.ttl.as_secs_f64(),
+                id,
             )
-            .bind(lease.ttl.as_secs_f64())
-            .bind(id)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            let expires_at: DateTime<Utc> = updated.get("lease_expires_at");
 
             tx.commit()
                 .await
@@ -674,9 +670,9 @@ impl RunStore for PostgresStore {
 
             // Lock the expired runs first: SKIP LOCKED lets concurrent reapers
             // work on disjoint sets instead of blocking on each other.
-            let rows = sqlx::query(
+            let rows = sqlx::query!(
                 r#"
-                SELECT r.id, r.state_machine__id, r.retry_count, r.max_retries
+                SELECT r.id, r.state_machine__id as "state_machine__id!", r.retry_count, r.max_retries
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
@@ -685,14 +681,10 @@ impl RunStore for PostgresStore {
                   AND r.lease_expires_at < NOW()
                 ORDER BY r.lease_expires_at ASC
                 LIMIT $1
-                -- Same locking rule as pick_next_pending: the two per-run rows,
-                -- never the shared abstract_state row. Locking `sm` keeps a
-                -- reaper from recovering a run whose worker is committing a
-                -- status transition at that very moment.
                 FOR UPDATE OF r, sm SKIP LOCKED
                 "#,
+                limit as i64,
             )
-            .bind(limit as i64)
             .fetch_all(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -700,10 +692,10 @@ impl RunStore for PostgresStore {
             let mut reaped = Vec::with_capacity(rows.len());
 
             for row in &rows {
-                let run_id: Uuid = row.get("id");
-                let state_machine_id: Uuid = row.get("state_machine__id");
-                let retry_count: i32 = row.get("retry_count");
-                let max_retries: i32 = row.get("max_retries");
+                let run_id = row.id;
+                let state_machine_id = row.state_machine__id;
+                let retry_count = row.retry_count;
+                let max_retries = row.max_retries;
 
                 let exhausted = retry_count + 1 > max_retries;
                 let to = if exhausted {
@@ -723,7 +715,7 @@ impl RunStore for PostgresStore {
                 // A requeued run keeps no error: it is going to run again.
                 // Only the final give-up records why the run failed.
                 if exhausted {
-                    sqlx::query(
+                    sqlx::query!(
                         r#"
                         UPDATE ironflow.runs
                         SET retry_count = retry_count + 1,
@@ -734,14 +726,14 @@ impl RunStore for PostgresStore {
                             updated_at = NOW()
                         WHERE id = $2
                         "#,
+                        LEASE_EXPIRED_ERROR,
+                        run_id,
                     )
-                    .bind(LEASE_EXPIRED_ERROR)
-                    .bind(run_id)
                     .execute(&mut *tx)
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
                 } else {
-                    sqlx::query(
+                    sqlx::query!(
                         r#"
                         UPDATE ironflow.runs
                         SET retry_count = retry_count + 1,
@@ -750,8 +742,8 @@ impl RunStore for PostgresStore {
                             updated_at = NOW()
                         WHERE id = $1
                         "#,
+                        run_id,
                     )
-                    .bind(run_id)
                     .execute(&mut *tx)
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -810,7 +802,7 @@ impl RunStore for PostgresStore {
             let cutoff = Utc::now() - Duration::days(i64::from(max_age_days));
 
             // Age-based: terminal runs older than cutoff.
-            let age_rows = sqlx::query(
+            let age_rows = sqlx::query!(
                 r#"
                 SELECT r.id, r.workflow_name
                 FROM ironflow.runs r
@@ -821,25 +813,25 @@ impl RunStore for PostgresStore {
                 ORDER BY r.created_at ASC
                 LIMIT $3
                 "#,
+                &terminal_states,
+                cutoff,
+                batch_size as i64,
             )
-            .bind(&terminal_states)
-            .bind(cutoff)
-            .bind(batch_size as i64)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             let mut result: Vec<PurgeableRun> = age_rows
-                .iter()
+                .into_iter()
                 .map(|row| PurgeableRun {
-                    run_id: row.get("id"),
-                    workflow_name: row.get("workflow_name"),
+                    run_id: row.id,
+                    workflow_name: row.workflow_name,
                     reason: PurgeReason::TooOld,
                 })
                 .collect();
 
             // Count-based: for each workflow, terminal runs beyond the limit.
-            let excess_rows = sqlx::query(
+            let excess_rows = sqlx::query!(
                 r#"
                 WITH ranked AS (
                     SELECT r.id, r.workflow_name,
@@ -858,20 +850,19 @@ impl RunStore for PostgresStore {
                 ORDER BY workflow_name, rn ASC
                 LIMIT $3
                 "#,
+                &terminal_states,
+                max_runs_per_workflow as i64,
+                batch_size as i64,
             )
-            .bind(&terminal_states)
-            .bind(max_runs_per_workflow as i64)
-            .bind(batch_size as i64)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            for row in &excess_rows {
-                let run_id: Uuid = row.get("id");
-                if !result.iter().any(|p| p.run_id == run_id) {
+            for row in excess_rows {
+                if !result.iter().any(|p| p.run_id == row.id) {
                     result.push(PurgeableRun {
-                        run_id,
-                        workflow_name: row.get("workflow_name"),
+                        run_id: row.id,
+                        workflow_name: row.workflow_name,
                         reason: PurgeReason::ExceedsWorkflowLimit,
                     });
                 }
@@ -890,17 +881,15 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            let key_rows =
-                sqlx::query("SELECT storage_key FROM ironflow.step_artifacts WHERE run_id = $1")
-                    .bind(id)
-                    .fetch_all(&mut *tx)
-                    .await
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            let storage_keys = sqlx::query_scalar!(
+                "SELECT storage_key FROM ironflow.step_artifacts WHERE run_id = $1",
+                id,
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            let storage_keys: Vec<String> = key_rows.iter().map(|r| r.get("storage_key")).collect();
-
-            let result = sqlx::query("DELETE FROM ironflow.runs WHERE id = $1")
-                .bind(id)
+            let result = sqlx::query!("DELETE FROM ironflow.runs WHERE id = $1", id,)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -909,7 +898,7 @@ impl RunStore for PostgresStore {
                 return Err(StoreError::RunNotFound(id));
             }
 
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 DELETE FROM lib_fsm.state_machine
                 WHERE state_machine__id NOT IN (
@@ -946,37 +935,37 @@ impl RunStore for PostgresStore {
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
             // Create FSM instance at initial state (pending)
-            let row = sqlx::query("SELECT lib_fsm.state_machine_create($1) as state_machine__id")
-                .bind(fsm_machine_id)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
-            let state_machine_id: Uuid = row.get("state_machine__id");
+            let state_machine_id = sqlx::query_scalar!(
+                r#"SELECT lib_fsm.state_machine_create($1) as "state_machine__id!""#,
+                fsm_machine_id,
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
 
             let kind_str = super::helpers::step_kind_to_str(&req.kind);
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO ironflow.steps (id, trace_id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt, is_error_handler)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                         (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $3),
                         $11)
                 "#,
+                id,
+                req.trace_id,
+                req.run_id,
+                &req.name,
+                kind_str.as_ref(),
+                req.position as i32,
+                state_machine_id,
+                req.input.as_ref() as _,
+                now,
+                now,
+                req.is_error_handler,
             )
-            .bind(id)
-            .bind(req.trace_id)
-            .bind(req.run_id)
-            .bind(&req.name)
-            .bind(kind_str.as_ref())
-            .bind(req.position as i32)
-            .bind(state_machine_id)
-            .bind(req.input.as_ref())
-            .bind(now)
-            .bind(now)
-            .bind(req.is_error_handler)
             .execute(&mut *tx)
             .await
             .map_err(|e| {
-                // Map foreign key constraint errors to RunNotFound
                 if e.to_string().contains("foreign key") || e.to_string().contains("run_id") {
                     StoreError::RunNotFound(req.run_id)
                 } else {
@@ -1019,24 +1008,23 @@ impl RunStore for PostgresStore {
 
             // Handle status transition if provided
             if let Some(new_status) = update.status {
-                let row = sqlx::query(
+                let row = sqlx::query!(
                     r#"
-                    SELECT ast.name as state_name, s.state_machine__id
+                    SELECT ast.name as "state_name!", s.state_machine__id as "state_machine__id!"
                     FROM ironflow.steps s
                     JOIN lib_fsm.state_machine sm ON sm.state_machine__id = s.state_machine__id
                     JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
                     WHERE s.id = $1
                     FOR UPDATE
-                    "#
+                    "#,
+                    id,
                 )
-                .bind(id)
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?
                 .ok_or(StoreError::StepNotFound(id))?;
 
-                let current_state_name: &str = row.get("state_name");
-                let current = super::helpers::parse_step_status(current_state_name)?;
+                let current = super::helpers::parse_step_status(&row.state_name)?;
 
                 let event =
                     PostgresStore::step_status_to_event(current, new_status).map_err(|_| {
@@ -1046,7 +1034,7 @@ impl RunStore for PostgresStore {
                         ))
                     })?;
 
-                let state_machine_id: Uuid = row.get("state_machine__id");
+                let state_machine_id = row.state_machine__id;
 
                 // Perform FSM transition
                 sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
@@ -1252,7 +1240,7 @@ impl RunStore for PostgresStore {
 
     fn list_step_dependencies(&self, run_id: Uuid) -> StoreFuture<'_, Vec<StepDependency>> {
         Box::pin(async move {
-            let rows = sqlx::query(
+            let rows = sqlx::query!(
                 r#"
                 SELECT sd.step_id, sd.depends_on, sd.created_at
                 FROM ironflow.step_dependencies sd
@@ -1260,8 +1248,8 @@ impl RunStore for PostgresStore {
                 WHERE s.run_id = $1
                 ORDER BY sd.created_at ASC
                 "#,
+                run_id,
             )
-            .bind(run_id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1269,9 +1257,9 @@ impl RunStore for PostgresStore {
             Ok(rows
                 .iter()
                 .map(|row| StepDependency {
-                    step_id: row.get("step_id"),
-                    depends_on: row.get("depends_on"),
-                    created_at: row.get("created_at"),
+                    step_id: row.step_id,
+                    depends_on: row.depends_on,
+                    created_at: row.created_at,
                 })
                 .collect())
         })

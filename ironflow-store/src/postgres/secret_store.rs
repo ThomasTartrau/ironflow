@@ -1,11 +1,8 @@
 //! [`SecretStore`] implementation for PostgreSQL.
 
-#[cfg(feature = "secret-store")]
-use chrono::Utc;
-use sqlx::Row;
+use chrono::{DateTime, Utc};
 #[cfg(feature = "secret-store")]
 use tracing::error;
-#[cfg(feature = "secret-store")]
 use uuid::Uuid;
 
 #[cfg(feature = "secret-store")]
@@ -37,15 +34,55 @@ impl PostgresStore {
 
     /// Distinct key versions used by stored secrets, ascending.
     async fn used_key_versions(&self) -> Result<Vec<i32>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT DISTINCT key_version FROM ironflow.secrets ORDER BY key_version ASC",
+        let rows = sqlx::query_scalar!(
+            "SELECT DISTINCT key_version FROM ironflow.secrets ORDER BY key_version ASC"
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        Ok(rows.iter().map(|r| r.get("key_version")).collect())
+        Ok(rows)
     }
+}
+
+/// Row struct for secret queries that return metadata + crypto columns.
+#[cfg(feature = "secret-store")]
+struct SecretCryptoRow {
+    id: Uuid,
+    key: String,
+    encrypted_value: Vec<u8>,
+    nonce: Vec<u8>,
+    key_version: i32,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+/// Row struct for `set_secret` RETURNING clause (no encrypted columns).
+#[cfg(feature = "secret-store")]
+struct SecretUpsertRow {
+    id: Uuid,
+    key: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+/// Row struct for rotation batch (no timestamps).
+#[cfg(feature = "secret-store")]
+struct SecretRotationRow {
+    id: Uuid,
+    key: String,
+    encrypted_value: Vec<u8>,
+    nonce: Vec<u8>,
+    key_version: i32,
+}
+
+/// Row struct for paginated metadata listing.
+struct SecretMetadataRow {
+    id: Uuid,
+    key: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    total_count: i64,
 }
 
 impl SecretStore for PostgresStore {
@@ -56,10 +93,11 @@ impl SecretStore for PostgresStore {
             {
                 let ring = self.require_key_ring()?;
 
-                let row = sqlx::query(
+                let row = sqlx::query_as!(
+                    SecretCryptoRow,
                     "SELECT id, key, encrypted_value, nonce, key_version, created_at, updated_at FROM ironflow.secrets WHERE key = $1",
+                    &key,
                 )
-                .bind(&key)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -68,28 +106,25 @@ impl SecretStore for PostgresStore {
                     return Ok(None);
                 };
 
-                let encrypted_value: Vec<u8> = row.get("encrypted_value");
-                let nonce: Vec<u8> = row.get("nonce");
-                let key_version: i32 = row.get("key_version");
-
-                let master_key = ring.key_for(key_version).ok_or_else(|| {
+                let master_key = ring.key_for(row.key_version).ok_or_else(|| {
                     StoreError::Crypto(format!(
-                        "secret {key:?} uses key version {key_version} which is not configured"
+                        "secret {:?} uses key version {} which is not configured",
+                        key, row.key_version
                     ))
                 })?;
 
-                let plaintext = decrypt(master_key, &encrypted_value, &nonce)
+                let plaintext = decrypt(master_key, &row.encrypted_value, &row.nonce)
                     .map_err(|e| StoreError::Crypto(e.to_string()))?;
 
                 let value = String::from_utf8(plaintext)
                     .map_err(|e| StoreError::Crypto(format!("invalid UTF-8: {e}")))?;
 
                 Ok(Some(Secret {
-                    id: row.get("id"),
-                    key: row.get("key"),
+                    id: row.id,
+                    key: row.key,
                     value,
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
                 }))
             }
             #[cfg(not(feature = "secret-store"))]
@@ -116,7 +151,8 @@ impl SecretStore for PostgresStore {
                 let id = Uuid::now_v7();
                 let now = Utc::now();
 
-                let row = sqlx::query(
+                let row = sqlx::query_as!(
+                    SecretUpsertRow,
                     r#"
                     INSERT INTO ironflow.secrets (id, key, encrypted_value, nonce, key_version, created_at, updated_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -127,24 +163,24 @@ impl SecretStore for PostgresStore {
                             updated_at = EXCLUDED.updated_at
                     RETURNING id, key, created_at, updated_at
                     "#,
+                    id,
+                    &key,
+                    &encrypted_value,
+                    &nonce,
+                    ring.active_version(),
+                    now,
+                    now,
                 )
-                .bind(id)
-                .bind(&key)
-                .bind(&encrypted_value)
-                .bind(&nonce)
-                .bind(ring.active_version())
-                .bind(now)
-                .bind(now)
                 .fetch_one(&self.pool)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
                 Ok(Secret {
-                    id: row.get("id"),
-                    key: row.get("key"),
+                    id: row.id,
+                    key: row.key,
                     value,
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
                 })
             }
             #[cfg(not(feature = "secret-store"))]
@@ -160,8 +196,7 @@ impl SecretStore for PostgresStore {
     fn delete_secret(&self, key: &str) -> StoreFuture<'_, bool> {
         let key = key.to_string();
         Box::pin(async move {
-            let result = sqlx::query("DELETE FROM ironflow.secrets WHERE key = $1")
-                .bind(&key)
+            let result = sqlx::query!("DELETE FROM ironflow.secrets WHERE key = $1", &key,)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -173,15 +208,15 @@ impl SecretStore for PostgresStore {
     fn list_secret_keys(&self, prefix: &str) -> StoreFuture<'_, Vec<String>> {
         let pattern = format!("{}%", escape_like(prefix));
         Box::pin(async move {
-            let rows = sqlx::query(
+            let rows = sqlx::query_scalar!(
                 "SELECT key FROM ironflow.secrets WHERE key LIKE $1 ESCAPE '\\' ORDER BY key",
+                &pattern,
             )
-            .bind(&pattern)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            Ok(rows.iter().map(|r| r.get("key")).collect())
+            Ok(rows)
         })
     }
 
@@ -197,35 +232,32 @@ impl SecretStore for PostgresStore {
             let per_page = per_page.clamp(1, 100);
             let offset = ((page - 1) * per_page) as i64;
 
-            let rows = sqlx::query(
+            let rows = sqlx::query_as!(
+                SecretMetadataRow,
                 r#"
-                SELECT id, key, created_at, updated_at, COUNT(*) OVER() as total_count
+                SELECT id, key, created_at, updated_at, COUNT(*) OVER() as "total_count!: i64"
                 FROM ironflow.secrets
                 WHERE key LIKE $1 ESCAPE '\'
                 ORDER BY key ASC
                 LIMIT $2 OFFSET $3
                 "#,
+                &pattern,
+                per_page as i64,
+                offset,
             )
-            .bind(&pattern)
-            .bind(per_page as i64)
-            .bind(offset)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            let total = if rows.is_empty() {
-                0u64
-            } else {
-                rows[0].get::<i64, _>("total_count") as u64
-            };
+            let total = rows.first().map_or(0u64, |r| r.total_count as u64);
 
             let items = rows
                 .into_iter()
                 .map(|r| SecretMetadata {
-                    id: r.get("id"),
-                    key: r.get("key"),
-                    created_at: r.get("created_at"),
-                    updated_at: r.get("updated_at"),
+                    id: r.id,
+                    key: r.key,
+                    created_at: r.created_at,
+                    updated_at: r.updated_at,
                 })
                 .collect();
 
@@ -277,7 +309,8 @@ impl SecretStore for PostgresStore {
 
                 let batch_size = request.effective_batch_size() as i64;
 
-                let rows = sqlx::query(
+                let rows = sqlx::query_as!(
+                    SecretRotationRow,
                     r#"
                     SELECT id, key, encrypted_value, nonce, key_version
                     FROM ironflow.secrets
@@ -286,10 +319,10 @@ impl SecretStore for PostgresStore {
                     ORDER BY id ASC
                     LIMIT $3
                     "#,
+                    request.to_version,
+                    request.after_id,
+                    batch_size,
                 )
-                .bind(request.to_version)
-                .bind(request.after_id)
-                .bind(batch_size)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -299,26 +332,21 @@ impl SecretStore for PostgresStore {
                 let mut last_id: Option<Uuid> = None;
 
                 for row in &rows {
-                    let id: Uuid = row.get("id");
-                    let secret_key: String = row.get("key");
-                    let source_version: i32 = row.get("key_version");
-                    let encrypted_value: Vec<u8> = row.get("encrypted_value");
-                    let nonce: Vec<u8> = row.get("nonce");
-
-                    last_id = Some(id);
+                    last_id = Some(row.id);
 
                     let plaintext = match ring
-                        .key_for(source_version)
-                        .ok_or_else(|| format!("key version {source_version} is not configured"))
+                        .key_for(row.key_version)
+                        .ok_or_else(|| format!("key version {} is not configured", row.key_version))
                         .and_then(|source| {
-                            decrypt(source, &encrypted_value, &nonce).map_err(|e| e.to_string())
+                            decrypt(source, &row.encrypted_value, &row.nonce)
+                                .map_err(|e| e.to_string())
                         }) {
                         Ok(plaintext) => plaintext,
                         Err(reason) => {
                             failed += 1;
                             error!(
-                                secret_key = %secret_key,
-                                key_version = source_version,
+                                secret_key = %row.key,
+                                key_version = row.key_version,
                                 reason = %reason,
                                 "secret rotation failed"
                             );
@@ -331,7 +359,7 @@ impl SecretStore for PostgresStore {
                         Err(e) => {
                             failed += 1;
                             error!(
-                                secret_key = %secret_key,
+                                secret_key = %row.key,
                                 reason = %e,
                                 "secret rotation failed"
                             );
@@ -344,18 +372,18 @@ impl SecretStore for PostgresStore {
                     // is left alone rather than overwritten with stale data.
                     // updated_at stays untouched: re-encryption is not a
                     // change to the secret itself.
-                    let result = sqlx::query(
+                    let result = sqlx::query!(
                         r#"
                         UPDATE ironflow.secrets
                         SET encrypted_value = $1, nonce = $2, key_version = $3
                         WHERE id = $4 AND key_version = $5
                         "#,
+                        &new_value,
+                        &new_nonce,
+                        request.to_version,
+                        row.id,
+                        row.key_version,
                     )
-                    .bind(&new_value)
-                    .bind(&new_nonce)
-                    .bind(request.to_version)
-                    .bind(id)
-                    .bind(source_version)
                     .execute(&self.pool)
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -369,20 +397,19 @@ impl SecretStore for PostgresStore {
                 // last_id unset, so fall back to the incoming cursor rather
                 // than counting the whole stock again.
                 let cursor = last_id.or(request.after_id);
-                let remaining: i64 = sqlx::query(
+                let remaining = sqlx::query_scalar!(
                     r#"
-                    SELECT COUNT(*) AS remaining
+                    SELECT COUNT(*) AS "remaining!: i64"
                     FROM ironflow.secrets
                     WHERE key_version <> $1
                       AND ($2::uuid IS NULL OR id > $2)
                     "#,
+                    request.to_version,
+                    cursor,
                 )
-                .bind(request.to_version)
-                .bind(cursor)
                 .fetch_one(&self.pool)
                 .await
-                .map_err(|e| StoreError::Database(e.to_string()))?
-                .get("remaining");
+                .map_err(|e| StoreError::Database(e.to_string()))?;
 
                 Ok(RotationBatch {
                     to_version: request.to_version,

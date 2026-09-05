@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    UPDATE ironflow.runs\n                    SET idempotency_key = NULL, updated_at = $3\n                    WHERE idempotency_key = $1 AND created_at <= $2\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "28c0659bab2810df3566d7c08fa96024259687550a092c00394af7594d33929e"
+}

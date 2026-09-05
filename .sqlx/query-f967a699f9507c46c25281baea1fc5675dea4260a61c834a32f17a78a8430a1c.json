@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, last_used_at, created_at, updated_at\n                FROM iam.api_keys WHERE user_id = $1 ORDER BY created_at DESC\n                ",
+  "query": "\n                INSERT INTO iam.api_keys (id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, rate_limit_override, created_at, updated_at)\n                VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9, $10)\n                RETURNING id, user_id, name, key_hash, key_prefix, scopes, is_active, expires_at, last_used_at, created_at, updated_at, rate_limit_override\n                ",
   "describe": {
     "columns": [
       {
@@ -57,11 +57,25 @@
         "ordinal": 10,
         "name": "updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "rate_limit_override",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Text",
+        "Varchar",
+        "TextArray",
+        "Timestamptz",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -75,8 +89,9 @@
       true,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "293e187fd1b3525cde8e10bfcf87719ed0296a76ccd5217d1a340294c3172310"
+  "hash": "f967a699f9507c46c25281baea1fc5675dea4260a61c834a32f17a78a8430a1c"
 }

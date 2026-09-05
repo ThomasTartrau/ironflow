@@ -47,19 +47,19 @@ impl LogStore for PostgresStore {
             let streams = vec![stream_str.to_string(); n];
             let timestamps = vec![now; n];
 
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO ironflow.run_logs (id, run_id, step_id, step_name, stream, line, created_at)
                 SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::timestamptz[])
                 "#,
+                &ids,
+                &run_ids,
+                &step_ids,
+                &step_names,
+                &streams,
+                &entries.lines,
+                &timestamps,
             )
-            .bind(&ids)
-            .bind(&run_ids)
-            .bind(&step_ids)
-            .bind(&step_names)
-            .bind(&streams)
-            .bind(&entries.lines)
-            .bind(&timestamps)
             .execute(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
