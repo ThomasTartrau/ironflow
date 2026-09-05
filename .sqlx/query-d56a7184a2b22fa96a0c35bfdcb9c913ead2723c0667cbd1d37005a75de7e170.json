@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT abstract_machine__id FROM lib_fsm.abstract_state_machine WHERE name = $1",
+  "query": "SELECT abstract_machine__id as \"abstract_machine__id!\" FROM lib_fsm.abstract_state_machine WHERE name = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "abstract_machine__id",
+        "name": "abstract_machine__id!",
         "type_info": "Uuid"
       }
     ],
@@ -18,5 +18,5 @@
       false
     ]
   },
-  "hash": "2affddc0776c1f0e02e155fd2e1894f41088f63f8e840d9eebab9a14ed7daff7"
+  "hash": "d56a7184a2b22fa96a0c35bfdcb9c913ead2723c0667cbd1d37005a75de7e170"
 }

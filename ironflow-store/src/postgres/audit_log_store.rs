@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -12,6 +12,33 @@ use crate::error::StoreError;
 use crate::store::StoreFuture;
 
 use super::PostgresStore;
+
+/// Row struct for the `append_audit_log` RETURNING clause.
+struct AuditLogRow {
+    id: Uuid,
+    event_type: String,
+    payload: serde_json::Value,
+    run_id: Option<Uuid>,
+    step_id: Option<Uuid>,
+    user_id: Option<Uuid>,
+    created_at: DateTime<Utc>,
+}
+
+impl AuditLogRow {
+    fn into_entry(self) -> Result<AuditLogEntry, StoreError> {
+        let event_type = EventKind::from_str(&self.event_type)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(AuditLogEntry {
+            id: self.id,
+            event_type,
+            payload: self.payload,
+            run_id: self.run_id,
+            step_id: self.step_id,
+            user_id: self.user_id,
+            created_at: self.created_at,
+        })
+    }
+}
 
 fn row_to_entry(row: sqlx::postgres::PgRow) -> Result<AuditLogEntry, StoreError> {
     let event_type_str: String = row.get("event_type");
@@ -35,25 +62,26 @@ impl AuditLogStore for PostgresStore {
             let id = Uuid::now_v7();
             let now = Utc::now();
 
-            let row = sqlx::query(
+            let row = sqlx::query_as!(
+                AuditLogRow,
                 r#"
                 INSERT INTO ironflow.audit_logs (id, event_type, payload, run_id, step_id, user_id, created_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING id, event_type, payload, run_id, step_id, user_id, created_at
                 "#,
+                id,
+                entry.event_type.as_str(),
+                &entry.payload,
+                entry.run_id,
+                entry.step_id,
+                entry.user_id,
+                now,
             )
-            .bind(id)
-            .bind(entry.event_type.as_str())
-            .bind(&entry.payload)
-            .bind(entry.run_id)
-            .bind(entry.step_id)
-            .bind(entry.user_id)
-            .bind(now)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            row_to_entry(row)
+            row.into_entry()
         })
     }
 

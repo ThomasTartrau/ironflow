@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            UPDATE ironflow.runs\n                            SET started_at = COALESCE(started_at, $1),\n                                updated_at = $1,\n                                worker_id = $2,\n                                lease_expires_at = NOW() + make_interval(secs => $3)\n                            WHERE id = $4\n                            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Text",
+        "Float8",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cb6af461195391f59dbe9ca829738cdfcec941d1503fc220c04d161ec64bda45"
+}

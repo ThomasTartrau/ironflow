@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                WITH ranked AS (\n                    SELECT r.id, r.workflow_name,\n                           ROW_NUMBER() OVER (\n                               PARTITION BY r.workflow_name\n                               ORDER BY r.created_at DESC\n                           ) AS rn\n                    FROM ironflow.runs r\n                    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id\n                    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id\n                    WHERE ast.name = ANY($1)\n                )\n                SELECT id, workflow_name\n                FROM ranked\n                WHERE rn > $2\n                ORDER BY workflow_name, rn ASC\n                LIMIT $3\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "workflow_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ae7ade3ddc21d9230c5f5bad9c63f0e0aad9ffd2c0f431871562b5e66990ba33"
+}
