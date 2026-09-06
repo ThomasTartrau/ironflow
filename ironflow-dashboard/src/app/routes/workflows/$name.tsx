@@ -5,7 +5,7 @@ import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { CodeBlock } from "@/app/components/CodeBlock";
-import { BackLink } from "@/app/components/BackLink";
+import { Breadcrumb } from "@/app/components/Breadcrumb";
 import { RunsTable } from "@/app/routes/runs/_components/RunsTable";
 import { RunDialog } from "./_components/RunDialog";
 import { Button } from "@/components/ui/button";
@@ -51,13 +51,40 @@ export function Component() {
 		>
 			<div className="space-y-8">
 				<div className="flex items-center justify-between">
-					<BackLink to="/workflows" label="Back to Workflows" />
+					<Breadcrumb
+						items={[
+							{ label: "Workflows", to: "/workflows" },
+							{ label: workflow.name },
+						]}
+					/>
 					{workflow.version !== "unversioned" && (
 						<Badge variant="outline" className="gap-1 font-mono text-xs">
 							<Tag className="size-3" aria-hidden="true" />
 							{workflow.version}
 						</Badge>
 					)}
+				</div>
+
+				<div className="space-y-3">
+					<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground border-l-2 border-primary pl-3">
+						Overview
+					</h2>
+					<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+						<div className="rounded-[var(--radius)] border p-3">
+							<p className="text-xs text-muted-foreground mb-1">Description</p>
+							<p className="text-sm">
+								{workflow.description || "No description provided."}
+							</p>
+						</div>
+						<div className="rounded-[var(--radius)] border p-3">
+							<p className="text-xs text-muted-foreground mb-1">Version</p>
+							<p className="text-sm font-mono">{workflow.version}</p>
+						</div>
+						<div className="rounded-[var(--radius)] border p-3">
+							<p className="text-xs text-muted-foreground mb-1">Recent runs</p>
+							<p className="text-sm">{recentRuns.length}</p>
+						</div>
+					</div>
 				</div>
 
 				{workflow.source_code && (

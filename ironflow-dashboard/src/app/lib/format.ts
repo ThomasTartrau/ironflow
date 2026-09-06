@@ -22,6 +22,20 @@ export function formatCost(usd: number): string {
 	return `$${usd.toFixed(2)}`;
 }
 
+const URL_PATTERN = /https?:\/\/([^/\s]+)/;
+
+export function shortenStepName(name: string): string {
+	const match = URL_PATTERN.exec(name);
+	if (!match) return name;
+
+	const domain = match[1];
+	const urlStart = match.index;
+	const prefix = name.slice(0, urlStart).replace(/-$/, "");
+
+	if (prefix.length === 0) return domain;
+	return `${prefix}: ${domain}`;
+}
+
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
 
 /** Human-readable file size, using 1024-based units. */

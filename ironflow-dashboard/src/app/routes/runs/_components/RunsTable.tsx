@@ -56,7 +56,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 						<TableHead className="w-36">Labels</TableHead>
 						<TableHead className="w-24">Duration</TableHead>
 						<TableHead className="w-20">Cost</TableHead>
-						<TableHead className="w-36">Started / Scheduled</TableHead>
+						<TableHead className="w-36">Started</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -83,7 +83,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 							</TableCell>
 							{hasVersions && (
 								<TableCell className="font-mono text-xs text-muted-foreground tabular-nums">
-									{run.handler_version || "-"}
+									{run.handler_version || "latest"}
 								</TableCell>
 							)}
 							<TableCell>

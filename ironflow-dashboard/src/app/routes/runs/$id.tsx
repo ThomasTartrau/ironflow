@@ -17,6 +17,7 @@ import { useLiveClock } from "@/app/hooks/use-live-clock";
 import { StatCard } from "@/app/components/StatCard";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import { TriggerBadge } from "@/app/components/TriggerBadge";
+import { CreatedByBadge } from "@/app/components/CreatedByBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { CollapsibleSection } from "@/app/components/CollapsibleSection";
 import { RunActions } from "./_components/RunActions";
@@ -27,7 +28,7 @@ import { AttemptSelector } from "./_components/AttemptSelector";
 import { listAttempts, resolveShownAttempt } from "./_components/attempts";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { CostBudgetCard } from "./_components/CostBudgetCard";
-import { BackLink } from "@/app/components/BackLink";
+import { Breadcrumb } from "@/app/components/Breadcrumb";
 import { formatDuration } from "@/app/lib/format";
 import {
 	Bot,
@@ -129,7 +130,13 @@ export function Component() {
 			}
 		>
 			<div className="space-y-6">
-				<BackLink to="/runs" label="Back to Runs" />
+				<Breadcrumb
+					items={[
+						{ label: "Runs", to: "/runs" },
+						{ label: run.workflow_name, to: `/workflows/${run.workflow_name}` },
+						{ label: `Run ${run.id.slice(0, 8)}` },
+					]}
+				/>
 
 				<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
 					{run.scheduled_at && !run.started_at ? (
@@ -167,9 +174,12 @@ export function Component() {
 					<StatCard
 						label="Triggered by"
 						value={
-							<span className="text-base font-normal">
-								{run.created_by.label}
-							</span>
+							<div className="flex flex-col gap-0.5 min-w-0">
+								<TriggerBadge trigger={run.trigger} />
+								{run.created_by.kind !== "system" && (
+									<CreatedByBadge createdBy={run.created_by} />
+								)}
+							</div>
 						}
 						icon={CREATED_BY_ICONS[run.created_by.kind]}
 					/>

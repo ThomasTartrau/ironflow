@@ -8,6 +8,7 @@ import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { useAppSelector } from "@/app/store";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
 	Table,
 	TableBody,
@@ -60,6 +61,7 @@ export function Component() {
 		username: string;
 	} | null>(null);
 	const [deletingId, setDeletingId] = useState<string | null>(null);
+	const [confirmInput, setConfirmInput] = useState("");
 
 	function handleDelete(id: string, _username: string) {
 		setConfirmDelete(null);
@@ -87,6 +89,8 @@ export function Component() {
 
 	const isSelfDelete =
 		confirmDelete !== null && confirmDelete.id === currentUserId;
+	const selfDeleteBlocked =
+		isSelfDelete && confirmInput !== confirmDelete?.username;
 
 	return (
 		<HeaderApp
@@ -220,7 +224,10 @@ export function Component() {
 			<Dialog
 				open={confirmDelete !== null}
 				onOpenChange={(open) => {
-					if (!open) setConfirmDelete(null);
+					if (!open) {
+						setConfirmDelete(null);
+						setConfirmInput("");
+					}
 				}}
 			>
 				<DialogContent>
@@ -243,14 +250,42 @@ export function Component() {
 							This action cannot be undone.
 						</DialogDescription>
 					</DialogHeader>
+					{isSelfDelete && (
+						<div className="grid gap-1.5">
+							<label
+								htmlFor="confirm-username"
+								className="text-sm text-muted-foreground"
+							>
+								Type{" "}
+								<span className="font-mono font-medium text-foreground">
+									{confirmDelete?.username}
+								</span>{" "}
+								to confirm
+							</label>
+							<Input
+								id="confirm-username"
+								placeholder={confirmDelete?.username ?? ""}
+								value={confirmInput}
+								onChange={(e) => setConfirmInput(e.target.value)}
+								autoComplete="off"
+							/>
+						</div>
+					)}
 					<DialogFooter>
-						<Button variant="outline" onClick={() => setConfirmDelete(null)}>
+						<Button
+							variant="outline"
+							onClick={() => {
+								setConfirmDelete(null);
+								setConfirmInput("");
+							}}
+						>
 							Cancel
 						</Button>
 						<Button
 							variant="destructive"
 							disabled={
-								confirmDelete !== null && deletingId === confirmDelete.id
+								selfDeleteBlocked ||
+								(confirmDelete !== null && deletingId === confirmDelete.id)
 							}
 							onClick={() => {
 								if (confirmDelete) {
