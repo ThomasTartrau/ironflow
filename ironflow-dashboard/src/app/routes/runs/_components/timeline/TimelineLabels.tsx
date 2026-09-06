@@ -1,5 +1,11 @@
 import type React from "react";
-import { formatDuration } from "@/app/lib/format";
+import { formatDuration, shortenStepName } from "@/app/lib/format";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { TimelineRow } from "./types";
 import { getKindMeta, ROW_HEIGHT, ROW_GAP, AXIS_HEIGHT } from "./types";
 
@@ -20,6 +26,13 @@ export function TimelineLabels({
 				const meta = getKindMeta(row.step.kind);
 				const Icon = meta.icon;
 				const isSelected = selectedStepId === row.step.id;
+				const shortName = shortenStepName(row.step.name);
+				const needsTooltip = shortName !== row.step.name;
+				const nameSpan = (
+					<span className="text-[11px] font-medium text-foreground/70 truncate">
+						{shortName}
+					</span>
+				);
 				return (
 					<button
 						type="button"
@@ -38,9 +51,18 @@ export function TimelineLabels({
 						onClick={() => onRowClick(row.step.id, row.ownerRunId)}
 					>
 						<Icon className={`h-3 w-3 shrink-0 ${meta.color}`} />
-						<span className="text-[11px] font-medium text-foreground/70 truncate">
-							{row.step.name}
-						</span>
+						{needsTooltip ? (
+							<TooltipProvider delay={200}>
+								<Tooltip>
+									<TooltipTrigger render={nameSpan} />
+									<TooltipContent side="right">
+										<span className="font-mono text-xs">{row.step.name}</span>
+									</TooltipContent>
+								</Tooltip>
+							</TooltipProvider>
+						) : (
+							nameSpan
+						)}
 						<span className="text-[10px] text-muted-foreground ml-auto shrink-0 font-mono tabular-nums">
 							{formatDuration(row.step.duration_ms)}
 						</span>

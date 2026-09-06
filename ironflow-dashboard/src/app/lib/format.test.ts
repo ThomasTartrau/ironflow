@@ -5,6 +5,7 @@ import {
 	formatDuration,
 	formatPercent,
 	formatCost,
+	shortenStepName,
 } from "./format";
 
 describe("formatBytes", () => {
@@ -104,6 +105,40 @@ describe("formatPercent", () => {
 
 	it("formats 100%", () => {
 		expect(formatPercent(100)).toBe("100.0%");
+	});
+});
+
+describe("shortenStepName", () => {
+	it("extracts domain from a name containing an https URL", () => {
+		expect(
+			shortenStepName("mark-seen-https://gitlab.com/ThomasTartrau/ironflow"),
+		).toBe("mark-seen: gitlab.com");
+	});
+
+	it("extracts domain from a name containing an http URL", () => {
+		expect(shortenStepName("check-http://example.org/some/deep/path")).toBe(
+			"check: example.org",
+		);
+	});
+
+	it("returns the name unchanged when there is no URL", () => {
+		expect(shortenStepName("deploy-staging")).toBe("deploy-staging");
+	});
+
+	it("returns the name unchanged when it is empty", () => {
+		expect(shortenStepName("")).toBe("");
+	});
+
+	it("handles a name that is only a URL", () => {
+		expect(shortenStepName("https://github.com/anthropics/claude")).toBe(
+			"github.com",
+		);
+	});
+
+	it("handles a name with multiple dashes before the URL", () => {
+		expect(shortenStepName("my-step-name-https://example.com/path")).toBe(
+			"my-step-name: example.com",
+		);
 	});
 });
 

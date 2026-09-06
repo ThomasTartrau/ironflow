@@ -98,6 +98,7 @@ export function AuditLogsFilters({
 				<Input
 					id="filter-from"
 					type="datetime-local"
+					lang="en"
 					value={filters.from}
 					onChange={(e) => onFilterChange({ from: e.target.value })}
 					className="h-9 text-xs"
@@ -111,6 +112,7 @@ export function AuditLogsFilters({
 				<Input
 					id="filter-to"
 					type="datetime-local"
+					lang="en"
 					value={filters.to}
 					onChange={(e) => onFilterChange({ to: e.target.value })}
 					className="h-9 text-xs"

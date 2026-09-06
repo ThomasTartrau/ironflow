@@ -70,3 +70,17 @@ describe("RunsTable authorship", () => {
 		expect(screen.queryByText("api")).toBeNull();
 	});
 });
+
+describe("RunsTable version column", () => {
+	it("shows 'latest' when handler_version is null", () => {
+		const run = runFixture({ kind: "system", id: null, label: "api" });
+		const runWithVersion = {
+			...run,
+			id: "019a3f2b-0000-7000-8000-0000000000fe",
+			handler_version: "1.2.0",
+		};
+		renderTable([run, runWithVersion]);
+		expect(screen.getByText("latest")).toBeInTheDocument();
+		expect(screen.getByText("1.2.0")).toBeInTheDocument();
+	});
+});

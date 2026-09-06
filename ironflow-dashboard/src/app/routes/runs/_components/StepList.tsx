@@ -30,7 +30,13 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
-import { formatDuration, formatCost } from "@/app/lib/format";
+import { formatDuration, formatCost, shortenStepName } from "@/app/lib/format";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
 	ChevronDown,
 	ChevronUp,
@@ -70,6 +76,38 @@ function getKindColor(kind: string): string {
 		default:
 			return "bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-400/15 dark:text-gray-300 dark:border-gray-400/30";
 	}
+}
+
+function StepNameCell({
+	name,
+	isRunning,
+}: {
+	name: string;
+	isRunning: boolean;
+}) {
+	const shortName = shortenStepName(name);
+	const needsTooltip = shortName !== name;
+	return (
+		<TableCell className="font-medium">
+			<span className="flex items-center gap-2 min-w-0">
+				{isRunning && <RunningDot />}
+				{needsTooltip ? (
+					<TooltipProvider delay={200}>
+						<Tooltip>
+							<TooltipTrigger
+								render={<span className="truncate">{shortName}</span>}
+							/>
+							<TooltipContent side="bottom">
+								<span className="font-mono text-xs">{name}</span>
+							</TooltipContent>
+						</Tooltip>
+					</TooltipProvider>
+				) : (
+					<span className="truncate">{name}</span>
+				)}
+			</span>
+		</TableCell>
+	);
 }
 
 function ChildRunSteps({ runId }: { runId: string }) {
@@ -274,7 +312,10 @@ function StepOutput({ step }: { step: StepResponse }) {
 						</Badge>
 					)}
 				</div>
-				<div className="max-h-96 overflow-auto border rounded-md p-4 bg-muted/50">
+				<div
+					className="max-h-96 overflow-auto border rounded-md p-4 bg-muted/50 break-words"
+					style={{ overflowWrap: "anywhere" }}
+				>
 					{hasContent ? (
 						isJson ? (
 							<pre className="text-xs whitespace-pre-wrap break-words font-mono leading-relaxed">
@@ -576,10 +617,7 @@ function StepRow({ step }: { step: StepResponse }) {
 				className={`cursor-pointer hover:bg-muted/50 transition-colors duration-700 ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-[var(--status-running-bg)] border-l-2 border-l-[var(--status-running-fg)]" : ""}`}
 			>
 				<TableCell className="font-medium">
-					<span className="flex items-center gap-2">
-						{isRunning && <RunningDot />}
-						{step.name}
-					</span>
+					<StepNameCell name={step.name} isRunning={isRunning} />
 				</TableCell>
 				<TableCell>
 					<Badge

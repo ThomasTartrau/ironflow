@@ -2,7 +2,13 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import type { StepResponse, RunDetailResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { Card } from "@/components/ui/card";
-import { formatDuration } from "@/app/lib/format";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { formatDuration, shortenStepName } from "@/app/lib/format";
 import { Link } from "react-router";
 import {
 	Terminal,
@@ -124,10 +130,13 @@ function StepNode({
 	const dot = statusDot[step.status] ?? "bg-gray-300";
 	const isLocal = ownerRunId === currentRunId;
 
+	const shortName = shortenStepName(step.name);
+	const needsTooltip = shortName !== step.name;
+
 	return (
 		<button
 			type="button"
-			className="block shrink-0 w-[140px] transition-transform hover:scale-105 text-left"
+			className="block shrink-0 w-[200px] transition-transform hover:scale-105 text-left"
 			onClick={() => {
 				window.__focusStepTarget = step.id;
 				window.dispatchEvent(
@@ -171,9 +180,26 @@ function StepNode({
 							className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${dot}`}
 						/>
 					</div>
-					<h3 className="truncate text-[11px] font-semibold text-foreground leading-tight">
-						{step.name}
-					</h3>
+					{needsTooltip ? (
+						<TooltipProvider delay={200}>
+							<Tooltip>
+								<TooltipTrigger
+									render={
+										<h3 className="truncate text-[11px] font-semibold text-foreground leading-tight">
+											{shortName}
+										</h3>
+									}
+								/>
+								<TooltipContent side="bottom">
+									<span className="font-mono text-xs">{step.name}</span>
+								</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
+					) : (
+						<h3 className="truncate text-[11px] font-semibold text-foreground leading-tight">
+							{step.name}
+						</h3>
+					)}
 					<div className="flex items-center gap-1 text-[11px] text-foreground/45 font-mono tabular-nums">
 						<span>{formatDuration(step.duration_ms)}</span>
 						{cost && (
