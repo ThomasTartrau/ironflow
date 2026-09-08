@@ -73,6 +73,17 @@ variables:
   - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
   - release-plz --version
 
+.install-mdbook: &install-mdbook
+  - mkdir -p .cargo/bin
+  - |
+    case "$(uname -m)" in
+      aarch64|arm64) MDBOOK_ARCH="aarch64-unknown-linux-gnu" ;;
+      *)             MDBOOK_ARCH="x86_64-unknown-linux-gnu" ;;
+    esac
+  - curl -sSfL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-${MDBOOK_ARCH}.tar.gz" | tar -xz -C .cargo/bin mdbook
+  - curl -sSfL "https://github.com/badboy/mdbook-mermaid/releases/download/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-${MDBOOK_ARCH}.tar.gz" | tar -xz -C .cargo/bin mdbook-mermaid
+  - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
+
 .pnpm-install: &pnpm-install
   before_script:
     - corepack enable
@@ -144,10 +155,7 @@ mdbook-build:
     MDBOOK_VERSION: "0.5.4"
     MDBOOK_MERMAID_VERSION: "0.17.1"
   script:
-    - mkdir -p .cargo/bin
-    - curl -sSfL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C .cargo/bin mdbook
-    - curl -sSfL "https://github.com/badboy/mdbook-mermaid/releases/download/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C .cargo/bin mdbook-mermaid
-    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
+    - *install-mdbook
     - mdbook build
 
 unit-tests:
@@ -318,10 +326,7 @@ pages:
     MDBOOK_VERSION: "0.5.4"
     MDBOOK_MERMAID_VERSION: "0.17.1"
   script:
-    - mkdir -p .cargo/bin
-    - curl -sSfL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C .cargo/bin mdbook
-    - curl -sSfL "https://github.com/badboy/mdbook-mermaid/releases/download/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C .cargo/bin mdbook-mermaid
-    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
+    - *install-mdbook
     - mdbook build
     - mv book public
   artifacts:
