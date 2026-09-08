@@ -10,8 +10,7 @@ use std::time::Duration;
 
 use ironflow_core::operations::http::Http;
 use ironflow_core::error::OperationError;
-use ironflow_engine::error::EngineError;
-use ironflow_engine::operation::Operation;
+use ironflow_core::operation::{Operation, OperationContext};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -38,7 +37,10 @@ impl Operation for JsonGet {
         Some(json!({"url": format!("{}/{}", self.base_url, self.path)}))
     }
 
-    fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a OperationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
         Box::pin(async move {
             let url = format!("{}/{}", self.base_url, self.path);
             let resp = Http::get(&url)
@@ -48,10 +50,10 @@ impl Operation for JsonGet {
                 .await?;
 
             if !resp.is_success() {
-                return Err(EngineError::Operation(OperationError::Http {
+                return Err(OperationError::Http {
                     status: Some(resp.status()),
                     message: format!("{url} answered {}", resp.status()),
-                }));
+                });
             }
 
             // `json()` maps a parse failure to OperationError::Deserialize.
@@ -65,9 +67,10 @@ impl Operation for JsonGet {
 Handler side:
 
 ```rust,no_run
+use ironflow_core::error::OperationError;
+use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::operation::Operation;
 use serde_json::{Value, json};
 use std::future::Future;
 use std::pin::Pin;
@@ -82,7 +85,10 @@ impl Operation for JsonGet {
     fn kind(&self) -> &str {
         "json_get"
     }
-    fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a OperationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
         Box::pin(async move { Ok(json!({"id": 1, "title": "stub"})) })
     }
 }

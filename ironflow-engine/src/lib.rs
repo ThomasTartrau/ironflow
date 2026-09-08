@@ -72,7 +72,10 @@ pub mod prelude {
     pub use crate::notify::{
         Event, EventPublisher, EventSubscriber, WebhookSubscriber, WorkflowEvent, WorkflowEventBus,
     };
-    pub use crate::operation::Operation;
+    pub use crate::operation::{
+        NoopSecretResolver, Operation, OperationContext, SecretResolver, SecretValue,
+        TypedOperation,
+    };
     pub use crate::run_creator::{CreateRunOpts, RunCreator};
     pub use crate::schedule::CronSchedule;
 }

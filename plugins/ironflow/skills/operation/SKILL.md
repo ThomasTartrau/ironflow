@@ -24,8 +24,7 @@ use std::pin::Pin;
 
 use ironflow_core::operations::http::Http;
 use ironflow_core::error::OperationError;
-use ironflow_engine::error::EngineError;
-use ironflow_engine::operation::Operation;
+use ironflow_core::operation::{Operation, OperationContext};
 use serde_json::{Value, json};
 
 /// Posts a message to a Slack channel through an incoming webhook.
@@ -44,16 +43,19 @@ impl Operation for SlackMessage {
         Some(json!({"text": self.text}))
     }
 
-    fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a OperationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
         Box::pin(async move {
             let resp = Http::post(&self.webhook_url)
                 .json(json!({"text": self.text}))
                 .await?;
             if !resp.is_success() {
-                return Err(EngineError::Operation(OperationError::Http {
+                return Err(OperationError::Http {
                     status: Some(resp.status()),
                     message: format!("slack answered {}", resp.status()),
-                }));
+                });
             }
             Ok(json!({"status": resp.status()}))
         })
@@ -66,9 +68,10 @@ Two complete examples to copy from: `references/http-json.md` (generic JSON API 
 ## 3. Call it from a handler
 
 ```rust,no_run
+use ironflow_core::error::OperationError;
+use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::operation::Operation;
 use serde_json::{Value, json};
 use std::future::Future;
 use std::pin::Pin;
@@ -79,7 +82,10 @@ impl Operation for Ping {
     fn kind(&self) -> &str {
         "ping"
     }
-    fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a OperationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
         Box::pin(async move { Ok(json!({"ok": true})) })
     }
 }
@@ -104,8 +110,9 @@ Add a test of the operation alone when it is pure enough (build the struct, call
 
 ## Rules
 
-- **Errors are `EngineError`.** Wrap transport errors as `EngineError::Operation(OperationError::Http { .. })`, bad configuration as `EngineError::StepConfig(..)`. `Http` errors convert with `?` already.
+- **Errors are `OperationError`.** Wrap transport errors as `OperationError::Http { .. }`, secret errors as `OperationError::Secret { .. }`. `Http` errors from `ironflow_core::operations::http::Http` convert with `?` already.
 - **`input()` is observability, not secrets.** It lands in the database and the dashboard.
 - **Output is JSON.** Return what later steps need (ids, urls, status), not the raw response body when it is large.
 - **No retry loops inside `execute()`.** Retries are a step concern: the run fails, the operator retries the run.
-- **Credentials from `ctx.secrets()` or the worker environment**, read in the handler and passed into the struct. `ctx.secrets()` needs `cargo add -p workflows ironflow-engine --features secret-store`.
+- **`OperationContext`** provides `ctx.http_client()` (shared `reqwest::Client`) and `ctx.secrets()` (a `SecretResolver`). Use `ctx.secrets().get("key").await?` to fetch credentials inside `execute()`, or read them in the handler and pass them into the struct.
+- **External crates depend on `ironflow-core` only**, not `ironflow-engine`. The `Operation` trait and `OperationContext` live in `ironflow-core::operation`.

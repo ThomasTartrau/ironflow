@@ -619,6 +619,39 @@ impl ScopedSecretStore {
     }
 }
 
+#[cfg(feature = "secret-store")]
+mod secret_resolver_impl {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use ironflow_core::error::OperationError;
+    use ironflow_core::operation::{SecretResolver, SecretValue};
+
+    use super::ScopedSecretStore;
+
+    impl SecretResolver for ScopedSecretStore {
+        fn get(
+            &self,
+            key: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<SecretValue>, OperationError>> + Send + '_>>
+        {
+            let full_key = format!("{}{key}", self.prefix);
+            let store = self.store.clone();
+            Box::pin(async move {
+                match store.get_secret(&full_key).await {
+                    Ok(Some(secret)) => Ok(Some(SecretValue {
+                        value: secret.value,
+                    })),
+                    Ok(None) => Ok(None),
+                    Err(err) => Err(OperationError::Secret {
+                        message: err.to_string(),
+                    }),
+                }
+            })
+        }
+    }
+}
+
 impl fmt::Debug for ScopedSecretStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScopedSecretStore")
@@ -844,6 +877,30 @@ mod tests {
             let debug = format!("{scoped:?}");
             assert!(debug.contains("ScopedSecretStore"));
             assert!(debug.contains("workflows/"));
+        }
+
+        #[tokio::test]
+        async fn secret_resolver_returns_existing_secret() {
+            use ironflow_core::operation::SecretResolver;
+
+            let store = test_store();
+            let scoped = ScopedSecretStore::for_workflow(uuid_a(), store);
+            scoped.set("api_token", "sk-test-123").await.unwrap();
+
+            let result = SecretResolver::get(&scoped, "api_token").await;
+            let secret = result.unwrap().expect("secret should exist");
+            assert_eq!(secret.value, "sk-test-123");
+        }
+
+        #[tokio::test]
+        async fn secret_resolver_returns_none_for_missing() {
+            use ironflow_core::operation::SecretResolver;
+
+            let store = test_store();
+            let scoped = ScopedSecretStore::for_workflow(uuid_a(), store);
+
+            let result = SecretResolver::get(&scoped, "nonexistent").await;
+            assert!(result.unwrap().is_none());
         }
     }
 }
