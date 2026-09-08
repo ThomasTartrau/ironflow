@@ -82,6 +82,7 @@ variables:
     esac
     curl -sSfL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-${MDBOOK_ARCH}.tar.gz" | tar -xz -C .cargo/bin mdbook
     curl -sSfL "https://github.com/badboy/mdbook-mermaid/releases/download/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-${MDBOOK_ARCH}.tar.gz" | tar -xz -C .cargo/bin mdbook-mermaid
+    export PATH="${CI_PROJECT_DIR}/.cargo/bin:${PATH}"
 
 .pnpm-install: &pnpm-install
   before_script:
@@ -155,7 +156,7 @@ mdbook-build:
     MDBOOK_MERMAID_VERSION: "0.17.1"
   script:
     - *install-mdbook
-    - .cargo/bin/mdbook build
+    - mdbook build
 
 unit-tests:
   extends: .only-mr
@@ -326,7 +327,7 @@ pages:
     MDBOOK_MERMAID_VERSION: "0.17.1"
   script:
     - *install-mdbook
-    - .cargo/bin/mdbook build
+    - mdbook build
     - mv book public
   artifacts:
     paths:
