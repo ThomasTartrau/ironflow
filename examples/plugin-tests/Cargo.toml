@@ -8,6 +8,7 @@ publish = false
 doctest = true
 
 [dependencies]
+async-trait = "0.1"
 ironflow-core = { path = "../../ironflow-core", features = [
     "provider-anthropic-api",
     "provider-openai",
@@ -20,6 +21,9 @@ ironflow-store = { path = "../../ironflow-store", features = [
     "store-postgres",
     "secret-store",
 ] }
+
+gitlab = "0.1903"
+ironflow-ops-gitlab = { path = "../../ops/gitlab" }
 
 chrono = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -21,30 +21,25 @@
 //! # Examples
 //!
 //! ```no_run
+//! use async_trait::async_trait;
 //! use ironflow_core::operation::{Operation, OperationContext};
 //! use ironflow_core::error::OperationError;
 //! use serde_json::{Value, json};
-//! use std::future::Future;
-//! use std::pin::Pin;
 //!
 //! struct CreateGitlabIssue {
 //!     project_id: u64,
 //!     title: String,
 //! }
 //!
+//! #[async_trait]
 //! impl Operation for CreateGitlabIssue {
 //!     fn kind(&self) -> &str {
 //!         "gitlab"
 //!     }
 //!
-//!     fn execute<'a>(
-//!         &'a self,
-//!         ctx: &'a OperationContext,
-//!     ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-//!         Box::pin(async move {
-//!             // Use ctx.http_client() for HTTP calls, ctx.secrets() for credentials.
-//!             Ok(json!({"issue_id": 42, "url": "https://gitlab.com/issues/42"}))
-//!         })
+//!     async fn execute(&self, ctx: &OperationContext) -> Result<Value, OperationError> {
+//!         // Use ctx.http_client() for HTTP calls, ctx.secrets() for credentials.
+//!         Ok(json!({"issue_id": 42, "url": "https://gitlab.com/issues/42"}))
 //!     }
 //! }
 //! ```
@@ -53,10 +48,9 @@
 mod tests;
 
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -108,6 +102,7 @@ impl fmt::Debug for SecretValue {
 /// assert!(result.unwrap().is_none());
 /// # });
 /// ```
+#[async_trait]
 pub trait SecretResolver: Send + Sync {
     /// Look up a secret by key.
     ///
@@ -117,10 +112,7 @@ pub trait SecretResolver: Send + Sync {
     /// # Errors
     ///
     /// Returns [`OperationError::Secret`] if the underlying store fails.
-    fn get(
-        &self,
-        key: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<SecretValue>, OperationError>> + Send + '_>>;
+    async fn get(&self, key: &str) -> Result<Option<SecretValue>, OperationError>;
 }
 
 /// A [`SecretResolver`] that always returns `Ok(None)`.
@@ -139,13 +131,10 @@ pub trait SecretResolver: Send + Sync {
 /// ```
 pub struct NoopSecretResolver;
 
+#[async_trait]
 impl SecretResolver for NoopSecretResolver {
-    fn get(
-        &self,
-        _key: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<SecretValue>, OperationError>> + Send + '_>>
-    {
-        Box::pin(async { Ok(None) })
+    async fn get(&self, _key: &str) -> Result<Option<SecretValue>, OperationError> {
+        Ok(None)
     }
 }
 
@@ -234,31 +223,27 @@ impl OperationContext {
 /// # Examples
 ///
 /// ```no_run
+/// use async_trait::async_trait;
 /// use ironflow_core::operation::{Operation, OperationContext};
 /// use ironflow_core::error::OperationError;
 /// use serde_json::{Value, json};
-/// use std::future::Future;
-/// use std::pin::Pin;
 ///
 /// struct SendSlackMessage {
 ///     channel: String,
 ///     text: String,
 /// }
 ///
+/// #[async_trait]
 /// impl Operation for SendSlackMessage {
 ///     fn kind(&self) -> &str { "slack" }
 ///
-///     fn execute<'a>(
-///         &'a self,
-///         ctx: &'a OperationContext,
-///     ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-///         Box::pin(async move {
-///             // Post to Slack API using ctx.http_client() ...
-///             Ok(json!({"ok": true, "ts": "1234567890.123456"}))
-///         })
+///     async fn execute(&self, ctx: &OperationContext) -> Result<Value, OperationError> {
+///         // Post to Slack API using ctx.http_client() ...
+///         Ok(json!({"ok": true, "ts": "1234567890.123456"}))
 ///     }
 /// }
 /// ```
+#[async_trait]
 pub trait Operation: Send + Sync {
     /// A short, lowercase identifier for this operation type.
     ///
@@ -274,10 +259,7 @@ pub trait Operation: Send + Sync {
     /// # Errors
     ///
     /// Return [`OperationError`] if the operation fails.
-    fn execute<'a>(
-        &'a self,
-        ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>>;
+    async fn execute(&self, ctx: &OperationContext) -> Result<Value, OperationError>;
 
     /// Optional JSON representation of the operation input, stored in
     /// the step's `input` column for observability.
@@ -297,12 +279,11 @@ pub trait Operation: Send + Sync {
 /// # Examples
 ///
 /// ```no_run
+/// use async_trait::async_trait;
 /// use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 /// use ironflow_core::error::OperationError;
 /// use serde::Deserialize;
 /// use serde_json::{Value, json};
-/// use std::future::Future;
-/// use std::pin::Pin;
 ///
 /// #[derive(Debug, Deserialize)]
 /// struct IssueCreated {
@@ -312,13 +293,11 @@ pub trait Operation: Send + Sync {
 ///
 /// struct CreateIssue;
 ///
+/// #[async_trait]
 /// impl Operation for CreateIssue {
 ///     fn kind(&self) -> &str { "gitlab" }
-///     fn execute<'a>(
-///         &'a self,
-///         _ctx: &'a OperationContext,
-///     ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-///         Box::pin(async { Ok(json!({"iid": 42, "url": "https://gitlab.com/issues/42"})) })
+///     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+///         Ok(json!({"iid": 42, "url": "https://gitlab.com/issues/42"}))
 ///     }
 /// }
 ///

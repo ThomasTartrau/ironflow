@@ -1,0 +1,20 @@
+[package]
+name = "ironflow-ops-gitlab"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "GitLab integration for Ironflow workflows, powered by the gitlab crate"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "gitlab", "operations", "ironflow"]
+categories = ["asynchronous", "development-tools"]
+
+[dependencies]
+async-trait = "0.1"
+gitlab = "0.1903"
+ironflow-core = { path = "../../ironflow-core" }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

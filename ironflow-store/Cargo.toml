@@ -30,6 +30,7 @@ sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }
 
 # Operation context (SecretResolver impl)
+async-trait = { version = "0.1", optional = true }
 ironflow-core = { version = "3.13.0", path = "../ironflow-core", optional = true }
 
 # PostgreSQL (Phase 2)
@@ -48,7 +49,7 @@ sqlx = { version = "0.8", features = [
 default = ["store-memory"]
 store-memory = []
 store-postgres = ["sqlx"]
-secret-store = ["aes-gcm", "rand", "hkdf", "sha2", "base64", "ironflow-core"]
+secret-store = ["aes-gcm", "rand", "hkdf", "sha2", "base64", "async-trait", "ironflow-core"]
 openapi = ["utoipa"]
 
 [dev-dependencies]

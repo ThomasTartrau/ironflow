@@ -1856,32 +1856,27 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use crate::operation::{Operation, OperationContext};
+    use async_trait::async_trait;
     use ironflow_core::error::OperationError;
     use ironflow_store::models::StepKind;
-    use std::future::Future;
-    use std::pin::Pin;
 
     struct FakeGitlabOp {
         project_id: u64,
         title: String,
     }
 
+    #[async_trait]
     impl Operation for FakeGitlabOp {
         fn kind(&self) -> &str {
             "gitlab"
         }
 
-        fn execute<'a>(
-            &'a self,
-            _ctx: &'a OperationContext,
-        ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-            Box::pin(async move {
-                Ok(json!({
-                    "issue_id": 42,
-                    "project_id": self.project_id,
-                    "title": self.title,
-                }))
-            })
+        async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+            Ok(json!({
+                "issue_id": 42,
+                "project_id": self.project_id,
+                "title": self.title,
+            }))
         }
 
         fn input(&self) -> Option<Value> {
@@ -1894,20 +1889,16 @@ mod tests {
 
     struct FailingOp;
 
+    #[async_trait]
     impl Operation for FailingOp {
         fn kind(&self) -> &str {
             "broken-service"
         }
 
-        fn execute<'a>(
-            &'a self,
-            _ctx: &'a OperationContext,
-        ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-            Box::pin(async move {
-                Err(OperationError::Http {
-                    status: None,
-                    message: "service unavailable".to_string(),
-                })
+        async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+            Err(OperationError::Http {
+                status: None,
+                message: "service unavailable".to_string(),
             })
         }
     }

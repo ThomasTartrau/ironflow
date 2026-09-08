@@ -1,7 +1,6 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 
@@ -12,23 +11,19 @@ struct GitLabIssueOp {
     title: String,
 }
 
+#[async_trait]
 impl Operation for GitLabIssueOp {
     fn kind(&self) -> &str {
         "gitlab"
     }
 
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            Ok(json!({
-                "issue_id": 42,
-                "url": "https://gitlab.com/issues/42",
-                "project_id": self.project_id,
-                "title": self.title
-            }))
-        })
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        Ok(json!({
+            "issue_id": 42,
+            "url": "https://gitlab.com/issues/42",
+            "project_id": self.project_id,
+            "title": self.title
+        }))
     }
 
     fn input(&self) -> Option<Value> {
@@ -41,35 +36,29 @@ impl Operation for GitLabIssueOp {
 
 struct NoInputOp;
 
+#[async_trait]
 impl Operation for NoInputOp {
     fn kind(&self) -> &str {
         "noop"
     }
 
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async { Ok(json!({"status": "ok"})) })
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        Ok(json!({"status": "ok"}))
     }
 }
 
 struct ErrorOp;
 
+#[async_trait]
 impl Operation for ErrorOp {
     fn kind(&self) -> &str {
         "error_test"
     }
 
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async {
-            Err(OperationError::Http {
-                status: Some(500),
-                message: "test error".to_string(),
-            })
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        Err(OperationError::Http {
+            status: Some(500),
+            message: "test error".to_string(),
         })
     }
 }

@@ -621,33 +621,25 @@ impl ScopedSecretStore {
 
 #[cfg(feature = "secret-store")]
 mod secret_resolver_impl {
-    use std::future::Future;
-    use std::pin::Pin;
-
+    use async_trait::async_trait;
     use ironflow_core::error::OperationError;
     use ironflow_core::operation::{SecretResolver, SecretValue};
 
     use super::ScopedSecretStore;
 
+    #[async_trait]
     impl SecretResolver for ScopedSecretStore {
-        fn get(
-            &self,
-            key: &str,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<SecretValue>, OperationError>> + Send + '_>>
-        {
+        async fn get(&self, key: &str) -> Result<Option<SecretValue>, OperationError> {
             let full_key = format!("{}{key}", self.prefix);
-            let store = self.store.clone();
-            Box::pin(async move {
-                match store.get_secret(&full_key).await {
-                    Ok(Some(secret)) => Ok(Some(SecretValue {
-                        value: secret.value,
-                    })),
-                    Ok(None) => Ok(None),
-                    Err(err) => Err(OperationError::Secret {
-                        message: err.to_string(),
-                    }),
-                }
-            })
+            match self.store.get_secret(&full_key).await {
+                Ok(Some(secret)) => Ok(Some(SecretValue {
+                    value: secret.value,
+                })),
+                Ok(None) => Ok(None),
+                Err(err) => Err(OperationError::Secret {
+                    message: err.to_string(),
+                }),
+            }
         }
     }
 }
