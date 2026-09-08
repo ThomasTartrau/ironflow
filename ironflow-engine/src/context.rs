@@ -61,7 +61,11 @@ use crate::executor::{ParallelStepResult, StepOutput, StepResult, execute_step_c
 use crate::guard::{SharedGuardState, WorkflowGuardConfig, WorkflowRejection};
 use crate::handler::WorkflowHandler;
 use crate::log_sender::{LogSender, StepLogSender};
-use crate::operation::Operation;
+#[cfg(not(feature = "secret-store"))]
+use crate::operation::NoopSecretResolver;
+use crate::operation::{Operation, OperationContext, SecretResolver};
+#[cfg(feature = "secret-store")]
+use ironflow_store::workflow_secrets::ScopedSecretStore;
 
 /// Callback type for resolving workflow handlers by name.
 pub(crate) type HandlerResolver =
@@ -135,6 +139,8 @@ pub struct WorkflowContext {
     event_bus: Option<crate::notify::WorkflowEventBus>,
     /// W3C trace context for distributed tracing propagation.
     trace_context: WorkflowTraceContext,
+    /// Shared operation context for custom operations.
+    operation_ctx: Option<OperationContext>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.
@@ -180,6 +186,7 @@ impl WorkflowContext {
             step_results: Vec::new(),
             event_bus: None,
             trace_context,
+            operation_ctx: None,
         }
     }
 
@@ -220,6 +227,7 @@ impl WorkflowContext {
             step_results: Vec::new(),
             event_bus: None,
             trace_context,
+            operation_ctx: None,
         }
     }
 
@@ -671,6 +679,24 @@ impl WorkflowContext {
             workflow_uuid,
             self.store.clone(),
         )
+    }
+
+    fn ensure_operation_ctx(&mut self) -> &OperationContext {
+        self.operation_ctx.get_or_insert_with(|| {
+            #[cfg(feature = "secret-store")]
+            let secrets: Arc<dyn SecretResolver> = {
+                let workflow_uuid =
+                    Uuid::new_v5(&Uuid::NAMESPACE_OID, self.workflow_name.as_bytes());
+                Arc::new(ScopedSecretStore::for_workflow(
+                    workflow_uuid,
+                    self.store.clone(),
+                ))
+            };
+            #[cfg(not(feature = "secret-store"))]
+            let secrets: Arc<dyn SecretResolver> = Arc::new(NoopSecretResolver);
+
+            OperationContext::new(secrets)
+        })
     }
 
     /// Persist a partial snapshot of the run after a step transition.
@@ -1450,7 +1476,8 @@ impl WorkflowContext {
     ///
     /// ```no_run
     /// use ironflow_engine::context::WorkflowContext;
-    /// use ironflow_engine::operation::Operation;
+    /// use ironflow_engine::operation::{Operation, OperationContext};
+    /// use ironflow_core::error::OperationError;
     /// use ironflow_engine::error::EngineError;
     /// use serde_json::{Value, json};
     /// use std::pin::Pin;
@@ -1459,7 +1486,7 @@ impl WorkflowContext {
     /// struct MyOp;
     /// impl Operation for MyOp {
     ///     fn kind(&self) -> &str { "my-service" }
-    ///     fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    ///     fn execute<'a>(&'a self, _ctx: &'a OperationContext) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
     ///         Box::pin(async { Ok(json!({"ok": true})) })
     ///     }
     /// }
@@ -1497,7 +1524,9 @@ impl WorkflowContext {
 
         let start = Instant::now();
 
-        match op.execute().await {
+        let op_ctx = self.ensure_operation_ctx();
+
+        match op.execute(op_ctx).await {
             Ok(output_value) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
                 self.total_duration_ms += duration_ms;
@@ -1539,13 +1568,14 @@ impl WorkflowContext {
             }
             Err(err) => {
                 let completed_at = Utc::now();
+                let engine_err = EngineError::Operation(err);
                 if let Err(store_err) = self
                     .store
                     .update_step(
                         step.id,
                         StepUpdate {
                             status: Some(StepStatus::Failed),
-                            error: Some(err.to_string()),
+                            error: Some(engine_err.to_string()),
                             completed_at: Some(completed_at),
                             ..StepUpdate::default()
                         },
@@ -1555,7 +1585,7 @@ impl WorkflowContext {
                     error!(step_id = %step.id, error = %store_err, "failed to persist step failure");
                 }
 
-                Err(err)
+                Err(engine_err)
             }
         }
     }
@@ -1866,6 +1896,7 @@ impl WorkflowContext {
             step_results: Vec::new(),
             event_bus: self.event_bus.clone(),
             trace_context: self.trace_context.child(),
+            operation_ctx: None,
         };
 
         let result = handler.execute(&mut child_ctx).await;

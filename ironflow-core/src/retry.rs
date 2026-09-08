@@ -269,7 +269,9 @@ pub fn is_retryable(error: &OperationError) -> bool {
             AgentError::PromptTooLarge { .. } | AgentError::BudgetExceeded { .. } => false,
         },
         OperationError::Timeout { .. } => true,
-        OperationError::Shell { .. } | OperationError::Deserialize { .. } => false,
+        OperationError::Shell { .. }
+        | OperationError::Deserialize { .. }
+        | OperationError::Secret { .. } => false,
     }
 }
 

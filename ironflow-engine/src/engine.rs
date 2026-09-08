@@ -1855,7 +1855,8 @@ mod tests {
     // Operation trait tests
     // -----------------------------------------------------------------------
 
-    use crate::operation::Operation;
+    use crate::operation::{Operation, OperationContext};
+    use ironflow_core::error::OperationError;
     use ironflow_store::models::StepKind;
     use std::future::Future;
     use std::pin::Pin;
@@ -1870,7 +1871,10 @@ mod tests {
             "gitlab"
         }
 
-        fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+        fn execute<'a>(
+            &'a self,
+            _ctx: &'a OperationContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
             Box::pin(async move {
                 Ok(json!({
                     "issue_id": 42,
@@ -1895,8 +1899,16 @@ mod tests {
             "broken-service"
         }
 
-        fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
-            Box::pin(async move { Err(EngineError::StepConfig("service unavailable".to_string())) })
+        fn execute<'a>(
+            &'a self,
+            _ctx: &'a OperationContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
+            Box::pin(async move {
+                Err(OperationError::Http {
+                    status: None,
+                    message: "service unavailable".to_string(),
+                })
+            })
         }
     }
 

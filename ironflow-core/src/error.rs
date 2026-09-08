@@ -69,6 +69,16 @@ pub enum OperationError {
         /// The underlying serde error message.
         reason: String,
     },
+
+    /// The secret store failed to read or decrypt a secret.
+    ///
+    /// Returned by [`SecretResolver::get`](crate::operation::SecretResolver::get)
+    /// implementations when the underlying storage or decryption layer errors.
+    #[error("secret error: {message}")]
+    Secret {
+        /// Human-readable error description.
+        message: String,
+    },
 }
 
 impl OperationError {

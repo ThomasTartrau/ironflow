@@ -10,8 +10,7 @@ use std::time::Duration;
 
 use ironflow_core::operations::http::Http;
 use ironflow_core::error::OperationError;
-use ironflow_engine::error::EngineError;
-use ironflow_engine::operation::Operation;
+use ironflow_core::operation::{Operation, OperationContext};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -47,7 +46,10 @@ impl Operation for CreateGitlabIssue {
         }))
     }
 
-    fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a OperationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
         Box::pin(async move {
             let url = format!("{}/api/v4/projects/{}/issues", self.base_url, self.project);
             let resp = Http::post(&url)
@@ -61,10 +63,10 @@ impl Operation for CreateGitlabIssue {
                 .await?;
 
             if !resp.is_success() {
-                return Err(EngineError::Operation(OperationError::Http {
+                return Err(OperationError::Http {
                     status: Some(resp.status()),
                     message: format!("gitlab answered {}: {}", resp.status(), resp.body()),
-                }));
+                });
             }
 
             let issue: IssueCreated = resp.json()?;
@@ -77,10 +79,11 @@ impl Operation for CreateGitlabIssue {
 Handler side, with the token from the secret store and the issue url reused later:
 
 ```rust,no_run
+use ironflow_core::error::OperationError;
+use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::operation::Operation;
 use serde_json::{Value, json};
 use std::future::Future;
 use std::pin::Pin;
@@ -98,7 +101,10 @@ impl Operation for CreateGitlabIssue {
     fn kind(&self) -> &str {
         "gitlab"
     }
-    fn execute(&self) -> Pin<Box<dyn Future<Output = Result<Value, EngineError>> + Send + '_>> {
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a OperationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
         Box::pin(async move { Ok(json!({"iid": 42, "url": "https://gitlab.com/x/y/-/issues/42"})) })
     }
 }

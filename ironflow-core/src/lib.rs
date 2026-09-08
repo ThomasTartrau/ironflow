@@ -70,6 +70,7 @@
 pub mod dry_run;
 pub mod error;
 pub mod metric_names;
+pub mod operation;
 pub mod parallel;
 pub mod pricing;
 pub mod provider;
@@ -95,6 +96,10 @@ pub mod operations {
 pub mod prelude {
     pub use crate::dry_run::{DryRunGuard, is_dry_run, set_dry_run};
     pub use crate::error::{AgentError, OperationError};
+    pub use crate::operation::{
+        NoopSecretResolver, Operation, OperationContext, SecretResolver, SecretValue,
+        TypedOperation,
+    };
     pub use crate::operations::agent::{Agent, AgentResult, Model, PermissionMode};
     pub use crate::operations::http::{Http, HttpOutput};
     pub use crate::operations::shell::{Shell, ShellOutput};
