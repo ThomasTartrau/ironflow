@@ -13,3 +13,6 @@ ironflow-api/dashboard/
 
 .claude/*
 !.claude/rules/
+
+# mdBook build output (root only, not docs/book/)
+/book/

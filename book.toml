@@ -1,0 +1,22 @@
+[book]
+title = "Ironflow"
+description = "Workflow orchestration platform where workflows are imperative Rust code"
+authors = ["Thomas Tartrau"]
+language = "en"
+src = "docs/book/src"
+
+[build]
+build-dir = "book"
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+git-repository-url = "https://gitlab.com/ThomasTartrau/ironflow"
+edit-url-template = "https://gitlab.com/ThomasTartrau/ironflow/-/edit/main/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[output.html.fold]
+enable = true
+level = 0
+
