@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.27.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.26.0...ironflow-store-v2.27.0) - 2026-09-08
+
+### Added
+
+- #55 add ironflow-ops-gitlab crate powered by the gitlab crate
+
 ## [2.26.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.25.0...ironflow-store-v2.26.0) - 2026-09-08
 
 ### Added
