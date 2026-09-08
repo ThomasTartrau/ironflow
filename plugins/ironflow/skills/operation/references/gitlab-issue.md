@@ -1,113 +1,72 @@
 # Example: create a GitLab issue
 
-Token read from the workflow secrets, project id and title from the handler, issue id
-and url persisted as the step output.
+Uses `ironflow-ops-gitlab`, a thin wrapper around the [`gitlab`](https://crates.io/crates/gitlab)
+crate. The token is read from the workflow secrets, the endpoint is built with the crate's
+typed builders, and the result is a tracked workflow step.
+
+Add the dependency:
+
+```bash
+cargo add -p workflows ironflow-ops-gitlab
+```
+
+## Typed query (no tracking)
+
+When you only need the response and do not need step lifecycle tracking:
 
 ```rust,no_run
-use std::future::Future;
-use std::pin::Pin;
-use std::time::Duration;
-
-use ironflow_core::operations::http::Http;
-use ironflow_core::error::OperationError;
-use ironflow_core::operation::{Operation, OperationContext};
+use gitlab::api::{projects::issues::CreateIssue, AsyncQuery};
+use ironflow_ops_gitlab::GitLab;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
 use serde::Deserialize;
-use serde_json::{Value, json};
-
-/// `POST /projects/:id/issues` on a GitLab instance.
-pub struct CreateGitlabIssue {
-    /// Instance base url, for example `https://gitlab.com`.
-    pub base_url: String,
-    /// Numeric project id or url-encoded `group%2Fproject`.
-    pub project: String,
-    pub title: String,
-    pub description: String,
-    pub labels: Vec<String>,
-    /// Personal or project access token with `api` scope.
-    pub token: String,
-}
 
 #[derive(Debug, Deserialize)]
-struct IssueCreated {
+struct Issue {
     iid: u64,
     web_url: String,
 }
 
-impl Operation for CreateGitlabIssue {
-    fn kind(&self) -> &str {
-        "gitlab"
-    }
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let token = ctx
+        .secrets()
+        .get("gitlab_token")
+        .await
+        .map_err(EngineError::Store)?
+        .ok_or_else(|| EngineError::StepConfig("secret gitlab_token missing".to_string()))?;
 
-    fn input(&self) -> Option<Value> {
-        Some(json!({
-            "project": self.project,
-            "title": self.title,
-            "labels": self.labels,
-        }))
-    }
+    let gitlab = GitLab::new(&token.value, "gitlab.com")
+        .await
+        .map_err(EngineError::Operation)?;
 
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = format!("{}/api/v4/projects/{}/issues", self.base_url, self.project);
-            let resp = Http::post(&url)
-                .header("PRIVATE-TOKEN", &self.token)
-                .json(json!({
-                    "title": self.title,
-                    "description": self.description,
-                    "labels": self.labels.join(","),
-                }))
-                .timeout(Duration::from_secs(30))
-                .await?;
+    let endpoint = CreateIssue::builder()
+        .project("my-group/my-project")
+        .title("Bug report")
+        .description("Steps to reproduce...")
+        .build()
+        .map_err(|e| EngineError::StepConfig(e.to_string()))?;
 
-            if !resp.is_success() {
-                return Err(OperationError::Http {
-                    status: Some(resp.status()),
-                    message: format!("gitlab answered {}: {}", resp.status(), resp.body()),
-                });
-            }
+    let issue: Issue = endpoint
+        .query_async(gitlab.client())
+        .await
+        .map_err(|e| EngineError::StepConfig(e.to_string()))?;
 
-            let issue: IssueCreated = resp.json()?;
-            Ok(json!({"iid": issue.iid, "url": issue.web_url}))
-        })
-    }
+    println!("Created issue !{} at {}", issue.iid, issue.web_url);
+    Ok(())
 }
 ```
 
-Handler side, with the token from the secret store and the issue url reused later:
+## Tracked operation
+
+Wrap the endpoint in `gitlab.op(endpoint)` to get step lifecycle tracking
+(step record, status, duration, output persistence):
 
 ```rust,no_run
-use ironflow_core::error::OperationError;
-use ironflow_core::operation::{Operation, OperationContext};
+use gitlab::api::projects::issues::CreateIssue;
+use ironflow_ops_gitlab::GitLab;
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use serde_json::{Value, json};
-use std::future::Future;
-use std::pin::Pin;
-
-struct CreateGitlabIssue {
-    base_url: String,
-    project: String,
-    title: String,
-    description: String,
-    labels: Vec<String>,
-    token: String,
-}
-
-impl Operation for CreateGitlabIssue {
-    fn kind(&self) -> &str {
-        "gitlab"
-    }
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async move { Ok(json!({"iid": 42, "url": "https://gitlab.com/x/y/-/issues/42"})) })
-    }
-}
 
 async fn example(ctx: &mut WorkflowContext, failing_step: &str) -> Result<(), EngineError> {
     let token = ctx
@@ -115,20 +74,24 @@ async fn example(ctx: &mut WorkflowContext, failing_step: &str) -> Result<(), En
         .get("gitlab_token")
         .await
         .map_err(EngineError::Store)?
-        .ok_or_else(|| EngineError::StepConfig("secret gitlab_token missing".to_string()))?
-        .value;
+        .ok_or_else(|| EngineError::StepConfig("secret gitlab_token missing".to_string()))?;
 
-    let op = CreateGitlabIssue {
-        base_url: "https://gitlab.com".to_string(),
-        project: "12345".to_string(),
-        title: format!("Nightly build failed at step {failing_step}"),
-        description: format!("Run {} failed.", ctx.run_id()),
-        labels: vec!["ci".to_string(), "automated".to_string()],
-        token,
-    };
-    let issue = ctx.operation("open-issue", &op).await?;
+    let gitlab = GitLab::new(&token.value, "gitlab.com")
+        .await
+        .map_err(EngineError::Operation)?;
 
-    let url = issue.output["url"].as_str().unwrap_or_default().to_string();
+    let labels = ["ci".to_string(), "automated".to_string()];
+    let endpoint = CreateIssue::builder()
+        .project("12345")
+        .title(format!("Nightly build failed at step {failing_step}"))
+        .description(format!("Run {} failed.", ctx.run_id()))
+        .labels(labels.iter())
+        .build()
+        .map_err(|e| EngineError::StepConfig(e.to_string()))?;
+
+    let issue = ctx.operation("open-issue", &gitlab.op(endpoint)).await?;
+
+    let url = issue.output["web_url"].as_str().unwrap_or_default().to_string();
     ctx.shell(
         "announce",
         ShellConfig::new("echo \"Issue opened: $ISSUE_URL\"").env("ISSUE_URL", &url),
@@ -136,6 +99,16 @@ async fn example(ctx: &mut WorkflowContext, failing_step: &str) -> Result<(), En
     .await?;
     Ok(())
 }
+```
+
+## Self-hosted instance
+
+Pass your host instead of `"gitlab.com"`:
+
+```rust,ignore
+let gitlab = GitLab::new(&token.value, "gitlab.example.com")
+    .await
+    .map_err(EngineError::Operation)?;
 ```
 
 Store the token once in the dashboard (Secrets, workflow scope) under the key `gitlab_token`.

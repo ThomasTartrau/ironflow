@@ -4,10 +4,9 @@ Wraps any JSON endpoint. The handler picks the response type; the operation pers
 compact output.
 
 ```rust,no_run
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use ironflow_core::operations::http::Http;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
@@ -28,6 +27,7 @@ pub struct Page {
     pub title: String,
 }
 
+#[async_trait]
 impl Operation for JsonGet {
     fn kind(&self) -> &str {
         "json_get"
@@ -37,29 +37,24 @@ impl Operation for JsonGet {
         Some(json!({"url": format!("{}/{}", self.base_url, self.path)}))
     }
 
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = format!("{}/{}", self.base_url, self.path);
-            let resp = Http::get(&url)
-                .header("Authorization", &format!("Bearer {}", self.bearer))
-                .header("Accept", "application/json")
-                .timeout(Duration::from_secs(30))
-                .await?;
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        let url = format!("{}/{}", self.base_url, self.path);
+        let resp = Http::get(&url)
+            .header("Authorization", &format!("Bearer {}", self.bearer))
+            .header("Accept", "application/json")
+            .timeout(Duration::from_secs(30))
+            .await?;
 
-            if !resp.is_success() {
-                return Err(OperationError::Http {
-                    status: Some(resp.status()),
-                    message: format!("{url} answered {}", resp.status()),
-                });
-            }
+        if !resp.is_success() {
+            return Err(OperationError::Http {
+                status: Some(resp.status()),
+                message: format!("{url} answered {}", resp.status()),
+            });
+        }
 
-            // `json()` maps a parse failure to OperationError::Deserialize.
-            let page: Page = resp.json()?;
-            Ok(json!({"id": page.id, "title": page.title}))
-        })
+        // `json()` maps a parse failure to OperationError::Deserialize.
+        let page: Page = resp.json()?;
+        Ok(json!({"id": page.id, "title": page.title}))
     }
 }
 ```
@@ -67,13 +62,12 @@ impl Operation for JsonGet {
 Handler side:
 
 ```rust,no_run
+use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use serde_json::{Value, json};
-use std::future::Future;
-use std::pin::Pin;
 
 struct JsonGet {
     base_url: String,
@@ -81,15 +75,13 @@ struct JsonGet {
     bearer: String,
 }
 
+#[async_trait]
 impl Operation for JsonGet {
     fn kind(&self) -> &str {
         "json_get"
     }
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async move { Ok(json!({"id": 1, "title": "stub"})) })
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        Ok(json!({"id": 1, "title": "stub"}))
     }
 }
 

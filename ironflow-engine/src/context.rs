@@ -1475,19 +1475,19 @@ impl WorkflowContext {
     /// # Examples
     ///
     /// ```no_run
+    /// use async_trait::async_trait;
     /// use ironflow_engine::context::WorkflowContext;
     /// use ironflow_engine::operation::{Operation, OperationContext};
     /// use ironflow_core::error::OperationError;
     /// use ironflow_engine::error::EngineError;
     /// use serde_json::{Value, json};
-    /// use std::pin::Pin;
-    /// use std::future::Future;
     ///
     /// struct MyOp;
+    /// #[async_trait]
     /// impl Operation for MyOp {
     ///     fn kind(&self) -> &str { "my-service" }
-    ///     fn execute<'a>(&'a self, _ctx: &'a OperationContext) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-    ///         Box::pin(async { Ok(json!({"ok": true})) })
+    ///     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+    ///         Ok(json!({"ok": true}))
     ///     }
     /// }
     ///

@@ -11,6 +11,7 @@ keywords = ["workflow", "engine", "orchestration", "fsm"]
 categories = ["asynchronous", "development-tools"]
 
 [dependencies]
+async-trait = "0.1"
 ironflow-artifacts = { version = "0.1.1", path = "../ironflow-artifacts" }
 ironflow-core = { version = "3.13.0", path = "../ironflow-core" }
 ironflow-store = { version = "2.26.0", path = "../ironflow-store" }

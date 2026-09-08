@@ -19,9 +19,7 @@ One AskUserQuestion call: operation name (`snake_case` struct, lowercase `kind()
 One file per operation in the workflows crate under `src/operations/`. Template:
 
 ```rust,no_run
-use std::future::Future;
-use std::pin::Pin;
-
+use async_trait::async_trait;
 use ironflow_core::operations::http::Http;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
@@ -33,6 +31,7 @@ pub struct SlackMessage {
     pub text: String,
 }
 
+#[async_trait]
 impl Operation for SlackMessage {
     fn kind(&self) -> &str {
         "slack"
@@ -43,50 +42,42 @@ impl Operation for SlackMessage {
         Some(json!({"text": self.text}))
     }
 
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            let resp = Http::post(&self.webhook_url)
-                .json(json!({"text": self.text}))
-                .await?;
-            if !resp.is_success() {
-                return Err(OperationError::Http {
-                    status: Some(resp.status()),
-                    message: format!("slack answered {}", resp.status()),
-                });
-            }
-            Ok(json!({"status": resp.status()}))
-        })
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        let resp = Http::post(&self.webhook_url)
+            .json(json!({"text": self.text}))
+            .await?;
+        if !resp.is_success() {
+            return Err(OperationError::Http {
+                status: Some(resp.status()),
+                message: format!("slack answered {}", resp.status()),
+            });
+        }
+        Ok(json!({"status": resp.status()}))
     }
 }
 ```
 
-Two complete examples to copy from: `references/http-json.md` (generic JSON API wrapper with typed response) and `references/gitlab-issue.md` (create an issue, token from a secret).
+Two complete examples to copy from: `references/http-json.md` (generic JSON API wrapper with typed response) and `references/gitlab-issue.md` (create a GitLab issue via `ironflow-ops-gitlab`, typed queries and tracked operations).
 
 ## 3. Call it from a handler
 
 ```rust,no_run
+use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use serde_json::{Value, json};
-use std::future::Future;
-use std::pin::Pin;
 
 struct Ping;
 
+#[async_trait]
 impl Operation for Ping {
     fn kind(&self) -> &str {
         "ping"
     }
-    fn execute<'a>(
-        &'a self,
-        _ctx: &'a OperationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, OperationError>> + Send + 'a>> {
-        Box::pin(async move { Ok(json!({"ok": true})) })
+    async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
+        Ok(json!({"ok": true}))
     }
 }
 
