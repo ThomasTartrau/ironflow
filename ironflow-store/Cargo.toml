@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-store"
-version = "2.25.0"
+version = "2.26.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -30,7 +30,7 @@ sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }
 
 # Operation context (SecretResolver impl)
-ironflow-core = { version = "3.12.0", path = "../ironflow-core", optional = true }
+ironflow-core = { version = "3.13.0", path = "../ironflow-core", optional = true }
 
 # PostgreSQL (Phase 2)
 sqlx = { version = "0.8", features = [
