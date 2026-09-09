@@ -11,8 +11,7 @@ ironflow-api/dashboard/
 .codegraph.cache
 .envrc
 
-.claude/*
-!.claude/rules/
+.claude/worktrees
 
 # mdBook build output (root only, not docs/book/)
 /book/
