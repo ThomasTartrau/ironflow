@@ -2920,6 +2920,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-ops-common"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ironflow-core",
+ "ironflow-ops-common",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "ironflow-ops-git"
 version = "0.1.0"
 dependencies = [
@@ -2949,6 +2963,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "ironflow-core",
+ "ironflow-ops-common",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
@@ -2980,6 +2995,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "ironflow-core",
+ "ironflow-ops-common",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
@@ -2993,6 +3009,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "ironflow-core",
+ "ironflow-ops-common",
  "reqwest 0.13.2",
  "serde",
  "serde_json",

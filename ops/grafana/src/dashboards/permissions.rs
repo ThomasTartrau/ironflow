@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, post, to_value};
 
 use super::types::DashboardPermission;
 
@@ -31,9 +30,7 @@ use super::types::DashboardPermission;
 /// # }
 /// ```
 pub struct DashboardGetPermissions {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -41,9 +38,7 @@ impl DashboardGetPermissions {
     /// Create a get-permissions operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/dashboards/uid/{uid}/permissions")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -54,7 +49,9 @@ impl DashboardGetPermissions {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<DashboardPermission>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/dashboards/uid/{}/permissions", self.uid))
+            .await
     }
 }
 
@@ -65,7 +62,7 @@ impl Operation for DashboardGetPermissions {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -100,9 +97,7 @@ impl TypedOperation for DashboardGetPermissions {
 /// # }
 /// ```
 pub struct DashboardUpdatePermissions {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
     body: Value,
 }
@@ -111,9 +106,7 @@ impl DashboardUpdatePermissions {
     /// Create an update-permissions operation.
     pub fn new(client: &GrafanaClient, uid: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/dashboards/uid/{uid}/permissions")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
             body,
         }
@@ -125,7 +118,12 @@ impl DashboardUpdatePermissions {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        post::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json(
+                &format!("/api/dashboards/uid/{}/permissions", self.uid),
+                &self.body,
+            )
+            .await
     }
 }
 

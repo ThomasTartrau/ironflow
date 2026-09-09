@@ -6,12 +6,10 @@
 use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, patch, post, put, to_value};
 
 /// Response from annotation creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,9 +63,7 @@ pub struct AnnotationOutput {
 /// # }
 /// ```
 pub struct AnnotationCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -75,9 +71,7 @@ impl AnnotationCreate {
     /// Create a new annotation operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/annotations"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -88,7 +82,7 @@ impl AnnotationCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AnnotationCreateOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client.post_json("/api/annotations", &self.body).await
     }
 }
 
@@ -99,7 +93,7 @@ impl Operation for AnnotationCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -132,9 +126,7 @@ impl TypedOperation for AnnotationCreate {
 /// # }
 /// ```
 pub struct AnnotationList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     from: Option<u64>,
     to: Option<u64>,
 }
@@ -142,20 +134,8 @@ pub struct AnnotationList {
 impl AnnotationList {
     /// Create a list-annotations operation with optional time range.
     pub fn new(client: &GrafanaClient, from: Option<u64>, to: Option<u64>) -> Self {
-        let mut url = Url::parse(&client.url("/api/annotations")).expect("valid base URL");
-        {
-            let mut q = url.query_pairs_mut();
-            if let Some(f) = from {
-                q.append_pair("from", &f.to_string());
-            }
-            if let Some(t) = to {
-                q.append_pair("to", &t.to_string());
-            }
-        }
         Self {
-            url: url.to_string(),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             from,
             to,
         }
@@ -167,7 +147,16 @@ impl AnnotationList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<AnnotationOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        let mut params = Vec::new();
+        if let Some(f) = self.from {
+            params.push(("from", f.to_string()));
+        }
+        if let Some(t) = self.to {
+            params.push(("to", t.to_string()));
+        }
+        self.client
+            .get_json_with_query("/api/annotations", &params)
+            .await
     }
 }
 
@@ -178,7 +167,7 @@ impl Operation for AnnotationList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -211,9 +200,7 @@ impl TypedOperation for AnnotationList {
 /// # }
 /// ```
 pub struct AnnotationGetById {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -221,9 +208,7 @@ impl AnnotationGetById {
     /// Create a get-annotation operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/annotations/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -234,7 +219,9 @@ impl AnnotationGetById {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AnnotationOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/annotations/{}", self.id))
+            .await
     }
 }
 
@@ -245,7 +232,7 @@ impl Operation for AnnotationGetById {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -280,9 +267,7 @@ impl TypedOperation for AnnotationGetById {
 /// # }
 /// ```
 pub struct AnnotationUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     body: Value,
 }
@@ -291,9 +276,7 @@ impl AnnotationUpdate {
     /// Create an update-annotation operation.
     pub fn new(client: &GrafanaClient, id: u64, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/annotations/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             body,
         }
@@ -305,7 +288,9 @@ impl AnnotationUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        put::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(&format!("/api/annotations/{}", self.id), &self.body)
+            .await
     }
 }
 
@@ -347,9 +332,7 @@ impl Operation for AnnotationUpdate {
 /// # }
 /// ```
 pub struct AnnotationPatch {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     body: Value,
 }
@@ -358,9 +341,7 @@ impl AnnotationPatch {
     /// Create a patch-annotation operation.
     pub fn new(client: &GrafanaClient, id: u64, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/annotations/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             body,
         }
@@ -372,7 +353,9 @@ impl AnnotationPatch {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        patch::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .patch_json(&format!("/api/annotations/{}", self.id), &self.body)
+            .await
     }
 }
 
@@ -412,9 +395,7 @@ impl Operation for AnnotationPatch {
 /// # }
 /// ```
 pub struct AnnotationDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -422,9 +403,7 @@ impl AnnotationDelete {
     /// Create a delete-annotation operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/annotations/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -435,7 +414,9 @@ impl AnnotationDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/annotations/{}", self.id))
+            .await
     }
 }
 
@@ -475,18 +456,14 @@ impl Operation for AnnotationDelete {
 /// # }
 /// ```
 pub struct AnnotationGetTags {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl AnnotationGetTags {
     /// Create a get-tags operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/annotations/tags"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -496,7 +473,7 @@ impl AnnotationGetTags {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        get::<Value>(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/annotations/tags").await
     }
 }
 

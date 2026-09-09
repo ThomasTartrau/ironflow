@@ -352,7 +352,7 @@ impl Operation for GetDetectedFieldValues {
     /// Returns [`OperationError::Http`] if the request fails or the response
     /// status is not 2xx.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.field_name, "field name")?;
+        validate_path_segment(&self.field_name, "field name", "loki")?;
         let mut req = self
             .client
             .get(&format!(

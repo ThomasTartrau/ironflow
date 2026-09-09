@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, to_value};
 
 use super::types::{DashboardGetOutput, DashboardSaveOutput};
 
@@ -35,9 +34,7 @@ use super::types::{DashboardGetOutput, DashboardSaveOutput};
 /// # }
 /// ```
 pub struct DashboardSave {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -51,9 +48,7 @@ impl DashboardSave {
     /// Create a dashboard save operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/dashboards/db"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -64,7 +59,9 @@ impl DashboardSave {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<DashboardSaveOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json("/api/dashboards/db", &self.body)
+            .await
     }
 }
 
@@ -75,7 +72,7 @@ impl Operation for DashboardSave {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -108,9 +105,7 @@ impl TypedOperation for DashboardSave {
 /// # }
 /// ```
 pub struct DashboardGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -118,9 +113,7 @@ impl DashboardGet {
     /// Create a get-dashboard operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/dashboards/uid/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -131,7 +124,9 @@ impl DashboardGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<DashboardGetOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/dashboards/uid/{}", self.uid))
+            .await
     }
 }
 
@@ -142,7 +137,7 @@ impl Operation for DashboardGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -175,9 +170,7 @@ impl TypedOperation for DashboardGet {
 /// # }
 /// ```
 pub struct DashboardDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -185,9 +178,7 @@ impl DashboardDelete {
     /// Create a delete-dashboard operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/dashboards/uid/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -198,7 +189,9 @@ impl DashboardDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/dashboards/uid/{}", self.uid))
+            .await
     }
 }
 

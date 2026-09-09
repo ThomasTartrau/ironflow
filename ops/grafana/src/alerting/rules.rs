@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, put, to_value};
 
 use super::types::AlertRuleOutput;
 
@@ -31,9 +30,7 @@ use super::types::AlertRuleOutput;
 /// # }
 /// ```
 pub struct AlertRuleGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -41,9 +38,7 @@ impl AlertRuleGet {
     /// Create a get-alert-rule operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/alert-rules/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -54,7 +49,9 @@ impl AlertRuleGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AlertRuleOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/v1/provisioning/alert-rules/{}", self.uid))
+            .await
     }
 }
 
@@ -65,7 +62,7 @@ impl Operation for AlertRuleGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -98,18 +95,14 @@ impl TypedOperation for AlertRuleGet {
 /// # }
 /// ```
 pub struct AlertRuleList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl AlertRuleList {
     /// Create a list-alert-rules operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/v1/provisioning/alert-rules"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -119,7 +112,9 @@ impl AlertRuleList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<AlertRuleOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json("/api/v1/provisioning/alert-rules")
+            .await
     }
 }
 
@@ -130,7 +125,7 @@ impl Operation for AlertRuleList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -161,9 +156,7 @@ impl TypedOperation for AlertRuleList {
 /// # }
 /// ```
 pub struct AlertRuleCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -171,9 +164,7 @@ impl AlertRuleCreate {
     /// Create a create-alert-rule operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/v1/provisioning/alert-rules"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -184,7 +175,9 @@ impl AlertRuleCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AlertRuleOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json("/api/v1/provisioning/alert-rules", &self.body)
+            .await
     }
 }
 
@@ -195,7 +188,7 @@ impl Operation for AlertRuleCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -230,9 +223,7 @@ impl TypedOperation for AlertRuleCreate {
 /// # }
 /// ```
 pub struct AlertRuleUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
     body: Value,
 }
@@ -241,9 +232,7 @@ impl AlertRuleUpdate {
     /// Create an update-alert-rule operation.
     pub fn new(client: &GrafanaClient, uid: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/alert-rules/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
             body,
         }
@@ -255,7 +244,12 @@ impl AlertRuleUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AlertRuleOutput, OperationError> {
-        put(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(
+                &format!("/api/v1/provisioning/alert-rules/{}", self.uid),
+                &self.body,
+            )
+            .await
     }
 }
 
@@ -266,7 +260,7 @@ impl Operation for AlertRuleUpdate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -299,9 +293,7 @@ impl TypedOperation for AlertRuleUpdate {
 /// # }
 /// ```
 pub struct AlertRuleDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -309,9 +301,7 @@ impl AlertRuleDelete {
     /// Create a delete-alert-rule operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/alert-rules/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -322,7 +312,9 @@ impl AlertRuleDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/v1/provisioning/alert-rules/{}", self.uid))
+            .await
     }
 }
 

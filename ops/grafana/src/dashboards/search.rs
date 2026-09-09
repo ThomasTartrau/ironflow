@@ -3,10 +3,10 @@
 use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
+use ironflow_ops_common::helpers::{check_response_json, reqwest_err};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, to_value};
 
 use super::types::DashboardSearchHit;
 
@@ -31,9 +31,7 @@ use super::types::DashboardSearchHit;
 /// # }
 /// ```
 pub struct DashboardSearch {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     query: Option<String>,
     tag: Option<String>,
 }
@@ -43,22 +41,8 @@ impl DashboardSearch {
     ///
     /// Both `query` and `tag` are optional filters.
     pub fn new(client: &GrafanaClient, query: Option<&str>, tag: Option<&str>) -> Self {
-        let base = client.url("/api/search");
-        let mut url = reqwest::Url::parse(&base).expect("base URL is always valid");
-        {
-            let mut pairs = url.query_pairs_mut();
-            pairs.append_pair("type", "dash-db");
-            if let Some(q) = query {
-                pairs.append_pair("query", q);
-            }
-            if let Some(t) = tag {
-                pairs.append_pair("tag", t);
-            }
-        }
         Self {
-            url: url.to_string(),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             query: query.map(String::from),
             tag: tag.map(String::from),
         }
@@ -70,7 +54,18 @@ impl DashboardSearch {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<DashboardSearchHit>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        let mut req = self
+            .client
+            .get_request("/api/search")
+            .query(&[("type", "dash-db")]);
+        if let Some(ref q) = self.query {
+            req = req.query(&[("query", q.as_str())]);
+        }
+        if let Some(ref t) = self.tag {
+            req = req.query(&[("tag", t.as_str())]);
+        }
+        let resp = req.send().await.map_err(reqwest_err)?;
+        check_response_json(resp).await
     }
 }
 
@@ -81,7 +76,7 @@ impl Operation for DashboardSearch {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {

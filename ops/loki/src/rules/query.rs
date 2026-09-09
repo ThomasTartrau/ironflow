@@ -145,7 +145,7 @@ impl Operation for GetRulesByNamespace {
     /// Returns [`OperationError::Http`] if the request fails or the response
     /// status is not 2xx.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.namespace, "namespace")?;
+        validate_path_segment(&self.namespace, "namespace", "loki")?;
         let response = self
             .client
             .get(&format!("/loki/api/v1/rules/{}", self.namespace))
@@ -230,8 +230,8 @@ impl Operation for GetRuleGroup {
     /// Returns [`OperationError::Http`] if the request fails or the response
     /// status is not 2xx.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.namespace, "namespace")?;
-        validate_path_segment(&self.group, "group")?;
+        validate_path_segment(&self.namespace, "namespace", "loki")?;
+        validate_path_segment(&self.group, "group", "loki")?;
         let response = self
             .client
             .get(&format!(

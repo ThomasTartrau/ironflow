@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, to_value};
 
 /// Response from snapshot creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,9 +61,7 @@ pub struct SnapshotListItem {
 /// # }
 /// ```
 pub struct SnapshotCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -72,9 +69,7 @@ impl SnapshotCreate {
     /// Create a snapshot creation operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/snapshots"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -85,7 +80,7 @@ impl SnapshotCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<SnapshotCreateOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client.post_json("/api/snapshots", &self.body).await
     }
 }
 
@@ -96,7 +91,7 @@ impl Operation for SnapshotCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -129,18 +124,14 @@ impl TypedOperation for SnapshotCreate {
 /// # }
 /// ```
 pub struct SnapshotList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl SnapshotList {
     /// Create a list operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/dashboard/snapshots"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -150,7 +141,7 @@ impl SnapshotList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<SnapshotListItem>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/dashboard/snapshots").await
     }
 }
 
@@ -161,7 +152,7 @@ impl Operation for SnapshotList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -194,9 +185,7 @@ impl TypedOperation for SnapshotList {
 /// # }
 /// ```
 pub struct SnapshotGetByKey {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     key: String,
 }
 
@@ -204,9 +193,7 @@ impl SnapshotGetByKey {
     /// Create a get-by-key operation.
     pub fn new(client: &GrafanaClient, key: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/snapshots/{key}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             key: key.to_string(),
         }
     }
@@ -217,7 +204,9 @@ impl SnapshotGetByKey {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        get::<Value>(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/snapshots/{}", self.key))
+            .await
     }
 }
 
@@ -257,9 +246,7 @@ impl Operation for SnapshotGetByKey {
 /// # }
 /// ```
 pub struct SnapshotDeleteByKey {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     key: String,
 }
 
@@ -267,9 +254,7 @@ impl SnapshotDeleteByKey {
     /// Create a delete-by-key operation.
     pub fn new(client: &GrafanaClient, key: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/snapshots/{key}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             key: key.to_string(),
         }
     }
@@ -280,7 +265,9 @@ impl SnapshotDeleteByKey {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/snapshots/{}", self.key))
+            .await
     }
 }
 

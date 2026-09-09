@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, put, to_value};
 
 use super::types::ContactPointOutput;
 
@@ -31,18 +30,14 @@ use super::types::ContactPointOutput;
 /// # }
 /// ```
 pub struct ContactPointList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl ContactPointList {
     /// Create a list-contact-points operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/v1/provisioning/contact-points"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -52,7 +47,9 @@ impl ContactPointList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<ContactPointOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json("/api/v1/provisioning/contact-points")
+            .await
     }
 }
 
@@ -63,7 +60,7 @@ impl Operation for ContactPointList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -94,9 +91,7 @@ impl TypedOperation for ContactPointList {
 /// # }
 /// ```
 pub struct ContactPointCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -104,9 +99,7 @@ impl ContactPointCreate {
     /// Create a create-contact-point operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/v1/provisioning/contact-points"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -117,7 +110,9 @@ impl ContactPointCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<ContactPointOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json("/api/v1/provisioning/contact-points", &self.body)
+            .await
     }
 }
 
@@ -128,7 +123,7 @@ impl Operation for ContactPointCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -163,9 +158,7 @@ impl TypedOperation for ContactPointCreate {
 /// # }
 /// ```
 pub struct ContactPointUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
     body: Value,
 }
@@ -174,9 +167,7 @@ impl ContactPointUpdate {
     /// Create an update-contact-point operation.
     pub fn new(client: &GrafanaClient, uid: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/contact-points/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
             body,
         }
@@ -188,7 +179,12 @@ impl ContactPointUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        put::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(
+                &format!("/api/v1/provisioning/contact-points/{}", self.uid),
+                &self.body,
+            )
+            .await
     }
 }
 
@@ -228,9 +224,7 @@ impl Operation for ContactPointUpdate {
 /// # }
 /// ```
 pub struct ContactPointDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -238,9 +232,7 @@ impl ContactPointDelete {
     /// Create a delete-contact-point operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/contact-points/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -251,7 +243,9 @@ impl ContactPointDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/v1/provisioning/contact-points/{}", self.uid))
+            .await
     }
 }
 

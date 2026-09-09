@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, put, to_value};
 
 use super::types::{TeamListOutput, TeamOutput};
 
@@ -31,18 +30,14 @@ use super::types::{TeamListOutput, TeamOutput};
 /// # }
 /// ```
 pub struct TeamList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl TeamList {
     /// Create a list-teams operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/teams/search"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -52,7 +47,7 @@ impl TeamList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<TeamListOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/teams/search").await
     }
 }
 
@@ -63,7 +58,7 @@ impl Operation for TeamList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -92,9 +87,7 @@ impl TypedOperation for TeamList {
 /// # }
 /// ```
 pub struct TeamGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -102,9 +95,7 @@ impl TeamGet {
     /// Create a get-team operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/teams/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -115,7 +106,9 @@ impl TeamGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<TeamOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/teams/{}", self.id))
+            .await
     }
 }
 
@@ -126,7 +119,7 @@ impl Operation for TeamGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -160,9 +153,7 @@ impl TypedOperation for TeamGet {
 /// # }
 /// ```
 pub struct TeamCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -170,9 +161,7 @@ impl TeamCreate {
     /// Create a new-team operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/teams"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -183,7 +172,7 @@ impl TeamCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        post::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client.post_json("/api/teams", &self.body).await
     }
 }
 
@@ -224,9 +213,7 @@ impl Operation for TeamCreate {
 /// # }
 /// ```
 pub struct TeamUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     body: Value,
 }
@@ -235,9 +222,7 @@ impl TeamUpdate {
     /// Create an update-team operation.
     pub fn new(client: &GrafanaClient, id: u64, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/teams/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             body,
         }
@@ -249,7 +234,9 @@ impl TeamUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        put::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(&format!("/api/teams/{}", self.id), &self.body)
+            .await
     }
 }
 
@@ -289,9 +276,7 @@ impl Operation for TeamUpdate {
 /// # }
 /// ```
 pub struct TeamDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -299,9 +284,7 @@ impl TeamDelete {
     /// Create a delete-team operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/teams/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -312,7 +295,9 @@ impl TeamDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/teams/{}", self.id))
+            .await
     }
 }
 

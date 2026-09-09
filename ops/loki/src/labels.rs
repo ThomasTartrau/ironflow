@@ -196,7 +196,7 @@ impl Operation for GetLabelValues {
     /// Returns [`OperationError::Http`] if the request fails or the response
     /// status is not 2xx.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.name, "label name")?;
+        validate_path_segment(&self.name, "label name", "loki")?;
         let mut req = self
             .client
             .get(&format!("/loki/api/v1/label/{}/values", self.name));

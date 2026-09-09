@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, to_value};
 
 use super::types::OrgOutput;
 
@@ -31,18 +30,14 @@ use super::types::OrgOutput;
 /// # }
 /// ```
 pub struct OrgList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl OrgList {
     /// Create a list-orgs operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/orgs"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -52,7 +47,7 @@ impl OrgList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<OrgOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/orgs").await
     }
 }
 
@@ -63,7 +58,7 @@ impl Operation for OrgList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -92,9 +87,7 @@ impl TypedOperation for OrgList {
 /// # }
 /// ```
 pub struct OrgGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -102,9 +95,7 @@ impl OrgGet {
     /// Create a get-org operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/orgs/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -115,7 +106,9 @@ impl OrgGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<OrgOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/orgs/{}", self.id))
+            .await
     }
 }
 
@@ -126,7 +119,7 @@ impl Operation for OrgGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -159,9 +152,7 @@ impl TypedOperation for OrgGet {
 /// # }
 /// ```
 pub struct OrgCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     name: String,
 }
 
@@ -169,9 +160,7 @@ impl OrgCreate {
     /// Create a new-org operation.
     pub fn new(client: &GrafanaClient, name: &str) -> Self {
         Self {
-            url: client.url("/api/orgs"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             name: name.to_string(),
         }
     }
@@ -182,13 +171,9 @@ impl OrgCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        post::<_, Value>(
-            &self.http,
-            &self.url,
-            &self.token,
-            &serde_json::json!({ "name": self.name }),
-        )
-        .await
+        self.client
+            .post_json("/api/orgs", &serde_json::json!({ "name": self.name }))
+            .await
     }
 }
 
@@ -228,9 +213,7 @@ impl Operation for OrgCreate {
 /// # }
 /// ```
 pub struct OrgDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -238,9 +221,7 @@ impl OrgDelete {
     /// Create a delete-org operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/orgs/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -251,7 +232,9 @@ impl OrgDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/orgs/{}", self.id))
+            .await
     }
 }
 

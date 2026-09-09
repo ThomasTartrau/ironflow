@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, put, to_value};
 
 use super::DataSourceOutput;
 
@@ -33,9 +32,7 @@ use super::DataSourceOutput;
 /// # }
 /// ```
 pub struct DataSourceCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -43,9 +40,7 @@ impl DataSourceCreate {
     /// Create a new data-source creation operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/datasources"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -56,7 +51,7 @@ impl DataSourceCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<DataSourceOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client.post_json("/api/datasources", &self.body).await
     }
 }
 
@@ -67,7 +62,7 @@ impl Operation for DataSourceCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -100,18 +95,14 @@ impl TypedOperation for DataSourceCreate {
 /// # }
 /// ```
 pub struct DataSourceList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl DataSourceList {
     /// Create a list-data-sources operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/datasources"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -121,7 +112,7 @@ impl DataSourceList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<DataSourceOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/datasources").await
     }
 }
 
@@ -132,7 +123,7 @@ impl Operation for DataSourceList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -163,9 +154,7 @@ impl TypedOperation for DataSourceList {
 /// # }
 /// ```
 pub struct DataSourceUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     body: Value,
 }
@@ -174,9 +163,7 @@ impl DataSourceUpdate {
     /// Create an update-data-source operation.
     pub fn new(client: &GrafanaClient, id: u64, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/datasources/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             body,
         }
@@ -188,7 +175,9 @@ impl DataSourceUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<DataSourceOutput, OperationError> {
-        put(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(&format!("/api/datasources/{}", self.id), &self.body)
+            .await
     }
 }
 
@@ -199,7 +188,7 @@ impl Operation for DataSourceUpdate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -232,9 +221,7 @@ impl TypedOperation for DataSourceUpdate {
 /// # }
 /// ```
 pub struct DataSourceDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -242,9 +229,7 @@ impl DataSourceDelete {
     /// Create a delete-data-source operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/datasources/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -255,7 +240,9 @@ impl DataSourceDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/datasources/{}", self.id))
+            .await
     }
 }
 
@@ -297,9 +284,7 @@ impl Operation for DataSourceDelete {
 /// # }
 /// ```
 pub struct DataSourceQuery {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -307,9 +292,7 @@ impl DataSourceQuery {
     /// Create a data-source query operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/ds/query"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -320,7 +303,7 @@ impl DataSourceQuery {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        post::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client.post_json("/api/ds/query", &self.body).await
     }
 }
 

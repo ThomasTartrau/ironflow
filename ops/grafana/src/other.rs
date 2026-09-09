@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, post, to_value};
 
 /// Short URL creation response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,9 +43,7 @@ pub struct ShortUrlOutput {
 /// # }
 /// ```
 pub struct CreateShortUrl {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -54,9 +51,7 @@ impl CreateShortUrl {
     /// Create a short-URL operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/short-urls"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -67,7 +62,7 @@ impl CreateShortUrl {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<ShortUrlOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client.post_json("/api/short-urls", &self.body).await
     }
 }
 
@@ -78,7 +73,7 @@ impl Operation for CreateShortUrl {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -112,18 +107,14 @@ impl TypedOperation for CreateShortUrl {
 /// # }
 /// ```
 pub struct GetFrontendSettings {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl GetFrontendSettings {
     /// Create a get-frontend-settings operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/frontend/settings"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -133,7 +124,7 @@ impl GetFrontendSettings {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        get::<Value>(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/frontend/settings").await
     }
 }
 
@@ -173,18 +164,14 @@ impl Operation for GetFrontendSettings {
 /// # }
 /// ```
 pub struct RenewAuth {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl RenewAuth {
     /// Create a renew-auth operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/auth/renew"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -194,7 +181,7 @@ impl RenewAuth {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        get::<Value>(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/auth/renew").await
     }
 }
 
