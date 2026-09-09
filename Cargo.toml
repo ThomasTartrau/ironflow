@@ -25,6 +25,7 @@ members = [
     "ops/git",
     "ops/k8s",
     "ops/loki",
+    "ops/tempo",
 ]
 
 [profile.release]
