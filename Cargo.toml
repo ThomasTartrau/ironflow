@@ -31,6 +31,7 @@ members = [
     "ops/slack",
     "ops/mimir",
     "ops/s3",
+    "ops/docker",
     "ops/postgres",
     "ops/helm",
 ]
