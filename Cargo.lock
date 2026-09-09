@@ -3132,6 +3132,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-ops-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ironflow-core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "ironflow-ops-slack"
 version = "0.1.0"
 dependencies = [
