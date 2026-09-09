@@ -2944,6 +2944,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-ops-grafana"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ironflow-core",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "ironflow-ops-k8s"
 version = "0.1.2"
 dependencies = [
