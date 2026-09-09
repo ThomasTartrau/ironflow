@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, post, to_value};
 
 /// Server-wide statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,18 +69,14 @@ pub struct HealthOutput {
 /// # }
 /// ```
 pub struct AdminGetStats {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl AdminGetStats {
     /// Create a get-stats operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/admin/stats"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -91,7 +86,7 @@ impl AdminGetStats {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AdminStatsOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/admin/stats").await
     }
 }
 
@@ -102,7 +97,7 @@ impl Operation for AdminGetStats {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -136,9 +131,7 @@ impl TypedOperation for AdminGetStats {
 /// # }
 /// ```
 pub struct AdminSetAlertsPause {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     paused: bool,
 }
 
@@ -152,9 +145,7 @@ impl AdminSetAlertsPause {
     /// Create a set-alerts-pause operation.
     pub fn new(client: &GrafanaClient, paused: bool) -> Self {
         Self {
-            url: client.url("/api/admin/pause-all-alerts"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             paused,
         }
     }
@@ -165,13 +156,12 @@ impl AdminSetAlertsPause {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        post::<_, Value>(
-            &self.http,
-            &self.url,
-            &self.token,
-            &serde_json::json!({ "paused": self.paused }),
-        )
-        .await
+        self.client
+            .post_json(
+                "/api/admin/pause-all-alerts",
+                &serde_json::json!({ "paused": self.paused }),
+            )
+            .await
     }
 }
 
@@ -211,18 +201,14 @@ impl Operation for AdminSetAlertsPause {
 /// # }
 /// ```
 pub struct AdminGetHealth {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl AdminGetHealth {
     /// Create a get-health operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/health"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -232,7 +218,7 @@ impl AdminGetHealth {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<HealthOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/health").await
     }
 }
 
@@ -243,7 +229,7 @@ impl Operation for AdminGetHealth {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {

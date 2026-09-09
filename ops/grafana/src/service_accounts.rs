@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, patch, post, to_value};
 
 /// Service account metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,18 +59,14 @@ pub struct ServiceAccountTokenOutput {
 /// # }
 /// ```
 pub struct ServiceAccountList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl ServiceAccountList {
     /// Create a list operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/serviceaccounts/search"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -81,7 +76,7 @@ impl ServiceAccountList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        get::<Value>(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/serviceaccounts/search").await
     }
 }
 
@@ -121,9 +116,7 @@ impl Operation for ServiceAccountList {
 /// # }
 /// ```
 pub struct ServiceAccountGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -131,9 +124,7 @@ impl ServiceAccountGet {
     /// Create a get operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/serviceaccounts/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -144,7 +135,9 @@ impl ServiceAccountGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<ServiceAccountOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/serviceaccounts/{}", self.id))
+            .await
     }
 }
 
@@ -155,7 +148,7 @@ impl Operation for ServiceAccountGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -190,9 +183,7 @@ impl TypedOperation for ServiceAccountGet {
 /// # }
 /// ```
 pub struct ServiceAccountCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -200,9 +191,7 @@ impl ServiceAccountCreate {
     /// Create a service account creation operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/serviceaccounts"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -213,7 +202,9 @@ impl ServiceAccountCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<ServiceAccountOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json("/api/serviceaccounts", &self.body)
+            .await
     }
 }
 
@@ -224,7 +215,7 @@ impl Operation for ServiceAccountCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -259,9 +250,7 @@ impl TypedOperation for ServiceAccountCreate {
 /// # }
 /// ```
 pub struct ServiceAccountUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     body: Value,
 }
@@ -270,9 +259,7 @@ impl ServiceAccountUpdate {
     /// Create an update operation.
     pub fn new(client: &GrafanaClient, id: u64, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/serviceaccounts/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             body,
         }
@@ -284,7 +271,9 @@ impl ServiceAccountUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<ServiceAccountOutput, OperationError> {
-        patch(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .patch_json(&format!("/api/serviceaccounts/{}", self.id), &self.body)
+            .await
     }
 }
 
@@ -295,7 +284,7 @@ impl Operation for ServiceAccountUpdate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -328,9 +317,7 @@ impl TypedOperation for ServiceAccountUpdate {
 /// # }
 /// ```
 pub struct ServiceAccountDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -338,9 +325,7 @@ impl ServiceAccountDelete {
     /// Create a delete operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/serviceaccounts/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -351,7 +336,9 @@ impl ServiceAccountDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/serviceaccounts/{}", self.id))
+            .await
     }
 }
 
@@ -393,9 +380,7 @@ impl Operation for ServiceAccountDelete {
 /// # }
 /// ```
 pub struct ServiceAccountCreateToken {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     body: Value,
 }
@@ -404,9 +389,7 @@ impl ServiceAccountCreateToken {
     /// Create a token creation operation.
     pub fn new(client: &GrafanaClient, id: u64, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/serviceaccounts/{id}/tokens")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             body,
         }
@@ -418,7 +401,12 @@ impl ServiceAccountCreateToken {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<ServiceAccountTokenOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json(
+                &format!("/api/serviceaccounts/{}/tokens", self.id),
+                &self.body,
+            )
+            .await
     }
 }
 
@@ -433,7 +421,7 @@ impl Operation for ServiceAccountCreateToken {
         // Redact the token key -- it is a one-time secret that must not be
         // persisted in the workflow step history.
         output.key = output.key.map(|_| "[REDACTED]".to_string());
-        to_value(&output)
+        GrafanaClient::to_value(&output)
     }
 
     fn input(&self) -> Option<Value> {
@@ -466,9 +454,7 @@ impl TypedOperation for ServiceAccountCreateToken {
 /// # }
 /// ```
 pub struct ServiceAccountDeleteToken {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     token_id: u64,
 }
@@ -477,9 +463,7 @@ impl ServiceAccountDeleteToken {
     /// Create a token deletion operation.
     pub fn new(client: &GrafanaClient, id: u64, token_id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/serviceaccounts/{id}/tokens/{token_id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             token_id,
         }
@@ -491,7 +475,12 @@ impl ServiceAccountDeleteToken {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!(
+                "/api/serviceaccounts/{}/tokens/{}",
+                self.id, self.token_id
+            ))
+            .await
     }
 }
 

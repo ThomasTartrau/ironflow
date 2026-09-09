@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, put, to_value};
 
 /// Playlist metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,18 +44,14 @@ pub struct PlaylistOutput {
 /// # }
 /// ```
 pub struct PlaylistList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl PlaylistList {
     /// Create a list operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/playlists"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -66,7 +61,7 @@ impl PlaylistList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<PlaylistOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/playlists").await
     }
 }
 
@@ -77,7 +72,7 @@ impl Operation for PlaylistList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -110,9 +105,7 @@ impl TypedOperation for PlaylistList {
 /// # }
 /// ```
 pub struct PlaylistGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -120,9 +113,7 @@ impl PlaylistGet {
     /// Create a get operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/playlists/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -133,7 +124,9 @@ impl PlaylistGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<PlaylistOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/playlists/{}", self.uid))
+            .await
     }
 }
 
@@ -144,7 +137,7 @@ impl Operation for PlaylistGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -179,9 +172,7 @@ impl TypedOperation for PlaylistGet {
 /// # }
 /// ```
 pub struct PlaylistCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -189,9 +180,7 @@ impl PlaylistCreate {
     /// Create a playlist creation operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/playlists"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -202,7 +191,7 @@ impl PlaylistCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<PlaylistOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client.post_json("/api/playlists", &self.body).await
     }
 }
 
@@ -213,7 +202,7 @@ impl Operation for PlaylistCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -248,9 +237,7 @@ impl TypedOperation for PlaylistCreate {
 /// # }
 /// ```
 pub struct PlaylistUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
     body: Value,
 }
@@ -259,9 +246,7 @@ impl PlaylistUpdate {
     /// Create an update operation.
     pub fn new(client: &GrafanaClient, uid: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/playlists/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
             body,
         }
@@ -273,7 +258,9 @@ impl PlaylistUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<PlaylistOutput, OperationError> {
-        put(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(&format!("/api/playlists/{}", self.uid), &self.body)
+            .await
     }
 }
 
@@ -284,7 +271,7 @@ impl Operation for PlaylistUpdate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -317,9 +304,7 @@ impl TypedOperation for PlaylistUpdate {
 /// # }
 /// ```
 pub struct PlaylistDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -327,9 +312,7 @@ impl PlaylistDelete {
     /// Create a delete operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/playlists/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -340,7 +323,9 @@ impl PlaylistDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/playlists/{}", self.uid))
+            .await
     }
 }
 

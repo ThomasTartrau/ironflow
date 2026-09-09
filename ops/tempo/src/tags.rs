@@ -197,7 +197,7 @@ impl Operation for GetSearchTagValues {
     /// Returns [`OperationError::External`] if the tag name is invalid, or
     /// [`OperationError::Http`] if the request fails.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.tag_name, "tag_name")?;
+        validate_path_segment(&self.tag_name, "tag_name", "tempo")?;
 
         let response = send_request(
             self.client
@@ -273,7 +273,7 @@ impl Operation for GetSearchTagValuesV2 {
     /// Returns [`OperationError::External`] if the tag name is invalid, or
     /// [`OperationError::Http`] if the request fails.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.tag_name, "tag_name")?;
+        validate_path_segment(&self.tag_name, "tag_name", "tempo")?;
 
         let response = send_request(
             self.client

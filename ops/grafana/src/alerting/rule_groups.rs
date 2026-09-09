@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, put, to_value};
 
 use super::types::AlertRuleGroupOutput;
 
@@ -31,9 +30,7 @@ use super::types::AlertRuleGroupOutput;
 /// # }
 /// ```
 pub struct AlertRuleGroupGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     folder_uid: String,
     group: String,
 }
@@ -42,11 +39,7 @@ impl AlertRuleGroupGet {
     /// Create a get-alert-rule-group operation.
     pub fn new(client: &GrafanaClient, folder_uid: &str, group: &str) -> Self {
         Self {
-            url: client.url(&format!(
-                "/api/v1/provisioning/folder/{folder_uid}/rule-groups/{group}"
-            )),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             folder_uid: folder_uid.to_string(),
             group: group.to_string(),
         }
@@ -58,7 +51,12 @@ impl AlertRuleGroupGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AlertRuleGroupOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!(
+                "/api/v1/provisioning/folder/{}/rule-groups/{}",
+                self.folder_uid, self.group
+            ))
+            .await
     }
 }
 
@@ -69,7 +67,7 @@ impl Operation for AlertRuleGroupGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -107,9 +105,7 @@ impl TypedOperation for AlertRuleGroupGet {
 /// # }
 /// ```
 pub struct AlertRuleGroupUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     folder_uid: String,
     group: String,
     body: Value,
@@ -119,11 +115,7 @@ impl AlertRuleGroupUpdate {
     /// Create an update-alert-rule-group operation.
     pub fn new(client: &GrafanaClient, folder_uid: &str, group: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!(
-                "/api/v1/provisioning/folder/{folder_uid}/rule-groups/{group}"
-            )),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             folder_uid: folder_uid.to_string(),
             group: group.to_string(),
             body,
@@ -136,7 +128,15 @@ impl AlertRuleGroupUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<AlertRuleGroupOutput, OperationError> {
-        put(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(
+                &format!(
+                    "/api/v1/provisioning/folder/{}/rule-groups/{}",
+                    self.folder_uid, self.group
+                ),
+                &self.body,
+            )
+            .await
     }
 }
 
@@ -147,7 +147,7 @@ impl Operation for AlertRuleGroupUpdate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {

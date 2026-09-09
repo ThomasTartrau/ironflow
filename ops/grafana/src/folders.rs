@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, put, to_value};
 
 /// Folder metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,9 +62,7 @@ pub struct FolderPermission {
 /// # }
 /// ```
 pub struct FolderCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     title: String,
     uid: Option<String>,
 }
@@ -74,9 +71,7 @@ impl FolderCreate {
     /// Create a new folder operation.
     pub fn new(client: &GrafanaClient, title: &str, uid: Option<&str>) -> Self {
         Self {
-            url: client.url("/api/folders"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             title: title.to_string(),
             uid: uid.map(String::from),
         }
@@ -92,7 +87,7 @@ impl FolderCreate {
         if let Some(uid) = &self.uid {
             body["uid"] = Value::String(uid.clone());
         }
-        post(&self.http, &self.url, &self.token, &body).await
+        self.client.post_json("/api/folders", &body).await
     }
 }
 
@@ -103,7 +98,7 @@ impl Operation for FolderCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -136,9 +131,7 @@ impl TypedOperation for FolderCreate {
 /// # }
 /// ```
 pub struct FolderGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -146,9 +139,7 @@ impl FolderGet {
     /// Create a get-folder operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/folders/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -159,7 +150,9 @@ impl FolderGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<FolderOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/folders/{}", self.uid))
+            .await
     }
 }
 
@@ -170,7 +163,7 @@ impl Operation for FolderGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -203,9 +196,7 @@ impl TypedOperation for FolderGet {
 /// # }
 /// ```
 pub struct FolderUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
     title: String,
     version: u64,
@@ -215,9 +206,7 @@ impl FolderUpdate {
     /// Create an update-folder operation.
     pub fn new(client: &GrafanaClient, uid: &str, title: &str, version: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/folders/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
             title: title.to_string(),
             version,
@@ -231,7 +220,9 @@ impl FolderUpdate {
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<FolderOutput, OperationError> {
         let body = serde_json::json!({ "title": self.title, "version": self.version });
-        put(&self.http, &self.url, &self.token, &body).await
+        self.client
+            .put_json(&format!("/api/folders/{}", self.uid), &body)
+            .await
     }
 }
 
@@ -242,7 +233,7 @@ impl Operation for FolderUpdate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -275,9 +266,7 @@ impl TypedOperation for FolderUpdate {
 /// # }
 /// ```
 pub struct FolderDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -285,9 +274,7 @@ impl FolderDelete {
     /// Create a delete-folder operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/folders/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -298,7 +285,9 @@ impl FolderDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/folders/{}", self.uid))
+            .await
     }
 }
 
@@ -338,9 +327,7 @@ impl Operation for FolderDelete {
 /// # }
 /// ```
 pub struct FolderGetPermissions {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -348,9 +335,7 @@ impl FolderGetPermissions {
     /// Create a get-permissions operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/folders/{uid}/permissions")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -361,7 +346,9 @@ impl FolderGetPermissions {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<FolderPermission>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/folders/{}/permissions", self.uid))
+            .await
     }
 }
 
@@ -372,7 +359,7 @@ impl Operation for FolderGetPermissions {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -407,9 +394,7 @@ impl TypedOperation for FolderGetPermissions {
 /// # }
 /// ```
 pub struct FolderUpdatePermissions {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
     body: Value,
 }
@@ -418,9 +403,7 @@ impl FolderUpdatePermissions {
     /// Create an update-permissions operation.
     pub fn new(client: &GrafanaClient, uid: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/folders/{uid}/permissions")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
             body,
         }
@@ -432,7 +415,12 @@ impl FolderUpdatePermissions {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        post::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json(
+                &format!("/api/folders/{}/permissions", self.uid),
+                &self.body,
+            )
+            .await
     }
 }
 

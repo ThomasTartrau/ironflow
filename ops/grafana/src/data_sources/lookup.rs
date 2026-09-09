@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, to_value};
 
 use super::DataSourceOutput;
 
@@ -31,9 +30,7 @@ use super::DataSourceOutput;
 /// # }
 /// ```
 pub struct DataSourceGetById {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -41,9 +38,7 @@ impl DataSourceGetById {
     /// Create a get-data-source-by-id operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/datasources/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -54,7 +49,9 @@ impl DataSourceGetById {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<DataSourceOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/datasources/{}", self.id))
+            .await
     }
 }
 
@@ -65,7 +62,7 @@ impl Operation for DataSourceGetById {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -98,9 +95,7 @@ impl TypedOperation for DataSourceGetById {
 /// # }
 /// ```
 pub struct DataSourceGetByUid {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -108,9 +103,7 @@ impl DataSourceGetByUid {
     /// Create a get-data-source-by-uid operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/datasources/uid/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -121,7 +114,9 @@ impl DataSourceGetByUid {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<DataSourceOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/datasources/uid/{}", self.uid))
+            .await
     }
 }
 
@@ -132,7 +127,7 @@ impl Operation for DataSourceGetByUid {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -165,9 +160,7 @@ impl TypedOperation for DataSourceGetByUid {
 /// # }
 /// ```
 pub struct DataSourceGetByName {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     name: String,
 }
 
@@ -175,9 +168,7 @@ impl DataSourceGetByName {
     /// Create a get-data-source-by-name operation.
     pub fn new(client: &GrafanaClient, name: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/datasources/name/{name}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             name: name.to_string(),
         }
     }
@@ -188,7 +179,9 @@ impl DataSourceGetByName {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<DataSourceOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/datasources/name/{}", self.name))
+            .await
     }
 }
 
@@ -199,7 +192,7 @@ impl Operation for DataSourceGetByName {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {

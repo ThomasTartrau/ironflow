@@ -4,6 +4,7 @@ use std::fmt;
 
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::OperationContext;
+use ironflow_ops_common::HttpApiClient;
 use reqwest::Client;
 use reqwest::RequestBuilder;
 
@@ -39,37 +40,16 @@ use reqwest::RequestBuilder;
 /// ```
 #[derive(Clone)]
 pub struct TempoClient {
-    base_url: String,
-    auth: Auth,
-    http: Client,
+    inner: HttpApiClient,
 }
 
 impl fmt::Debug for TempoClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TempoClient")
-            .field("base_url", &self.base_url)
-            .field("auth", &self.auth)
+            .field("base_url", &self.inner.base_url())
+            .field("auth", self.inner.auth())
             .field("http", &"[reqwest::Client]")
             .finish()
-    }
-}
-
-#[derive(Clone)]
-enum Auth {
-    None,
-    Bearer(String),
-    Basic { user: String, password: String },
-}
-
-impl fmt::Debug for Auth {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Auth::None => write!(f, "None"),
-            Auth::Bearer(_) => write!(f, "Bearer(<redacted>)"),
-            Auth::Basic { user, .. } => {
-                write!(f, "Basic {{ user: {user:?}, password: <redacted> }}")
-            }
-        }
     }
 }
 
@@ -98,41 +78,10 @@ impl TempoClient {
     /// # }
     /// ```
     pub async fn from_context(ctx: &OperationContext) -> Result<Self, OperationError> {
-        let url_secret = ctx.secrets().get("tempo_url").await?;
-        let base_url = url_secret
-            .filter(|s| !s.value.is_empty())
-            .map(|s| s.value)
-            .ok_or_else(|| OperationError::Secret {
-                message: "missing or empty secret: tempo_url".into(),
-            })?;
-
-        let base_url = base_url.trim_end_matches('/').to_owned();
-
-        let token = ctx.secrets().get("tempo_token").await?;
-        let basic = ctx.secrets().get("tempo_basic_auth").await?;
-
-        let auth = if let Some(t) = token.filter(|s| !s.value.is_empty()) {
-            Auth::Bearer(t.value)
-        } else if let Some(b) = basic.filter(|s| !s.value.is_empty()) {
-            let (user, password) =
-                b.value
-                    .split_once(':')
-                    .ok_or_else(|| OperationError::Secret {
-                        message: "tempo_basic_auth must be in 'user:password' format".into(),
-                    })?;
-            Auth::Basic {
-                user: user.to_owned(),
-                password: password.to_owned(),
-            }
-        } else {
-            Auth::None
-        };
-
-        Ok(Self {
-            base_url,
-            auth,
-            http: ctx.http_client().clone(),
-        })
+        let inner =
+            HttpApiClient::from_context(ctx, "tempo_url", "tempo_token", "tempo_basic_auth")
+                .await?;
+        Ok(Self { inner })
     }
 
     /// Build a client from explicit parameters, without a secret store.
@@ -147,9 +96,7 @@ impl TempoClient {
     /// ```
     pub fn new(base_url: &str, http: Client) -> Self {
         Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            auth: Auth::None,
-            http,
+            inner: HttpApiClient::new(base_url, http),
         }
     }
 
@@ -166,7 +113,7 @@ impl TempoClient {
     /// ```
     #[must_use]
     pub fn with_bearer_token(mut self, token: &str) -> Self {
-        self.auth = Auth::Bearer(token.to_owned());
+        self.inner = self.inner.with_bearer_token(token);
         self
     }
 
@@ -183,62 +130,47 @@ impl TempoClient {
     /// ```
     #[must_use]
     pub fn with_basic_auth(mut self, user: &str, password: &str) -> Self {
-        self.auth = Auth::Basic {
-            user: user.to_owned(),
-            password: password.to_owned(),
-        };
+        self.inner = self.inner.with_basic_auth(user, password);
         self
     }
 
     /// The base URL of the Tempo instance.
     pub fn base_url(&self) -> &str {
-        &self.base_url
+        self.inner.base_url()
     }
 
     /// The underlying HTTP client.
     pub fn http_client(&self) -> &Client {
-        &self.http
+        self.inner.http_client()
     }
 
     /// Build a GET request to the given path, with authentication applied.
     pub(crate) fn get(&self, path: &str) -> RequestBuilder {
-        self.authenticate(self.http.get(format!("{}{path}", self.base_url)))
+        self.inner.get(path)
     }
 
     /// Build a POST request to the given path, with authentication applied.
     pub(crate) fn post(&self, path: &str) -> RequestBuilder {
-        self.authenticate(self.http.post(format!("{}{path}", self.base_url)))
+        self.inner.post(path)
     }
 
     /// Build a PATCH request to the given path, with authentication applied.
     pub(crate) fn patch(&self, path: &str) -> RequestBuilder {
-        self.authenticate(self.http.patch(format!("{}{path}", self.base_url)))
+        self.inner.patch(path)
     }
 
     /// Build a DELETE request to the given path, with authentication applied.
     pub(crate) fn delete(&self, path: &str) -> RequestBuilder {
-        self.authenticate(self.http.delete(format!("{}{path}", self.base_url)))
-    }
-
-    fn authenticate(&self, builder: RequestBuilder) -> RequestBuilder {
-        match &self.auth {
-            Auth::None => builder,
-            Auth::Bearer(token) => builder.bearer_auth(token),
-            Auth::Basic { user, password } => builder.basic_auth(user, Some(password)),
-        }
+        self.inner.delete(path)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
-    use async_trait::async_trait;
     use ironflow_core::error::OperationError;
-    use ironflow_core::operation::{
-        NoopSecretResolver, OperationContext, SecretResolver, SecretValue,
-    };
+    use ironflow_core::operation::{NoopSecretResolver, OperationContext};
     use wiremock::matchers::{header, header_exists, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -268,16 +200,17 @@ mod tests {
     #[test]
     fn with_bearer_token_sets_auth() {
         let tempo = TempoClient::new("http://tempo:3200", Client::new()).with_bearer_token("tok");
-        assert!(matches!(tempo.auth, Auth::Bearer(ref t) if t == "tok"));
+        let debug = format!("{tempo:?}");
+        assert!(debug.contains("Bearer(<redacted>)"));
     }
 
     #[test]
     fn with_basic_auth_sets_auth() {
         let tempo =
             TempoClient::new("http://tempo:3200", Client::new()).with_basic_auth("user", "pass");
-        assert!(
-            matches!(tempo.auth, Auth::Basic { ref user, ref password } if user == "user" && password == "pass")
-        );
+        let debug = format!("{tempo:?}");
+        assert!(debug.contains("Basic"));
+        assert!(debug.contains("user"));
     }
 
     #[test]
@@ -290,33 +223,6 @@ mod tests {
             "Debug output must not contain the bearer token: {debug}"
         );
         assert!(debug.contains("<redacted>"));
-    }
-
-    struct MapSecretResolver(HashMap<String, String>);
-
-    #[async_trait]
-    impl SecretResolver for MapSecretResolver {
-        async fn get(&self, key: &str) -> Result<Option<SecretValue>, OperationError> {
-            Ok(self.0.get(key).map(|v| SecretValue { value: v.clone() }))
-        }
-    }
-
-    #[tokio::test]
-    async fn from_context_rejects_basic_auth_without_colon() {
-        let mut secrets = HashMap::new();
-        secrets.insert("tempo_url".into(), "http://tempo:3200".into());
-        secrets.insert("tempo_basic_auth".into(), "no-colon-here".into());
-        let ctx = OperationContext::new(Arc::new(MapSecretResolver(secrets)));
-        let err = TempoClient::from_context(&ctx).await.unwrap_err();
-        match err {
-            OperationError::Secret { message } => {
-                assert!(
-                    message.contains("user:password"),
-                    "expected format hint, got: {message}"
-                );
-            }
-            other => panic!("expected Secret error, got: {other}"),
-        }
     }
 
     #[tokio::test]

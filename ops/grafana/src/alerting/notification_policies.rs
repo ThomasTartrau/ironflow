@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, put, to_value};
 
 use super::types::NotificationPolicyOutput;
 
@@ -31,18 +30,14 @@ use super::types::NotificationPolicyOutput;
 /// # }
 /// ```
 pub struct NotificationPolicyGet {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl NotificationPolicyGet {
     /// Create a get-notification-policies operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/v1/provisioning/policies"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -52,7 +47,7 @@ impl NotificationPolicyGet {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<NotificationPolicyOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/v1/provisioning/policies").await
     }
 }
 
@@ -63,7 +58,7 @@ impl Operation for NotificationPolicyGet {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -94,9 +89,7 @@ impl TypedOperation for NotificationPolicyGet {
 /// # }
 /// ```
 pub struct NotificationPolicyUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -104,9 +97,7 @@ impl NotificationPolicyUpdate {
     /// Create an update-notification-policies operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/v1/provisioning/policies"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -117,7 +108,9 @@ impl NotificationPolicyUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        put::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json("/api/v1/provisioning/policies", &self.body)
+            .await
     }
 }
 

@@ -76,7 +76,7 @@ impl Operation for CreateRuleGroup {
     /// Returns [`OperationError::Http`] if the request fails or the response
     /// status is not 2xx.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.namespace, "namespace")?;
+        validate_path_segment(&self.namespace, "namespace", "loki")?;
         let response = self
             .client
             .post(&format!("/loki/api/v1/rules/{}", self.namespace))
@@ -166,8 +166,8 @@ impl Operation for DeleteRuleGroup {
     /// Returns [`OperationError::Http`] if the request fails or the response
     /// status is not 2xx.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.namespace, "namespace")?;
-        validate_path_segment(&self.group, "group")?;
+        validate_path_segment(&self.namespace, "namespace", "loki")?;
+        validate_path_segment(&self.group, "group", "loki")?;
         let response = self
             .client
             .delete(&format!(
@@ -255,7 +255,7 @@ impl Operation for DeleteRuleNamespace {
     /// Returns [`OperationError::Http`] if the request fails or the response
     /// status is not 2xx.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.namespace, "namespace")?;
+        validate_path_segment(&self.namespace, "namespace", "loki")?;
         let response = self
             .client
             .delete(&format!("/loki/api/v1/rules/{}", self.namespace))

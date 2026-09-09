@@ -6,11 +6,11 @@
 use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
+use ironflow_ops_common::helpers::{check_response_json, reqwest_err};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{get, put, to_value};
 
 /// User metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,18 +63,14 @@ pub struct UserSearchOutput {
 /// # }
 /// ```
 pub struct UserList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl UserList {
     /// Create a list-users operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/org/users"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -84,7 +80,7 @@ impl UserList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<UserOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/org/users").await
     }
 }
 
@@ -95,7 +91,7 @@ impl Operation for UserList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -124,9 +120,7 @@ impl TypedOperation for UserList {
 /// # }
 /// ```
 pub struct UserGetById {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
 }
 
@@ -134,9 +128,7 @@ impl UserGetById {
     /// Create a get-user operation.
     pub fn new(client: &GrafanaClient, id: u64) -> Self {
         Self {
-            url: client.url(&format!("/api/users/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
         }
     }
@@ -147,7 +139,9 @@ impl UserGetById {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<UserOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/users/{}", self.id))
+            .await
     }
 }
 
@@ -158,7 +152,7 @@ impl Operation for UserGetById {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -191,22 +185,15 @@ impl TypedOperation for UserGetById {
 /// # }
 /// ```
 pub struct UserSearch {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     query: String,
 }
 
 impl UserSearch {
     /// Create a search-users operation.
     pub fn new(client: &GrafanaClient, query: &str) -> Self {
-        let base = client.url("/api/users/search");
-        let mut url = reqwest::Url::parse(&base).expect("base URL is always valid");
-        url.query_pairs_mut().append_pair("query", query);
         Self {
-            url: url.to_string(),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             query: query.to_string(),
         }
     }
@@ -217,7 +204,14 @@ impl UserSearch {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<UserSearchOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        let resp = self
+            .client
+            .get_request("/api/users/search")
+            .query(&[("query", &self.query)])
+            .send()
+            .await
+            .map_err(reqwest_err)?;
+        check_response_json(resp).await
     }
 }
 
@@ -228,7 +222,7 @@ impl Operation for UserSearch {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -262,9 +256,7 @@ impl TypedOperation for UserSearch {
 /// # }
 /// ```
 pub struct UserUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     id: u64,
     body: Value,
 }
@@ -273,9 +265,7 @@ impl UserUpdate {
     /// Create an update-user operation.
     pub fn new(client: &GrafanaClient, id: u64, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/users/{id}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             id,
             body,
         }
@@ -287,7 +277,9 @@ impl UserUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        put::<_, Value>(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(&format!("/api/users/{}", self.id), &self.body)
+            .await
     }
 }
 

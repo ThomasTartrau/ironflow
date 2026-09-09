@@ -4,6 +4,7 @@ use std::fmt;
 
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::OperationContext;
+use ironflow_ops_common::HttpApiClient;
 use reqwest::Client;
 use reqwest::RequestBuilder;
 
@@ -39,37 +40,16 @@ use reqwest::RequestBuilder;
 /// ```
 #[derive(Clone)]
 pub struct LokiClient {
-    base_url: String,
-    auth: Auth,
-    http: Client,
+    inner: HttpApiClient,
 }
 
 impl fmt::Debug for LokiClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LokiClient")
-            .field("base_url", &self.base_url)
-            .field("auth", &self.auth)
+            .field("base_url", &self.inner.base_url())
+            .field("auth", self.inner.auth())
             .field("http", &"[reqwest::Client]")
             .finish()
-    }
-}
-
-#[derive(Clone)]
-enum Auth {
-    None,
-    Bearer(String),
-    Basic { user: String, password: String },
-}
-
-impl fmt::Debug for Auth {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Auth::None => write!(f, "None"),
-            Auth::Bearer(_) => write!(f, "Bearer(<redacted>)"),
-            Auth::Basic { user, .. } => {
-                write!(f, "Basic {{ user: {user:?}, password: <redacted> }}")
-            }
-        }
     }
 }
 
@@ -98,41 +78,9 @@ impl LokiClient {
     /// # }
     /// ```
     pub async fn from_context(ctx: &OperationContext) -> Result<Self, OperationError> {
-        let url_secret = ctx.secrets().get("loki_url").await?;
-        let base_url = url_secret
-            .filter(|s| !s.value.is_empty())
-            .map(|s| s.value)
-            .ok_or_else(|| OperationError::Secret {
-                message: "missing or empty secret: loki_url".into(),
-            })?;
-
-        let base_url = base_url.trim_end_matches('/').to_owned();
-
-        let token = ctx.secrets().get("loki_token").await?;
-        let basic = ctx.secrets().get("loki_basic_auth").await?;
-
-        let auth = if let Some(t) = token.filter(|s| !s.value.is_empty()) {
-            Auth::Bearer(t.value)
-        } else if let Some(b) = basic.filter(|s| !s.value.is_empty()) {
-            let (user, password) =
-                b.value
-                    .split_once(':')
-                    .ok_or_else(|| OperationError::Secret {
-                        message: "loki_basic_auth must be in 'user:password' format".into(),
-                    })?;
-            Auth::Basic {
-                user: user.to_owned(),
-                password: password.to_owned(),
-            }
-        } else {
-            Auth::None
-        };
-
-        Ok(Self {
-            base_url,
-            auth,
-            http: ctx.http_client().clone(),
-        })
+        let inner =
+            HttpApiClient::from_context(ctx, "loki_url", "loki_token", "loki_basic_auth").await?;
+        Ok(Self { inner })
     }
 
     /// Build a client from explicit parameters, without a secret store.
@@ -147,9 +95,7 @@ impl LokiClient {
     /// ```
     pub fn new(base_url: &str, http: Client) -> Self {
         Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            auth: Auth::None,
-            http,
+            inner: HttpApiClient::new(base_url, http),
         }
     }
 
@@ -166,7 +112,7 @@ impl LokiClient {
     /// ```
     #[must_use]
     pub fn with_bearer_token(mut self, token: &str) -> Self {
-        self.auth = Auth::Bearer(token.to_owned());
+        self.inner = self.inner.with_bearer_token(token);
         self
     }
 
@@ -183,44 +129,33 @@ impl LokiClient {
     /// ```
     #[must_use]
     pub fn with_basic_auth(mut self, user: &str, password: &str) -> Self {
-        self.auth = Auth::Basic {
-            user: user.to_owned(),
-            password: password.to_owned(),
-        };
+        self.inner = self.inner.with_basic_auth(user, password);
         self
     }
 
     /// The base URL of the Loki instance.
     pub fn base_url(&self) -> &str {
-        &self.base_url
+        self.inner.base_url()
     }
 
     /// The underlying HTTP client.
     pub fn http_client(&self) -> &Client {
-        &self.http
+        self.inner.http_client()
     }
 
     /// Build a GET request to the given path, with authentication applied.
     pub(crate) fn get(&self, path: &str) -> RequestBuilder {
-        self.authenticate(self.http.get(format!("{}{path}", self.base_url)))
+        self.inner.get(path)
     }
 
     /// Build a POST request to the given path, with authentication applied.
     pub(crate) fn post(&self, path: &str) -> RequestBuilder {
-        self.authenticate(self.http.post(format!("{}{path}", self.base_url)))
+        self.inner.post(path)
     }
 
     /// Build a DELETE request to the given path, with authentication applied.
     pub(crate) fn delete(&self, path: &str) -> RequestBuilder {
-        self.authenticate(self.http.delete(format!("{}{path}", self.base_url)))
-    }
-
-    fn authenticate(&self, builder: RequestBuilder) -> RequestBuilder {
-        match &self.auth {
-            Auth::None => builder,
-            Auth::Bearer(token) => builder.bearer_auth(token),
-            Auth::Basic { user, password } => builder.basic_auth(user, Some(password)),
-        }
+        self.inner.delete(path)
     }
 }
 
@@ -256,16 +191,17 @@ mod tests {
     #[test]
     fn with_bearer_token_sets_auth() {
         let loki = LokiClient::new("http://loki:3100", Client::new()).with_bearer_token("tok");
-        assert!(matches!(loki.auth, Auth::Bearer(ref t) if t == "tok"));
+        let debug = format!("{loki:?}");
+        assert!(debug.contains("Bearer(<redacted>)"));
     }
 
     #[test]
     fn with_basic_auth_sets_auth() {
         let loki =
             LokiClient::new("http://loki:3100", Client::new()).with_basic_auth("user", "pass");
-        assert!(
-            matches!(loki.auth, Auth::Basic { ref user, ref password } if user == "user" && password == "pass")
-        );
+        let debug = format!("{loki:?}");
+        assert!(debug.contains("Basic"));
+        assert!(debug.contains("user"));
     }
 
     #[test]

@@ -21,6 +21,7 @@ members = [
     "ironflow-cli",
     "ironflow-templates",
     "xtask",
+    "ops/common",
     "ops/gitlab",
     "ops/git",
     "ops/k8s",

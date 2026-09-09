@@ -6,7 +6,6 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, put, to_value};
 
 use super::types::TemplateOutput;
 
@@ -31,18 +30,14 @@ use super::types::TemplateOutput;
 /// # }
 /// ```
 pub struct TemplateList {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl TemplateList {
     /// Create a list-templates operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/v1/provisioning/templates"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -52,7 +47,7 @@ impl TemplateList {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<TemplateOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/v1/provisioning/templates").await
     }
 }
 
@@ -63,7 +58,7 @@ impl Operation for TemplateList {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 }
 
@@ -94,9 +89,7 @@ impl TypedOperation for TemplateList {
 /// # }
 /// ```
 pub struct TemplateCreate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     name: String,
     body: Value,
 }
@@ -105,9 +98,7 @@ impl TemplateCreate {
     /// Create a create-template operation.
     pub fn new(client: &GrafanaClient, name: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/templates/{name}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             name: name.to_string(),
             body,
         }
@@ -119,7 +110,12 @@ impl TemplateCreate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<TemplateOutput, OperationError> {
-        put(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(
+                &format!("/api/v1/provisioning/templates/{}", self.name),
+                &self.body,
+            )
+            .await
     }
 }
 
@@ -130,7 +126,7 @@ impl Operation for TemplateCreate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -165,9 +161,7 @@ impl TypedOperation for TemplateCreate {
 /// # }
 /// ```
 pub struct TemplateUpdate {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     name: String,
     body: Value,
 }
@@ -176,9 +170,7 @@ impl TemplateUpdate {
     /// Create an update-template operation.
     pub fn new(client: &GrafanaClient, name: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/templates/{name}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             name: name.to_string(),
             body,
         }
@@ -190,7 +182,12 @@ impl TemplateUpdate {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<TemplateOutput, OperationError> {
-        put(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(
+                &format!("/api/v1/provisioning/templates/{}", self.name),
+                &self.body,
+            )
+            .await
     }
 }
 
@@ -201,7 +198,7 @@ impl Operation for TemplateUpdate {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -234,9 +231,7 @@ impl TypedOperation for TemplateUpdate {
 /// # }
 /// ```
 pub struct TemplateDelete {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     name: String,
 }
 
@@ -244,9 +239,7 @@ impl TemplateDelete {
     /// Create a delete-template operation.
     pub fn new(client: &GrafanaClient, name: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/v1/provisioning/templates/{name}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             name: name.to_string(),
         }
     }
@@ -257,7 +250,9 @@ impl TemplateDelete {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/v1/provisioning/templates/{}", self.name))
+            .await
     }
 }
 

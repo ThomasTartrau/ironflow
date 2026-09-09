@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::GrafanaClient;
-use crate::helpers::{delete, get, post, put, to_value};
 
 /// Role metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,18 +56,14 @@ pub struct RoleAssignment {
 /// # }
 /// ```
 pub struct RbacGetRoles {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
 }
 
 impl RbacGetRoles {
     /// Create a get-roles operation.
     pub fn new(client: &GrafanaClient) -> Self {
         Self {
-            url: client.url("/api/access-control/roles"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
         }
     }
 
@@ -78,7 +73,7 @@ impl RbacGetRoles {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<RoleOutput>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client.get_json("/api/access-control/roles").await
     }
 }
 
@@ -89,7 +84,7 @@ impl Operation for RbacGetRoles {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -122,9 +117,7 @@ impl TypedOperation for RbacGetRoles {
 /// # }
 /// ```
 pub struct RbacGetRole {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -132,9 +125,7 @@ impl RbacGetRole {
     /// Create a get-role operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/access-control/roles/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -145,7 +136,9 @@ impl RbacGetRole {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<RoleOutput, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!("/api/access-control/roles/{}", self.uid))
+            .await
     }
 }
 
@@ -156,7 +149,7 @@ impl Operation for RbacGetRole {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -191,9 +184,7 @@ impl TypedOperation for RbacGetRole {
 /// # }
 /// ```
 pub struct RbacCreateRole {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     body: Value,
 }
 
@@ -201,9 +192,7 @@ impl RbacCreateRole {
     /// Create a role creation operation.
     pub fn new(client: &GrafanaClient, body: Value) -> Self {
         Self {
-            url: client.url("/api/access-control/roles"),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             body,
         }
     }
@@ -214,7 +203,9 @@ impl RbacCreateRole {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<RoleOutput, OperationError> {
-        post(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .post_json("/api/access-control/roles", &self.body)
+            .await
     }
 }
 
@@ -225,7 +216,7 @@ impl Operation for RbacCreateRole {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -260,9 +251,7 @@ impl TypedOperation for RbacCreateRole {
 /// # }
 /// ```
 pub struct RbacUpdateRole {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
     body: Value,
 }
@@ -271,9 +260,7 @@ impl RbacUpdateRole {
     /// Create an update-role operation.
     pub fn new(client: &GrafanaClient, uid: &str, body: Value) -> Self {
         Self {
-            url: client.url(&format!("/api/access-control/roles/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
             body,
         }
@@ -285,7 +272,12 @@ impl RbacUpdateRole {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<RoleOutput, OperationError> {
-        put(&self.http, &self.url, &self.token, &self.body).await
+        self.client
+            .put_json(
+                &format!("/api/access-control/roles/{}", self.uid),
+                &self.body,
+            )
+            .await
     }
 }
 
@@ -296,7 +288,7 @@ impl Operation for RbacUpdateRole {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {
@@ -329,9 +321,7 @@ impl TypedOperation for RbacUpdateRole {
 /// # }
 /// ```
 pub struct RbacDeleteRole {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -339,9 +329,7 @@ impl RbacDeleteRole {
     /// Create a delete-role operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/access-control/roles/{uid}")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -352,7 +340,9 @@ impl RbacDeleteRole {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Value, OperationError> {
-        delete(&self.http, &self.url, &self.token).await
+        self.client
+            .delete_json(&format!("/api/access-control/roles/{}", self.uid))
+            .await
     }
 }
 
@@ -392,9 +382,7 @@ impl Operation for RbacDeleteRole {
 /// # }
 /// ```
 pub struct RbacGetRoleAssignments {
-    url: String,
-    token: String,
-    http: reqwest::Client,
+    client: GrafanaClient,
     uid: String,
 }
 
@@ -402,9 +390,7 @@ impl RbacGetRoleAssignments {
     /// Create a get-assignments operation.
     pub fn new(client: &GrafanaClient, uid: &str) -> Self {
         Self {
-            url: client.url(&format!("/api/access-control/roles/{uid}/assignments")),
-            token: client.token().to_string(),
-            http: client.http().clone(),
+            client: client.clone(),
             uid: uid.to_string(),
         }
     }
@@ -415,7 +401,12 @@ impl RbacGetRoleAssignments {
     ///
     /// Returns [`OperationError::Http`] on API failure.
     pub async fn run(&self) -> Result<Vec<RoleAssignment>, OperationError> {
-        get(&self.http, &self.url, &self.token).await
+        self.client
+            .get_json(&format!(
+                "/api/access-control/roles/{}/assignments",
+                self.uid
+            ))
+            .await
     }
 }
 
@@ -426,7 +417,7 @@ impl Operation for RbacGetRoleAssignments {
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        to_value(&self.run().await?)
+        GrafanaClient::to_value(&self.run().await?)
     }
 
     fn input(&self) -> Option<Value> {

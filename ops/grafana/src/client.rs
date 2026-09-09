@@ -4,7 +4,12 @@ use std::fmt;
 
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::OperationContext;
+use ironflow_ops_common::HttpApiClient;
+use ironflow_ops_common::helpers::{check_response_json, reqwest_err, to_value};
 use reqwest::Client;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 /// A Grafana API client that resolves credentials from the workflow's secret store.
 ///
@@ -32,10 +37,9 @@ use reqwest::Client;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct GrafanaClient {
-    http: Client,
-    base_url: String,
-    token: String,
+    inner: HttpApiClient,
 }
 
 impl GrafanaClient {
@@ -146,28 +150,13 @@ impl GrafanaClient {
                 message: format!("failed to build HTTP client: {e}"),
             })?;
 
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        Ok(Self {
-            http,
-            base_url,
-            token: token.to_string(),
-        })
-    }
-
-    /// The underlying [`reqwest::Client`].
-    pub(crate) fn http(&self) -> &Client {
-        &self.http
+        let inner = HttpApiClient::new(base_url, http).with_bearer_token(token);
+        Ok(Self { inner })
     }
 
     /// The base URL (without trailing slash).
     pub fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    /// The bearer token.
-    pub(crate) fn token(&self) -> &str {
-        &self.token
+        self.inner.base_url()
     }
 
     /// Build a full API URL by appending `path` to the base URL.
@@ -184,15 +173,88 @@ impl GrafanaClient {
     /// # }
     /// ```
     pub fn url(&self, path: &str) -> String {
-        format!("{}{path}", self.base_url)
+        self.inner.url(path)
+    }
+
+    /// Build an authenticated GET [`RequestBuilder`] for the given path.
+    ///
+    /// Use this when you need to add query parameters or other customization
+    /// before sending. For simple requests, prefer [`get_json`](Self::get_json).
+    pub(crate) fn get_request(&self, path: &str) -> reqwest::RequestBuilder {
+        self.inner.get(path)
+    }
+
+    /// Send a request and deserialize the JSON response.
+    async fn send_json<T: DeserializeOwned>(
+        req: reqwest::RequestBuilder,
+    ) -> Result<T, OperationError> {
+        let resp = req.send().await.map_err(reqwest_err)?;
+        check_response_json(resp).await
+    }
+
+    /// Send a GET request with query parameters and deserialize the JSON response.
+    pub(crate) async fn get_json_with_query<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> Result<T, OperationError> {
+        Self::send_json(self.inner.get(path).query(query)).await
+    }
+
+    /// Send a GET request and deserialize the JSON response.
+    pub(crate) async fn get_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, OperationError> {
+        Self::send_json(self.inner.get(path)).await
+    }
+
+    /// Send a POST request with a JSON body and deserialize the response.
+    pub(crate) async fn post_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, OperationError> {
+        Self::send_json(self.inner.post(path).json(body)).await
+    }
+
+    /// Send a PUT request with a JSON body and deserialize the response.
+    pub(crate) async fn put_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, OperationError> {
+        Self::send_json(self.inner.put(path).json(body)).await
+    }
+
+    /// Send a PATCH request with a JSON body and deserialize the response.
+    pub(crate) async fn patch_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, OperationError> {
+        Self::send_json(self.inner.patch(path).json(body)).await
+    }
+
+    /// Send a DELETE request and deserialize the JSON response.
+    pub(crate) async fn delete_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, OperationError> {
+        Self::send_json(self.inner.delete(path)).await
+    }
+
+    /// Serialize a value to [`serde_json::Value`].
+    pub(crate) fn to_value<T: Serialize>(val: &T) -> Result<Value, OperationError> {
+        to_value(val)
     }
 }
 
 impl fmt::Debug for GrafanaClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GrafanaClient")
-            .field("base_url", &self.base_url)
-            .field("token", &"[REDACTED]")
+            .field("base_url", &self.inner.base_url())
+            .field("auth", self.inner.auth())
             .finish()
     }
 }
@@ -233,7 +295,7 @@ mod tests {
             GrafanaClient::new("super-secret-token", "https://grafana.example.com").unwrap();
         let debug = format!("{client:?}");
         assert!(!debug.contains("super-secret-token"));
-        assert!(debug.contains("REDACTED"));
+        assert!(debug.contains("redacted"));
         assert!(debug.contains("GrafanaClient"));
     }
 

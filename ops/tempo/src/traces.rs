@@ -93,7 +93,7 @@ impl Operation for GetTrace {
     /// Returns [`OperationError::External`] if the trace ID is invalid, or
     /// [`OperationError::Http`] if the request fails.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.trace_id, "trace_id")?;
+        validate_path_segment(&self.trace_id, "trace_id", "tempo")?;
 
         let mut req = self.client.get(&format!("/api/traces/{}", self.trace_id));
         if let Some(ref s) = self.start {
@@ -192,7 +192,7 @@ impl Operation for GetTraceV2 {
     /// Returns [`OperationError::External`] if the trace ID is invalid, or
     /// [`OperationError::Http`] if the request fails.
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        validate_path_segment(&self.trace_id, "trace_id")?;
+        validate_path_segment(&self.trace_id, "trace_id", "tempo")?;
 
         let mut req = self
             .client
