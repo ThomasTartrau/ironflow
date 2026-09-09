@@ -31,6 +31,8 @@ members = [
     "ops/slack",
     "ops/mimir",
     "ops/s3",
+    "ops/postgres",
+    "ops/helm",
 ]
 
 [profile.release]
