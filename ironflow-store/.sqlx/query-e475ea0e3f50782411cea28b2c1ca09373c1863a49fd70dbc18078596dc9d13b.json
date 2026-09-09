@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lib_fsm.state_machine_transition($1, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state_machine_transition",
+        "type_info": "Record"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e475ea0e3f50782411cea28b2c1ca09373c1863a49fd70dbc18078596dc9d13b"
+}

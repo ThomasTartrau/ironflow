@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                DELETE FROM lib_fsm.state_machine\n                WHERE state_machine__id NOT IN (\n                    SELECT state_machine__id FROM ironflow.runs\n                    UNION ALL\n                    SELECT state_machine__id FROM ironflow.steps\n                )\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "607d8393543eb521ac80b459270d2868b3f3c823aba05137a3d4b65592bb2383"
+}

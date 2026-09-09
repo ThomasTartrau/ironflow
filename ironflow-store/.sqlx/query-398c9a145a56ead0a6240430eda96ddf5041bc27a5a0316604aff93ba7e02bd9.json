@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT r.id, r.state_machine__id as \"state_machine__id!\", r.retry_count, r.max_retries\n                FROM ironflow.runs r\n                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id\n                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id\n                WHERE ast.name = 'running'\n                  AND r.lease_expires_at IS NOT NULL\n                  AND r.lease_expires_at < NOW()\n                ORDER BY r.lease_expires_at ASC\n                LIMIT $1\n                FOR UPDATE OF r, sm SKIP LOCKED\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "state_machine__id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "retry_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "max_retries",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "398c9a145a56ead0a6240430eda96ddf5041bc27a5a0316604aff93ba7e02bd9"
+}

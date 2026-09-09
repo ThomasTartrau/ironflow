@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT sd.step_id, sd.depends_on, sd.created_at\n                FROM ironflow.step_dependencies sd\n                JOIN ironflow.steps s ON s.id = sd.step_id\n                WHERE s.run_id = $1\n                ORDER BY sd.created_at ASC\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "step_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "depends_on",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a9de2ef1b9907d100e9e7fe8afbcdc51375eb405835bdabd5fefb852a036f563"
+}

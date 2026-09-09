@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT r.worker_id, ast.name as \"state_name!\"\n                FROM ironflow.runs r\n                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id\n                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id\n                WHERE r.id = $1\n                FOR UPDATE OF r, sm\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "worker_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "state_name!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "2e6c67f260f4eef28fe61247e9b77543a4d2ada10c020ca698be92740e5223bf"
+}

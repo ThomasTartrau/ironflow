@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO ironflow.run_logs (id, run_id, step_id, step_name, stream, line, created_at)\n                SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::timestamptz[])\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "UuidArray",
+        "UuidArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TimestamptzArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d2cb372df47a425cb5ecad3b095cbc329542e483aba625bed6789af1ff8cd40f"
+}
