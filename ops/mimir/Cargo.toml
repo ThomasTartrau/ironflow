@@ -1,0 +1,23 @@
+[package]
+name = "ironflow-ops-mimir"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Grafana Mimir operations for Ironflow workflows"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "mimir", "operations", "ironflow"]
+categories = ["asynchronous", "development-tools"]
+
+[dependencies]
+async-trait = "0.1"
+ironflow-core = { version = "3.15.0", path = "../../ironflow-core" }
+ironflow-ops-common = { version = "0.1.1", path = "../common" }
+reqwest = { version = "0.13", features = ["json", "query"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"
