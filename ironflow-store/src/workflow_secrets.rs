@@ -654,7 +654,11 @@ impl fmt::Debug for ScopedSecretStore {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const MASTER: [u8; 32] = [1u8; 32];
     const UUID_A: &str = "11111111-1111-1111-1111-111111111111";
@@ -712,6 +716,7 @@ mod tests {
 
     #[test]
     fn missing_key_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let saved = env::var(SECRETS_KEY_ENV).ok();
         unsafe { env::remove_var(SECRETS_KEY_ENV) };
 
@@ -725,6 +730,7 @@ mod tests {
 
     #[test]
     fn invalid_key_length() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let saved = env::var(SECRETS_KEY_ENV).ok();
         unsafe { env::set_var(SECRETS_KEY_ENV, BASE64.encode([0u8; 16])) };
 
