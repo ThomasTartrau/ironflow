@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-grafana"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -2991,7 +2991,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-loki"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "ironflow-core",
@@ -3005,7 +3005,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-tempo"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "ironflow-core",
