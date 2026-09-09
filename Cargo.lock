@@ -3075,6 +3075,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-ops-helm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ironflow-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ironflow-ops-k8s"
 version = "0.1.2"
 dependencies = [
