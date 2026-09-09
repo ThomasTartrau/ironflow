@@ -14,7 +14,7 @@ categories = ["asynchronous", "development-tools"]
 async-trait = "0.1"
 aws-config = "1"
 aws-credential-types = "1"
-aws-sdk-s3 = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "http-1x", "sigv4a"] }
 aws-smithy-types = "1"
 ironflow-core = { version = "3.15.0", path = "../../ironflow-core" }
 serde = { version = "1", features = ["derive"] }

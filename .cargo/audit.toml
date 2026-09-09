@@ -18,14 +18,4 @@ ignore = [
     # rkyv 0.7.46 (optional dep of rust_decimal, never compiled)
     # rust_decimal's rkyv feature is not enabled; present in lockfile only
     "RUSTSEC-2026-0235",
-
-    # h2 0.3.27 (via aws-smithy-http-client -> hyper 0.14)
-    # Fix requires h2 >= 0.4.16; blocked on AWS SDK updating to hyper 1.x
-    "RUSTSEC-2026-0258",
-
-    # rustls-webpki 0.101.7 (via aws-smithy-http-client -> rustls 0.21)
-    # Fix requires rustls-webpki >= 0.103.12; blocked on AWS SDK updating rustls
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0104",
 ]
