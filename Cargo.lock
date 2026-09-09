@@ -2962,6 +2962,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-ops-loki"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ironflow-core",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "ironflow-plugin-tests"
 version = "0.1.0"
 dependencies = [
