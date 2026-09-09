@@ -1,0 +1,27 @@
+[package]
+name = "ironflow-ops-k8s"
+version = "0.1.1"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Kubernetes integration for Ironflow workflows, powered by the kube crate"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "kubernetes", "operations", "ironflow"]
+categories = ["asynchronous", "development-tools"]
+
+[dependencies]
+async-trait = "0.1"
+kube = { version = "3.1", features = ["client", "runtime", "ws", "rustls-tls", "aws-lc-rs"], default-features = false }
+k8s-openapi = { version = "0.27", features = ["latest"] }
+ironflow-core = { version = "3.14.0", path = "../../ironflow-core" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+either = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+http = "1"
+hyper = "1"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"

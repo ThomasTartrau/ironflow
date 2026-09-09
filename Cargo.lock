@@ -2944,6 +2944,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-ops-k8s"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "either",
+ "http",
+ "hyper",
+ "ironflow-core",
+ "k8s-openapi",
+ "kube",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "ironflow-plugin-tests"
 version = "0.1.0"
 dependencies = [

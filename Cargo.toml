@@ -23,6 +23,7 @@ members = [
     "xtask",
     "ops/gitlab",
     "ops/git",
+    "ops/k8s",
 ]
 
 [profile.release]
