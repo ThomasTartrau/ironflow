@@ -79,6 +79,30 @@ pub enum OperationError {
         /// Human-readable error description.
         message: String,
     },
+
+    /// An error from an external library (e.g. `git2`, `gitlab`).
+    ///
+    /// Used by `ironflow-ops-*` crates to wrap third-party library errors
+    /// without introducing domain-specific variants into this enum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::error::OperationError;
+    ///
+    /// let err = OperationError::External {
+    ///     origin: "git".to_string(),
+    ///     message: "reference not found".to_string(),
+    /// };
+    /// assert!(err.to_string().contains("git error"));
+    /// ```
+    #[error("{origin} error: {message}")]
+    External {
+        /// Short identifier for the library or domain (e.g. `"git"`, `"gitlab"`).
+        origin: String,
+        /// Human-readable error description from the underlying library.
+        message: String,
+    },
 }
 
 impl OperationError {
@@ -542,6 +566,15 @@ mod tests {
             }
             _ => panic!("expected SchemaValidation"),
         }
+    }
+
+    #[test]
+    fn external_error_display() {
+        let err = OperationError::External {
+            origin: "git".to_string(),
+            message: "reference not found".to_string(),
+        };
+        assert_eq!(err.to_string(), "git error: reference not found");
     }
 
     #[test]

@@ -252,6 +252,7 @@ impl RetryPolicy {
 ///   costs money and cannot succeed)
 /// - [`OperationError::Shell`]
 /// - [`OperationError::Deserialize`]
+/// - [`OperationError::External`]
 pub fn is_retryable(error: &OperationError) -> bool {
     match error {
         OperationError::Http { status, .. } => match status {
@@ -271,7 +272,8 @@ pub fn is_retryable(error: &OperationError) -> bool {
         OperationError::Timeout { .. } => true,
         OperationError::Shell { .. }
         | OperationError::Deserialize { .. }
-        | OperationError::Secret { .. } => false,
+        | OperationError::Secret { .. }
+        | OperationError::External { .. } => false,
     }
 }
 
