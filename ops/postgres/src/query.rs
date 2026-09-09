@@ -27,9 +27,10 @@ pub struct QueryRowsOutput {
 /// use ironflow_ops_postgres::query::QueryRows;
 /// use ironflow_core::operation::Operation;
 ///
+/// # fn example(pool: sqlx::PgPool) {
 /// let op = QueryRows::new(pool, "SELECT id, name FROM users WHERE active = $1", vec![serde_json::json!(true)]);
 /// assert_eq!(op.kind(), "postgres");
-/// # let pool: sqlx::PgPool = todo!();
+/// # }
 /// ```
 pub struct QueryRows {
     pool: PgPool,
@@ -99,9 +100,10 @@ pub struct QueryOneOutput {
 /// use ironflow_ops_postgres::query::QueryOne;
 /// use ironflow_core::operation::Operation;
 ///
+/// # fn example(pool: sqlx::PgPool) {
 /// let op = QueryOne::new(pool, "SELECT id, name FROM users WHERE id = $1", vec![serde_json::json!(1)]);
 /// assert_eq!(op.kind(), "postgres");
-/// # let pool: sqlx::PgPool = todo!();
+/// # }
 /// ```
 pub struct QueryOne {
     pool: PgPool,
@@ -170,9 +172,10 @@ pub struct QueryScalarOutput {
 /// use ironflow_ops_postgres::query::QueryScalar;
 /// use ironflow_core::operation::Operation;
 ///
+/// # fn example(pool: sqlx::PgPool) {
 /// let op = QueryScalar::new(pool, "SELECT count(*) FROM users", vec![]);
 /// assert_eq!(op.kind(), "postgres");
-/// # let pool: sqlx::PgPool = todo!();
+/// # }
 /// ```
 pub struct QueryScalar {
     pool: PgPool,

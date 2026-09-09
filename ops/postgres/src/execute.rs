@@ -27,9 +27,10 @@ pub struct ExecuteOutput {
 /// use ironflow_ops_postgres::execute::Execute;
 /// use ironflow_core::operation::Operation;
 ///
+/// # fn example(pool: sqlx::PgPool) {
 /// let op = Execute::new(pool, "INSERT INTO users (name) VALUES ($1)", vec![serde_json::json!("Alice")]);
 /// assert_eq!(op.kind(), "postgres");
-/// # let pool: sqlx::PgPool = todo!();
+/// # }
 /// ```
 pub struct Execute {
     pool: PgPool,
@@ -105,12 +106,13 @@ pub struct ExecuteBatchOutput {
 /// use ironflow_ops_postgres::execute::ExecuteBatch;
 /// use ironflow_core::operation::Operation;
 ///
+/// # fn example(pool: sqlx::PgPool) {
 /// let op = ExecuteBatch::new(pool, vec![
 ///     "CREATE TABLE IF NOT EXISTS t (id int)".to_string(),
 ///     "INSERT INTO t VALUES (1)".to_string(),
 /// ]);
 /// assert_eq!(op.kind(), "postgres");
-/// # let pool: sqlx::PgPool = todo!();
+/// # }
 /// ```
 pub struct ExecuteBatch {
     pool: PgPool,
@@ -181,12 +183,13 @@ pub struct TransactionOutput {
 /// use ironflow_ops_postgres::execute::Transaction;
 /// use ironflow_core::operation::Operation;
 ///
+/// # fn example(pool: sqlx::PgPool) {
 /// let op = Transaction::new(pool, vec![
 ///     "INSERT INTO accounts (id, balance) VALUES (1, 100)".to_string(),
 ///     "UPDATE accounts SET balance = balance - 50 WHERE id = 1".to_string(),
 /// ]);
 /// assert_eq!(op.kind(), "postgres");
-/// # let pool: sqlx::PgPool = todo!();
+/// # }
 /// ```
 pub struct Transaction {
     pool: PgPool,
