@@ -30,6 +30,7 @@ members = [
     "ops/tempo",
     "ops/slack",
     "ops/mimir",
+    "ops/s3",
 ]
 
 [profile.release]
