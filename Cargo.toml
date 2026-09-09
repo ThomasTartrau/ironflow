@@ -22,6 +22,7 @@ members = [
     "ironflow-templates",
     "xtask",
     "ops/gitlab",
+    "ops/k8s",
 ]
 
 [profile.release]
