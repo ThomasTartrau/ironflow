@@ -1,0 +1,22 @@
+[package]
+name = "ironflow-ops-slack"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Slack integration for Ironflow workflows, powered by slack-morphism"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "slack", "operations", "ironflow"]
+categories = ["asynchronous", "development-tools"]
+
+[dependencies]
+async-trait = "0.1"
+ironflow-core = { version = "3.15.0", path = "../../ironflow-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+slack-morphism = { version = "2", features = ["hyper"] }
+
+[dev-dependencies]
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+tokio = { version = "1", features = ["full"] }

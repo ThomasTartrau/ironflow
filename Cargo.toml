@@ -28,6 +28,7 @@ members = [
     "ops/grafana",
     "ops/loki",
     "ops/tempo",
+    "ops/slack",
 ]
 
 [profile.release]
