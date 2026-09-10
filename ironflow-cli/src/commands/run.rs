@@ -1,15 +1,20 @@
-//! Run subcommands: create, list, get, cancel, approve, retry.
+//! Run subcommands: create, list, get, cancel, approve, retry, watch, diff.
 
 use std::fs;
-use std::io::Write as _;
+use std::io::{Write as _, stdout};
 use std::path::PathBuf;
 use std::slice;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand};
+use futures_util::StreamExt;
+use humantime::format_duration;
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ListRunsFilter;
-use ironflow_sdk::types::CreateRunRequest;
+use ironflow_sdk::types::{CreateRunRequest, RunStatus};
+use serde_json::{Map, Value, from_str, json, to_string};
+use tokio::time::timeout as tokio_timeout;
 use uuid::Uuid;
 
 use crate::output;
@@ -100,22 +105,44 @@ pub enum RunCommands {
         #[arg(long)]
         force: bool,
     },
+    /// Watch a run in real time via SSE.
+    Watch {
+        /// Run UUID.
+        id: Uuid,
+        /// Only show step transitions, not log data.
+        #[arg(long)]
+        no_logs: bool,
+        /// Stop watching after this duration (e.g. "30s", "5m", "1h").
+        #[arg(long, value_parser = parse_humantime)]
+        timeout: Option<Duration>,
+    },
+    /// Compare two runs of the same workflow side by side.
+    Diff {
+        /// First run UUID.
+        run_a: Uuid,
+        /// Second run UUID.
+        run_b: Uuid,
+    },
 }
 
+/// Parse a human-readable duration string (e.g. "30s", "5m", "1h").
+fn parse_humantime(s: &str) -> Result<Duration, String> {
+    humantime::parse_duration(s).map_err(|e| e.to_string())
+}
+
+/// Terminal event types that signal the run is done.
+const TERMINAL_EVENTS: &[&str] = &["run_completed", "run_failed", "run_cancelled"];
+
 /// Resolve the payload from inline string or file.
-fn resolve_payload(
-    payload: Option<&str>,
-    payload_file: Option<&PathBuf>,
-) -> Result<serde_json::Value> {
+fn resolve_payload(payload: Option<&str>, payload_file: Option<&PathBuf>) -> Result<Value> {
     match (payload, payload_file) {
-        (Some(raw), _) => serde_json::from_str(raw).context("invalid JSON in --payload"),
+        (Some(raw), _) => from_str(raw).context("invalid JSON in --payload"),
         (_, Some(path)) => {
             let content = fs::read_to_string(path)
                 .with_context(|| format!("cannot read payload file: {}", path.display()))?;
-            serde_json::from_str(&content)
-                .with_context(|| format!("invalid JSON in {}", path.display()))
+            from_str(&content).with_context(|| format!("invalid JSON in {}", path.display()))
         }
-        (None, None) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+        (None, None) => Ok(Value::Object(Map::new())),
     }
 }
 
@@ -208,7 +235,7 @@ pub async fn execute(
             })?;
 
             if !json_mode && !response.data.steps.is_empty() {
-                let mut out = std::io::stdout().lock();
+                let mut out = stdout().lock();
                 writeln!(out)?;
                 writeln!(out, "Steps:")?;
                 writeln!(out, "{}", output::steps_table(&response.data.steps))?;
@@ -238,7 +265,128 @@ pub async fn execute(
                 output::runs_table(slice::from_ref(&response.data))
             })?;
         }
+        RunCommands::Watch {
+            id,
+            no_logs,
+            timeout,
+        } => {
+            execute_watch(client, *id, *no_logs, *timeout, json_mode).await?;
+        }
+        RunCommands::Diff { run_a, run_b } => {
+            execute_diff(client, *run_a, *run_b, json_mode).await?;
+        }
     }
+    Ok(())
+}
+
+/// Watch a run in real time via SSE.
+async fn execute_watch(
+    client: &IronflowClient,
+    run_id: Uuid,
+    no_logs: bool,
+    timeout: Option<Duration>,
+    json_mode: bool,
+) -> Result<()> {
+    let run = client.get_run(run_id).await?;
+    let status = run.data.run.status;
+    if matches!(
+        status,
+        RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
+    ) {
+        if json_mode {
+            output::print_output(json_mode, &run, || output::run_detail_table(&run.data))?;
+        } else {
+            let mut out = stdout().lock();
+            writeln!(out, "Run {run_id} already in terminal state: {status}")?;
+        }
+        return Ok(());
+    }
+
+    let watch_fut = async {
+        let mut stream = client.events(Some(run_id), None).await?;
+        let mut out = stdout().lock();
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(ev) => {
+                    if no_logs
+                        && !ev.event_type.starts_with("run_")
+                        && !ev.event_type.starts_with("step_")
+                    {
+                        continue;
+                    }
+
+                    if json_mode {
+                        let obj = json!({
+                            "event": ev.event_type,
+                            "data": ev.data,
+                        });
+                        writeln!(out, "{}", to_string(&obj)?)?;
+                    } else {
+                        writeln!(out, "[{}] {}", ev.event_type, ev.data)?;
+                    }
+
+                    if TERMINAL_EVENTS.contains(&ev.event_type.as_str()) {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow!("SSE stream error: {e}"));
+                }
+            }
+        }
+
+        Ok::<(), anyhow::Error>(())
+    };
+
+    match timeout {
+        Some(dur) => {
+            tokio_timeout(dur, watch_fut).await.unwrap_or_else(|_| {
+                eprintln!("Timeout reached after {}", format_duration(dur));
+                Ok(())
+            })?;
+        }
+        None => {
+            watch_fut.await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Compare two runs of the same workflow side by side.
+async fn execute_diff(
+    client: &IronflowClient,
+    run_a_id: Uuid,
+    run_b_id: Uuid,
+    json_mode: bool,
+) -> Result<()> {
+    if run_a_id == run_b_id {
+        bail!("both run IDs are the same; nothing to diff");
+    }
+
+    let (a, b) = tokio::try_join!(client.get_run(run_a_id), client.get_run(run_b_id))?;
+
+    if a.data.run.workflow_name != b.data.run.workflow_name {
+        bail!(
+            "cannot diff runs from different workflows: '{}' vs '{}'",
+            a.data.run.workflow_name,
+            b.data.run.workflow_name
+        );
+    }
+
+    if json_mode {
+        let diff = json!({
+            "run_a": a.data,
+            "run_b": b.data,
+        });
+        output::print_json(&diff)?;
+    } else {
+        let table = output::run_diff_table(&a.data, &b.data);
+        let mut out = stdout().lock();
+        writeln!(out, "{table}")?;
+    }
+
     Ok(())
 }
 

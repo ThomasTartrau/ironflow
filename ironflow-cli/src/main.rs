@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::Template(args) => return commands::template::execute(args),
+        Commands::Init(args) => return commands::init::execute(args),
         Commands::Completions { shell } => return generate_completions(*shell, &mut io::stdout()),
         Commands::Man => return generate_man_page(&mut io::stdout()),
         _ => {}

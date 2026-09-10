@@ -15,6 +15,8 @@ use ironflow_sdk::IronflowClient;
 use crate::commands;
 use crate::commands::api_key::ApiKeyArgs;
 use crate::commands::audit_log::AuditLogArgs;
+use crate::commands::dashboard::DashboardArgs;
+use crate::commands::init::InitArgs;
 use crate::commands::logs::LogsArgs;
 use crate::commands::run::RunArgs;
 use crate::commands::schedule::ScheduleArgs;
@@ -86,8 +88,12 @@ pub enum Commands {
     AuditLog(AuditLogArgs),
     /// Manage workflow schedules.
     Schedule(ScheduleArgs),
-    /// Manage workflow templates (add, list, info).
+    /// Manage workflow templates (add, list, info, create).
     Template(TemplateArgs),
+    /// Scaffold a new Ironflow project.
+    Init(InitArgs),
+    /// Open the Ironflow dashboard in the default browser.
+    Dashboard(DashboardArgs),
     /// Generate shell completions for the given shell.
     Completions {
         /// Target shell.
@@ -160,6 +166,8 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::AuditLog(args) => commands::audit_log::execute(client, args, cli.json).await,
         Commands::Schedule(args) => commands::schedule::execute(client, args, cli.json).await,
         Commands::Template(args) => commands::template::execute(args),
+        Commands::Init(args) => commands::init::execute(args),
+        Commands::Dashboard(args) => commands::dashboard::execute(client, args),
         Commands::Completions { shell } => generate_completions(*shell, &mut io::stdout()),
         Commands::Man => generate_man_page(&mut io::stdout()),
     }
