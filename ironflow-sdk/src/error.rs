@@ -47,6 +47,15 @@ pub enum Error {
     /// SSE stream error.
     #[error("SSE error: {0}")]
     Sse(String),
+
+    /// All retry attempts exhausted.
+    #[error("retries exhausted after {attempts} attempts: {source}")]
+    Exhausted {
+        /// Number of attempts made.
+        attempts: u32,
+        /// The last error encountered.
+        source: Box<Error>,
+    },
 }
 
 impl Error {
@@ -78,5 +87,10 @@ impl Error {
             Self::Api { code, .. } => Some(code),
             _ => None,
         }
+    }
+
+    /// Returns `true` if all retry attempts were exhausted.
+    pub fn is_exhausted(&self) -> bool {
+        matches!(self, Self::Exhausted { .. })
     }
 }

@@ -29,6 +29,8 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["sync"] }
 ironflow-types = { version = "0.2.1", path = "../ironflow-types" }
 eventsource-stream = "0.2"
+rand = "0.9"
+bytes = "1"
 
 [build-dependencies]
 progenitor = "0.14"
@@ -41,8 +43,10 @@ tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 axum = "0.8"
 ironflow-api = { path = "../ironflow-api" }
+ironflow-artifacts = { path = "../ironflow-artifacts" }
 ironflow-auth = { path = "../ironflow-auth" }
 ironflow-store = { path = "../ironflow-store" }
 ironflow-engine = { path = "../ironflow-engine" }
 ironflow-core = { path = "../ironflow-core" }
 uuid = { version = "1", features = ["v7"] }
+tempfile = "3"

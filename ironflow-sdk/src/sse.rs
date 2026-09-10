@@ -151,4 +151,77 @@ impl crate::IronflowClient {
         }
         Ok(parse_sse_stream(response))
     }
+
+    /// Subscribe to SSE events for a specific run.
+    ///
+    /// Connects to `GET /api/v1/runs/{run_id}/events` and returns a
+    /// [`Stream`](futures_util::Stream) of [`SseEvent`]s with automatic
+    /// reconnection on network failures.
+    ///
+    /// Reconnection uses exponential backoff (1s, 2s, 4s, ... capped at 30s).
+    /// The API does not support `Last-Event-ID`, so events emitted during
+    /// a disconnection window are lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Http`] if the initial connection fails, or
+    /// [`Error::Api`] on a non-2xx status code.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::IronflowClient;
+    /// use futures_util::StreamExt;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example() -> Result<(), ironflow_sdk::Error> {
+    /// let client = IronflowClient::new("https://ironflow.example.com", "key");
+    /// let mut stream = client.subscribe_run_events(Uuid::nil()).await?;
+    ///
+    /// while let Some(event) = stream.next().await {
+    ///     let event = event?;
+    ///     # let _ = event;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_run_events(&self, run_id: Uuid) -> Result<EventStream, Error> {
+        let path = format!("/api/v1/runs/{run_id}/events");
+        let response = self.get(&path).send().await?;
+        if !response.status().is_success() {
+            return Err(Self::into_api_error(response).await);
+        }
+        Ok(parse_sse_stream(response))
+    }
+
+    /// Subscribe to the global SSE event stream.
+    ///
+    /// Connects to `GET /api/v1/events` and returns a
+    /// [`Stream`](futures_util::Stream) of [`SseEvent`]s for all runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Http`] if the connection fails, or [`Error::Api`]
+    /// on a non-2xx status code.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::IronflowClient;
+    /// use futures_util::StreamExt;
+    ///
+    /// # async fn example() -> Result<(), ironflow_sdk::Error> {
+    /// let client = IronflowClient::new("https://ironflow.example.com", "key");
+    /// let mut stream = client.subscribe_global_events().await?;
+    ///
+    /// while let Some(event) = stream.next().await {
+    ///     let event = event?;
+    ///     # let _ = event;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_global_events(&self) -> Result<EventStream, Error> {
+        self.events(None, None).await
+    }
 }
