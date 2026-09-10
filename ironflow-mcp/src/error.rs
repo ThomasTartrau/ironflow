@@ -22,6 +22,10 @@ pub enum McpError {
     /// JSON deserialization failed.
     #[error("deserialization echouee : {0}")]
     Deserialize(String),
+
+    /// Input validation failed.
+    #[error("validation echouee : {0}")]
+    Validation(String),
 }
 
 impl From<McpError> for CallToolError {
