@@ -746,7 +746,12 @@ mod tests {
                 exit_code,
                 stderr: _,
             }) => {
-                assert_eq!(exit_code, -1);
+                // -1 when spawn() itself fails (macOS); 127 when the child
+                // process starts but exec fails (Linux).
+                assert!(
+                    exit_code == -1 || exit_code == 127,
+                    "expected -1 or 127, got {exit_code}"
+                );
             }
             _ => panic!("expected Shell error"),
         }
