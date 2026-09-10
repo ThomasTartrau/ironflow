@@ -155,17 +155,14 @@ impl crate::IronflowClient {
     /// Subscribe to SSE events for a specific run.
     ///
     /// Connects to `GET /api/v1/runs/{run_id}/events` and returns a
-    /// [`Stream`](futures_util::Stream) of [`SseEvent`]s with automatic
-    /// reconnection on network failures.
-    ///
-    /// Reconnection uses exponential backoff (1s, 2s, 4s, ... capped at 30s).
-    /// The API does not support `Last-Event-ID`, so events emitted during
-    /// a disconnection window are lost.
+    /// [`Stream`] of [`SseEvent`]s. The stream
+    /// ends when the connection drops; the caller is responsible for
+    /// reconnection if needed.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Http`] if the initial connection fails, or
-    /// [`Error::Api`] on a non-2xx status code.
+    /// Returns [`Error::Http`] if the connection fails, or [`Error::Api`]
+    /// on a non-2xx status code.
     ///
     /// # Examples
     ///
@@ -186,6 +183,7 @@ impl crate::IronflowClient {
     /// # }
     /// ```
     pub async fn subscribe_run_events(&self, run_id: Uuid) -> Result<EventStream, Error> {
+        self.rate_limiter.wait().await;
         let path = format!("/api/v1/runs/{run_id}/events");
         let response = self.get(&path).send().await?;
         if !response.status().is_success() {
@@ -197,7 +195,7 @@ impl crate::IronflowClient {
     /// Subscribe to the global SSE event stream.
     ///
     /// Connects to `GET /api/v1/events` and returns a
-    /// [`Stream`](futures_util::Stream) of [`SseEvent`]s for all runs.
+    /// [`Stream`] of [`SseEvent`]s for all runs.
     ///
     /// # Errors
     ///
@@ -222,6 +220,7 @@ impl crate::IronflowClient {
     /// # }
     /// ```
     pub async fn subscribe_global_events(&self) -> Result<EventStream, Error> {
+        self.rate_limiter.wait().await;
         self.events(None, None).await
     }
 }

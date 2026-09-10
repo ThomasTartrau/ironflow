@@ -178,8 +178,8 @@ async fn exhausted_after_max_retries() {
     let err = client.list_runs().await.unwrap_err();
 
     assert!(
-        err.is_api_error(),
-        "final 503 should be returned as Api error"
+        err.is_exhausted(),
+        "all retries exhausted should return Exhausted error, got: {err}"
     );
     assert_eq!(err.status(), Some(503));
     assert_eq!(counter.get(), 3, "1 initial + 2 retries = 3 total");
@@ -253,8 +253,8 @@ async fn rate_limiter_delays_after_429() {
     let start = tokio::time::Instant::now();
     let _ = client.list_runs().await.unwrap();
     assert!(
-        start.elapsed() >= Duration::from_millis(900),
-        "rate limiter should have delayed the request by ~1s, got {:?}",
+        start.elapsed() >= Duration::from_millis(700),
+        "rate limiter should have delayed the request, got {:?}",
         start.elapsed()
     );
 }

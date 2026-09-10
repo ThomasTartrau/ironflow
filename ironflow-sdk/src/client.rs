@@ -8,7 +8,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 pub use ironflow_types::{ApiMeta, ApiResponse};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use reqwest::{Client, RequestBuilder};
+use reqwest::{Client, RequestBuilder, Response};
+use serde_json::from_str;
 use uuid::Uuid;
 
 pub use crate::builder::{ArtifactDownload, ClientBuilder};
@@ -293,11 +294,11 @@ impl IronflowClient {
     }
 
     /// Parse an error response into an [`Error`].
-    pub(crate) async fn into_api_error(response: reqwest::Response) -> Error {
+    pub(crate) async fn into_api_error(response: Response) -> Error {
         let status = response.status();
         let status_code = status.as_u16();
         let text = response.text().await.unwrap_or_default();
-        serde_json::from_str::<ApiErrorEnvelope>(&text)
+        from_str::<ApiErrorEnvelope>(&text)
             .map(|env| Error::api(status_code, env.error.code, env.error.message))
             .unwrap_or_else(|_| {
                 Error::api(
@@ -370,7 +371,7 @@ impl IronflowClient {
         &self,
         request: &types::CreateRunRequest,
     ) -> Result<ApiResponse<types::RunResponse>, Error> {
-        self.send_envelope(self.post("/api/v1/runs").json(request))
+        self.send_envelope_once(self.post("/api/v1/runs").json(request))
             .await
     }
 
@@ -571,7 +572,7 @@ impl IronflowClient {
         &self,
         request: &types::CreateApiKeyRequest,
     ) -> Result<ApiResponse<types::CreateApiKeyResponse>, Error> {
-        self.send_envelope(self.post("/api/v1/api-keys").json(request))
+        self.send_envelope_once(self.post("/api/v1/api-keys").json(request))
             .await
     }
 

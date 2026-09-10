@@ -5,6 +5,19 @@ use uuid::Uuid;
 use crate::client::{ArtifactDownload, IronflowClient};
 use crate::error::Error;
 
+fn validate_artifact_name(name: &str) -> Result<(), Error> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+    {
+        return Err(Error::Deserialize(format!(
+            "invalid artifact name: {name:?}"
+        )));
+    }
+    Ok(())
+}
+
 impl IronflowClient {
     /// Download an artifact by step name.
     ///
@@ -40,6 +53,8 @@ impl IronflowClient {
         step_name: &str,
         artifact_name: &str,
     ) -> Result<ArtifactDownload, Error> {
+        validate_artifact_name(artifact_name)?;
+
         let run_detail = self.get_run(run_id).await?;
         let step = run_detail
             .data
@@ -50,17 +65,18 @@ impl IronflowClient {
                 Error::Deserialize(format!("step '{step_name}' not found in run {run_id}"))
             })?;
 
-        let sha256 = step
+        let artifact_meta = step
             .artifacts
             .iter()
             .find(|a| a.name == artifact_name)
-            .map(|a| a.sha256.clone())
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                Error::Deserialize(format!(
+                    "artifact '{artifact_name}' not found in step '{step_name}'"
+                ))
+            })?;
 
         let mut download = self.download_raw(run_id, step.id, artifact_name).await?;
-        if !sha256.is_empty() {
-            download.sha256 = sha256;
-        }
+        download.sha256 = artifact_meta.sha256.clone();
         Ok(download)
     }
 
@@ -101,6 +117,7 @@ impl IronflowClient {
         step_id: Uuid,
         artifact_name: &str,
     ) -> Result<ArtifactDownload, Error> {
+        validate_artifact_name(artifact_name)?;
         self.download_raw(run_id, step_id, artifact_name).await
     }
 

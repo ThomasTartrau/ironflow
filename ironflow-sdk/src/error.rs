@@ -73,10 +73,12 @@ impl Error {
         matches!(self, Self::Api { .. })
     }
 
-    /// Returns the HTTP status code if this is an API error.
+    /// Returns the HTTP status code if this is an API error (or an
+    /// [`Exhausted`](Self::Exhausted) wrapping one).
     pub fn status(&self) -> Option<u16> {
         match self {
             Self::Api { status, .. } => Some(*status),
+            Self::Exhausted { source, .. } => source.status(),
             _ => None,
         }
     }
@@ -92,5 +94,71 @@ impl Error {
     /// Returns `true` if all retry attempts were exhausted.
     pub fn is_exhausted(&self) -> bool {
         matches!(self, Self::Exhausted { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_error_accessors() {
+        let err = Error::api(404, "NOT_FOUND", "not found");
+        assert!(err.is_api_error());
+        assert!(!err.is_exhausted());
+        assert_eq!(err.status(), Some(404));
+        assert_eq!(err.code(), Some("NOT_FOUND"));
+    }
+
+    #[test]
+    fn exhausted_delegates_status() {
+        let inner = Error::api(503, "SERVICE_UNAVAILABLE", "unavailable");
+        let err = Error::Exhausted {
+            attempts: 3,
+            source: Box::new(inner),
+        };
+        assert!(err.is_exhausted());
+        assert!(!err.is_api_error());
+        assert_eq!(err.status(), Some(503));
+        assert_eq!(err.code(), None);
+    }
+
+    #[test]
+    fn exhausted_with_non_api_source() {
+        let inner = Error::Deserialize("bad json".to_string());
+        let err = Error::Exhausted {
+            attempts: 2,
+            source: Box::new(inner),
+        };
+        assert!(err.is_exhausted());
+        assert_eq!(err.status(), None);
+    }
+
+    #[test]
+    fn deserialize_error() {
+        let err = Error::Deserialize("bad json".to_string());
+        assert!(!err.is_api_error());
+        assert!(!err.is_exhausted());
+        assert_eq!(err.status(), None);
+        assert_eq!(err.code(), None);
+    }
+
+    #[test]
+    fn sse_error() {
+        let err = Error::Sse("connection reset".to_string());
+        assert!(!err.is_api_error());
+        assert!(!err.is_exhausted());
+        assert_eq!(err.status(), None);
+    }
+
+    #[test]
+    fn exhausted_display() {
+        let inner = Error::api(503, "UNAVAILABLE", "down");
+        let err = Error::Exhausted {
+            attempts: 4,
+            source: Box::new(inner),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("4 attempts"));
     }
 }

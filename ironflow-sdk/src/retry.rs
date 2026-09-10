@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use rand::Rng;
-use reqwest::StatusCode;
+use reqwest::{Error as ReqwestError, Response, StatusCode};
 
 /// Configuration for automatic request retries.
 ///
@@ -55,7 +55,7 @@ pub(crate) fn is_retryable_status(status: StatusCode) -> bool {
 }
 
 /// Returns `true` if the reqwest error is a transient network/timeout failure.
-pub(crate) fn is_retryable_error(err: &reqwest::Error) -> bool {
+pub(crate) fn is_retryable_error(err: &ReqwestError) -> bool {
     err.is_timeout() || err.is_connect() || err.is_request()
 }
 
@@ -78,7 +78,7 @@ pub(crate) fn backoff_delay(config: &RetryConfig, attempt: u32) -> Duration {
 /// Parse the `Retry-After` header value as seconds.
 ///
 /// Returns `None` if the header is missing or not a valid integer.
-pub(crate) fn parse_retry_after(response: &reqwest::Response) -> Option<Duration> {
+pub(crate) fn parse_retry_after(response: &Response) -> Option<Duration> {
     response
         .headers()
         .get("retry-after")
