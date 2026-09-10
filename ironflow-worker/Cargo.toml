@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.15.13"
+version = "2.15.14"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -12,8 +12,8 @@ categories = ["asynchronous"]
 
 [dependencies]
 ironflow-core = { version = "3.15.0", path = "../ironflow-core" }
-ironflow-store = { version = "2.27.2", path = "../ironflow-store", default-features = false }
-ironflow-engine = { version = "2.32.2", path = "../ironflow-engine" }
+ironflow-store = { version = "2.27.3", path = "../ironflow-store", default-features = false }
+ironflow-engine = { version = "2.32.3", path = "../ironflow-engine" }
 ironflow-artifacts = { version = "0.1.1", path = "../ironflow-artifacts" }
 
 bytes = "1"
