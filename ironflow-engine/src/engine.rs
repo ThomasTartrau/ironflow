@@ -558,8 +558,8 @@ impl Engine {
     /// Returns pairs of `(workflow_name, cron_expression)` for all handlers
     /// where [`WorkflowHandler::schedule`] returns `Some`.
     ///
-    /// Use this to wire scheduled handlers into a cron scheduler
-    /// (e.g. `ironflow_runtime::Runtime::cron`).
+    /// Use this to wire scheduled handlers into a scheduler
+    /// (e.g. the schedule ticker in `ironflow-api`).
     ///
     /// # Examples
     ///

@@ -1,9 +1,9 @@
 //! The runtime server builder and HTTP serving logic.
 //!
 //! [`Runtime`] is the central entry-point for configuring and launching an
-//! ironflow daemon. It uses a builder pattern to register webhook routes and
-//! cron jobs, then starts an [Axum](https://docs.rs/axum) HTTP server with
-//! graceful shutdown on `Ctrl+C`.
+//! ironflow daemon. It uses a builder pattern to register webhook routes,
+//! then starts an [Axum](https://docs.rs/axum) HTTP server with graceful
+//! shutdown on `Ctrl+C`.
 //!
 //! Webhook handlers are executed in the background via [`tokio::spawn`], so
 //! the HTTP endpoint responds with **202 Accepted** immediately while the
@@ -22,12 +22,10 @@ use axum::routing::{get, post};
 use serde_json::{Value, from_slice};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
-use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info, warn};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::cron::CronJob;
 use crate::error::RuntimeError;
 use crate::trigger::{Trigger, TriggerEvent, TriggerSink};
 use crate::webhook::{WebhookAuth, extract_delivery_id};
@@ -75,11 +73,10 @@ pub struct WebhookContext {
     pub delivery_id: Option<String>,
 }
 
-/// Metric name constants for the runtime (webhook + cron).
+/// Metric name constants for the runtime (webhook).
 #[cfg(feature = "prometheus")]
 mod metric_names {
     pub const WEBHOOK_RECEIVED_TOTAL: &str = "ironflow_webhook_received_total";
-    pub const CRON_RUNS_TOTAL: &str = "ironflow_cron_runs_total";
 
     pub const AUTH_REJECTED: &str = "rejected";
     pub const AUTH_ACCEPTED: &str = "accepted";
@@ -95,10 +92,8 @@ struct WebhookRoute {
 /// The ironflow runtime server builder.
 ///
 /// `Runtime` uses a builder pattern: create one with [`Runtime::new`], register
-/// webhook routes with [`Runtime::webhook`] and cron jobs with
-/// [`Runtime::cron`], then call [`Runtime::serve`] to start both the HTTP
-/// server and the cron scheduler, or [`Runtime::run_crons`] to run only the
-/// cron scheduler without an HTTP listener.
+/// webhook routes with [`Runtime::webhook`], then call [`Runtime::serve`] to
+/// start the HTTP server.
 ///
 /// # Built-in endpoints
 ///
@@ -118,9 +113,6 @@ struct WebhookRoute {
 ///         .webhook("/hooks/deploy", WebhookAuth::github("secret"), |payload| async move {
 ///             println!("deploy triggered: {payload}");
 ///         })
-///         .cron("0 0 * * * *", "hourly-sync", || async {
-///             println!("syncing...");
-///         })
 ///         .serve("0.0.0.0:3000")
 ///         .await?;
 ///
@@ -129,7 +121,6 @@ struct WebhookRoute {
 /// ```
 pub struct Runtime {
     webhooks: Vec<WebhookRoute>,
-    crons: Vec<CronJob>,
     triggers: Vec<Box<dyn Trigger>>,
     trigger_handler: Option<TriggerHandler>,
     max_body_size: usize,
@@ -138,7 +129,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Creates a new, empty `Runtime` with no webhooks or cron jobs.
+    /// Creates a new, empty `Runtime` with no webhooks.
     ///
     /// # Examples
     ///
@@ -150,7 +141,6 @@ impl Runtime {
     pub fn new() -> Self {
         Self {
             webhooks: Vec::new(),
-            crons: Vec::new(),
             triggers: Vec::new(),
             trigger_handler: None,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
@@ -201,17 +191,18 @@ impl Runtime {
 
     /// Override the default shutdown signal (`Ctrl+C` / `SIGTERM`).
     ///
-    /// By default, [`Runtime::serve`] and [`Runtime::run_crons`] block until
-    /// the process receives `Ctrl+C` or `SIGTERM`. Use this method to provide
-    /// a custom future that resolves when the runtime should shut down.
+    /// By default, [`Runtime::serve`] blocks until the process receives
+    /// `Ctrl+C` or `SIGTERM`. Use this method to provide a custom future
+    /// that resolves when the runtime should shut down.
     ///
     /// This is useful in tests where you want to trigger a clean shutdown
-    /// (including `scheduler.shutdown()`) without relying on OS signals.
+    /// without relying on OS signals.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// use ironflow_runtime::runtime::Runtime;
+    /// use ironflow_runtime::prelude::*;
     /// use tokio::sync::oneshot;
     ///
     /// # async fn example() -> Result<(), ironflow_runtime::error::RuntimeError> {
@@ -219,10 +210,10 @@ impl Runtime {
     ///
     /// let rt = Runtime::new()
     ///     .with_shutdown(async { let _ = rx.await; })
-    ///     .cron("0 */5 * * * *", "check", || async {});
+    ///     .webhook("/hooks/test", WebhookAuth::none(), |_| async {});
     ///
     /// // In another task: tx.send(()) to trigger shutdown.
-    /// rt.run_crons().await?;
+    /// rt.serve("127.0.0.1:3000").await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -317,42 +308,6 @@ impl Runtime {
             path: path.to_string(),
             auth,
             handler,
-        });
-        self
-    }
-
-    /// Registers a cron job.
-    ///
-    /// The `schedule` uses a **6-field cron expression** (seconds granularity):
-    /// `sec min hour day-of-month month day-of-week`.
-    ///
-    /// # Arguments
-    ///
-    /// * `schedule` - A 6-field cron expression, e.g. `"0 */5 * * * *"` for every 5 minutes.
-    /// * `name` - A human-readable name for logging.
-    /// * `handler` - An async function to execute on each tick.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use ironflow_runtime::prelude::*;
-    ///
-    /// let runtime = Runtime::new()
-    ///     .cron("0 0 * * * *", "hourly-cleanup", || async {
-    ///         println!("cleaning up...");
-    ///     });
-    /// ```
-    pub fn cron<F, Fut>(mut self, schedule: &str, name: &str, handler: F) -> Self
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let handler_fn: Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync> =
-            Box::new(move || Box::pin(handler()));
-        self.crons.push(CronJob {
-            schedule: schedule.to_string(),
-            name: name.to_string(),
-            handler: handler_fn,
         });
         self
     }
@@ -465,9 +420,8 @@ impl Runtime {
 
     /// Consumes the runtime and returns only the axum [`Router`].
     ///
-    /// Cron jobs are **not** started. This is useful for testing the HTTP
-    /// layer in isolation without side-effects (e.g. with
-    /// `tower::ServiceExt::oneshot`).
+    /// This is useful for testing the HTTP layer in isolation without
+    /// side-effects (e.g. with `tower::ServiceExt::oneshot`).
     ///
     /// # Examples
     ///
@@ -479,12 +433,6 @@ impl Runtime {
     ///     .into_router();
     /// ```
     pub fn into_router(self) -> Router {
-        if !self.crons.is_empty() {
-            warn!(
-                cron_count = self.crons.len(),
-                "into_router() drops registered cron jobs - use serve() or run_crons() to start them"
-            );
-        }
         let tracker = Arc::new(HandlerTracker::new(self.max_concurrent_handlers));
         Self::build_router(
             self.webhooks,
@@ -495,126 +443,21 @@ impl Runtime {
         )
     }
 
-    /// Starts the cron scheduler with all registered cron jobs.
-    ///
-    /// This is an internal helper used by both [`Runtime::serve`] and
-    /// [`Runtime::run_crons`].
-    async fn start_scheduler(crons: Vec<CronJob>) -> Result<JobScheduler, RuntimeError> {
-        let scheduler = JobScheduler::new().await?;
-
-        for cron_job in crons {
-            let handler = Arc::new(cron_job.handler);
-            let name = cron_job.name.clone();
-            let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let job = Job::new_async(cron_job.schedule.as_str(), move |_uuid, _lock| {
-                let handler = handler.clone();
-                let name = name.clone();
-                let running = running.clone();
-                Box::pin(async move {
-                    if running.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                        warn!(cron = %name, "cron job still running, skipping this tick");
-                        return;
-                    }
-                    info!(cron = %name, "cron job triggered");
-                    #[cfg(feature = "prometheus")]
-                    metrics::counter!(metric_names::CRON_RUNS_TOTAL, "job" => name.clone())
-                        .increment(1);
-                    (handler)().await;
-                    running.store(false, std::sync::atomic::Ordering::Release);
-                })
-            })?;
-            info!(cron = %cron_job.name, schedule = %cron_job.schedule, "registered cron job");
-            scheduler.add(job).await?;
-        }
-
-        scheduler.start().await?;
-        Ok(scheduler)
-    }
-
-    /// Starts only the cron scheduler, blocking until a shutdown signal is
-    /// received (`Ctrl+C` / `SIGTERM`).
-    ///
-    /// Unlike [`Runtime::serve`], this does **not** start an HTTP server. Any
-    /// registered webhooks are ignored (a warning is logged if webhooks were
-    /// registered).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// - The cron scheduler fails to initialise or a cron expression is invalid.
-    /// - The scheduler fails to shut down cleanly.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use ironflow_runtime::prelude::*;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), ironflow_runtime::error::RuntimeError> {
-    ///     Runtime::new()
-    ///         .cron("0 0 * * * *", "hourly-sync", || async {
-    ///             println!("syncing...");
-    ///         })
-    ///         .run_crons()
-    ///         .await?;
-    ///     Ok(())
-    /// }
-    /// ```
-    pub async fn run_crons(self) -> Result<(), RuntimeError> {
-        let _ = dotenvy::dotenv();
-
-        if !self.webhooks.is_empty() {
-            warn!(
-                webhook_count = self.webhooks.len(),
-                "run_crons() ignores registered webhooks - use serve() to start both webhooks and crons"
-            );
-        }
-
-        #[cfg(feature = "prometheus")]
-        {
-            match metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder() {
-                Ok(_) => info!("prometheus metrics recorder installed"),
-                Err(_) => {
-                    info!("prometheus metrics recorder already installed, reusing existing")
-                }
-            }
-        }
-
-        let mut scheduler = Self::start_scheduler(self.crons).await?;
-
-        info!("ironflow cron scheduler running (no HTTP server)");
-        match self.custom_shutdown {
-            Some(signal) => signal.await,
-            None => shutdown_signal().await,
-        }
-
-        info!("shutting down scheduler");
-        scheduler.shutdown().await.map_err(RuntimeError::Shutdown)?;
-        info!("ironflow cron scheduler stopped");
-
-        Ok(())
-    }
-
-    /// Starts the HTTP server and cron scheduler, blocking until shutdown.
+    /// Starts the HTTP server, blocking until shutdown.
     ///
     /// This method:
     ///
     /// 1. Loads environment variables from `.env` via [`dotenvy`].
-    /// 2. Starts the [`tokio_cron_scheduler`] scheduler with all registered cron jobs.
-    /// 3. Builds an [Axum](https://docs.rs/axum) router with all registered webhook
+    /// 2. Builds an [Axum](https://docs.rs/axum) router with all registered webhook
     ///    routes plus a `GET /health` endpoint.
+    /// 3. Starts registered triggers.
     /// 4. Binds to `addr` and serves until a `Ctrl+C` signal is received.
-    /// 5. Gracefully shuts down the scheduler before returning.
-    ///
-    /// If you only need cron jobs without an HTTP server, use
-    /// [`Runtime::run_crons`] instead.
+    /// 5. Gracefully shuts down triggers and waits for in-flight handlers.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     ///
-    /// - The cron scheduler fails to initialise or a cron expression is invalid.
     /// - The TCP listener cannot bind to `addr`.
     /// - The Axum server encounters a fatal I/O error.
     ///
@@ -647,8 +490,6 @@ impl Runtime {
                 }
             }
         };
-
-        let mut scheduler = Self::start_scheduler(self.crons).await?;
 
         // Start triggers
         let trigger_token = CancellationToken::new();
@@ -691,8 +532,6 @@ impl Runtime {
             }
         }
 
-        info!("shutting down scheduler");
-        scheduler.shutdown().await.map_err(RuntimeError::Shutdown)?;
         info!("ironflow runtime stopped");
 
         Ok(())
@@ -937,7 +776,6 @@ mod tests {
     fn runtime_new_creates_with_defaults() {
         let rt = Runtime::new();
         assert_eq!(rt.webhooks.len(), 0);
-        assert_eq!(rt.crons.len(), 0);
         assert_eq!(rt.max_body_size, DEFAULT_MAX_BODY_SIZE);
         assert_eq!(rt.max_concurrent_handlers, DEFAULT_MAX_CONCURRENT_HANDLERS);
         assert!(rt.custom_shutdown.is_none());
@@ -949,7 +787,6 @@ mod tests {
         let rt_new = Runtime::new();
         let rt_default = Runtime::default();
         assert_eq!(rt_new.webhooks.len(), rt_default.webhooks.len());
-        assert_eq!(rt_new.crons.len(), rt_default.crons.len());
         assert_eq!(rt_new.max_body_size, rt_default.max_body_size);
         assert_eq!(
             rt_new.max_concurrent_handlers,
@@ -1115,36 +952,6 @@ mod tests {
         assert_eq!(rt.webhooks.len(), 4);
     }
 
-    /// Test that cron() registers a job and returns self.
-    #[test]
-    fn cron_registers_job_and_returns_self() {
-        let rt = Runtime::new().cron("0 0 * * * *", "daily-task", || async {});
-        assert_eq!(rt.crons.len(), 1);
-        assert_eq!(rt.crons[0].name, "daily-task");
-        assert_eq!(rt.crons[0].schedule, "0 0 * * * *");
-    }
-
-    /// Test that cron() is chainable.
-    #[test]
-    fn cron_chainable() {
-        let rt = Runtime::new()
-            .cron("0 0 * * * *", "midnight", || async {})
-            .cron("0 */5 * * * *", "every-5-minutes", || async {});
-        assert_eq!(rt.crons.len(), 2);
-    }
-
-    /// Test that cron() preserves all parameters correctly.
-    #[test]
-    fn cron_preserves_schedule_and_name() {
-        let rt = Runtime::new()
-            .cron("0 12 * * * MON", "noon-mondays", || async {})
-            .cron("0 0 1 * * *", "first-of-month", || async {});
-        assert_eq!(rt.crons[0].name, "noon-mondays");
-        assert_eq!(rt.crons[0].schedule, "0 12 * * * MON");
-        assert_eq!(rt.crons[1].name, "first-of-month");
-        assert_eq!(rt.crons[1].schedule, "0 0 1 * * *");
-    }
-
     /// Test that into_router() returns a Router (compiles and doesn't panic).
     #[test]
     fn into_router_returns_router() {
@@ -1161,16 +968,6 @@ mod tests {
             .webhook("/hook-b", WebhookAuth::github("secret"), |_| async {});
         let _router = rt.into_router();
         // If this compiles and doesn't panic, the router was successfully created with all webhooks.
-    }
-
-    /// Test that into_router() with cron jobs (warns but doesn't panic).
-    #[test]
-    fn into_router_with_crons_returns_router() {
-        let rt = Runtime::new()
-            .cron("0 0 * * * *", "daily", || async {})
-            .cron("0 */5 * * * *", "every-5-min", || async {});
-        let _router = rt.into_router();
-        // Crons are dropped but not an error; router should still be created.
     }
 
     /// Test that into_router() with max_body_size returns a Router.
@@ -1203,20 +1000,10 @@ mod tests {
             .max_body_size(512 * 1024)
             .max_concurrent_handlers(32)
             .webhook("/hook-a", WebhookAuth::none(), |_| async {})
-            .webhook("/hook-b", WebhookAuth::github("secret"), |_| async {})
-            .cron("0 0 * * * *", "daily", || async {});
+            .webhook("/hook-b", WebhookAuth::github("secret"), |_| async {});
 
         assert_eq!(rt.max_body_size, 512 * 1024);
         assert_eq!(rt.max_concurrent_handlers, 32);
         assert_eq!(rt.webhooks.len(), 2);
-        assert_eq!(rt.crons.len(), 1);
-    }
-
-    /// Test that into_router() drops cron jobs with a warning logged.
-    #[test]
-    fn into_router_with_crons_doesnt_start_them() {
-        let rt = Runtime::new().cron("0 0 * * * *", "test-cron", || async {});
-        // This should not panic; crons are simply dropped.
-        let _router = rt.into_router();
     }
 }
