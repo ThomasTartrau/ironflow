@@ -7,7 +7,7 @@ use axum::response::IntoResponse;
 use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::NewSchedule;
+use ironflow_store::entities::{NewSchedule, ScheduleSource};
 
 use crate::entities::{CreateScheduleRequest, ScheduleResponse};
 use crate::error::ApiError;
@@ -60,6 +60,7 @@ pub async fn create_schedule(
             workflow_name: req.workflow_name,
             cron_expression: req.cron_expression,
             inputs: req.inputs,
+            source: ScheduleSource::Api,
             created_by_user_id: auth.user_id,
             next_trigger_at: next,
         })

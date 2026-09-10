@@ -40,7 +40,7 @@ pub use run::{
 };
 pub use run_actor::RunActor;
 pub use run_status::RunStatus;
-pub use schedule::{NewSchedule, Schedule, ScheduleUpdate};
+pub use schedule::{NewSchedule, Schedule, ScheduleSource, ScheduleUpdate};
 pub use secret::{
     DEFAULT_ROTATION_BATCH_SIZE, KeyVersionStatus, MAX_ROTATION_BATCH_SIZE, RotationBatch,
     RotationRequest, Secret, SecretMetadata,

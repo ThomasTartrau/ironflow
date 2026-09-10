@@ -24,7 +24,8 @@ use ironflow_store::store::Store;
 
 use crate::error::ApiError;
 use crate::reaper::Reaper;
-use crate::schedule_ticker::{ScheduleTicker, sync_handler_schedules};
+use crate::schedule_sync::sync_handler_schedules;
+use crate::schedule_ticker::ScheduleTicker;
 
 /// Global application state.
 ///

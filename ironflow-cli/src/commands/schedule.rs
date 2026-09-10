@@ -61,12 +61,21 @@ pub enum ScheduleCommands {
 fn schedules_table(schedules: &[ScheduleResponse]) -> Table {
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::Dynamic);
-    table.set_header(vec!["ID", "WORKFLOW", "CRON", "ENABLED", "NEXT TRIGGER"]);
+    table.set_header(vec![
+        "ID",
+        "WORKFLOW",
+        "CRON",
+        "SOURCE",
+        "ENABLED",
+        "NEXT TRIGGER",
+    ]);
     for s in schedules {
+        let source = format!("{:?}", s.source).to_lowercase();
         table.add_row(vec![
             s.id.to_string(),
             s.workflow_name.clone(),
             s.cron_expression.clone(),
+            source.to_string(),
             if s.disabled_at.is_none() {
                 "active".to_string()
             } else {

@@ -2,26 +2,21 @@
 //!
 //! All schedules live in the database -- both those created via the REST API
 //! and those declared by a [`WorkflowHandler::schedule()`]. At server startup,
-//! call [`sync_handler_schedules`] to seed DB rows for handler-declared
-//! schedules, then spawn [`ScheduleTicker::run`] which polls
-//! [`list_due_schedules`] and creates a run for each schedule whose
-//! `next_trigger_at` has passed.
+//! call [`sync_handler_schedules`](crate::schedule_sync::sync_handler_schedules)
+//! to reconcile handler-declared schedules, then spawn [`ScheduleTicker::run`]
+//! which polls [`claim_due_schedules`] and creates a run for each claimed
+//! schedule.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use croner::Cron;
-use ironflow_engine::engine::Engine;
-use ironflow_store::entities::{
-    NewRun, NewSchedule, RunActor, Schedule, ScheduleUpdate, TriggerKind,
-};
+use ironflow_store::entities::{NewRun, RunActor, Schedule, ScheduleUpdate, TriggerKind};
 use ironflow_store::store::Store;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 /// Compute the next trigger time from a cron expression (5-field standard format).
 pub(crate) fn next_trigger(
@@ -56,59 +51,6 @@ pub(crate) fn new_run_from_schedule(schedule: &Schedule, created_by: Option<RunA
     }
 }
 
-/// Seed a DB schedule for each handler that declares [`WorkflowHandler::schedule()`].
-///
-/// Existing schedules (matched by `workflow_name`) are left untouched. Only
-/// missing ones are created. Call this once at server startup, before
-/// spawning the [`ScheduleTicker`].
-///
-/// # Errors
-///
-/// Returns the first store error encountered. Schedules created before the
-/// error are kept.
-pub async fn sync_handler_schedules(
-    engine: &Engine,
-    store: &dyn Store,
-) -> Result<(), ironflow_store::error::StoreError> {
-    let handlers = engine.scheduled_handlers();
-    if handlers.is_empty() {
-        return Ok(());
-    }
-
-    let existing = store.list_schedules(1, 1000).await?;
-    let existing_names: std::collections::HashSet<&str> = existing
-        .items
-        .iter()
-        .map(|s| s.workflow_name.as_str())
-        .collect();
-
-    for (name, cron_schedule) in handlers {
-        if existing_names.contains(name) {
-            continue;
-        }
-
-        let next = next_trigger(cron_schedule.as_str()).unwrap_or(None);
-
-        store
-            .create_schedule(NewSchedule {
-                workflow_name: name.to_string(),
-                cron_expression: cron_schedule.as_str().to_string(),
-                inputs: serde_json::json!({}),
-                created_by_user_id: Uuid::nil(),
-                next_trigger_at: next,
-            })
-            .await?;
-
-        info!(
-            workflow = %name,
-            schedule = %cron_schedule,
-            "synced handler-declared schedule to DB"
-        );
-    }
-
-    Ok(())
-}
-
 /// How often the ticker checks for due schedules.
 pub const DEFAULT_TICK_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -119,7 +61,8 @@ pub const DEFAULT_TICK_INTERVAL: Duration = Duration::from_secs(15);
 /// ```no_run
 /// use std::sync::Arc;
 /// use std::time::Duration;
-/// use ironflow_api::schedule_ticker::{ScheduleTicker, sync_handler_schedules};
+/// use ironflow_api::schedule_ticker::ScheduleTicker;
+/// use ironflow_api::schedule_sync::sync_handler_schedules;
 /// use ironflow_engine::engine::Engine;
 /// use ironflow_core::providers::claude::ClaudeCodeProvider;
 /// use ironflow_store::memory::InMemoryStore;
@@ -185,21 +128,21 @@ impl ScheduleTicker {
     ///
     /// Exposed for tests and for callers that drive the tick themselves.
     pub async fn tick(&self) {
-        let due = match self.store.list_due_schedules().await {
-            Ok(due) => due,
+        let claimed = match self.store.claim_due_schedules().await {
+            Ok(claimed) => claimed,
             Err(err) => {
-                error!(error = %err, "failed to list due schedules");
+                error!(error = %err, "failed to claim due schedules");
                 return;
             }
         };
 
-        if due.is_empty() {
+        if claimed.is_empty() {
             return;
         }
 
-        info!(count = due.len(), "firing due schedules");
+        info!(count = claimed.len(), "firing due schedules");
 
-        for schedule in due {
+        for schedule in claimed {
             let run_result = self
                 .store
                 .create_run(new_run_from_schedule(&schedule, None))
@@ -232,23 +175,27 @@ impl ScheduleTicker {
                     warn!(
                         schedule_id = %schedule.id,
                         error = %err,
-                        "cannot compute next trigger, disabling schedule"
+                        "cannot compute next trigger, schedule will remain paused"
                     );
                     None
                 }
             };
 
-            let update = ScheduleUpdate {
-                last_triggered_at: Some(Some(Utc::now())),
-                next_trigger_at: Some(next),
-                ..Default::default()
-            };
-
-            if let Err(err) = self.store.update_schedule(schedule.id, update).await {
+            if let Err(err) = self
+                .store
+                .update_schedule(
+                    schedule.id,
+                    ScheduleUpdate {
+                        next_trigger_at: Some(next),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
                 error!(
                     schedule_id = %schedule.id,
                     error = %err,
-                    "failed to update schedule after trigger"
+                    "failed to set next trigger time after firing"
                 );
             }
         }
@@ -258,7 +205,7 @@ impl ScheduleTicker {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use ironflow_store::entities::{NewSchedule, RunFilter};
+    use ironflow_store::entities::{NewSchedule, RunFilter, ScheduleSource};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
     use serde_json::json;
@@ -274,6 +221,7 @@ mod tests {
                 workflow_name: "deploy".to_string(),
                 cron_expression: "* * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: Uuid::now_v7(),
                 next_trigger_at: Some(Utc::now() - chrono::Duration::seconds(10)),
             })
@@ -314,6 +262,7 @@ mod tests {
                 workflow_name: "deploy".to_string(),
                 cron_expression: "* * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: Uuid::now_v7(),
                 next_trigger_at: Some(Utc::now() - chrono::Duration::seconds(10)),
             })
@@ -349,6 +298,7 @@ mod tests {
                 workflow_name: "deploy".to_string(),
                 cron_expression: "* * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: Uuid::now_v7(),
                 next_trigger_at: Some(Utc::now() + chrono::Duration::hours(1)),
             })
@@ -379,95 +329,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_creates_missing_handler_schedules() {
-        use ironflow_core::providers::claude::ClaudeCodeProvider;
-        use ironflow_engine::context::WorkflowContext;
-        use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
-        use ironflow_engine::prelude::CronSchedule;
+    async fn tick_does_not_double_fire() {
+        let (store, _) = make_store_with_due_schedule().await;
+        let ticker = ScheduleTicker::new(store.clone());
 
-        struct Scheduled {
-            cron: CronSchedule,
-        }
-        impl WorkflowHandler for Scheduled {
-            fn name(&self) -> &str {
-                "nightly-cleanup"
-            }
-            fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
-                Box::pin(async { Ok(()) })
-            }
-            fn schedule(&self) -> Option<&CronSchedule> {
-                Some(&self.cron)
-            }
-        }
+        ticker.tick().await;
+        ticker.tick().await;
 
-        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
-        let provider = Arc::new(ClaudeCodeProvider::new());
-        let mut engine = ironflow_engine::engine::Engine::new(store.clone(), provider);
-        engine
-            .register(Scheduled {
-                cron: CronSchedule::new("0 0 * * *").unwrap(),
-            })
-            .expect("register");
-
-        sync_handler_schedules(&engine, store.as_ref())
+        let runs = store
+            .list_runs(RunFilter::default(), 1, 10)
             .await
-            .expect("sync");
-
-        let page = store.list_schedules(1, 10).await.expect("list");
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].workflow_name, "nightly-cleanup");
-        assert_eq!(page.items[0].cron_expression, "0 0 * * *");
-        assert!(page.items[0].next_trigger_at.is_some());
-    }
-
-    #[tokio::test]
-    async fn sync_skips_existing_schedule() {
-        use ironflow_core::providers::claude::ClaudeCodeProvider;
-        use ironflow_engine::context::WorkflowContext;
-        use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
-        use ironflow_engine::prelude::CronSchedule;
-
-        struct Scheduled {
-            cron: CronSchedule,
-        }
-        impl WorkflowHandler for Scheduled {
-            fn name(&self) -> &str {
-                "deploy"
-            }
-            fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
-                Box::pin(async { Ok(()) })
-            }
-            fn schedule(&self) -> Option<&CronSchedule> {
-                Some(&self.cron)
-            }
-        }
-
-        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
-        store
-            .create_schedule(NewSchedule {
-                workflow_name: "deploy".to_string(),
-                cron_expression: "*/5 * * * *".to_string(),
-                inputs: json!({"env": "prod"}),
-                created_by_user_id: Uuid::now_v7(),
-                next_trigger_at: Some(Utc::now()),
-            })
-            .await
-            .expect("seed");
-
-        let provider = Arc::new(ClaudeCodeProvider::new());
-        let mut engine = ironflow_engine::engine::Engine::new(store.clone(), provider);
-        engine
-            .register(Scheduled {
-                cron: CronSchedule::new("0 0 * * *").unwrap(),
-            })
-            .expect("register");
-
-        sync_handler_schedules(&engine, store.as_ref())
-            .await
-            .expect("sync");
-
-        let page = store.list_schedules(1, 10).await.expect("list");
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].cron_expression, "*/5 * * * *");
+            .expect("list runs");
+        assert_eq!(
+            runs.items.len(),
+            1,
+            "second tick must not create a duplicate run"
+        );
     }
 }

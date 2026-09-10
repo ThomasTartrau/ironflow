@@ -723,7 +723,7 @@ impl ScheduleStore for ApiRunStore {
         })
     }
 
-    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
+    fn claim_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "ScheduleStore not available in worker".to_string(),

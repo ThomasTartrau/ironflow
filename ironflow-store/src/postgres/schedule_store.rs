@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::entities::{NewSchedule, Page, Schedule, ScheduleUpdate};
+use crate::entities::{NewSchedule, Page, Schedule, ScheduleSource, ScheduleUpdate};
 use crate::error::StoreError;
 use crate::schedule_store::ScheduleStore;
 use crate::store::StoreFuture;
@@ -14,6 +14,7 @@ struct ScheduleRow {
     workflow_name: String,
     cron_expression: String,
     inputs: Value,
+    source: String,
     disabled_at: Option<DateTime<Utc>>,
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
@@ -29,6 +30,7 @@ impl From<ScheduleRow> for Schedule {
             workflow_name: row.workflow_name,
             cron_expression: row.cron_expression,
             inputs: row.inputs,
+            source: row.source.parse().unwrap_or(ScheduleSource::Api),
             disabled_at: row.disabled_at,
             last_triggered_at: row.last_triggered_at,
             next_trigger_at: row.next_trigger_at,
@@ -44,6 +46,7 @@ struct ScheduleRowWithTotal {
     workflow_name: String,
     cron_expression: String,
     inputs: Value,
+    source: String,
     disabled_at: Option<DateTime<Utc>>,
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
@@ -60,6 +63,7 @@ impl From<ScheduleRowWithTotal> for Schedule {
             workflow_name: row.workflow_name,
             cron_expression: row.cron_expression,
             inputs: row.inputs,
+            source: row.source.parse().unwrap_or(ScheduleSource::Api),
             disabled_at: row.disabled_at,
             last_triggered_at: row.last_triggered_at,
             next_trigger_at: row.next_trigger_at,
@@ -75,14 +79,15 @@ impl ScheduleStore for PostgresStore {
         Box::pin(async move {
             let id = Uuid::now_v7();
             let now = Utc::now();
+            let source_str = req.source.as_str();
             let row = sqlx::query_as!(
                 ScheduleRow,
                 r#"
                 INSERT INTO ironflow.schedules
-                    (id, workflow_name, cron_expression, inputs,
+                    (id, workflow_name, cron_expression, inputs, source,
                      next_trigger_at, created_by_user_id, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING id, workflow_name, cron_expression, inputs,
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at,
                     created_by_user_id, created_at, updated_at
                 "#,
@@ -90,6 +95,7 @@ impl ScheduleStore for PostgresStore {
                 &req.workflow_name,
                 &req.cron_expression,
                 &req.inputs,
+                source_str,
                 req.next_trigger_at,
                 req.created_by_user_id,
                 now,
@@ -108,7 +114,7 @@ impl ScheduleStore for PostgresStore {
             let row = sqlx::query_as!(
                 ScheduleRow,
                 r#"
-                SELECT id, workflow_name, cron_expression, inputs,
+                SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at,
                     created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
@@ -130,7 +136,7 @@ impl ScheduleStore for PostgresStore {
             let rows = sqlx::query_as!(
                 ScheduleRowWithTotal,
                 r#"
-                SELECT id, workflow_name, cron_expression, inputs,
+                SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at,
                     created_by_user_id, created_at, updated_at,
                     COUNT(*) OVER () as "total_count!: i64"
@@ -162,7 +168,7 @@ impl ScheduleStore for PostgresStore {
             let existing = sqlx::query_as!(
                 ScheduleRow,
                 r#"
-                SELECT id, workflow_name, cron_expression, inputs,
+                SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at,
                     created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
@@ -202,7 +208,7 @@ impl ScheduleStore for PostgresStore {
                     last_triggered_at = $6,
                     updated_at = $7
                 WHERE id = $1
-                RETURNING id, workflow_name, cron_expression, inputs,
+                RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at,
                     created_by_user_id, created_at, updated_at
                 "#,
@@ -236,19 +242,29 @@ impl ScheduleStore for PostgresStore {
         })
     }
 
-    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
+    fn claim_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
         Box::pin(async move {
             let rows = sqlx::query_as!(
                 ScheduleRow,
                 r#"
-                SELECT id, workflow_name, cron_expression, inputs,
-                    disabled_at, last_triggered_at, next_trigger_at,
-                    created_by_user_id, created_at, updated_at
-                FROM ironflow.schedules
-                WHERE disabled_at IS NULL
-                  AND next_trigger_at IS NOT NULL
-                  AND next_trigger_at <= NOW()
-                ORDER BY next_trigger_at ASC
+                WITH due AS (
+                    SELECT id
+                    FROM ironflow.schedules
+                    WHERE disabled_at IS NULL
+                      AND next_trigger_at IS NOT NULL
+                      AND next_trigger_at <= NOW()
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE ironflow.schedules s
+                SET last_triggered_at = NOW(),
+                    next_trigger_at = NULL,
+                    updated_at = NOW()
+                FROM due
+                WHERE s.id = due.id
+                RETURNING s.id, s.workflow_name, s.cron_expression,
+                    s.inputs, s.source,
+                    s.disabled_at, s.last_triggered_at, s.next_trigger_at,
+                    s.created_by_user_id, s.created_at, s.updated_at
                 "#,
             )
             .fetch_all(&self.pool)

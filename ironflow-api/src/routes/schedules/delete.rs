@@ -6,15 +6,20 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ScheduleSource;
 
 use crate::error::ApiError;
 use crate::state::AppState;
 
 /// Delete a schedule by ID.
 ///
+/// Handler-declared schedules (`source = handler`) cannot be deleted via the
+/// API -- they are managed by the code and reconciled at startup.
+///
 /// # Errors
 ///
 /// - 401 if not authenticated
+/// - 403 if the schedule is handler-declared
 /// - 404 if the schedule does not exist
 #[cfg_attr(
     feature = "openapi",
@@ -26,6 +31,7 @@ use crate::state::AppState;
         responses(
             (status = 204, description = "Schedule deleted"),
             (status = 401, description = "Unauthorized"),
+            (status = 403, description = "Cannot delete handler-declared schedule"),
             (status = 404, description = "Schedule not found")
         ),
         security(("Bearer" = []))
@@ -36,6 +42,19 @@ pub async fn delete_schedule(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let schedule = state
+        .store
+        .find_schedule_by_id(id)
+        .await?
+        .ok_or(ApiError::ScheduleNotFound(id))?;
+
+    if schedule.source == ScheduleSource::Handler {
+        return Err(ApiError::Conflict(
+            "cannot delete a handler-declared schedule; remove it from the code instead"
+                .to_string(),
+        ));
+    }
+
     state.store.delete_schedule(id).await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -54,7 +73,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{NewSchedule, NewUser};
+    use ironflow_store::entities::{NewSchedule, NewUser, ScheduleSource};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
     use serde_json::json;
@@ -130,6 +149,7 @@ mod tests {
                 workflow_name: "deploy".to_string(),
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: user_id,
                 next_trigger_at: None,
             })

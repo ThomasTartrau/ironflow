@@ -18,6 +18,7 @@ impl ScheduleStore for InMemoryStore {
                 workflow_name: req.workflow_name,
                 cron_expression: req.cron_expression,
                 inputs: req.inputs,
+                source: req.source,
                 disabled_at: None,
                 last_triggered_at: None,
                 next_trigger_at: req.next_trigger_at,
@@ -98,17 +99,27 @@ impl ScheduleStore for InMemoryStore {
         })
     }
 
-    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
+    fn claim_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
         Box::pin(async move {
             let now = Utc::now();
-            let state = self.state.read().await;
-            let due = state
+            let mut state = self.state.write().await;
+            let due_ids: Vec<Uuid> = state
                 .schedules
                 .values()
                 .filter(|s| s.is_active() && s.next_trigger_at.is_some_and(|at| at <= now))
-                .cloned()
+                .map(|s| s.id)
                 .collect();
-            Ok(due)
+
+            let mut claimed = Vec::with_capacity(due_ids.len());
+            for id in due_ids {
+                if let Some(schedule) = state.schedules.get_mut(&id) {
+                    schedule.last_triggered_at = Some(now);
+                    schedule.next_trigger_at = None;
+                    schedule.updated_at = now;
+                    claimed.push(schedule.clone());
+                }
+            }
+            Ok(claimed)
         })
     }
 }
@@ -117,6 +128,8 @@ impl ScheduleStore for InMemoryStore {
 mod tests {
     use serde_json::json;
 
+    use crate::entities::ScheduleSource;
+
     use super::*;
 
     fn new_schedule(workflow: &str, cron: &str) -> NewSchedule {
@@ -124,6 +137,7 @@ mod tests {
             workflow_name: workflow.to_string(),
             cron_expression: cron.to_string(),
             inputs: json!({}),
+            source: ScheduleSource::Api,
             created_by_user_id: Uuid::now_v7(),
             next_trigger_at: Some(Utc::now()),
         }
@@ -138,6 +152,7 @@ mod tests {
             .expect("create");
         assert_eq!(created.workflow_name, "deploy");
         assert!(created.is_active());
+        assert_eq!(created.source, ScheduleSource::Api);
 
         let found = store
             .find_schedule_by_id(created.id)
@@ -145,6 +160,19 @@ mod tests {
             .expect("find")
             .expect("some");
         assert_eq!(found.id, created.id);
+    }
+
+    #[tokio::test]
+    async fn create_handler_source() {
+        let store = InMemoryStore::new();
+        let created = store
+            .create_schedule(NewSchedule {
+                source: ScheduleSource::Handler,
+                ..new_schedule("nightly", "0 0 * * *")
+            })
+            .await
+            .expect("create");
+        assert_eq!(created.source, ScheduleSource::Handler);
     }
 
     #[tokio::test]
@@ -220,7 +248,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_due_schedules_filters_correctly() {
+    async fn claim_due_schedules_filters_correctly() {
         use chrono::TimeDelta;
 
         let store = InMemoryStore::new();
@@ -230,6 +258,7 @@ mod tests {
                 workflow_name: "past".to_string(),
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: Uuid::now_v7(),
                 next_trigger_at: Some(Utc::now() - TimeDelta::seconds(60)),
             })
@@ -241,6 +270,7 @@ mod tests {
                 workflow_name: "future".to_string(),
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: Uuid::now_v7(),
                 next_trigger_at: Some(Utc::now() + TimeDelta::seconds(3600)),
             })
@@ -252,6 +282,7 @@ mod tests {
                 workflow_name: "disabled".to_string(),
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: Uuid::now_v7(),
                 next_trigger_at: Some(Utc::now() - TimeDelta::seconds(60)),
             })
@@ -268,8 +299,14 @@ mod tests {
             .await
             .expect("disable");
 
-        let due = store.list_due_schedules().await.expect("due");
+        let due = store.claim_due_schedules().await.expect("claim");
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].id, past.id);
+        assert!(due[0].last_triggered_at.is_some());
+        assert!(due[0].next_trigger_at.is_none());
+
+        // Claiming again returns nothing (next_trigger_at was cleared).
+        let due_again = store.claim_due_schedules().await.expect("claim again");
+        assert!(due_again.is_empty());
     }
 }

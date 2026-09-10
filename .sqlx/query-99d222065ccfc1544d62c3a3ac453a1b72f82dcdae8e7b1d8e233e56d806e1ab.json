@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                UPDATE ironflow.schedules\n                SET cron_expression = $2,\n                    inputs = $3,\n                    disabled_at = $4,\n                    next_trigger_at = $5,\n                    last_triggered_at = $6,\n                    updated_at = $7\n                WHERE id = $1\n                RETURNING id, workflow_name, cron_expression, inputs,\n                    disabled_at, last_triggered_at, next_trigger_at,\n                    created_by_user_id, created_at, updated_at\n                ",
+  "query": "\n                INSERT INTO ironflow.schedules\n                    (id, workflow_name, cron_expression, inputs, source,\n                     next_trigger_at, created_by_user_id, created_at, updated_at)\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n                RETURNING id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at,\n                    created_by_user_id, created_at, updated_at\n                ",
   "describe": {
     "columns": [
       {
@@ -25,31 +25,36 @@
       },
       {
         "ordinal": 4,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
         "name": "disabled_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "last_triggered_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "next_trigger_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "created_by_user_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -58,14 +63,17 @@
       "Left": [
         "Uuid",
         "Text",
+        "Text",
         "Jsonb",
+        "Text",
         "Timestamptz",
-        "Timestamptz",
+        "Uuid",
         "Timestamptz",
         "Timestamptz"
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -78,5 +86,5 @@
       false
     ]
   },
-  "hash": "c353e09b607d4f4a51ef9e019ac37c07b5f98f32fb0c15e548f2beb542de00cf"
+  "hash": "99d222065ccfc1544d62c3a3ac453a1b72f82dcdae8e7b1d8e233e56d806e1ab"
 }

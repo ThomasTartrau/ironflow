@@ -116,7 +116,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{NewSchedule, NewUser};
+    use ironflow_store::entities::{NewSchedule, NewUser, ScheduleSource};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
     use serde_json::json;
@@ -179,6 +179,7 @@ mod tests {
                 workflow_name: "deploy".to_string(),
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
+                source: ScheduleSource::Api,
                 created_by_user_id: user.id,
                 next_trigger_at: None,
             })

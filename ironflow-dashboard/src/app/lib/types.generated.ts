@@ -523,9 +523,13 @@ export interface paths {
 		post?: never;
 		/**
 		 * Delete a schedule by ID.
-		 * @description # Errors
+		 * @description Handler-declared schedules (`source = handler`) cannot be deleted via the
+		 *     API -- they are managed by the code and reconciled at startup.
+		 *
+		 *     # Errors
 		 *
 		 *     - 401 if not authenticated
+		 *     - 403 if the schedule is handler-declared
 		 *     - 404 if the schedule does not exist
 		 */
 		delete: operations["delete_schedule"];
@@ -1610,7 +1614,8 @@ export interface components {
 			 * @description Filter by step ID.
 			 */
 			step_id?: string | null;
-			stream?: null | components["schemas"]["LogStream"];
+			/** @description Filter by output stream (`stdout`, `stderr`, `system`). */
+			stream?: components["schemas"]["LogStream"];
 		};
 		/** @description How the configured key ring lines up with the stored secrets. */
 		KeyVersionsResponse: {
@@ -1633,7 +1638,8 @@ export interface components {
 		};
 		/** @description Query parameters for listing audit log entries. */
 		ListAuditLogsQuery: {
-			event_type?: null | components["schemas"]["EventKind"];
+			/** @description Filter by event type (e.g. `run_status_changed`). */
+			event_type?: components["schemas"]["EventKind"];
 			/**
 			 * Format: date-time
 			 * @description Filter entries created at or after this timestamp.
@@ -1688,7 +1694,8 @@ export interface components {
 			 * @description Items per page.
 			 */
 			per_page?: number | null;
-			status?: null | components["schemas"]["RunStatus"];
+			/** @description Filter by run status. */
+			status?: components["schemas"]["RunStatus"];
 			/** @description Filter by workflow name. */
 			workflow?: string | null;
 		};
@@ -2040,6 +2047,8 @@ export interface components {
 			 * @description When the schedule will next fire.
 			 */
 			next_trigger_at?: string | null;
+			/** @description Where this schedule was created (`handler` or `api`). */
+			source: components["schemas"]["ScheduleSource"];
 			/**
 			 * Format: date-time
 			 * @description When the schedule was last updated.
@@ -2048,6 +2057,27 @@ export interface components {
 			/** @description Name of the workflow to trigger. */
 			workflow_name: string;
 		};
+		/**
+		 * @description Where a schedule was created.
+		 *
+		 *     `Handler` schedules are declared in code via [`WorkflowHandler::schedule()`]
+		 *     and synced to the database at startup. `Api` schedules are created by users
+		 *     through the REST API, CLI, or dashboard.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::ScheduleSource;
+		 *
+		 *     let source = ScheduleSource::Handler;
+		 *     assert_eq!(source.as_str(), "handler");
+		 *
+		 *     let parsed: ScheduleSource = "api".parse().unwrap();
+		 *     assert_eq!(parsed, ScheduleSource::Api);
+		 *     ```
+		 * @enum {string}
+		 */
+		ScheduleSource: "handler" | "api";
 		/** @description A scope entry with its machine name and human-readable label. */
 		ScopeEntry: {
 			/** @description Short description. */
@@ -2707,17 +2737,17 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by event type (e.g. `run_status_changed`). */
-				event_type?: null | components["schemas"]["EventKind"];
+				event_type?: components["schemas"]["EventKind"];
 				/** @description Filter by run ID. */
-				run_id?: string | null;
+				run_id?: string;
 				/** @description Filter entries created at or after this timestamp. */
-				from?: string | null;
+				from?: string;
 				/** @description Filter entries created at or before this timestamp. */
-				to?: string | null;
+				to?: string;
 				/** @description Page number (1-based, default: 1). */
-				page?: number | null;
+				page?: number;
 				/** @description Items per page (default: 50, max: 100). */
-				per_page?: number | null;
+				per_page?: number;
 			};
 			header?: never;
 			path?: never;
@@ -2953,28 +2983,28 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by workflow name. */
-				workflow?: string | null;
+				workflow?: string;
 				/** @description Filter by run status. */
-				status?: null | components["schemas"]["RunStatus"];
+				status?: components["schemas"]["RunStatus"];
 				/**
 				 * @description Filter by step presence (only applies to completed/cancelled runs).
 				 *     Non-terminal runs (pending, running, etc.) are always included.
 				 *     When `true`, only return completed/cancelled runs that have steps.
 				 *     When `false`, only return completed/cancelled runs without steps.
 				 */
-				has_steps?: boolean | null;
+				has_steps?: boolean;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
-				label?: string | null;
+				label?: string;
 				/**
 				 * @description Filter by author: the user ID that triggered the run.
 				 *
 				 *     Also matches runs triggered by one of that user's API keys.
 				 */
-				created_by?: string | null;
+				created_by?: string;
 				/** @description Page number (1-based). */
-				page?: number | null;
+				page?: number;
 				/** @description Items per page. */
-				per_page?: number | null;
+				per_page?: number;
 			};
 			header?: never;
 			path?: never;
@@ -3005,7 +3035,7 @@ export interface operations {
 			query?: never;
 			header?: {
 				/** @description Optional key making the call safe to replay. At most 255 printable ASCII characters, valid for 24 hours. */
-				"Idempotency-Key"?: string | null;
+				"Idempotency-Key"?: string;
 			};
 			path?: never;
 			cookie?: never;
@@ -3253,13 +3283,13 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by step ID. */
-				step_id?: string | null;
+				step_id?: string;
 				/** @description Filter by output stream (`stdout`, `stderr`, `system`). */
-				stream?: null | components["schemas"]["LogStream"];
+				stream?: components["schemas"]["LogStream"];
 				/** @description Cursor for pagination (last entry ID from previous page). */
-				cursor?: string | null;
+				cursor?: string;
 				/** @description Number of entries to return (default: 100, max: 1000). */
-				limit?: number | null;
+				limit?: number;
 			};
 			header?: never;
 			path: {
@@ -3589,6 +3619,13 @@ export interface operations {
 				};
 				content?: never;
 			};
+			/** @description Cannot delete handler-declared schedule */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
 			/** @description Schedule not found */
 			404: {
 				headers: {
@@ -3713,11 +3750,11 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by key prefix (e.g. `workflows/inbox/`). */
-				prefix?: string | null;
+				prefix?: string;
 				/** @description Page number (1-based, default 1). */
-				page?: number | null;
+				page?: number;
 				/** @description Items per page (default 50, max 100). */
-				per_page?: number | null;
+				per_page?: number;
 			};
 			header?: never;
 			path?: never;
@@ -3978,28 +4015,28 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by workflow name. */
-				workflow?: string | null;
+				workflow?: string;
 				/** @description Filter by run status. */
-				status?: null | components["schemas"]["RunStatus"];
+				status?: components["schemas"]["RunStatus"];
 				/**
 				 * @description Filter by step presence (only applies to completed/cancelled runs).
 				 *     Non-terminal runs (pending, running, etc.) are always included.
 				 *     When `true`, only return completed/cancelled runs that have steps.
 				 *     When `false`, only return completed/cancelled runs without steps.
 				 */
-				has_steps?: boolean | null;
+				has_steps?: boolean;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
-				label?: string | null;
+				label?: string;
 				/**
 				 * @description Filter by author: the user ID that triggered the run.
 				 *
 				 *     Also matches runs triggered by one of that user's API keys.
 				 */
-				created_by?: string | null;
+				created_by?: string;
 				/** @description Page number (1-based). */
-				page?: number | null;
+				page?: number;
 				/** @description Items per page. */
-				per_page?: number | null;
+				per_page?: number;
 			};
 			header?: never;
 			path?: never;
@@ -4029,9 +4066,9 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Page number (1-based, defaults to 1). */
-				page?: number | null;
+				page?: number;
 				/** @description Items per page (defaults to 20, max 100). */
-				per_page?: number | null;
+				per_page?: number;
 			};
 			header?: never;
 			path?: never;
@@ -4226,7 +4263,7 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Optional case-insensitive partial match on workflow name. */
-				name?: string | null;
+				name?: string;
 				/**
 				 * @description Optional case-insensitive partial match on the category path
 				 *     (e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).
@@ -4234,7 +4271,7 @@ export interface operations {
 				 *     Pass `__uncategorized__` to list only workflows without any
 				 *     category.
 				 */
-				category?: string | null;
+				category?: string;
 			};
 			header?: never;
 			path?: never;

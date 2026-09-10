@@ -3,7 +3,45 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use strum::{Display, EnumString, IntoStaticStr};
 use uuid::Uuid;
+
+/// Where a schedule was created.
+///
+/// `Handler` schedules are declared in code via [`WorkflowHandler::schedule()`]
+/// and synced to the database at startup. `Api` schedules are created by users
+/// through the REST API, CLI, or dashboard.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::ScheduleSource;
+///
+/// let source = ScheduleSource::Handler;
+/// assert_eq!(source.as_str(), "handler");
+///
+/// let parsed: ScheduleSource = "api".parse().unwrap();
+/// assert_eq!(parsed, ScheduleSource::Api);
+/// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, IntoStaticStr,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ScheduleSource {
+    /// Declared in code via `WorkflowHandler::schedule()`.
+    Handler,
+    /// Created via the REST API.
+    Api,
+}
+
+impl ScheduleSource {
+    /// String representation used in the database.
+    pub fn as_str(&self) -> &'static str {
+        self.into()
+    }
+}
 
 /// A persisted schedule that triggers a workflow on a cron expression.
 ///
@@ -13,7 +51,7 @@ use uuid::Uuid;
 /// # Examples
 ///
 /// ```
-/// use ironflow_store::entities::Schedule;
+/// use ironflow_store::entities::{Schedule, ScheduleSource};
 /// use chrono::Utc;
 /// use serde_json::json;
 /// use uuid::Uuid;
@@ -23,6 +61,7 @@ use uuid::Uuid;
 ///     workflow_name: "deploy".to_string(),
 ///     cron_expression: "0 0 * * * *".to_string(),
 ///     inputs: json!({}),
+///     source: ScheduleSource::Api,
 ///     disabled_at: None,
 ///     last_triggered_at: None,
 ///     next_trigger_at: Some(Utc::now()),
@@ -43,6 +82,8 @@ pub struct Schedule {
     pub cron_expression: String,
     /// JSON payload passed to the workflow on each trigger.
     pub inputs: Value,
+    /// Where this schedule was created.
+    pub source: ScheduleSource,
     /// When the schedule was disabled. `None` means active.
     pub disabled_at: Option<DateTime<Utc>>,
     /// When the schedule last created a run.
@@ -69,7 +110,7 @@ impl Schedule {
 /// # Examples
 ///
 /// ```
-/// use ironflow_store::entities::NewSchedule;
+/// use ironflow_store::entities::{NewSchedule, ScheduleSource};
 /// use serde_json::json;
 /// use uuid::Uuid;
 /// use chrono::Utc;
@@ -78,6 +119,7 @@ impl Schedule {
 ///     workflow_name: "deploy".to_string(),
 ///     cron_expression: "0 0 * * * *".to_string(),
 ///     inputs: json!({"env": "prod"}),
+///     source: ScheduleSource::Api,
 ///     created_by_user_id: Uuid::now_v7(),
 ///     next_trigger_at: Some(Utc::now()),
 /// };
@@ -91,6 +133,8 @@ pub struct NewSchedule {
     pub cron_expression: String,
     /// JSON payload for the workflow.
     pub inputs: Value,
+    /// Where this schedule originates.
+    pub source: ScheduleSource,
     /// User who creates the schedule.
     pub created_by_user_id: Uuid,
     /// Pre-computed next trigger time.
@@ -142,6 +186,7 @@ mod tests {
             workflow_name: "deploy".to_string(),
             cron_expression: "0 0 * * * *".to_string(),
             inputs: json!({"env": "prod"}),
+            source: ScheduleSource::Api,
             disabled_at: None,
             last_triggered_at: None,
             next_trigger_at: Some(Utc::now()),
@@ -163,6 +208,7 @@ mod tests {
             workflow_name: "deploy".to_string(),
             cron_expression: "0 0 * * * *".to_string(),
             inputs: json!({}),
+            source: ScheduleSource::Api,
             disabled_at: Some(Utc::now()),
             last_triggered_at: None,
             next_trigger_at: None,
@@ -171,6 +217,20 @@ mod tests {
             updated_at: Utc::now(),
         };
         assert!(!schedule.is_active());
+    }
+
+    #[test]
+    fn schedule_source_roundtrip() {
+        assert_eq!(ScheduleSource::Handler.as_str(), "handler");
+        assert_eq!(ScheduleSource::Api.as_str(), "api");
+
+        let parsed: ScheduleSource = "handler".parse().unwrap();
+        assert_eq!(parsed, ScheduleSource::Handler);
+
+        let parsed: ScheduleSource = "api".parse().unwrap();
+        assert_eq!(parsed, ScheduleSource::Api);
+
+        assert!("unknown".parse::<ScheduleSource>().is_err());
     }
 
     #[test]

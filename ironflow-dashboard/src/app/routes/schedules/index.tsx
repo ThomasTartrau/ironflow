@@ -59,6 +59,7 @@ interface ScheduleResponse {
 	workflow_name: string;
 	cron_expression: string;
 	inputs: Record<string, unknown>;
+	source: "handler" | "api";
 	disabled_at: string | null;
 	last_triggered_at: string | null;
 	next_trigger_at: string | null;
@@ -236,6 +237,7 @@ export function Component() {
 							<TableRow>
 								<TableHead>Workflow</TableHead>
 								<TableHead>Cron</TableHead>
+								<TableHead>Source</TableHead>
 								<TableHead>Next trigger</TableHead>
 								<TableHead>Last trigger</TableHead>
 								<TableHead>Status</TableHead>
@@ -252,6 +254,11 @@ export function Component() {
 										<code className="text-xs bg-muted px-1.5 py-0.5 rounded">
 											{s.cron_expression}
 										</code>
+									</TableCell>
+									<TableCell>
+										<Badge variant={s.source === "handler" ? "outline" : "secondary"}>
+											{s.source === "handler" ? "Code" : "API"}
+										</Badge>
 									</TableCell>
 									<TableCell>
 										{s.next_trigger_at ? (
@@ -319,23 +326,25 @@ export function Component() {
 												<TooltipContent>Trigger now</TooltipContent>
 											</Tooltip>
 										</TooltipProvider>
-										<TooltipProvider>
-											<Tooltip>
-												<TooltipTrigger
-													render={
-														<Button
-															variant="ghost"
-															size="icon"
-															onClick={() => setPendingDelete(s.id)}
-															aria-label="Delete"
-														>
-															<Trash2 className="size-4" />
-														</Button>
-													}
-												/>
-												<TooltipContent>Delete</TooltipContent>
-											</Tooltip>
-										</TooltipProvider>
+										{s.source !== "handler" && (
+											<TooltipProvider>
+												<Tooltip>
+													<TooltipTrigger
+														render={
+															<Button
+																variant="ghost"
+																size="icon"
+																onClick={() => setPendingDelete(s.id)}
+																aria-label="Delete"
+															>
+																<Trash2 className="size-4" />
+															</Button>
+														}
+													/>
+													<TooltipContent>Delete</TooltipContent>
+												</Tooltip>
+											</TooltipProvider>
+										)}
 									</TableCell>
 								</TableRow>
 							))}

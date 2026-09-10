@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT id, workflow_name, cron_expression, inputs,\n                    disabled_at, last_triggered_at, next_trigger_at,\n                    created_by_user_id, created_at, updated_at\n                FROM ironflow.schedules\n                WHERE disabled_at IS NULL\n                  AND next_trigger_at IS NOT NULL\n                  AND next_trigger_at <= NOW()\n                ORDER BY next_trigger_at ASC\n                ",
+  "query": "\n                UPDATE ironflow.schedules\n                SET cron_expression = $2,\n                    inputs = $3,\n                    disabled_at = $4,\n                    next_trigger_at = $5,\n                    last_triggered_at = $6,\n                    updated_at = $7\n                WHERE id = $1\n                RETURNING id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at,\n                    created_by_user_id, created_at, updated_at\n                ",
   "describe": {
     "columns": [
       {
@@ -25,39 +25,53 @@
       },
       {
         "ordinal": 4,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
         "name": "disabled_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "last_triggered_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "next_trigger_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "created_by_user_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz"
+      ]
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -70,5 +84,5 @@
       false
     ]
   },
-  "hash": "ea7f08ab78b4f69761c29d1fe20c296b8bc8e8f6af128cf97219f371284f46bc"
+  "hash": "52ed5a47fc3df1251d894978c244fb510fe01d75b6e897b0500c80ca00c358c2"
 }

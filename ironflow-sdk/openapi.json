@@ -1622,6 +1622,10 @@
             "nullable": true,
             "type": "string"
           },
+          "source": {
+            "$ref": "#/components/schemas/ScheduleSource",
+            "description": "Where this schedule was created (`handler` or `api`)."
+          },
           "updated_at": {
             "description": "When the schedule was last updated.",
             "format": "date-time",
@@ -1637,11 +1641,20 @@
           "workflow_name",
           "cron_expression",
           "inputs",
+          "source",
           "created_by_user_id",
           "created_at",
           "updated_at"
         ],
         "type": "object"
+      },
+      "ScheduleSource": {
+        "description": "Where a schedule was created.\n\n`Handler` schedules are declared in code via [`WorkflowHandler::schedule()`]\nand synced to the database at startup. `Api` schedules are created by users\nthrough the REST API, CLI, or dashboard.\n\n# Examples\n\n```\nuse ironflow_store::entities::ScheduleSource;\n\nlet source = ScheduleSource::Handler;\nassert_eq!(source.as_str(), \"handler\");\n\nlet parsed: ScheduleSource = \"api\".parse().unwrap();\nassert_eq!(parsed, ScheduleSource::Api);\n```",
+        "enum": [
+          "handler",
+          "api"
+        ],
+        "type": "string"
       },
       "ScopeEntry": {
         "description": "A scope entry with its machine name and human-readable label.",
@@ -3729,7 +3742,7 @@
     },
     "/api/v1/schedules/{id}": {
       "delete": {
-        "description": "# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "description": "Handler-declared schedules (`source = handler`) cannot be deleted via the\nAPI -- they are managed by the code and reconciled at startup.\n\n# Errors\n\n- 401 if not authenticated\n- 403 if the schedule is handler-declared\n- 404 if the schedule does not exist",
         "operationId": "delete_schedule",
         "parameters": [
           {
@@ -3749,6 +3762,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Cannot delete handler-declared schedule"
           },
           "404": {
             "description": "Schedule not found"

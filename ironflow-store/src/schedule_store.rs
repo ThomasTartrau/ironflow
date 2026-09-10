@@ -39,6 +39,12 @@ pub trait ScheduleStore: Send + Sync {
     /// the schedule does not exist.
     fn delete_schedule(&self, id: Uuid) -> StoreFuture<'_, ()>;
 
-    /// List enabled schedules whose `next_trigger_at` is in the past or now.
-    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>>;
+    /// Atomically claim enabled schedules whose `next_trigger_at` is in the
+    /// past, setting `last_triggered_at = now` and `next_trigger_at = None`.
+    ///
+    /// In a multi-instance deployment each schedule is claimed by exactly one
+    /// instance (the Postgres implementation uses `FOR UPDATE SKIP LOCKED`).
+    /// The caller is responsible for creating a run and recomputing
+    /// `next_trigger_at` for each returned schedule.
+    fn claim_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>>;
 }

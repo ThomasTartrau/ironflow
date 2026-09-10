@@ -6,7 +6,7 @@ use serde_json::Value;
 use uuid::Uuid;
 use validator::Validate;
 
-use ironflow_store::entities::Schedule;
+use ironflow_store::entities::{Schedule, ScheduleSource};
 
 /// Schedule list/detail response.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -20,6 +20,8 @@ pub struct ScheduleResponse {
     pub cron_expression: String,
     /// JSON payload passed to the workflow.
     pub inputs: Value,
+    /// Where this schedule was created (`handler` or `api`).
+    pub source: ScheduleSource,
     /// When the schedule was disabled. `None` means active.
     pub disabled_at: Option<DateTime<Utc>>,
     /// When the schedule last created a run.
@@ -41,6 +43,7 @@ impl From<Schedule> for ScheduleResponse {
             workflow_name: s.workflow_name,
             cron_expression: s.cron_expression,
             inputs: s.inputs,
+            source: s.source,
             disabled_at: s.disabled_at,
             last_triggered_at: s.last_triggered_at,
             next_trigger_at: s.next_trigger_at,
