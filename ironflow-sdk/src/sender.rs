@@ -24,10 +24,7 @@ impl IronflowClient {
     /// (for both HTTP status and network errors).
     /// Returns the underlying [`Error::Http`] or [`Error::Api`] on
     /// non-retryable failures.
-    pub(crate) async fn send_with_retry(
-        &self,
-        request: RequestBuilder,
-    ) -> Result<Response, Error> {
+    pub(crate) async fn send_with_retry(&self, request: RequestBuilder) -> Result<Response, Error> {
         self.rate_limiter.wait().await;
 
         let max = self.retry_config.max_retries;
@@ -99,10 +96,7 @@ impl IronflowClient {
     ///
     /// Returns [`Error::Http`] on network failure, or the raw response
     /// for the caller to inspect.
-    pub(crate) async fn send_once(
-        &self,
-        request: RequestBuilder,
-    ) -> Result<Response, Error> {
+    pub(crate) async fn send_once(&self, request: RequestBuilder) -> Result<Response, Error> {
         self.rate_limiter.wait().await;
 
         let response = request.send().await?;
