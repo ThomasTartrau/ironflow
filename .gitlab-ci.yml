@@ -38,9 +38,7 @@ variables:
   FF_USE_FASTZIP: 1
   CACHE_COMPRESSION_LEVEL: "fastest"
   RELEASE_PLZ_VERSION: "0.3.160"
-  CI_RUST_IMAGE_TAG: "1.94.1-v1"
-  SCCACHE_DIR: "${CI_PROJECT_DIR}/.sccache"
-  SCCACHE_CACHE_SIZE: "1G"
+  CI_RUST_IMAGE_TAG: "1.94.1-v2"
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
   COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
@@ -55,7 +53,6 @@ variables:
       - .cargo/registry/cache/
       - .cargo/registry/index/
       - .cargo/git/db/
-      - .sccache/
 
 .rust-release-cache: &rust-release-cache
   cache:
@@ -66,7 +63,6 @@ variables:
       - .cargo/registry/cache/
       - .cargo/registry/index/
       - .cargo/git/db/
-      - .sccache/
 
 .dashboard-cache: &dashboard-cache
   cache:

@@ -41,4 +41,3 @@ COPY --from=builder /usr/local/cargo/bin/sccache /usr/local/cargo/bin/
 COPY --from=builder /usr/local/cargo/bin/mdbook /usr/local/cargo/bin/
 COPY --from=builder /usr/local/cargo/bin/mdbook-mermaid /usr/local/cargo/bin/
 
-ENV RUSTC_WRAPPER=sccache
