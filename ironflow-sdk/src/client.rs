@@ -8,11 +8,14 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 pub use ironflow_types::{ApiMeta, ApiResponse};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use reqwest::{Client, RequestBuilder};
-use serde::de::DeserializeOwned;
+use reqwest::{Client, RequestBuilder, Response};
+use serde_json::from_str;
 use uuid::Uuid;
 
+pub use crate::builder::{ArtifactDownload, ClientBuilder};
 use crate::error::{ApiErrorEnvelope, Error};
+use crate::rate_limit::RateLimiter;
+use crate::retry::RetryConfig;
 use crate::types;
 
 /// Configuration for the Ironflow SDK client.
@@ -173,6 +176,8 @@ pub struct ListAuditLogsFilter<'a> {
 pub struct IronflowClient {
     pub(crate) http: Client,
     base_url: String,
+    pub(crate) retry_config: RetryConfig,
+    pub(crate) rate_limiter: RateLimiter,
 }
 
 impl IronflowClient {
@@ -223,6 +228,21 @@ impl IronflowClient {
     /// let client = IronflowClient::from_config(config);
     /// ```
     pub fn from_config(config: ClientConfig) -> Self {
+        Self::from_config_with_retry(config, RetryConfig::default(), RateLimiter::new())
+    }
+
+    /// Create a new client with custom retry and rate-limit settings.
+    ///
+    /// Prefer [`ClientBuilder`] for a more ergonomic interface.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `config.api_key` contains characters invalid for HTTP headers.
+    pub fn from_config_with_retry(
+        config: ClientConfig,
+        retry_config: RetryConfig,
+        rate_limiter: RateLimiter,
+    ) -> Self {
         let mut headers = HeaderMap::new();
         let auth_value = format!("Bearer {}", config.api_key);
         headers.insert(
@@ -239,6 +259,8 @@ impl IronflowClient {
         Self {
             http,
             base_url: config.base_url,
+            retry_config,
+            rate_limiter,
         }
     }
 
@@ -272,11 +294,11 @@ impl IronflowClient {
     }
 
     /// Parse an error response into an [`Error`].
-    pub(crate) async fn into_api_error(response: reqwest::Response) -> Error {
+    pub(crate) async fn into_api_error(response: Response) -> Error {
         let status = response.status();
         let status_code = status.as_u16();
         let text = response.text().await.unwrap_or_default();
-        serde_json::from_str::<ApiErrorEnvelope>(&text)
+        from_str::<ApiErrorEnvelope>(&text)
             .map(|env| Error::api(status_code, env.error.code, env.error.message))
             .unwrap_or_else(|_| {
                 Error::api(
@@ -285,33 +307,6 @@ impl IronflowClient {
                     text,
                 )
             })
-    }
-
-    /// Send a request and deserialize the response envelope.
-    pub(crate) async fn send_envelope<T: DeserializeOwned>(
-        &self,
-        request: RequestBuilder,
-    ) -> Result<ApiResponse<T>, Error> {
-        let response = request.send().await?;
-
-        if !response.status().is_success() {
-            return Err(Self::into_api_error(response).await);
-        }
-
-        let bytes = response.bytes().await?;
-        serde_json::from_slice::<ApiResponse<T>>(&bytes)
-            .map_err(|e| Error::Deserialize(format!("{e}: {}", String::from_utf8_lossy(&bytes))))
-    }
-
-    /// Send a request that returns 204 No Content.
-    pub(crate) async fn send_no_content(&self, request: RequestBuilder) -> Result<(), Error> {
-        let response = request.send().await?;
-
-        if response.status().is_success() {
-            return Ok(());
-        }
-
-        Err(Self::into_api_error(response).await)
     }
 
     // ── Health ──────────────────────────────────────────────────────
@@ -376,7 +371,7 @@ impl IronflowClient {
         &self,
         request: &types::CreateRunRequest,
     ) -> Result<ApiResponse<types::RunResponse>, Error> {
-        self.send_envelope(self.post("/api/v1/runs").json(request))
+        self.send_envelope_once(self.post("/api/v1/runs").json(request))
             .await
     }
 
@@ -577,7 +572,7 @@ impl IronflowClient {
         &self,
         request: &types::CreateApiKeyRequest,
     ) -> Result<ApiResponse<types::CreateApiKeyResponse>, Error> {
-        self.send_envelope(self.post("/api/v1/api-keys").json(request))
+        self.send_envelope_once(self.post("/api/v1/api-keys").json(request))
             .await
     }
 

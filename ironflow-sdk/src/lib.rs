@@ -46,10 +46,15 @@
 //! # }
 //! ```
 
+mod artifact_methods;
 mod auth_methods;
+pub mod builder;
 pub mod client;
 pub mod error;
+pub mod rate_limit;
+pub mod retry;
 mod schedule_methods;
+mod sender;
 #[doc(hidden)]
 #[allow(unused_imports, clippy::all)]
 mod generated {
@@ -57,6 +62,7 @@ mod generated {
 }
 pub mod sse;
 
+pub use builder::ClientBuilder;
 pub use client::IronflowClient;
 pub use error::Error;
 pub use generated::types;
