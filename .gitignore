@@ -13,5 +13,6 @@ ironflow-api/dashboard/
 
 .claude/worktrees
 
-# mdBook build output (root only, not docs/book/)
+# mdBook build output
 /book/
+docs/book/book/

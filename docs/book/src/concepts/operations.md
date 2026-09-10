@@ -70,4 +70,8 @@ impl Operation for SlackNotify {
 
 Built-in step types (Shell, Http, Agent, Approval) have dedicated methods on `WorkflowContext`. Operations are for everything else -- they give you a typed extension point without modifying the engine.
 
-See [Writing an Operation](../guides/writing-an-operation.md) for a step-by-step guide.
+## Pre-built ops crates
+
+Ironflow ships with 13 ready-to-use ops crates under `ops/` for common services: GitLab, Slack, Kubernetes, Docker, Helm, PostgreSQL, S3, Grafana, Loki, Mimir, Tempo, Git, and shared helpers. Each provides typed operations that plug directly into `ctx.operation()`.
+
+See [Using Pre-built Ops Crates](../guides/using-ops-crates.md) for the full catalog and usage examples, or [Writing an Operation](../guides/writing-an-operation.md) to implement your own from scratch.

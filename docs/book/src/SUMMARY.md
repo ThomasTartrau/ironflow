@@ -20,6 +20,7 @@
 
 - [Writing a Workflow](guides/writing-a-workflow.md)
 - [Writing an Operation](guides/writing-an-operation.md)
+- [Using Pre-built Ops Crates](guides/using-ops-crates.md)
 - [Parallel Execution](guides/parallel-execution.md)
 - [Transports](guides/transports.md)
 
