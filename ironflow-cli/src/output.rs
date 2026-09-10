@@ -29,6 +29,7 @@ fn status_color(status: &RunStatus) -> Color {
         RunStatus::AwaitingApproval => Color::Magenta,
         RunStatus::Retrying => Color::Cyan,
         RunStatus::Warning => Color::DarkYellow,
+        RunStatus::Sleeping => Color::DarkCyan,
     }
 }
 

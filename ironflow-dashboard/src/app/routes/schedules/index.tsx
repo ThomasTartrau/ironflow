@@ -256,7 +256,9 @@ export function Component() {
 										</code>
 									</TableCell>
 									<TableCell>
-										<Badge variant={s.source === "handler" ? "outline" : "secondary"}>
+										<Badge
+											variant={s.source === "handler" ? "outline" : "secondary"}
+										>
 											{s.source === "handler" ? "Code" : "API"}
 										</Badge>
 									</TableCell>

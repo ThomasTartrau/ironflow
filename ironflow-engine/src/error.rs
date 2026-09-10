@@ -116,6 +116,21 @@ pub enum EngineError {
         message: String,
     },
 
+    /// A delay step suspended the run until the given time.
+    ///
+    /// The engine transitions the run to
+    /// [`Sleeping`](ironflow_store::entities::RunStatus::Sleeping) and sets
+    /// `scheduled_at` so the worker re-queues it automatically.
+    #[error("delay sleeping for run {run_id}, step {step_id}: wake at {wake_at}")]
+    DelaySleeping {
+        /// The run that is sleeping.
+        run_id: uuid::Uuid,
+        /// The delay step.
+        step_id: uuid::Uuid,
+        /// When the run should be woken up.
+        wake_at: chrono::DateTime<chrono::Utc>,
+    },
+
     /// A workflow invocation was rejected by the [workflow guard](crate::guard).
     ///
     /// The run is transitioned to

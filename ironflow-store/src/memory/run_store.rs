@@ -663,7 +663,8 @@ impl RunStore for InMemoryStore {
                     RunStatus::Pending
                     | RunStatus::Running
                     | RunStatus::Retrying
-                    | RunStatus::AwaitingApproval => {
+                    | RunStatus::AwaitingApproval
+                    | RunStatus::Sleeping => {
                         active_runs += 1;
                     }
                 }

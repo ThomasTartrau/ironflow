@@ -1210,6 +1210,33 @@ impl Engine {
                     "run awaiting approval"
                 );
             }
+            Err(EngineError::DelaySleeping {
+                run_id: delay_run_id,
+                step_id,
+                wake_at,
+            }) => {
+                final_status = RunStatus::Sleeping;
+                final_run = self
+                    .store
+                    .update_run_returning(
+                        run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::Sleeping),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            scheduled_at: Some(wake_at),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    run_id = %delay_run_id,
+                    step_id = %step_id,
+                    wake_at = %wake_at,
+                    "run sleeping until delay elapses"
+                );
+            }
             Err(err) => {
                 // A guardrail stop (budget or workflow guard) is deliberate,
                 // not a breakage: the run is cancelled, never failed and

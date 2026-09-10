@@ -34,7 +34,8 @@ export function RunActions({ run }: RunActionsProps) {
 	const canCancel =
 		run.status === "pending" ||
 		run.status === "running" ||
-		run.status === "awaiting_approval";
+		run.status === "awaiting_approval" ||
+		run.status === "sleeping";
 	const canRetry = run.status === "failed" || run.status === "cancelled";
 	const canApprove = run.status === "awaiting_approval";
 	const isLoading = pendingAction !== "idle";

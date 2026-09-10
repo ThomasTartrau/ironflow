@@ -1614,8 +1614,7 @@ export interface components {
 			 * @description Filter by step ID.
 			 */
 			step_id?: string | null;
-			/** @description Filter by output stream (`stdout`, `stderr`, `system`). */
-			stream?: components["schemas"]["LogStream"];
+			stream?: null | components["schemas"]["LogStream"];
 		};
 		/** @description How the configured key ring lines up with the stored secrets. */
 		KeyVersionsResponse: {
@@ -1638,8 +1637,7 @@ export interface components {
 		};
 		/** @description Query parameters for listing audit log entries. */
 		ListAuditLogsQuery: {
-			/** @description Filter by event type (e.g. `run_status_changed`). */
-			event_type?: components["schemas"]["EventKind"];
+			event_type?: null | components["schemas"]["EventKind"];
 			/**
 			 * Format: date-time
 			 * @description Filter entries created at or after this timestamp.
@@ -1694,8 +1692,7 @@ export interface components {
 			 * @description Items per page.
 			 */
 			per_page?: number | null;
-			/** @description Filter by run status. */
-			status?: components["schemas"]["RunStatus"];
+			status?: null | components["schemas"]["RunStatus"];
 			/** @description Filter by workflow name. */
 			workflow?: string | null;
 		};
@@ -1974,9 +1971,10 @@ export interface components {
 		 *
 		 *     Valid transitions:
 		 *     - `Pending` -> `Running`, `Cancelled`
-		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`
+		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`, `Sleeping`
 		 *     - `Retrying` -> `Running`, `Failed`, `Cancelled`
 		 *     - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
+		 *     - `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`
 		 *
 		 *     Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
 		 *     transitioning to the same terminal state is a no-op, not an error.
@@ -1994,6 +1992,9 @@ export interface components {
 		 *     // A run whose worker lease expired goes back to the queue:
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
+		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
+		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));
 		 *     // Terminal-to-same is idempotent:
 		 *     assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
 		 *     assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
@@ -2010,7 +2011,8 @@ export interface components {
 			| "retrying"
 			| "cancelled"
 			| "awaiting_approval"
-			| "warning";
+			| "warning"
+			| "sleeping";
 		/** @description Schedule list/detail response. */
 		ScheduleResponse: {
 			/**
@@ -2737,17 +2739,17 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by event type (e.g. `run_status_changed`). */
-				event_type?: components["schemas"]["EventKind"];
+				event_type?: null | components["schemas"]["EventKind"];
 				/** @description Filter by run ID. */
-				run_id?: string;
+				run_id?: string | null;
 				/** @description Filter entries created at or after this timestamp. */
-				from?: string;
+				from?: string | null;
 				/** @description Filter entries created at or before this timestamp. */
-				to?: string;
+				to?: string | null;
 				/** @description Page number (1-based, default: 1). */
-				page?: number;
+				page?: number | null;
 				/** @description Items per page (default: 50, max: 100). */
-				per_page?: number;
+				per_page?: number | null;
 			};
 			header?: never;
 			path?: never;
@@ -2983,28 +2985,28 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by workflow name. */
-				workflow?: string;
+				workflow?: string | null;
 				/** @description Filter by run status. */
-				status?: components["schemas"]["RunStatus"];
+				status?: null | components["schemas"]["RunStatus"];
 				/**
 				 * @description Filter by step presence (only applies to completed/cancelled runs).
 				 *     Non-terminal runs (pending, running, etc.) are always included.
 				 *     When `true`, only return completed/cancelled runs that have steps.
 				 *     When `false`, only return completed/cancelled runs without steps.
 				 */
-				has_steps?: boolean;
+				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
-				label?: string;
+				label?: string | null;
 				/**
 				 * @description Filter by author: the user ID that triggered the run.
 				 *
 				 *     Also matches runs triggered by one of that user's API keys.
 				 */
-				created_by?: string;
+				created_by?: string | null;
 				/** @description Page number (1-based). */
-				page?: number;
+				page?: number | null;
 				/** @description Items per page. */
-				per_page?: number;
+				per_page?: number | null;
 			};
 			header?: never;
 			path?: never;
@@ -3035,7 +3037,7 @@ export interface operations {
 			query?: never;
 			header?: {
 				/** @description Optional key making the call safe to replay. At most 255 printable ASCII characters, valid for 24 hours. */
-				"Idempotency-Key"?: string;
+				"Idempotency-Key"?: string | null;
 			};
 			path?: never;
 			cookie?: never;
@@ -3283,13 +3285,13 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by step ID. */
-				step_id?: string;
+				step_id?: string | null;
 				/** @description Filter by output stream (`stdout`, `stderr`, `system`). */
-				stream?: components["schemas"]["LogStream"];
+				stream?: null | components["schemas"]["LogStream"];
 				/** @description Cursor for pagination (last entry ID from previous page). */
-				cursor?: string;
+				cursor?: string | null;
 				/** @description Number of entries to return (default: 100, max: 1000). */
-				limit?: number;
+				limit?: number | null;
 			};
 			header?: never;
 			path: {
@@ -3750,11 +3752,11 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by key prefix (e.g. `workflows/inbox/`). */
-				prefix?: string;
+				prefix?: string | null;
 				/** @description Page number (1-based, default 1). */
-				page?: number;
+				page?: number | null;
 				/** @description Items per page (default 50, max 100). */
-				per_page?: number;
+				per_page?: number | null;
 			};
 			header?: never;
 			path?: never;
@@ -4015,28 +4017,28 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Filter by workflow name. */
-				workflow?: string;
+				workflow?: string | null;
 				/** @description Filter by run status. */
-				status?: components["schemas"]["RunStatus"];
+				status?: null | components["schemas"]["RunStatus"];
 				/**
 				 * @description Filter by step presence (only applies to completed/cancelled runs).
 				 *     Non-terminal runs (pending, running, etc.) are always included.
 				 *     When `true`, only return completed/cancelled runs that have steps.
 				 *     When `false`, only return completed/cancelled runs without steps.
 				 */
-				has_steps?: boolean;
+				has_steps?: boolean | null;
 				/** @description Filter by labels. Comma-separated `key:value` pairs. */
-				label?: string;
+				label?: string | null;
 				/**
 				 * @description Filter by author: the user ID that triggered the run.
 				 *
 				 *     Also matches runs triggered by one of that user's API keys.
 				 */
-				created_by?: string;
+				created_by?: string | null;
 				/** @description Page number (1-based). */
-				page?: number;
+				page?: number | null;
 				/** @description Items per page. */
-				per_page?: number;
+				per_page?: number | null;
 			};
 			header?: never;
 			path?: never;
@@ -4066,9 +4068,9 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Page number (1-based, defaults to 1). */
-				page?: number;
+				page?: number | null;
 				/** @description Items per page (defaults to 20, max 100). */
-				per_page?: number;
+				per_page?: number | null;
 			};
 			header?: never;
 			path?: never;
@@ -4263,7 +4265,7 @@ export interface operations {
 		parameters: {
 			query?: {
 				/** @description Optional case-insensitive partial match on workflow name. */
-				name?: string;
+				name?: string | null;
 				/**
 				 * @description Optional case-insensitive partial match on the category path
 				 *     (e.g. `etl` matches `Data/ETL` and `data/etl/nightly`).
@@ -4271,7 +4273,7 @@ export interface operations {
 				 *     Pass `__uncategorized__` to list only workflows without any
 				 *     category.
 				 */
-				category?: string;
+				category?: string | null;
 			};
 			header?: never;
 			path?: never;

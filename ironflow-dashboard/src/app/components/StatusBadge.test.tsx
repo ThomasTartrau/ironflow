@@ -13,6 +13,7 @@ describe("StatusBadge", () => {
 		"retrying",
 		"cancelled",
 		"awaiting_approval",
+		"sleeping",
 	];
 
 	const stepStatuses: StepStatus[] = [
