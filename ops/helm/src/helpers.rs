@@ -156,9 +156,11 @@ pub(crate) mod tests {
         let client = nonexistent_client();
         let err = run_helm(&client, &["version"]).await.unwrap_err();
         let msg = err.to_string();
+        // "failed to spawn helm" when spawn() itself fails (macOS);
+        // exit code 127 when fork succeeds but exec fails (Linux).
         assert!(
-            msg.contains("failed to spawn helm"),
-            "expected spawn error, got: {msg}"
+            msg.contains("failed to spawn helm") || msg.contains("127"),
+            "expected spawn or command-not-found error, got: {msg}"
         );
     }
 
