@@ -111,6 +111,19 @@ impl UserStore for InMemoryStore {
             Ok(user.clone())
         })
     }
+
+    fn update_user_password(&self, id: Uuid, password_hash: String) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let user = state
+                .users
+                .get_mut(&id)
+                .ok_or(StoreError::UserNotFound(id))?;
+            user.password_hash = password_hash;
+            user.updated_at = Utc::now();
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]

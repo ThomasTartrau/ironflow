@@ -9,13 +9,14 @@ mod create_run;
 mod created_by;
 pub mod lease;
 mod run;
+mod schedule;
 mod secret;
 mod stats;
 mod step;
 mod user;
 
 pub use artifact::ArtifactResponse;
-pub use auth::{MeResponse, SignInRequest, SignUpRequest};
+pub use auth::{ChangePasswordRequest, MeResponse, SignInRequest, SignUpRequest};
 pub use create_run::{CreateRunRequest, IdempotencyKeyError, validate_idempotency_key};
 pub use created_by::{CreatedBy, CreatedByKind};
 pub use lease::{
@@ -23,6 +24,7 @@ pub use lease::{
     validate_lease_ttl,
 };
 pub use run::{ListRunsQuery, RunDetailResponse, RunResponse};
+pub use schedule::{CreateScheduleRequest, ScheduleResponse, UpdateScheduleRequest};
 pub use secret::{
     KeyVersionsResponse, RotateSecretsRequest, RotateSecretsResponse, SecretResponse,
     SetSecretRequest,

@@ -71,6 +71,10 @@ pub enum StoreError {
         name: String,
     },
 
+    /// The requested schedule does not exist.
+    #[error("schedule not found: {0}")]
+    ScheduleNotFound(Uuid),
+
     /// A database or I/O error from the backing store.
     #[error("database error: {0}")]
     Database(String),

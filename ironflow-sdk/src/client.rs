@@ -255,19 +255,19 @@ impl IronflowClient {
         self.http.get(self.url(path))
     }
 
-    fn post(&self, path: &str) -> RequestBuilder {
+    pub(crate) fn post(&self, path: &str) -> RequestBuilder {
         self.http.post(self.url(path))
     }
 
-    fn put(&self, path: &str) -> RequestBuilder {
+    pub(crate) fn put(&self, path: &str) -> RequestBuilder {
         self.http.put(self.url(path))
     }
 
-    fn delete(&self, path: &str) -> RequestBuilder {
+    pub(crate) fn delete(&self, path: &str) -> RequestBuilder {
         self.http.delete(self.url(path))
     }
 
-    fn patch(&self, path: &str) -> RequestBuilder {
+    pub(crate) fn patch(&self, path: &str) -> RequestBuilder {
         self.http.patch(self.url(path))
     }
 
@@ -288,7 +288,7 @@ impl IronflowClient {
     }
 
     /// Send a request and deserialize the response envelope.
-    async fn send_envelope<T: DeserializeOwned>(
+    pub(crate) async fn send_envelope<T: DeserializeOwned>(
         &self,
         request: RequestBuilder,
     ) -> Result<ApiResponse<T>, Error> {
@@ -304,7 +304,7 @@ impl IronflowClient {
     }
 
     /// Send a request that returns 204 No Content.
-    async fn send_no_content(&self, request: RequestBuilder) -> Result<(), Error> {
+    pub(crate) async fn send_no_content(&self, request: RequestBuilder) -> Result<(), Error> {
         let response = request.send().await?;
 
         if response.status().is_success() {

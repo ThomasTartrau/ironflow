@@ -113,6 +113,32 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/auth/password": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		/**
+		 * Change the authenticated user's password.
+		 * @description Verifies the old password, hashes the new one, and persists it.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if old password is incorrect or new password fails validation
+		 *     - 401 if no valid token is provided
+		 *     - 404 if the user no longer exists in the store
+		 */
+		patch: operations["change_password"];
+		trace?: never;
+	};
 	"/api/v1/auth/refresh": {
 		parameters: {
 			query?: never;
@@ -442,6 +468,139 @@ export interface paths {
 		get: operations["download_artifact"];
 		put?: never;
 		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/schedules": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List all schedules, paginated.
+		 * @description # Errors
+		 *
+		 *     - 401 if not authenticated
+		 */
+		get: operations["list_schedules"];
+		put?: never;
+		/**
+		 * Create a new schedule.
+		 * @description # Errors
+		 *
+		 *     - 400 if validation fails or cron expression is invalid
+		 *     - 400 if the workflow is not registered
+		 *     - 401 if not authenticated
+		 */
+		post: operations["create_schedule"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/schedules/{id}": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get a schedule by ID.
+		 * @description # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 404 if the schedule does not exist
+		 */
+		get: operations["get_schedule"];
+		put?: never;
+		post?: never;
+		/**
+		 * Delete a schedule by ID.
+		 * @description Handler-declared schedules (`source = handler`) cannot be deleted via the
+		 *     API -- they are managed by the code and reconciled at startup.
+		 *
+		 *     # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 403 if the schedule is handler-declared
+		 *     - 404 if the schedule does not exist
+		 */
+		delete: operations["delete_schedule"];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/schedules/{id}/pause": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Pause a schedule (set enabled = false).
+		 * @description # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 404 if the schedule does not exist
+		 */
+		post: operations["pause_schedule"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/schedules/{id}/resume": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Resume a schedule (clear disabled_at).
+		 * @description # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 404 if the schedule does not exist
+		 */
+		post: operations["resume_schedule"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/schedules/{id}/trigger": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Trigger a schedule manually, creating a run immediately.
+		 * @description # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 404 if the schedule does not exist
+		 */
+		post: operations["trigger_schedule"];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -879,6 +1038,13 @@ export interface components {
 			 */
 			user_id?: string | null;
 		};
+		/** @description Change password request body. */
+		ChangePasswordRequest: {
+			/** @description New password (min 8 characters). */
+			new_password: string;
+			/** @description Current password. */
+			old_password: string;
+		};
 		/** @description Request body for creating an API key. */
 		CreateApiKeyRequest: {
 			/**
@@ -988,6 +1154,15 @@ export interface components {
 			scheduled_at?: string | null;
 			/** @description The workflow name to trigger. */
 			workflow: string;
+		};
+		/** @description Create schedule request body. */
+		CreateScheduleRequest: {
+			/** @description Cron expression (6-field format, e.g. `"0 *\/5 * * * *"`). */
+			cron_expression: string;
+			/** @description JSON payload for the workflow. Defaults to `{}`. */
+			inputs?: unknown;
+			/** @description Name of the workflow to trigger. */
+			workflow_name: string;
 		};
 		/** @description Request body for creating a user (admin only). */
 		CreateUserRequest: {
@@ -1626,6 +1801,11 @@ export interface components {
 		LogStream: "stdout" | "stderr" | "system";
 		/** @description Current user profile response. */
 		MeResponse: {
+			/**
+			 * Format: date-time
+			 * @description When the user account was created.
+			 */
+			created_at: string;
 			/** @description Email address. */
 			email: string;
 			/** @description Admin flag. */
@@ -1833,6 +2013,73 @@ export interface components {
 			| "awaiting_approval"
 			| "warning"
 			| "sleeping";
+		/** @description Schedule list/detail response. */
+		ScheduleResponse: {
+			/**
+			 * Format: date-time
+			 * @description When the schedule was created.
+			 */
+			created_at: string;
+			/**
+			 * Format: uuid
+			 * @description User who created the schedule.
+			 */
+			created_by_user_id: string;
+			/** @description Cron expression. */
+			cron_expression: string;
+			/**
+			 * Format: date-time
+			 * @description When the schedule was disabled. `None` means active.
+			 */
+			disabled_at?: string | null;
+			/**
+			 * Format: uuid
+			 * @description Schedule ID.
+			 */
+			id: string;
+			/** @description JSON payload passed to the workflow. */
+			inputs: unknown;
+			/**
+			 * Format: date-time
+			 * @description When the schedule last created a run.
+			 */
+			last_triggered_at?: string | null;
+			/**
+			 * Format: date-time
+			 * @description When the schedule will next fire.
+			 */
+			next_trigger_at?: string | null;
+			/** @description Where this schedule was created (`handler` or `api`). */
+			source: components["schemas"]["ScheduleSource"];
+			/**
+			 * Format: date-time
+			 * @description When the schedule was last updated.
+			 */
+			updated_at: string;
+			/** @description Name of the workflow to trigger. */
+			workflow_name: string;
+		};
+		/**
+		 * @description Where a schedule was created.
+		 *
+		 *     `Handler` schedules are declared in code via [`WorkflowHandler::schedule()`]
+		 *     and synced to the database at startup. `Api` schedules are created by users
+		 *     through the REST API, CLI, or dashboard.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::ScheduleSource;
+		 *
+		 *     let source = ScheduleSource::Handler;
+		 *     assert_eq!(source.as_str(), "handler");
+		 *
+		 *     let parsed: ScheduleSource = "api".parse().unwrap();
+		 *     assert_eq!(parsed, ScheduleSource::Api);
+		 *     ```
+		 * @enum {string}
+		 */
+		ScheduleSource: "handler" | "api";
 		/** @description A scope entry with its machine name and human-readable label. */
 		ScopeEntry: {
 			/** @description Short description. */
@@ -2153,6 +2400,13 @@ export interface components {
 		UpdateRoleRequest: {
 			/** @description New admin status. */
 			is_admin: boolean;
+		};
+		/** @description Update schedule request body. All fields optional. */
+		UpdateScheduleRequest: {
+			/** @description New cron expression. */
+			cron_expression?: string | null;
+			/** @description New inputs payload. */
+			inputs?: unknown;
 		};
 		/** @description Request body for updating a secret value. */
 		UpdateSecretRequest: {
@@ -2545,6 +2799,43 @@ export interface operations {
 				content: {
 					"application/json": components["schemas"]["MeResponse"];
 				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	change_password: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Old and new passwords */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["ChangePasswordRequest"];
+			};
+		};
+		responses: {
+			/** @description Password changed successfully */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Invalid old password or validation error */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
 			};
 			/** @description Unauthorized */
 			401: {
@@ -3189,6 +3480,267 @@ export interface operations {
 			};
 			/** @description Artifact storage is not configured */
 			501: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_schedules: {
+		parameters: {
+			query?: {
+				/** @description Page number (1-based) */
+				page?: number;
+				/** @description Items per page */
+				per_page?: number;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Paginated schedules */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ScheduleResponse"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	create_schedule: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Schedule definition */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["CreateScheduleRequest"];
+			};
+		};
+		responses: {
+			/** @description Schedule created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ScheduleResponse"];
+				};
+			};
+			/** @description Invalid input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	get_schedule: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Schedule ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Schedule detail */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ScheduleResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Schedule not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	delete_schedule: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Schedule ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Schedule deleted */
+			204: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Cannot delete handler-declared schedule */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Schedule not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	pause_schedule: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Schedule ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Schedule paused */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ScheduleResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Schedule not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	resume_schedule: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Schedule ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Schedule resumed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ScheduleResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Schedule not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	trigger_schedule: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Schedule ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Run created from schedule */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ScheduleResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Schedule not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

@@ -224,4 +224,23 @@ impl UserStore for PostgresStore {
             Ok(row.into())
         })
     }
+
+    fn update_user_password(&self, id: Uuid, password_hash: String) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let result = sqlx::query!(
+                "UPDATE iam.users SET password_hash = $1, updated_at = $2 WHERE id = $3",
+                &password_hash,
+                Utc::now(),
+                id,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            if result.rows_affected() == 0 {
+                return Err(StoreError::UserNotFound(id));
+            }
+            Ok(())
+        })
+    }
 }

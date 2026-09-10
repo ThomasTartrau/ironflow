@@ -45,6 +45,7 @@ pub mod audit_log_store;
 pub mod entities;
 pub mod error;
 pub mod log_store;
+pub mod schedule_store;
 pub mod secret_store;
 pub mod store;
 pub mod user_store;
@@ -72,6 +73,7 @@ pub mod prelude {
     pub use crate::entities::*;
     pub use crate::error::StoreError;
     pub use crate::log_store::LogStore;
+    pub use crate::schedule_store::ScheduleStore;
     pub use crate::secret_store::SecretStore;
     pub use crate::store::{RunStore, Store};
     pub use crate::user_store::UserStore;

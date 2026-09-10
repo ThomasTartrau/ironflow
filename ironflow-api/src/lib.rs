@@ -80,6 +80,8 @@ pub mod rate_limit;
 pub mod reaper;
 pub mod response;
 pub mod routes;
+pub mod schedule_sync;
+pub mod schedule_ticker;
 pub mod sse;
 pub mod state;
 

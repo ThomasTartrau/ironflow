@@ -73,6 +73,12 @@ impl ServerHandler for IronflowHandler {
             IronflowTools::DeleteUserTool(t) => t.run(&self.client).await,
             IronflowTools::ListAuditLogsTool(t) => t.run(&self.client).await,
             IronflowTools::DownloadArtifactTool(t) => t.run(&self.client).await,
+            IronflowTools::ListSchedulesTool(t) => t.run(&self.client).await,
+            IronflowTools::CreateScheduleTool(t) => t.run(&self.client).await,
+            IronflowTools::DeleteScheduleTool(t) => t.run(&self.client).await,
+            IronflowTools::PauseScheduleTool(t) => t.run(&self.client).await,
+            IronflowTools::ResumeScheduleTool(t) => t.run(&self.client).await,
+            IronflowTools::TriggerScheduleTool(t) => t.run(&self.client).await,
         }
     }
 }

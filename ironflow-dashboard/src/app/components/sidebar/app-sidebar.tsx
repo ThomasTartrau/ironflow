@@ -1,6 +1,7 @@
 import {
 	BarChart3,
 	BookOpen,
+	CalendarClock,
 	KeyRound,
 	LayoutDashboard,
 	LockKeyhole,
@@ -68,6 +69,11 @@ const baseNavItems: NavItem[] = [
 				title: "Secrets",
 				url: "/secrets",
 				icon: LockKeyhole,
+			},
+			{
+				title: "Schedules",
+				url: "/schedules",
+				icon: CalendarClock,
 			},
 		],
 	},

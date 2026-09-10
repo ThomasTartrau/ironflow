@@ -46,4 +46,11 @@ pub trait UserStore: Send + Sync {
     ///
     /// Returns [`StoreError::UserNotFound`] if the user does not exist.
     fn update_user_role(&self, id: Uuid, is_admin: bool) -> StoreFuture<'_, User>;
+
+    /// Update a user's password hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::UserNotFound`] if the user does not exist.
+    fn update_user_password(&self, id: Uuid, password_hash: String) -> StoreFuture<'_, ()>;
 }

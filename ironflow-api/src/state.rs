@@ -12,6 +12,9 @@ use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
+
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_engine::engine::Engine;
@@ -20,6 +23,9 @@ use ironflow_store::entities::Run;
 use ironflow_store::store::Store;
 
 use crate::error::ApiError;
+use crate::reaper::Reaper;
+use crate::schedule_sync::sync_handler_schedules;
+use crate::schedule_ticker::ScheduleTicker;
 
 /// Global application state.
 ///
@@ -207,6 +213,39 @@ impl AppState {
             .await
             .map_err(ApiError::from)?
             .ok_or(ApiError::RunNotFound(id))
+    }
+
+    /// Spawn the built-in background tasks and return their shared shutdown token.
+    ///
+    /// This starts:
+    /// - **Schedule sync**: seeds DB rows for handler-declared schedules.
+    /// - **Schedule ticker**: polls due schedules and creates runs.
+    /// - **Reaper**: recovers runs abandoned by dead workers.
+    ///
+    /// Call this once after building the `AppState`, before serving requests.
+    /// Drop the returned [`CancellationToken`] (or call `.cancel()`) to stop
+    /// all tasks gracefully.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_api::state::AppState;
+    ///
+    /// # async fn example(state: AppState) {
+    /// let shutdown = state.spawn_background_tasks().await;
+    /// // ... serve requests ...
+    /// shutdown.cancel();
+    /// # }
+    /// ```
+    pub async fn spawn_background_tasks(&self) -> CancellationToken {
+        if let Err(err) = sync_handler_schedules(&self.engine, self.store.as_ref()).await {
+            warn!(error = %err, "failed to sync handler-declared schedules");
+        }
+
+        let shutdown = CancellationToken::new();
+        tokio::spawn(ScheduleTicker::new(self.store.clone()).run(shutdown.clone()));
+        tokio::spawn(Reaper::new(self.store.clone(), self.engine.clone()).run(shutdown.clone()));
+        shutdown
     }
 }
 

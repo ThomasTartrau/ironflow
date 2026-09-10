@@ -6,6 +6,7 @@ pub mod api_key;
 pub mod audit_log;
 pub mod logs;
 pub mod run;
+pub mod schedule;
 pub mod secret;
 pub mod stats;
 pub mod template;

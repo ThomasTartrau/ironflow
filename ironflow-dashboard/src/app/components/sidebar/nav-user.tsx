@@ -1,4 +1,4 @@
-import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "lucide-react";
+import { ChevronsUpDown, LogOut, Monitor, Moon, Sun, User } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -142,6 +142,10 @@ export function NavUser() {
 						</DropdownMenuGroup>
 						<DropdownMenuSeparator />
 						<DropdownMenuGroup>
+							<DropdownMenuItem onClick={() => navigate("/profile")}>
+								<User className="size-4" />
+								Profile
+							</DropdownMenuItem>
 							<DropdownMenuItem onClick={handleSignOut}>
 								<LogOut className="size-4" />
 								Sign out

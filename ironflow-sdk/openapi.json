@@ -170,6 +170,24 @@
         ],
         "type": "object"
       },
+      "ChangePasswordRequest": {
+        "description": "Change password request body.",
+        "properties": {
+          "new_password": {
+            "description": "New password (min 8 characters).",
+            "type": "string"
+          },
+          "old_password": {
+            "description": "Current password.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_password",
+          "new_password"
+        ],
+        "type": "object"
+      },
       "CreateApiKeyRequest": {
         "description": "Request body for creating an API key.",
         "properties": {
@@ -309,6 +327,27 @@
         },
         "required": [
           "workflow"
+        ],
+        "type": "object"
+      },
+      "CreateScheduleRequest": {
+        "description": "Create schedule request body.",
+        "properties": {
+          "cron_expression": {
+            "description": "Cron expression (6-field format, e.g. `\"0 */5 * * * *\"`).",
+            "type": "string"
+          },
+          "inputs": {
+            "description": "JSON payload for the workflow. Defaults to `{}`."
+          },
+          "workflow_name": {
+            "description": "Name of the workflow to trigger.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_name",
+          "cron_expression"
         ],
         "type": "object"
       },
@@ -1281,6 +1320,11 @@
       "MeResponse": {
         "description": "Current user profile response.",
         "properties": {
+          "created_at": {
+            "description": "When the user account was created.",
+            "format": "date-time",
+            "type": "string"
+          },
           "email": {
             "description": "Email address.",
             "type": "string"
@@ -1303,7 +1347,8 @@
           "user_id",
           "email",
           "username",
-          "is_admin"
+          "is_admin",
+          "created_at"
         ],
         "type": "object"
       },
@@ -1532,6 +1577,83 @@
           "awaiting_approval",
           "warning",
           "sleeping"
+        ],
+        "type": "string"
+      },
+      "ScheduleResponse": {
+        "description": "Schedule list/detail response.",
+        "properties": {
+          "created_at": {
+            "description": "When the schedule was created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by_user_id": {
+            "description": "User who created the schedule.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "cron_expression": {
+            "description": "Cron expression.",
+            "type": "string"
+          },
+          "disabled_at": {
+            "description": "When the schedule was disabled. `None` means active.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "Schedule ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "inputs": {
+            "description": "JSON payload passed to the workflow."
+          },
+          "last_triggered_at": {
+            "description": "When the schedule last created a run.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "next_trigger_at": {
+            "description": "When the schedule will next fire.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScheduleSource",
+            "description": "Where this schedule was created (`handler` or `api`)."
+          },
+          "updated_at": {
+            "description": "When the schedule was last updated.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "workflow_name": {
+            "description": "Name of the workflow to trigger.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workflow_name",
+          "cron_expression",
+          "inputs",
+          "source",
+          "created_by_user_id",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ScheduleSource": {
+        "description": "Where a schedule was created.\n\n`Handler` schedules are declared in code via [`WorkflowHandler::schedule()`]\nand synced to the database at startup. `Api` schedules are created by users\nthrough the REST API, CLI, or dashboard.\n\n# Examples\n\n```\nuse ironflow_store::entities::ScheduleSource;\n\nlet source = ScheduleSource::Handler;\nassert_eq!(source.as_str(), \"handler\");\n\nlet parsed: ScheduleSource = \"api\".parse().unwrap();\nassert_eq!(parsed, ScheduleSource::Api);\n```",
+        "enum": [
+          "handler",
+          "api"
         ],
         "type": "string"
       },
@@ -2082,6 +2204,20 @@
         "required": [
           "is_admin"
         ],
+        "type": "object"
+      },
+      "UpdateScheduleRequest": {
+        "description": "Update schedule request body. All fields optional.",
+        "properties": {
+          "cron_expression": {
+            "description": "New cron expression.",
+            "nullable": true,
+            "type": "string"
+          },
+          "inputs": {
+            "description": "New inputs payload."
+          }
+        },
         "type": "object"
       },
       "UpdateSecretRequest": {
@@ -2715,6 +2851,43 @@
           }
         ],
         "summary": "Return the current user's profile.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/password": {
+      "patch": {
+        "description": "Verifies the old password, hashes the new one, and persists it.\n\n# Errors\n\n- 400 if old password is incorrect or new password fails validation\n- 401 if no valid token is provided\n- 404 if the user no longer exists in the store",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "description": "Old and new passwords",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed successfully"
+          },
+          "400": {
+            "description": "Invalid old password or validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Change the authenticated user's password.",
         "tags": [
           "auth"
         ]
@@ -3469,6 +3642,324 @@
         ]
       }
     },
+    "/api/v1/schedules": {
+      "get": {
+        "description": "# Errors\n\n- 401 if not authenticated",
+        "operationId": "list_schedules",
+        "parameters": [
+          {
+            "description": "Page number (1-based)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Paginated schedules"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List all schedules, paginated.",
+        "tags": [
+          "schedules"
+        ]
+      },
+      "post": {
+        "description": "# Errors\n\n- 400 if validation fails or cron expression is invalid\n- 400 if the workflow is not registered\n- 401 if not authenticated",
+        "operationId": "create_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScheduleRequest"
+              }
+            }
+          },
+          "description": "Schedule definition",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            },
+            "description": "Schedule created"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Create a new schedule.",
+        "tags": [
+          "schedules"
+        ]
+      }
+    },
+    "/api/v1/schedules/{id}": {
+      "delete": {
+        "description": "Handler-declared schedules (`source = handler`) cannot be deleted via the\nAPI -- they are managed by the code and reconciled at startup.\n\n# Errors\n\n- 401 if not authenticated\n- 403 if the schedule is handler-declared\n- 404 if the schedule does not exist",
+        "operationId": "delete_schedule",
+        "parameters": [
+          {
+            "description": "Schedule ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Schedule deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Cannot delete handler-declared schedule"
+          },
+          "404": {
+            "description": "Schedule not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Delete a schedule by ID.",
+        "tags": [
+          "schedules"
+        ]
+      },
+      "get": {
+        "description": "# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "operationId": "get_schedule",
+        "parameters": [
+          {
+            "description": "Schedule ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            },
+            "description": "Schedule detail"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Schedule not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Get a schedule by ID.",
+        "tags": [
+          "schedules"
+        ]
+      }
+    },
+    "/api/v1/schedules/{id}/pause": {
+      "post": {
+        "description": "# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "operationId": "pause_schedule",
+        "parameters": [
+          {
+            "description": "Schedule ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            },
+            "description": "Schedule paused"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Schedule not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Pause a schedule (set enabled = false).",
+        "tags": [
+          "schedules"
+        ]
+      }
+    },
+    "/api/v1/schedules/{id}/resume": {
+      "post": {
+        "description": "# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "operationId": "resume_schedule",
+        "parameters": [
+          {
+            "description": "Schedule ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            },
+            "description": "Schedule resumed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Schedule not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Resume a schedule (clear disabled_at).",
+        "tags": [
+          "schedules"
+        ]
+      }
+    },
+    "/api/v1/schedules/{id}/trigger": {
+      "post": {
+        "description": "# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "operationId": "trigger_schedule",
+        "parameters": [
+          {
+            "description": "Schedule ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            },
+            "description": "Run created from schedule"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Schedule not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Trigger a schedule manually, creating a run immediately.",
+        "tags": [
+          "schedules"
+        ]
+      }
+    },
     "/api/v1/secrets": {
       "get": {
         "description": "Returns key, id, and timestamps. Never returns encrypted or decrypted values.",
@@ -4214,6 +4705,10 @@
     {
       "description": "Run/step log persistence and retrieval",
       "name": "logs"
+    },
+    {
+      "description": "Schedule management",
+      "name": "schedules"
     }
   ]
 }

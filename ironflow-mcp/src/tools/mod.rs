@@ -16,6 +16,7 @@ pub mod api_keys;
 pub mod artifacts;
 pub mod audit_logs;
 pub mod runs;
+pub mod schedules;
 pub mod secrets;
 pub mod stats;
 pub mod users;
@@ -26,6 +27,10 @@ pub use api_keys::{CreateApiKeyTool, DeleteApiKeyTool, ListApiKeysTool};
 pub use artifacts::DownloadArtifactTool;
 pub use audit_logs::ListAuditLogsTool;
 pub use runs::{CreateRunTool, GetRunLogsTool, GetRunTool, ListRunsTool, SearchRunsTool};
+pub use schedules::{
+    CreateScheduleTool, DeleteScheduleTool, ListSchedulesTool, PauseScheduleTool,
+    ResumeScheduleTool, TriggerScheduleTool,
+};
 pub use secrets::{
     CreateSecretTool, DeleteSecretTool, ListSecretsTool, RotateSecretKeyTool, UpdateSecretTool,
 };
@@ -61,7 +66,13 @@ rust_mcp_sdk::tool_box!(
         UpdateUserRoleTool,
         DeleteUserTool,
         ListAuditLogsTool,
-        DownloadArtifactTool
+        DownloadArtifactTool,
+        ListSchedulesTool,
+        CreateScheduleTool,
+        DeleteScheduleTool,
+        PauseScheduleTool,
+        ResumeScheduleTool,
+        TriggerScheduleTool
     ]
 );
 
