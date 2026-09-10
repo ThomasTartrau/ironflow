@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
+use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -151,6 +152,95 @@ impl ApiClient {
         self.handle_raw_response(resp).await
     }
 
+    /// Send a DELETE request, expecting a 204 No Content on success.
+    pub async fn delete(&self, path: &str) -> Result<(), McpError> {
+        debug!(path, "DELETE");
+        let resp = self
+            .client
+            .delete(self.url(path))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(McpError::Http)?;
+
+        self.check_status(resp).await?;
+        Ok(())
+    }
+
+    /// Send a PUT request with a JSON body and deserialize the `data` field.
+    pub async fn put<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T, McpError> {
+        debug!(path, "PUT");
+        let resp = self
+            .client
+            .put(self.url(path))
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await
+            .map_err(McpError::Http)?;
+
+        self.handle_response(resp).await
+    }
+
+    /// Send a PATCH request with a JSON body and deserialize the `data` field.
+    pub async fn patch<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+    ) -> Result<T, McpError> {
+        debug!(path, "PATCH");
+        let resp = self
+            .client
+            .patch(self.url(path))
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await
+            .map_err(McpError::Http)?;
+
+        self.handle_response(resp).await
+    }
+
+    /// Send a GET request and return the raw response bytes with the
+    /// Content-Type header value.
+    pub async fn get_bytes(&self, path: &str) -> Result<(Vec<u8>, String), McpError> {
+        debug!(path, "GET bytes");
+        let resp = self
+            .client
+            .get(self.url(path))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(McpError::Http)?;
+
+        let resp = self.check_status(resp).await?;
+
+        let content_type = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        let bytes = resp.bytes().await.map_err(McpError::Http)?.to_vec();
+        Ok((bytes, content_type))
+    }
+
+    async fn check_status(&self, resp: reqwest::Response) -> Result<reqwest::Response, McpError> {
+        if resp.status().is_success() {
+            return Ok(resp);
+        }
+        let status = resp.status();
+        let body = resp.text().await.map_err(McpError::Http)?;
+        let message = serde_json::from_str::<ApiErrorResponse>(&body)
+            .map(|e| e.error.message)
+            .unwrap_or(body);
+        Err(McpError::Api {
+            status: status.as_u16(),
+            message,
+        })
+    }
+
     async fn handle_raw_response(&self, resp: reqwest::Response) -> Result<Value, McpError> {
         let status = resp.status();
         let body = resp.text().await.map_err(McpError::Http)?;
@@ -188,7 +278,7 @@ mod tests {
     use axum::http::StatusCode;
     use axum::http::header::AUTHORIZATION;
     use axum::response::IntoResponse;
-    use axum::routing::{get, post};
+    use axum::routing::{delete, get, patch, post, put};
     use axum::{Json, Router};
     use serde::Deserialize;
     use serde_json::{Value, json};
@@ -517,5 +607,210 @@ mod tests {
 
         let result = client.get_raw_with_query("/stats", &[]).await.unwrap();
         assert_eq!(result["data"]["total"], 5);
+    }
+
+    // ---------------------------------------------------------------
+    // delete()
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_returns_ok_on_204() {
+        let app = Router::new().route(
+            "/api/v1/items/42",
+            delete(|| async { StatusCode::NO_CONTENT }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        client.delete("/items/42").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_returns_api_error_on_404() {
+        let app = Router::new().route(
+            "/api/v1/items/99",
+            delete(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": { "code": "NOT_FOUND", "message": "introuvable" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client.delete("/items/99").await.unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 404);
+                assert_eq!(message, "introuvable");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // put()
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn put_sends_json_body_and_unwraps_data() {
+        let received: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let received_clone = received.clone();
+
+        let app = Router::new().route(
+            "/api/v1/items/1",
+            put(move |Json(body): Json<Value>| {
+                let received = received_clone.clone();
+                async move {
+                    *received.lock().await = Some(body);
+                    Json(json!({ "data": { "id": 1, "updated": true } }))
+                }
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let payload = json!({ "value": "new" });
+        let result: Value = client.put("/items/1", &payload).await.unwrap();
+
+        assert_eq!(result, json!({ "id": 1, "updated": true }));
+        let body = received.lock().await.clone().unwrap();
+        assert_eq!(body, json!({ "value": "new" }));
+    }
+
+    #[tokio::test]
+    async fn put_returns_api_error_on_404() {
+        let app = Router::new().route(
+            "/api/v1/items/99",
+            put(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": { "code": "NOT_FOUND", "message": "introuvable" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client
+            .put::<Value>("/items/99", &json!({}))
+            .await
+            .unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 404);
+                assert_eq!(message, "introuvable");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // patch()
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn patch_sends_json_body_and_unwraps_data() {
+        let received: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let received_clone = received.clone();
+
+        let app = Router::new().route(
+            "/api/v1/items/1/role",
+            patch(move |Json(body): Json<Value>| {
+                let received = received_clone.clone();
+                async move {
+                    *received.lock().await = Some(body);
+                    Json(json!({ "data": { "id": 1, "role": "admin" } }))
+                }
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let payload = json!({ "is_admin": true });
+        let result: Value = client.patch("/items/1/role", &payload).await.unwrap();
+
+        assert_eq!(result, json!({ "id": 1, "role": "admin" }));
+        let body = received.lock().await.clone().unwrap();
+        assert_eq!(body, json!({ "is_admin": true }));
+    }
+
+    #[tokio::test]
+    async fn patch_returns_api_error_on_404() {
+        let app = Router::new().route(
+            "/api/v1/items/99/role",
+            patch(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": { "code": "NOT_FOUND", "message": "introuvable" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client
+            .patch::<Value>("/items/99/role", &json!({}))
+            .await
+            .unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 404);
+                assert_eq!(message, "introuvable");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // get_bytes()
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_bytes_returns_raw_body() {
+        let app = Router::new().route(
+            "/api/v1/files/report",
+            get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/plain")],
+                    "hello world",
+                )
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let (bytes, content_type) = client.get_bytes("/files/report").await.unwrap();
+        assert_eq!(bytes, b"hello world");
+        assert_eq!(content_type, "text/plain");
+    }
+
+    #[tokio::test]
+    async fn get_bytes_returns_api_error_on_404() {
+        let app = Router::new().route(
+            "/api/v1/files/missing",
+            get(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": { "code": "NOT_FOUND", "message": "introuvable" } })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+
+        let err = client.get_bytes("/files/missing").await.unwrap_err();
+        match err {
+            McpError::Api { status, message } => {
+                assert_eq!(status, 404);
+                assert_eq!(message, "introuvable");
+            }
+            other => panic!("expected McpError::Api, got {other:?}"),
+        }
     }
 }

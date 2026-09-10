@@ -51,6 +51,7 @@ impl ServerHandler for IronflowHandler {
             IronflowTools::GetWorkflowTool(t) => t.run(&self.client).await,
             IronflowTools::CreateRunTool(t) => t.run(&self.client).await,
             IronflowTools::ListRunsTool(t) => t.run(&self.client).await,
+            IronflowTools::SearchRunsTool(t) => t.run(&self.client).await,
             IronflowTools::GetRunTool(t) => t.run(&self.client).await,
             IronflowTools::GetRunLogsTool(t) => t.run(&self.client).await,
             IronflowTools::CancelRunTool(t) => t.run(&self.client).await,
@@ -58,6 +59,20 @@ impl ServerHandler for IronflowHandler {
             IronflowTools::RejectRunTool(t) => t.run(&self.client).await,
             IronflowTools::RetryRunTool(t) => t.run(&self.client).await,
             IronflowTools::GetStatsTool(t) => t.run(&self.client).await,
+            IronflowTools::ListSecretsTool(t) => t.run(&self.client).await,
+            IronflowTools::CreateSecretTool(t) => t.run(&self.client).await,
+            IronflowTools::UpdateSecretTool(t) => t.run(&self.client).await,
+            IronflowTools::DeleteSecretTool(t) => t.run(&self.client).await,
+            IronflowTools::RotateSecretKeyTool(t) => t.run(&self.client).await,
+            IronflowTools::ListApiKeysTool(t) => t.run(&self.client).await,
+            IronflowTools::CreateApiKeyTool(t) => t.run(&self.client).await,
+            IronflowTools::DeleteApiKeyTool(t) => t.run(&self.client).await,
+            IronflowTools::ListUsersTool(t) => t.run(&self.client).await,
+            IronflowTools::CreateUserTool(t) => t.run(&self.client).await,
+            IronflowTools::UpdateUserRoleTool(t) => t.run(&self.client).await,
+            IronflowTools::DeleteUserTool(t) => t.run(&self.client).await,
+            IronflowTools::ListAuditLogsTool(t) => t.run(&self.client).await,
+            IronflowTools::DownloadArtifactTool(t) => t.run(&self.client).await,
         }
     }
 }
