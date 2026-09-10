@@ -9,9 +9,7 @@ export function isJsonSchema(value: unknown): value is JSONSchema7 {
 	);
 }
 
-function resolveProperty(
-	def: JSONSchema7Definition,
-): JSONSchema7 | null {
+function resolveProperty(def: JSONSchema7Definition): JSONSchema7 | null {
 	if (typeof def === "boolean") return null;
 	return def;
 }

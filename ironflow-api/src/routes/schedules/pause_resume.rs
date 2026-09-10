@@ -85,8 +85,7 @@ pub async fn resume_schedule(
         .await?
         .ok_or(ApiError::ScheduleNotFound(id))?;
 
-    let next = next_trigger(&current.cron_expression)
-        .map_err(ApiError::BadRequest)?;
+    let next = next_trigger(&current.cron_expression).map_err(ApiError::BadRequest)?;
 
     let schedule = state
         .store

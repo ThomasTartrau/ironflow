@@ -14,7 +14,9 @@ use std::time::Duration;
 use chrono::Utc;
 use croner::Cron;
 use ironflow_engine::engine::Engine;
-use ironflow_store::entities::{NewRun, NewSchedule, RunActor, Schedule, ScheduleUpdate, TriggerKind};
+use ironflow_store::entities::{
+    NewRun, NewSchedule, RunActor, Schedule, ScheduleUpdate, TriggerKind,
+};
 use ironflow_store::store::Store;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
@@ -37,10 +39,7 @@ pub(crate) fn next_trigger(
 }
 
 /// Build a [`NewRun`] from a schedule's fields.
-pub(crate) fn new_run_from_schedule(
-    schedule: &Schedule,
-    created_by: Option<RunActor>,
-) -> NewRun {
+pub(crate) fn new_run_from_schedule(schedule: &Schedule, created_by: Option<RunActor>) -> NewRun {
     NewRun {
         workflow_name: schedule.workflow_name.clone(),
         trigger: TriggerKind::Cron {
