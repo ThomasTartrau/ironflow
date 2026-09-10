@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO ironflow.steps (id, trace_id, run_id, name, kind, position, state_machine__id, input, created_at, updated_at, attempt, is_error_handler)\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,\n                        (SELECT retry_count + 1 FROM ironflow.runs WHERE id = $3),\n                        $11)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Uuid",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8ed64ae100109eff9a59370ca4c426da705f5b45ca26cb1d595537749c0d9a9d"
+}

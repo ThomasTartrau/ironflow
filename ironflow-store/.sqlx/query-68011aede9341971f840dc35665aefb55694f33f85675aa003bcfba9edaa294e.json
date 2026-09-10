@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO ironflow.secrets (id, key, encrypted_value, nonce, key_version, created_at, updated_at)\n                    VALUES ($1, $2, $3, $4, $5, $6, $7)\n                    ON CONFLICT (key) DO UPDATE\n                        SET encrypted_value = EXCLUDED.encrypted_value,\n                            nonce = EXCLUDED.nonce,\n                            key_version = EXCLUDED.key_version,\n                            updated_at = EXCLUDED.updated_at\n                    RETURNING id, key, created_at, updated_at\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Bytea",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "68011aede9341971f840dc35665aefb55694f33f85675aa003bcfba9edaa294e"
+}
