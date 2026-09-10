@@ -108,6 +108,15 @@ impl McpConnection {
             reason: e.to_string(),
         })?;
 
+        // On some Linux systems, fork() succeeds but exec() fails in the
+        // child, so spawn() returns Ok with a process that is already dead.
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(McpError::SpawnFailed {
+                command: command.to_string(),
+                reason: format!("process exited immediately with {status}"),
+            });
+        }
+
         let stdin = child.stdin.take().ok_or_else(|| McpError::SpawnFailed {
             command: command.to_string(),
             reason: "failed to capture stdin".to_string(),
