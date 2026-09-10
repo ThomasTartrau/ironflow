@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [3.15.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.15.0...ironflow-core-v3.15.1) - 2026-09-10
+
+### Fixed
+
+- #70 detect dead child process in MCP stdio connection
+
+- #70 accept both -1 and 127 exit codes for nonexistent program test
+
 ## [3.15.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.14.0...ironflow-core-v3.15.0) - 2026-09-09
 
 ### Added

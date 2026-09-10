@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-ops-slack"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -12,7 +12,7 @@ categories = ["asynchronous", "development-tools"]
 
 [dependencies]
 async-trait = "0.1"
-ironflow-core = { version = "3.15.0", path = "../../ironflow-core" }
+ironflow-core = { version = "3.15.1", path = "../../ironflow-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 slack-morphism = { version = "2", features = ["hyper"] }
