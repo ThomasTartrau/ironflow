@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.28.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.27.4...ironflow-store-v2.28.0) - 2026-09-10
+
+### Added
+
+- #71 add delay step for timed workflow pauses
+
 ## [2.27.3](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.27.2...ironflow-store-v2.27.3) - 2026-09-10
 
 ### Fixed
