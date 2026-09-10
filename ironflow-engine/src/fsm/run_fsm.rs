@@ -46,6 +46,10 @@ pub enum RunEvent {
     Approved,
     /// Human rejected the run.
     Rejected,
+    /// A delay step suspended the run until a scheduled time.
+    DelaySleeping,
+    /// The delay elapsed and the run is re-queued.
+    DelayElapsed,
 }
 
 /// Finite state machine for a workflow run.
@@ -70,6 +74,9 @@ pub enum RunEvent {
 /// | AwaitingApproval | Approved | Running |
 /// | AwaitingApproval | Rejected | Failed |
 /// | AwaitingApproval | CancelRequested | Cancelled |
+/// | Running | DelaySleeping | Sleeping |
+/// | Sleeping | DelayElapsed | Pending |
+/// | Sleeping | CancelRequested | Cancelled |
 ///
 /// # Examples
 ///
@@ -232,6 +239,11 @@ fn next_state(from: RunStatus, event: RunEvent) -> Option<RunStatus> {
         (RunStatus::AwaitingApproval, RunEvent::Approved) => Some(RunStatus::Running),
         (RunStatus::AwaitingApproval, RunEvent::Rejected) => Some(RunStatus::Failed),
         (RunStatus::AwaitingApproval, RunEvent::CancelRequested) => Some(RunStatus::Cancelled),
+
+        // Delay
+        (RunStatus::Running, RunEvent::DelaySleeping) => Some(RunStatus::Sleeping),
+        (RunStatus::Sleeping, RunEvent::DelayElapsed) => Some(RunStatus::Pending),
+        (RunStatus::Sleeping, RunEvent::CancelRequested) => Some(RunStatus::Cancelled),
 
         // Terminal states and all other combos → invalid
         _ => None,

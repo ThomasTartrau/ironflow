@@ -2013,7 +2013,7 @@ impl WorkflowContext {
             step.trace_id,
         )
     )]
-    async fn execute_step(
+    pub(crate) async fn execute_step(
         &mut self,
         name: &str,
         kind: StepKind,
@@ -2371,7 +2371,11 @@ impl WorkflowContext {
     ///
     /// Records edges from `step_id` to all `last_step_ids`, then
     /// transitions the step to `Running` with the given timestamp.
-    async fn start_step(&self, step_id: Uuid, now: DateTime<Utc>) -> Result<(), EngineError> {
+    pub(crate) async fn start_step(
+        &self,
+        step_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<(), EngineError> {
         if !self.last_step_ids.is_empty() {
             let deps: Vec<NewStepDependency> = self
                 .last_step_ids
@@ -2429,6 +2433,23 @@ impl WorkflowContext {
     /// Access the store directly (advanced usage).
     pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
+    }
+
+    /// Get and increment the current position counter.
+    pub(crate) fn next_position(&mut self) -> u32 {
+        let pos = self.position;
+        self.position += 1;
+        pos
+    }
+
+    /// Access the replay steps from a previous execution.
+    pub(crate) fn replay_steps(&self) -> &HashMap<u32, Step> {
+        &self.replay_steps
+    }
+
+    /// Set the last step IDs (for dependency tracking).
+    pub(crate) fn set_last_step_ids(&mut self, ids: Vec<Uuid>) {
+        self.last_step_ids = ids;
     }
 
     /// Access the payload that triggered this run.
@@ -2708,7 +2729,7 @@ fn inject_error_context(
                 error_msg.to_string(),
             ));
         }
-        StepConfig::Workflow(_) | StepConfig::Approval(_) => {}
+        StepConfig::Workflow(_) | StepConfig::Approval(_) | StepConfig::Delay(_) => {}
     }
 }
 

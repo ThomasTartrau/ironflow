@@ -7,6 +7,7 @@
 mod agent;
 mod approval;
 mod artifact;
+pub mod delay;
 mod http;
 mod shell;
 mod workflow;
@@ -14,6 +15,7 @@ mod workflow;
 pub use agent::AgentStepConfig;
 pub use approval::ApprovalConfig;
 pub use artifact::{ArtifactInput, ArtifactOutput};
+pub use delay::DelayConfig;
 pub use http::HttpConfig;
 pub use shell::ShellConfig;
 pub use workflow::WorkflowStepConfig;
@@ -49,6 +51,8 @@ pub enum StepConfig {
     Workflow(WorkflowStepConfig),
     /// A human approval gate step.
     Approval(ApprovalConfig),
+    /// A timed delay/sleep step.
+    Delay(DelayConfig),
 }
 
 impl StepConfig {
@@ -70,7 +74,7 @@ impl StepConfig {
             StepConfig::Shell(c) => c.allow_failure,
             StepConfig::Http(c) => c.allow_failure,
             StepConfig::Agent(c) => c.allow_failure,
-            StepConfig::Workflow(_) | StepConfig::Approval(_) => false,
+            StepConfig::Workflow(_) | StepConfig::Approval(_) | StepConfig::Delay(_) => false,
         }
     }
 
@@ -94,7 +98,7 @@ impl StepConfig {
             StepConfig::Http(c) => c.retry.as_ref(),
             StepConfig::Agent(c) => c.retry.as_ref(),
             StepConfig::Workflow(c) => c.retry.as_ref(),
-            StepConfig::Approval(_) => None,
+            StepConfig::Approval(_) | StepConfig::Delay(_) => None,
         }
     }
 
@@ -116,6 +120,7 @@ impl StepConfig {
             StepConfig::Agent(_) => StepKind::Agent,
             StepConfig::Workflow(_) => StepKind::Workflow,
             StepConfig::Approval(_) => StepKind::Approval,
+            StepConfig::Delay(_) => StepKind::Custom("delay".to_string()),
         }
     }
 }
@@ -173,6 +178,7 @@ mod tests {
             StepConfig::Agent(AgentStepConfig::new("summarize")),
             StepConfig::Workflow(WorkflowStepConfig::new("build", serde_json::json!({}))),
             StepConfig::Approval(ApprovalConfig::new("Deploy to production?")),
+            StepConfig::Delay(DelayConfig::from_secs(60)),
         ];
 
         for config in configs {

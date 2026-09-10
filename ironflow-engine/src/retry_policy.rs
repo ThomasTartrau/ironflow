@@ -99,7 +99,8 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::ArtifactNotFound { .. }
         | EngineError::ArtifactsUnavailable(_)
         | EngineError::Artifact(_)
-        | EngineError::WorkflowGuardRejected(_) => false,
+        | EngineError::WorkflowGuardRejected(_)
+        | EngineError::DelaySleeping { .. } => false,
     }
 }
 

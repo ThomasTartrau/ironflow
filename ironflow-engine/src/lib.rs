@@ -44,6 +44,7 @@ pub mod artifact;
 pub mod budget;
 pub mod config;
 pub mod context;
+mod control_flow;
 pub mod engine;
 pub mod error;
 pub mod executor;
@@ -61,7 +62,9 @@ pub mod schedule;
 pub mod prelude {
     pub use crate::artifact::{ArtifactSink, ArtifactUpload, DirectArtifactSink};
     pub use crate::budget::BudgetConfig;
-    pub use crate::config::{AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig};
+    pub use crate::config::{
+        AgentStepConfig, ApprovalConfig, DelayConfig, HttpConfig, ShellConfig, StepConfig,
+    };
     pub use crate::context::WorkflowContext;
     pub use crate::engine::{Engine, EnqueueOptions, WorkflowResult};
     pub use crate::error::EngineError;

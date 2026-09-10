@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// Valid transitions:
 /// - `Pending` -> `Running`, `Cancelled`
-/// - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`
+/// - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`, `Sleeping`
 /// - `Retrying` -> `Running`, `Failed`, `Cancelled`
 /// - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
+/// - `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`
 ///
 /// Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
 /// transitioning to the same terminal state is a no-op, not an error.
@@ -26,6 +27,9 @@ use serde::{Deserialize, Serialize};
 /// // A run whose worker lease expired goes back to the queue:
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 /// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+/// assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
+/// assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
+/// assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));
 /// // Terminal-to-same is idempotent:
 /// assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
 /// assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
@@ -52,6 +56,8 @@ pub enum RunStatus {
     AwaitingApproval,
     /// All steps finished but at least one `allow_failure` step failed.
     Warning,
+    /// Paused by a delay step; resumes automatically when `scheduled_at` elapses.
+    Sleeping,
 }
 
 impl RunStatus {
@@ -73,12 +79,15 @@ impl RunStatus {
                 | (RunStatus::Running, RunStatus::Retrying)
                 | (RunStatus::Running, RunStatus::Cancelled)
                 | (RunStatus::Running, RunStatus::AwaitingApproval)
+                | (RunStatus::Running, RunStatus::Sleeping)
                 | (RunStatus::Retrying, RunStatus::Running)
                 | (RunStatus::Retrying, RunStatus::Failed)
                 | (RunStatus::Retrying, RunStatus::Cancelled)
                 | (RunStatus::AwaitingApproval, RunStatus::Running)
                 | (RunStatus::AwaitingApproval, RunStatus::Failed)
                 | (RunStatus::AwaitingApproval, RunStatus::Cancelled)
+                | (RunStatus::Sleeping, RunStatus::Pending)
+                | (RunStatus::Sleeping, RunStatus::Cancelled)
         )
     }
 
@@ -102,6 +111,7 @@ impl std::fmt::Display for RunStatus {
             RunStatus::Cancelled => f.write_str("Cancelled"),
             RunStatus::AwaitingApproval => f.write_str("AwaitingApproval"),
             RunStatus::Warning => f.write_str("Warning"),
+            RunStatus::Sleeping => f.write_str("Sleeping"),
         }
     }
 }
@@ -258,6 +268,22 @@ mod tests {
         assert!(!RunStatus::Running.can_transition_to(&RunStatus::Running));
         assert!(!RunStatus::Retrying.can_transition_to(&RunStatus::Retrying));
         assert!(!RunStatus::AwaitingApproval.can_transition_to(&RunStatus::AwaitingApproval));
+        assert!(!RunStatus::Sleeping.can_transition_to(&RunStatus::Sleeping));
+    }
+
+    #[test]
+    fn sleeping_transitions() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
+        assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
+        assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));
+        assert!(!RunStatus::Sleeping.can_transition_to(&RunStatus::Running));
+        assert!(!RunStatus::Sleeping.can_transition_to(&RunStatus::Completed));
+        assert!(!RunStatus::Sleeping.can_transition_to(&RunStatus::Failed));
+    }
+
+    #[test]
+    fn sleeping_is_not_terminal() {
+        assert!(!RunStatus::Sleeping.is_terminal());
     }
 
     #[test]
@@ -270,6 +296,7 @@ mod tests {
         assert_eq!(RunStatus::Cancelled.to_string(), "Cancelled");
         assert_eq!(RunStatus::AwaitingApproval.to_string(), "AwaitingApproval");
         assert_eq!(RunStatus::Warning.to_string(), "Warning");
+        assert_eq!(RunStatus::Sleeping.to_string(), "Sleeping");
     }
 
     #[test]
@@ -283,6 +310,7 @@ mod tests {
             RunStatus::Cancelled,
             RunStatus::AwaitingApproval,
             RunStatus::Warning,
+            RunStatus::Sleeping,
         ] {
             let json = serde_json::to_string(&status).expect("serialize");
             let back: RunStatus = serde_json::from_str(&json).expect("deserialize");

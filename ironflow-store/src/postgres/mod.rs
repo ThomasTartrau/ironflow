@@ -354,6 +354,9 @@ impl PostgresStore {
             (RunStatus::AwaitingApproval, RunStatus::Running) => Ok("approved"),
             (RunStatus::AwaitingApproval, RunStatus::Failed) => Ok("rejected"),
             (RunStatus::AwaitingApproval, RunStatus::Cancelled) => Ok("cancel_requested"),
+            (RunStatus::Running, RunStatus::Sleeping) => Ok("delay_started"),
+            (RunStatus::Sleeping, RunStatus::Pending) => Ok("delay_elapsed"),
+            (RunStatus::Sleeping, RunStatus::Cancelled) => Ok("cancel_requested"),
             _ => Err(StoreError::InvalidTransition { from, to }),
         }
     }
