@@ -33,27 +33,39 @@ default:
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
   IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh,secret-store"
-  GIT_DEPTH: 0
+  GIT_DEPTH: 50
   GIT_STRATEGY: clone
+  FF_USE_FASTZIP: 1
+  CACHE_COMPRESSION_LEVEL: "fastest"
   RELEASE_PLZ_VERSION: "0.3.160"
-  # cargo defaults to a 30s HTTP timeout, which the runner blows through often
-  # enough that crates.io uploads fail mid-release and leave the workspace
-  # half-published. Give the upload room and retry transient network errors.
+  CI_RUST_IMAGE_TAG: "1.94.1-v1"
+  SCCACHE_DIR: "${CI_PROJECT_DIR}/.sccache"
+  SCCACHE_CACHE_SIZE: "1G"
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
-  # Cached with node_modules so corepack downloads the pinned pnpm once per
-  # branch instead of hitting the npm registry in every dashboard job.
   COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
 
-.rust-cache: &rust-cache
+.rust-debug-cache: &rust-debug-cache
   cache:
-    key: rust-${CI_COMMIT_REF_SLUG}
+    key: rust-debug-${CI_COMMIT_REF_SLUG}
     fallback_keys:
-      - rust-${CI_DEFAULT_BRANCH}
+      - rust-debug-${CI_DEFAULT_BRANCH}
     paths:
       - .cargo/registry/cache/
       - .cargo/registry/index/
       - .cargo/git/db/
+      - .sccache/
+
+.rust-release-cache: &rust-release-cache
+  cache:
+    key: rust-release-${CI_COMMIT_REF_SLUG}
+    fallback_keys:
+      - rust-release-${CI_DEFAULT_BRANCH}
+    paths:
+      - .cargo/registry/cache/
+      - .cargo/registry/index/
+      - .cargo/git/db/
+      - .sccache/
 
 .dashboard-cache: &dashboard-cache
   cache:
@@ -64,6 +76,26 @@ variables:
       - ironflow-dashboard/node_modules/
       - .corepack/
 
+build-ci-images:
+  stage: .pre
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: 1
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - ci/rust/Dockerfile
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}/ci/rust"
+      --dockerfile "${CI_PROJECT_DIR}/ci/rust/Dockerfile"
+      --destination "${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}"
+      --cache=true
+
 # release-plz is installed as a prebuilt musl binary, not built from source:
 # its dependency tree (cargo crate) tracks the latest rustc and breaks on the
 # pinned toolchain image. The binary is self-contained and toolchain-independent.
@@ -72,17 +104,6 @@ variables:
   - curl -sSfL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C "${CI_PROJECT_DIR}/.cargo/bin" release-plz
   - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
   - release-plz --version
-
-.install-mdbook: &install-mdbook
-  - |
-    mkdir -p .cargo/bin
-    case "$(uname -m)" in
-      aarch64|arm64) MDBOOK_ARCH="aarch64-unknown-linux-musl" ;;
-      *)             MDBOOK_ARCH="x86_64-unknown-linux-gnu" ;;
-    esac
-    curl -sSfL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-${MDBOOK_ARCH}.tar.gz" | tar -xz -C .cargo/bin mdbook
-    curl -sSfL "https://github.com/badboy/mdbook-mermaid/releases/download/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-${MDBOOK_ARCH}.tar.gz" | tar -xz -C .cargo/bin mdbook-mermaid
-    export PATH="${CI_PROJECT_DIR}/.cargo/bin:${PATH}"
 
 .pnpm-install: &pnpm-install
   before_script:
@@ -107,23 +128,21 @@ variables:
 cargo-fmt:
   extends: .only-mr
   stage: check
-  image: rust:1.94.1
-  <<: *rust-cache
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - rustup component add rustfmt
     - cargo fmt --all -- --check
 
 cargo-clippy:
   extends: .only-mr
   stage: check
-  image: rust:1.94.1
-  <<: *rust-cache
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - rustup component add clippy
     - cargo clippy --workspace --all-targets --exclude ironflow-example-server --features "$IRONFLOW_FEATURES" -- -D warnings
 
 dashboard-check:
@@ -138,45 +157,36 @@ dashboard-check:
 cargo-audit:
   extends: .only-mr
   stage: check
-  image: rust:1.94.1
-  <<: *rust-cache
-  before_script:
-    - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
   script:
-    - cargo install cargo-audit --locked
     - cargo audit
   allow_failure: false
 
 mdbook-build:
   extends: .only-mr
   stage: check
-  image: rust:1.94.1
-  variables:
-    MDBOOK_VERSION: "0.5.4"
-    MDBOOK_MERMAID_VERSION: "0.17.1"
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   script:
-    - *install-mdbook
     - mdbook build
 
 unit-tests:
   extends: .only-mr
   stage: test
-  image: rust:1.94.1
-  <<: *rust-cache
-  needs:
-    - cargo-clippy
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
+  needs: []
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo test --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES"
+    - cargo nextest run --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES"
 
 doc-tests:
   extends: .only-mr
   stage: test
-  image: rust:1.94.1
-  <<: *rust-cache
-  needs:
-    - cargo-clippy
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
+  needs: []
   variables:
     RUSTFLAGS: "-D warnings"
   script:
@@ -187,10 +197,9 @@ doc-tests:
 check-plugin-template:
   extends: .only-mr
   stage: test
-  image: rust:1.94.1
-  <<: *rust-cache
-  needs:
-    - cargo-clippy
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
+  needs: []
   variables:
     RUSTFLAGS: "-D warnings"
   script:
@@ -226,8 +235,8 @@ dashboard-build:
 cargo-check-dashboard:
   extends: .only-mr
   stage: build
-  image: rust:1.94.1
-  <<: *rust-cache
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
   needs:
     - dashboard-build
   variables:
@@ -244,18 +253,18 @@ cargo-check-dashboard:
 # Skipped on "chore: release" commits since the code is unchanged.
 build-release:
   stage: build
-  image: rust:1.94.1
-  <<: *rust-cache
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-release-cache
   script:
-    - cargo build --workspace --exclude ironflow-example-server --release
+    - cargo check --workspace --exclude ironflow-example-server --release
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $RELEASE_COMMIT != "true"
 
 # release-plz-update creates the release MR. Only on regular main commits.
 release-plz-update:
   stage: release
-  image: rust:1.94.1
-  <<: *rust-cache
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-release-cache
   needs:
     - build-release
   variables:
@@ -290,8 +299,8 @@ release-plz-update:
 # (regular commits may have crates ready to publish, release commits always do).
 release-plz-release:
   stage: release
-  image: rust:1.94.1
-  <<: *rust-cache
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-release-cache
   needs:
     - job: build-release
       optional: true
@@ -321,12 +330,8 @@ release-plz-release:
 
 pages:
   stage: deploy
-  image: rust:1.94.1
-  variables:
-    MDBOOK_VERSION: "0.5.4"
-    MDBOOK_MERMAID_VERSION: "0.17.1"
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   script:
-    - *install-mdbook
     - mdbook build
     - mv book public
   artifacts:
