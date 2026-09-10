@@ -1791,9 +1791,10 @@ export interface components {
 		 *
 		 *     Valid transitions:
 		 *     - `Pending` -> `Running`, `Cancelled`
-		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`
+		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`, `Sleeping`
 		 *     - `Retrying` -> `Running`, `Failed`, `Cancelled`
 		 *     - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
+		 *     - `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`
 		 *
 		 *     Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
 		 *     transitioning to the same terminal state is a no-op, not an error.
@@ -1811,6 +1812,9 @@ export interface components {
 		 *     // A run whose worker lease expired goes back to the queue:
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
+		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
+		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));
 		 *     // Terminal-to-same is idempotent:
 		 *     assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
 		 *     assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
@@ -1827,7 +1831,8 @@ export interface components {
 			| "retrying"
 			| "cancelled"
 			| "awaiting_approval"
-			| "warning";
+			| "warning"
+			| "sleeping";
 		/** @description A scope entry with its machine name and human-readable label. */
 		ScopeEntry: {
 			/** @description Short description. */

@@ -58,7 +58,8 @@ function isRunActive(status: RunStatus): boolean {
 	return (
 		status === "pending" ||
 		status === "running" ||
-		status === "awaiting_approval"
+		status === "awaiting_approval" ||
+		status === "sleeping"
 	);
 }
 

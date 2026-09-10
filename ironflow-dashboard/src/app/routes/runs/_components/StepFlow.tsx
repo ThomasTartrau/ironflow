@@ -108,6 +108,7 @@ const statusDot: Record<string, string> = {
 	skipped: "bg-muted-foreground/40",
 	awaiting_approval: "bg-[var(--status-awaiting-fg)] animate-pulse",
 	rejected: "bg-[var(--status-rejected-fg)]",
+	sleeping: "bg-[var(--status-awaiting-fg)] animate-pulse",
 };
 
 function formatNodeCost(usd: number): string {
