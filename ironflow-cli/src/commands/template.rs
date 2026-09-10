@@ -1,6 +1,8 @@
 //! `ironflow-cli template` subcommands.
 
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -42,6 +44,14 @@ pub enum TemplateCommands {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+    /// Create a new empty template scaffold.
+    Create {
+        /// Template name.
+        name: String,
+        /// Output directory (default: `./<name>`).
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Execute a template subcommand.
@@ -58,6 +68,7 @@ pub fn execute(args: &TemplateArgs) -> Result<()> {
             name,
             output,
         } => cmd_add(source, name, output.as_deref()),
+        TemplateCommands::Create { name, output } => cmd_create(name, output.as_deref()),
     }
 }
 
@@ -145,6 +156,84 @@ fn cmd_info(source: &str, name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn git_user_name() -> String {
+    Command::new("git")
+        .args(["config", "user.name"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Author".to_string())
+}
+
+fn cmd_create(name: &str, output: Option<&Path>) -> Result<()> {
+    let dest = output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(name));
+
+    if dest.exists() {
+        anyhow::bail!("directory '{}' already exists", dest.display());
+    }
+
+    let src_dir = dest.join("src");
+    fs::create_dir_all(&src_dir)?;
+
+    let author = git_user_name();
+    let template_toml = format!(
+        r#"[template]
+name = "{name}"
+version = "0.1.0"
+description = "A workflow template"
+authors = ["{author}"]
+
+[dependencies]
+"#
+    );
+    fs::write(dest.join("template.toml"), template_toml)?;
+
+    let handler = format!(
+        r#"use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::handler::{{HandlerFuture, WorkflowHandler}};
+
+pub struct {handler_name};
+
+impl WorkflowHandler for {handler_name} {{
+    fn name(&self) -> &str {{
+        "{name}"
+    }}
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {{
+        Box::pin(async move {{
+            ctx.shell("hello", "echo 'Hello from {name}!'").await?;
+            Ok(())
+        }})
+    }}
+}}
+"#,
+        handler_name = to_pascal_case(name)
+    );
+    fs::write(src_dir.join("handler.rs"), handler)?;
+
+    println!("Template '{name}' created at {}", dest.display());
+
+    Ok(())
+}
+
+fn to_pascal_case(s: &str) -> String {
+    s.split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
+            }
+        })
+        .collect()
 }
 
 fn cmd_add(source: &str, name: &str, output: Option<&Path>) -> Result<()> {
