@@ -689,6 +689,92 @@ pub fn users_table(users: &[UserResponse]) -> Table {
     table
 }
 
+/// Render a side-by-side comparison of two runs of the same workflow.
+pub fn run_diff_table(a: &RunDetailResponse, b: &RunDetailResponse) -> Table {
+    let (ra, rb) = (&a.run, &b.run);
+    let mut table = base_table();
+    table.set_header(vec![
+        "Field",
+        &format!("Run {}", short_id(ra.id)),
+        &format!("Run {}", short_id(rb.id)),
+    ]);
+
+    let row = |f: &str, va: String, vb: String| -> Vec<Cell> {
+        let hl = va != vb;
+        vec![
+            Cell::new(f),
+            if hl {
+                Cell::new(&va).fg(Color::Yellow)
+            } else {
+                Cell::new(&va)
+            },
+            if hl {
+                Cell::new(&vb).fg(Color::Yellow)
+            } else {
+                Cell::new(&vb)
+            },
+        ]
+    };
+
+    table.add_row(row("Status", ra.status.to_string(), rb.status.to_string()));
+    table.add_row(row(
+        "Duration",
+        format_duration_ms(ra.duration_ms),
+        format_duration_ms(rb.duration_ms),
+    ));
+    table.add_row(row(
+        "Cost",
+        format_cost(ra.cost_usd, ra.max_cost_usd),
+        format_cost(rb.cost_usd, rb.max_cost_usd),
+    ));
+    table.add_row(row(
+        "Started",
+        format_optional_datetime(&ra.started_at),
+        format_optional_datetime(&rb.started_at),
+    ));
+    table.add_row(row(
+        "Completed",
+        format_optional_datetime(&ra.completed_at),
+        format_optional_datetime(&rb.completed_at),
+    ));
+    table.add_row(row(
+        "Error",
+        ra.error.clone().unwrap_or("-".into()),
+        rb.error.clone().unwrap_or("-".into()),
+    ));
+    if a.payload != b.payload {
+        table.add_row(row(
+            "Payload",
+            serde_json::to_string(&a.payload).unwrap_or_default(),
+            serde_json::to_string(&b.payload).unwrap_or_default(),
+        ));
+    }
+    for i in 0..a.steps.len().max(b.steps.len()) {
+        let (sa, sb) = (a.steps.get(i), b.steps.get(i));
+        let name = sa.or(sb).map(|s| s.name.as_str()).unwrap_or("-");
+        table.add_row(row(
+            &format!("{name} status"),
+            sa.map(|s| s.status.to_string()).unwrap_or("-".into()),
+            sb.map(|s| s.status.to_string()).unwrap_or("-".into()),
+        ));
+        table.add_row(row(
+            &format!("{name} duration"),
+            sa.map(|s| format_duration_ms(s.duration_ms))
+                .unwrap_or("-".into()),
+            sb.map(|s| format_duration_ms(s.duration_ms))
+                .unwrap_or("-".into()),
+        ));
+        table.add_row(row(
+            &format!("{name} cost"),
+            sa.map(|s| format!("${:.4}", s.cost_usd))
+                .unwrap_or("-".into()),
+            sb.map(|s| format!("${:.4}", s.cost_usd))
+                .unwrap_or("-".into()),
+        ));
+    }
+    table
+}
+
 /// Render a UUID as its first hyphen-separated group, enough to spot a row.
 fn short_id(id: Uuid) -> String {
     id.to_string()

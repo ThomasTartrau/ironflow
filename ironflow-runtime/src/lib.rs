@@ -1,13 +1,12 @@
 //! # ironflow-runtime
 //!
-//! The daemon/server layer for **ironflow**, providing webhook HTTP endpoints and
-//! cron scheduling on top of [`ironflow_core`] operations.
+//! The daemon/server layer for **ironflow**, providing webhook HTTP endpoints
+//! and trigger sources on top of [`ironflow_core`] operations.
 //!
 //! This crate exposes a [`runtime::Runtime`] builder that lets you declaratively register
-//! webhook routes (with pluggable authentication) and cron jobs, then either start a
-//! full [Axum](https://docs.rs/axum) HTTP server via [`runtime::Runtime::serve`] or run
-//! only the cron scheduler via [`runtime::Runtime::run_crons`], both with graceful
-//! shutdown support.
+//! webhook routes (with pluggable authentication), then start a full
+//! [Axum](https://docs.rs/axum) HTTP server via [`runtime::Runtime::serve`] with
+//! graceful shutdown support.
 //!
 //! # Quick start
 //!
@@ -19,9 +18,6 @@
 //!     Runtime::new()
 //!         .webhook("/hooks/github", WebhookAuth::github("my-secret"), |payload| async move {
 //!             println!("received: {payload}");
-//!         })
-//!         .cron("0 */5 * * * *", "health-check", || async {
-//!             println!("running health check");
 //!         })
 //!         .serve("0.0.0.0:3000")
 //!         .await?;
@@ -36,9 +32,7 @@
 //! - [`webhook`] - Webhook authentication strategies ([`webhook::WebhookAuth`]).
 //! - [`trigger`] - Pluggable trigger sources (`EventTrigger`,
 //!   `NatsTrigger` behind `trigger-nats` feature).
-//! - `cron` - Internal cron job representation (crate-private).
 
-pub(crate) mod cron;
 pub mod error;
 pub mod runtime;
 pub mod trigger;

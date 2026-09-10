@@ -28,7 +28,7 @@ graph TD
 | `ironflow-worker` | Background worker that polls and executes runs |
 | `ironflow-store` | Storage trait + PostgreSQL and in-memory backends |
 | `ironflow-auth` | JWT authentication, password hashing, API keys |
-| `ironflow-runtime` | Daemon features: webhooks, cron triggers |
+| `ironflow-runtime` | Daemon features: webhooks, trigger sources |
 | `ironflow-artifacts` | Blob storage for step-produced files |
 | `ironflow-templates` | Fetch and install workflow templates from Git |
 | `ironflow-sdk` | Type-safe Rust client (types generated from OpenAPI) |

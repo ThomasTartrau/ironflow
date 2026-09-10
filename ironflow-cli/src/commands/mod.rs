@@ -4,6 +4,8 @@ use std::str::FromStr;
 
 pub mod api_key;
 pub mod audit_log;
+pub mod dashboard;
+pub mod init;
 pub mod logs;
 pub mod run;
 pub mod schedule;

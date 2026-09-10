@@ -57,7 +57,7 @@ It ships as two things you can use independently:
 | [`ironflow-auth`](https://crates.io/crates/ironflow-auth) | ![](https://img.shields.io/crates/v/ironflow-auth.svg?label=) | JWT issuing and verification, Argon2 password hashing, axum extractors |
 | [`ironflow-api`](https://crates.io/crates/ironflow-api) | ![](https://img.shields.io/crates/v/ironflow-api.svg?label=) | REST API: runs, workflows, stats, audit logs, secrets, API keys, SSE |
 | [`ironflow-worker`](https://crates.io/crates/ironflow-worker) | ![](https://img.shields.io/crates/v/ironflow-worker.svg?label=) | Background worker that polls the API and executes workflow handlers |
-| [`ironflow-runtime`](https://crates.io/crates/ironflow-runtime) | ![](https://img.shields.io/crates/v/ironflow-runtime.svg?label=) | Standalone daemon: webhook endpoints (axum) and cron scheduling |
+| [`ironflow-runtime`](https://crates.io/crates/ironflow-runtime) | ![](https://img.shields.io/crates/v/ironflow-runtime.svg?label=) | Standalone daemon: webhook endpoints (axum) and trigger sources |
 | [`ironflow-types`](https://crates.io/crates/ironflow-types) | ![](https://img.shields.io/crates/v/ironflow-types.svg?label=) | Shared API envelope types (`ApiResponse`, `ErrorEnvelope`) |
 | [`ironflow-sdk`](https://crates.io/crates/ironflow-sdk) | ![](https://img.shields.io/crates/v/ironflow-sdk.svg?label=) | Type-safe Rust client, types generated from the OpenAPI spec |
 | [`ironflow-cli`](https://crates.io/crates/ironflow-cli) | ![](https://img.shields.io/crates/v/ironflow-cli.svg?label=) | `ironflow-cli` command: create runs, list workflows, stream logs, show stats |
@@ -81,8 +81,9 @@ The API owns persistence and never executes anything. Workers poll the API for p
 execute the workflow handler locally, and stream steps and logs back. Scaling out means starting
 more workers.
 
-`ironflow-runtime` is a separate, lighter path: a standalone daemon with webhook and cron
-endpoints that calls `ironflow-core` operations directly, without a store or an API.
+`ironflow-runtime` is a separate, lighter path: a standalone daemon with webhook
+endpoints and trigger sources that calls `ironflow-core` operations directly,
+without a store or an API.
 
 ---
 
@@ -645,7 +646,7 @@ scaffolded and built against each release. Details in
 | | `openapi` | utoipa schemas for engine types |
 | `ironflow-worker` | `prometheus` | Worker metrics |
 | | `heartbeat` | Periodic liveness reporting to the API |
-| `ironflow-runtime` | `prometheus` | Webhook and cron metrics |
+| `ironflow-runtime` | `prometheus` | Webhook metrics |
 | `ironflow-types` | `openapi` | utoipa schemas for envelope types |
 | `ironflow-sdk` | `rustls` *(default)* | reqwest with rustls |
 | | `native-tls` | reqwest with the platform TLS stack |
@@ -983,8 +984,8 @@ let result = Agent::new()
 
 ## 🌐 Standalone Runtime
 
-`ironflow-runtime` is the no-database path: an axum server exposing webhook endpoints and cron
-jobs that call operations directly.
+`ironflow-runtime` is the no-database path: an axum server exposing webhook endpoints
+and trigger sources that call operations directly.
 
 ```rust,no_run
 use ironflow_core::prelude::*;
@@ -1016,9 +1017,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let p = p.clone();
                 async move { on_push(payload, &p).await }
             }
-        })
-        .cron("0 30 8 * * *", "daily-report", || async {
-            println!("running daily report");
         })
         .serve("0.0.0.0:8080")
         .await?;
@@ -1082,7 +1080,6 @@ Runtime::new().webhook_with_context(
 | `ironflow_agent_tokens_input_total` | Counter | `model` |
 | `ironflow_agent_tokens_output_total` | Counter | `model` |
 | `ironflow_webhook_received_total` | Counter | `path`, `auth` |
-| `ironflow_cron_runs_total` | Counter | `job` |
 | `ironflow_runs_reaped_total` | Counter | `outcome` |
 | `ironflow_worker_leases_lost_total` | Counter | |
 
