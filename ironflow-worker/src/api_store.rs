@@ -15,12 +15,14 @@ use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
     ApiKey, ApiKeyUpdate, Artifact, ArtifactLookup, AuditLogEntry, AuditLogFilter,
     KeyVersionStatus, LeaseRequest, LogEntry, LogFilter, NewApiKey, NewArtifact, NewAuditLogEntry,
-    NewLogEntries, NewRun, NewStep, NewStepDependency, NewUser, Page, PurgePolicy, PurgeableRun,
-    ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats, RunStatus,
-    RunUpdate, Secret, SecretMetadata, Step, StepDependency, StepUpdate, User,
+    NewLogEntries, NewRun, NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy,
+    PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
+    RunStatus, RunUpdate, Schedule, ScheduleUpdate, Secret, SecretMetadata, Step, StepDependency,
+    StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::log_store::LogStore;
+use ironflow_store::schedule_store::ScheduleStore;
 use ironflow_store::secret_store::SecretStore;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
@@ -432,6 +434,14 @@ impl UserStore for ApiRunStore {
             ))
         })
     }
+
+    fn update_user_password(&self, _id: Uuid, _password_hash: String) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
 }
 
 impl ApiKeyStore for ApiRunStore {
@@ -672,6 +682,52 @@ impl ArtifactStore for ApiRunStore {
             Ok(artifacts
                 .into_iter()
                 .find(|artifact| artifact.step_id == producer.id && artifact.name == lookup.name))
+        })
+    }
+}
+
+impl ScheduleStore for ApiRunStore {
+    fn create_schedule(&self, _req: NewSchedule) -> StoreFuture<'_, Schedule> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ScheduleStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn find_schedule_by_id(&self, _id: Uuid) -> StoreFuture<'_, Option<Schedule>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn list_schedules(&self, _page: u32, _per_page: u32) -> StoreFuture<'_, Page<Schedule>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ScheduleStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn update_schedule(&self, _id: Uuid, _update: ScheduleUpdate) -> StoreFuture<'_, Schedule> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ScheduleStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn delete_schedule(&self, _id: Uuid) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ScheduleStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ScheduleStore not available in worker".to_string(),
+            ))
         })
     }
 }

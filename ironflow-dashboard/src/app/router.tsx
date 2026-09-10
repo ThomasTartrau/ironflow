@@ -96,6 +96,16 @@ export const router = createBrowserRouter([
 				errorElement: <ErrorBoundary />,
 			},
 			{
+				path: "/schedules",
+				lazy: () => import("./routes/schedules"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
+				path: "/profile",
+				lazy: () => import("./routes/profile"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
 				path: "*",
 				element: <Navigate to="/" replace />,
 			},

@@ -21,6 +21,7 @@ pub mod metrics;
 pub mod openapi_spec;
 pub mod retry_run;
 pub mod run_events;
+pub mod schedules;
 pub mod secrets;
 #[cfg(test)]
 mod test_helpers;
@@ -205,7 +206,8 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
     let auth_session_routes = Router::new()
         .route("/refresh", post(auth::refresh::refresh))
         .route("/sign-out", post(auth::sign_out::sign_out))
-        .route("/me", get(auth::me::me));
+        .route("/me", get(auth::me::me))
+        .route("/password", patch(auth::change_password::change_password));
 
     // Public + user-authenticated routes (rate-limited when configured)
     #[allow(unused_mut)]
@@ -261,6 +263,26 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route(
             "/secrets/{*key}",
             put(secrets::update::update_secret).delete(secrets::delete::delete_secret),
+        )
+        .route(
+            "/schedules",
+            get(schedules::list::list_schedules).post(schedules::create::create_schedule),
+        )
+        .route(
+            "/schedules/{id}",
+            get(schedules::get::get_schedule).delete(schedules::delete::delete_schedule),
+        )
+        .route(
+            "/schedules/{id}/pause",
+            post(schedules::pause_resume::pause_schedule),
+        )
+        .route(
+            "/schedules/{id}/resume",
+            post(schedules::pause_resume::resume_schedule),
+        )
+        .route(
+            "/schedules/{id}/trigger",
+            post(schedules::trigger::trigger_schedule),
         );
 
     #[cfg(feature = "prometheus")]

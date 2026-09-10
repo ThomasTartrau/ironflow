@@ -1,5 +1,6 @@
 //! Auth request and response DTOs.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use validator::Validate;
@@ -41,4 +42,17 @@ pub struct MeResponse {
     pub username: String,
     /// Admin flag.
     pub is_admin: bool,
+    /// When the user account was created.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Change password request body.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Deserialize, Validate)]
+pub struct ChangePasswordRequest {
+    /// Current password.
+    pub old_password: String,
+    /// New password (min 8 characters).
+    #[validate(length(min = 8, message = "password must be at least 8 characters"))]
+    pub new_password: String,
 }

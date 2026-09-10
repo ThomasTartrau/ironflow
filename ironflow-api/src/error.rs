@@ -112,13 +112,26 @@ pub enum ApiError {
     #[error("artifact exceeds the size limit")]
     ArtifactTooLarge,
 
+    /// Schedule not found (404).
+    #[error("schedule not found")]
+    ScheduleNotFound(Uuid),
+
     /// Store operation failed (500).
     #[error("database error")]
-    Store(#[from] StoreError),
+    Store(StoreError),
 
     /// Internal server error (500).
     #[error("internal server error")]
     Internal(String),
+}
+
+impl From<StoreError> for ApiError {
+    fn from(e: StoreError) -> Self {
+        match e {
+            StoreError::ScheduleNotFound(id) => ApiError::ScheduleNotFound(id),
+            other => ApiError::Store(other),
+        }
+    }
 }
 
 impl ApiError {
@@ -144,6 +157,7 @@ impl ApiError {
             ApiError::ArtifactNotFound(_) => "ARTIFACT_NOT_FOUND",
             ApiError::ArtifactStorageUnavailable => "ARTIFACT_STORAGE_UNAVAILABLE",
             ApiError::ArtifactTooLarge => "ARTIFACT_TOO_LARGE",
+            ApiError::ScheduleNotFound(_) => "SCHEDULE_NOT_FOUND",
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => "DUPLICATE_ARTIFACT",
             ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
@@ -174,6 +188,7 @@ impl ApiError {
             ApiError::ArtifactNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::ArtifactStorageUnavailable => StatusCode::NOT_IMPLEMENTED,
             ApiError::ArtifactTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            ApiError::ScheduleNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => StatusCode::CONFLICT,
             ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,

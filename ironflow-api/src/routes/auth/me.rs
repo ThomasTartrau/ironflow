@@ -44,6 +44,7 @@ pub async fn me(
         email: stored_user.email,
         username: stored_user.username,
         is_admin: stored_user.is_admin,
+        created_at: stored_user.created_at,
     }))
 }
 

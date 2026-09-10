@@ -17,6 +17,7 @@ use crate::commands::api_key::ApiKeyArgs;
 use crate::commands::audit_log::AuditLogArgs;
 use crate::commands::logs::LogsArgs;
 use crate::commands::run::RunArgs;
+use crate::commands::schedule::ScheduleArgs;
 use crate::commands::secret::SecretArgs;
 use crate::commands::template::TemplateArgs;
 use crate::commands::user::UserArgs;
@@ -83,6 +84,8 @@ pub enum Commands {
     /// Inspect audit logs (admin only).
     #[command(name = "audit-log")]
     AuditLog(AuditLogArgs),
+    /// Manage workflow schedules.
+    Schedule(ScheduleArgs),
     /// Manage workflow templates (add, list, info).
     Template(TemplateArgs),
     /// Generate shell completions for the given shell.
@@ -155,6 +158,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::ApiKey(args) => commands::api_key::execute(client, args, cli.json).await,
         Commands::User(args) => commands::user::execute(client, args, cli.json).await,
         Commands::AuditLog(args) => commands::audit_log::execute(client, args, cli.json).await,
+        Commands::Schedule(args) => commands::schedule::execute(client, args, cli.json).await,
         Commands::Template(args) => commands::template::execute(args),
         Commands::Completions { shell } => generate_completions(*shell, &mut io::stdout()),
         Commands::Man => generate_man_page(&mut io::stdout()),

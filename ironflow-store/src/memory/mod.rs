@@ -44,6 +44,7 @@ mod artifact_store;
 mod audit_log_store;
 mod log_store;
 mod run_store;
+mod schedule_store;
 mod secret_store;
 mod user_store;
 
@@ -59,6 +60,7 @@ pub(super) struct State {
     pub(super) users: HashMap<Uuid, User>,
     pub(super) api_keys: HashMap<Uuid, crate::entities::ApiKey>,
     pub(super) secrets: HashMap<String, EncryptedSecret>,
+    pub(super) schedules: HashMap<Uuid, crate::entities::Schedule>,
     pub(super) audit_logs: Vec<crate::entities::AuditLogEntry>,
     pub(super) log_entries: Vec<crate::entities::LogEntry>,
 }

@@ -33,14 +33,11 @@ use std::sync::Arc;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderValue, Method};
 use tokio::net::TcpListener;
-use tokio::spawn;
-use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use ironflow_api::config::ServerConfig;
-use ironflow_api::reaper::Reaper;
 use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::sse::SseBroadcaster;
 use ironflow_api::state::AppState;
@@ -195,9 +192,7 @@ async fn main() {
         state = state.with_blob_store(blob);
     }
 
-    // Without the reaper, a run whose worker dies stays Running forever.
-    let shutdown = CancellationToken::new();
-    spawn(Reaper::new(store, engine).run(shutdown.clone()));
+    let shutdown = state.spawn_background_tasks().await;
     let router_config = RouterConfig {
         dashboard_dir: config.dashboard_dir.clone(),
         rate_limit_auth: config.rate_limit_auth,

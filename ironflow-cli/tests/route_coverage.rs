@@ -174,6 +174,42 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/audit-logs",
         Coverage::Command(&["audit-log", "list"]),
     ),
+    // ── Schedules ──
+    (
+        "GET",
+        "/api/v1/schedules",
+        Coverage::Command(&["schedule", "list"]),
+    ),
+    (
+        "POST",
+        "/api/v1/schedules",
+        Coverage::Command(&["schedule", "create", "deploy", "0 * * * *"]),
+    ),
+    (
+        "GET",
+        "/api/v1/schedules/{id}",
+        Coverage::Exempt("detail view not exposed in CLI; `schedule list` shows all"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/schedules/{id}",
+        Coverage::Command(&["schedule", "delete", UUID, "--yes"]),
+    ),
+    (
+        "POST",
+        "/api/v1/schedules/{id}/pause",
+        Coverage::Command(&["schedule", "pause", UUID]),
+    ),
+    (
+        "POST",
+        "/api/v1/schedules/{id}/resume",
+        Coverage::Command(&["schedule", "resume", UUID]),
+    ),
+    (
+        "POST",
+        "/api/v1/schedules/{id}/trigger",
+        Coverage::Command(&["schedule", "trigger", UUID]),
+    ),
     // ── Deliberately out of the CLI's reach ──
     (
         "GET",
@@ -206,6 +242,11 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "GET",
         "/api/v1/auth/me",
         Coverage::Exempt("introspects the caller's session, which the CLI does not hold"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/auth/password",
+        Coverage::Exempt("password change is session-based; the CLI uses API keys"),
     ),
     (
         "GET",

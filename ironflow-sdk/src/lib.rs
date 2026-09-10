@@ -46,8 +46,10 @@
 //! # }
 //! ```
 
+mod auth_methods;
 pub mod client;
 pub mod error;
+mod schedule_methods;
 #[doc(hidden)]
 #[allow(unused_imports, clippy::all)]
 mod generated {

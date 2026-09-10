@@ -1,10 +1,11 @@
 //! OpenAPI/Swagger documentation for ironflow-api.
 
 use crate::entities::{
-    ArtifactResponse, CreateRunRequest, CreateUserRequest, CreatedBy, CreatedByKind,
-    KeyVersionsResponse, ListRunsQuery, MeResponse, RotateSecretsRequest, RotateSecretsResponse,
-    RunDetailResponse, RunResponse, SecretResponse, SetSecretRequest, SignInRequest, StatsResponse,
-    StepResponse, UpdateRoleRequest, UserResponse,
+    ArtifactResponse, ChangePasswordRequest, CreateRunRequest, CreateScheduleRequest,
+    CreateUserRequest, CreatedBy, CreatedByKind, KeyVersionsResponse, ListRunsQuery, MeResponse,
+    RotateSecretsRequest, RotateSecretsResponse, RunDetailResponse, RunResponse, ScheduleResponse,
+    SecretResponse, SetSecretRequest, SignInRequest, StatsResponse, StepResponse,
+    UpdateRoleRequest, UpdateScheduleRequest, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -19,7 +20,7 @@ use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approve_run, audit_logs, auth, cancel_run, create_run, download_artifact, get_run,
     get_run_logs, get_stats, get_workflow, health_check, list_runs, list_workflows, retry_run,
-    run_events, secrets, users,
+    run_events, schedules, secrets, users,
 };
 use ironflow_engine::notify::{Event, WorkflowEvent};
 use ironflow_store::entities::{AuditLogEntry, LogEntry, LogStream};
@@ -93,6 +94,14 @@ mod with_signup {
             audit_logs::list_audit_logs,
             get_run_logs::get_run_logs,
             run_events::run_events,
+            auth::change_password::change_password,
+            schedules::create::create_schedule,
+            schedules::list::list_schedules,
+            schedules::get::get_schedule,
+            schedules::delete::delete_schedule,
+            schedules::pause_resume::pause_schedule,
+            schedules::pause_resume::resume_schedule,
+            schedules::trigger::trigger_schedule,
         ),
         components(
             schemas(
@@ -135,6 +144,10 @@ mod with_signup {
                 LogStream,
                 GetRunLogsQuery,
                 LogCursorMeta,
+                ChangePasswordRequest,
+                ScheduleResponse,
+                CreateScheduleRequest,
+                UpdateScheduleRequest,
             )
         ),
         tags(
@@ -148,6 +161,7 @@ mod with_signup {
             (name = "secrets", description = "Encrypted secret management (admin only)"),
             (name = "audit", description = "Audit log (admin only)"),
             (name = "logs", description = "Run/step log persistence and retrieval"),
+            (name = "schedules", description = "Schedule management"),
         )
     )]
     pub struct ApiDoc;
@@ -200,6 +214,14 @@ mod without_signup {
             audit_logs::list_audit_logs,
             get_run_logs::get_run_logs,
             run_events::run_events,
+            auth::change_password::change_password,
+            schedules::create::create_schedule,
+            schedules::list::list_schedules,
+            schedules::get::get_schedule,
+            schedules::delete::delete_schedule,
+            schedules::pause_resume::pause_schedule,
+            schedules::pause_resume::resume_schedule,
+            schedules::trigger::trigger_schedule,
         ),
         components(
             schemas(
@@ -241,6 +263,10 @@ mod without_signup {
                 LogStream,
                 GetRunLogsQuery,
                 LogCursorMeta,
+                ChangePasswordRequest,
+                ScheduleResponse,
+                CreateScheduleRequest,
+                UpdateScheduleRequest,
             )
         ),
         tags(
@@ -254,6 +280,7 @@ mod without_signup {
             (name = "secrets", description = "Encrypted secret management (admin only)"),
             (name = "audit", description = "Audit log (admin only)"),
             (name = "logs", description = "Run/step log persistence and retrieval"),
+            (name = "schedules", description = "Schedule management"),
         )
     )]
     pub struct ApiDoc;

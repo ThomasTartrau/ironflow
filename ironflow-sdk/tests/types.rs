@@ -139,7 +139,8 @@ fn deserialize_me_response() {
         "user_id": "01936f5a-0000-7000-8000-000000000001",
         "username": "alice",
         "email": "alice@example.com",
-        "is_admin": true
+        "is_admin": true,
+        "created_at": "2024-01-01T00:00:00Z"
     }"#;
     let me: MeResponse = serde_json::from_str(json).unwrap();
     assert_eq!(me.username, "alice");

@@ -45,6 +45,7 @@ dashmap = "6"
 rand = "0.9"
 hex = "0.4"
 ironflow-artifacts = { version = "0.1.1", path = "../ironflow-artifacts" }
+croner = "2"
 tracing = "0.1"
 thiserror = "2"
 validator = { version = "0.20", features = ["derive"] }
