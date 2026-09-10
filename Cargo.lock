@@ -3379,7 +3379,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "ironflow-api"
-version = "2.32.0"
+version = "2.32.1"
 dependencies = [
  "axum",
  "chrono",
@@ -3454,7 +3454,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-cli"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "axum",
@@ -3519,7 +3519,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.33.1"
+version = "2.33.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -3824,7 +3824,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.4.24"
+version = "2.4.25"
 dependencies = [
  "async-nats",
  "axum",
@@ -3927,7 +3927,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.16.0"
+version = "2.16.1"
 dependencies = [
  "axum",
  "bytes",

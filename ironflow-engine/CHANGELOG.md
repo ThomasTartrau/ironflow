@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.33.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.33.1...ironflow-engine-v2.33.2) - 2026-09-10
+
+### Changed
+
+- #77 remove cron scheduling from ironflow-runtime
+
 ## [2.33.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.32.4...ironflow-engine-v2.33.0) - 2026-09-10
 
 ### Added
