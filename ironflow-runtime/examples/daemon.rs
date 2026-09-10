@@ -1,17 +1,14 @@
-//! Minimal runtime daemon with a webhook and a cron job.
+//! Minimal runtime daemon with a webhook.
 //!
-//! Demonstrates [`Runtime`] with a GitLab-authenticated webhook and a
-//! periodic system check. The webhook receives a JSON payload, extracts
-//! a description, and asks an agent to summarise it. The cron job collects
-//! `uptime` output and feeds it to an agent.
+//! Demonstrates [`Runtime`] with a GitLab-authenticated webhook. The webhook
+//! receives a JSON payload, extracts a description, and asks an agent to
+//! summarise it.
 //!
 //! ```bash
 //! # Set the GitLab webhook secret, then run:
 //! export GITLAB_SECRET="my-webhook-secret"
 //! cargo run --example daemon
 //! ```
-
-use std::time::Duration;
 
 use ironflow_core::prelude::*;
 use ironflow_runtime::prelude::*;
@@ -40,36 +37,6 @@ async fn on_webhook(payload: Value, provider: &ClaudeCodeProvider) {
     }
 }
 
-async fn on_cron(provider: &ClaudeCodeProvider) {
-    let uptime = Shell::new("uptime").timeout(Duration::from_secs(10)).await;
-
-    let output = match uptime {
-        Ok(shell) => shell.stdout().to_string(),
-        Err(e) => {
-            eprintln!("Cron shell failed: {e}");
-            return;
-        }
-    };
-
-    let result = Agent::new()
-        .system_prompt("You are a concise system assistant.")
-        .prompt(&format!(
-            "Here is the server uptime. Give a one-line summary:\n\n{output}"
-        ))
-        .model(Model::HAIKU)
-        .max_turns(1)
-        .max_budget_usd(0.10)
-        .run(provider)
-        .await;
-
-    match result {
-        Ok(agent) => {
-            eprintln!("Cron result: {}", agent.text());
-        }
-        Err(e) => eprintln!("Cron workflow failed: {e}"),
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -90,13 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |payload| {
                 let p = p.clone();
                 async move { on_webhook(payload, &p).await }
-            }
-        })
-        .cron("0 */5 * * * *", "system-check", {
-            let p = provider.clone();
-            move || {
-                let p = p.clone();
-                async move { on_cron(&p).await }
             }
         })
         // Bind to localhost only; use a reverse proxy for public exposure.
