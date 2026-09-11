@@ -207,9 +207,7 @@ impl ArtifactSink for DirectArtifactSink {
             match recorded {
                 Ok(artifact) => Ok(artifact),
                 Err(err) => {
-                    if !dedup_hit
-                        && let Err(cleanup) = self.blob.delete(&key).await
-                    {
+                    if !dedup_hit && let Err(cleanup) = self.blob.delete(&key).await {
                         warn!(
                             storage_key = %key,
                             error = %cleanup,
