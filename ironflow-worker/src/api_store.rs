@@ -684,6 +684,18 @@ impl ArtifactStore for ApiRunStore {
                 .find(|artifact| artifact.step_id == producer.id && artifact.name == lookup.name))
         })
     }
+
+    fn find_artifact_by_sha256(&self, _sha256: &str) -> StoreFuture<'_, Option<Artifact>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn count_artifacts_by_storage_key(&self, _storage_key: &str) -> StoreFuture<'_, u64> {
+        Box::pin(async move { Ok(0) })
+    }
+
+    fn list_all_storage_keys(&self) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
 }
 
 impl ScheduleStore for ApiRunStore {

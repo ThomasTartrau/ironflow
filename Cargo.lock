@@ -3419,7 +3419,12 @@ dependencies = [
 name = "ironflow-artifacts"
 version = "0.1.1"
 dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-types",
  "bytes",
+ "chrono",
  "futures-util",
  "hex",
  "mime_guess",

@@ -168,6 +168,28 @@ impl ArtifactSink for DirectArtifactSink {
             let key = storage_key(upload.run_id, upload.step_id, id);
             let digest = self.blob.put(&key, content).await?;
 
+            // Dedup: reuse an existing blob if one with the same SHA-256 exists.
+            // Dedup: reuse an existing blob if one with the same SHA-256 exists.
+            let (final_key, dedup_hit) =
+                match self.store.find_artifact_by_sha256(&digest.sha256).await {
+                    Ok(Some(existing)) => {
+                        if let Err(cleanup) = self.blob.delete(&key).await {
+                            warn!(
+                                storage_key = %key,
+                                error = %cleanup,
+                                "failed to remove deduplicated blob"
+                            );
+                        }
+                        info!(
+                            sha256 = %digest.sha256,
+                            reused_key = %existing.storage_key,
+                            "artifact deduplicated"
+                        );
+                        (existing.storage_key, true)
+                    }
+                    _ => (key.clone(), false),
+                };
+
             let recorded = self
                 .store
                 .create_artifact(NewArtifact {
@@ -175,7 +197,7 @@ impl ArtifactSink for DirectArtifactSink {
                     run_id: upload.run_id,
                     step_id: upload.step_id,
                     name: upload.name,
-                    storage_key: key.clone(),
+                    storage_key: final_key.clone(),
                     content_type: upload.content_type,
                     size_bytes: digest.size_bytes,
                     sha256: digest.sha256,
@@ -185,9 +207,9 @@ impl ArtifactSink for DirectArtifactSink {
             match recorded {
                 Ok(artifact) => Ok(artifact),
                 Err(err) => {
-                    // The blob is unreachable without its record; drop it rather
-                    // than leave a byte-for-byte orphan behind a known failure.
-                    if let Err(cleanup) = self.blob.delete(&key).await {
+                    if !dedup_hit
+                        && let Err(cleanup) = self.blob.delete(&key).await
+                    {
                         warn!(
                             storage_key = %key,
                             error = %cleanup,
@@ -382,6 +404,21 @@ mod tests {
 
     use super::*;
 
+    fn count_files_recursive(dir: &std::path::Path) -> usize {
+        let mut count = 0;
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    count += count_files_recursive(&path);
+                } else if path.is_file() {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     async fn sink_with_step() -> (TempDir, DirectArtifactSink, Uuid, Uuid) {
         let dir = TempDir::new().expect("temp dir");
         let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
@@ -502,6 +539,94 @@ mod tests {
 
         assert!(matches!(err, EngineError::Artifact(_)));
         assert!(!dir.path().join("artifacts").exists());
+    }
+
+    #[tokio::test]
+    async fn dedup_same_sha256_reuses_storage_key() {
+        let (dir, sink, run_id, step_id) = sink_with_step().await;
+
+        let second_step_id = sink
+            .store
+            .create_step(NewStep {
+                run_id,
+                trace_id: step_trace_id(run_id, "test", 1),
+                name: "test".to_string(),
+                kind: StepKind::Shell,
+                position: 1,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("create step")
+            .id;
+
+        let first = sink
+            .put(
+                upload(run_id, step_id, "report.txt"),
+                stream_from_bytes(b"identical content".to_vec()),
+            )
+            .await
+            .expect("first put");
+
+        let second = sink
+            .put(
+                upload(run_id, second_step_id, "report-copy.txt"),
+                stream_from_bytes(b"identical content".to_vec()),
+            )
+            .await
+            .expect("second put");
+
+        assert_eq!(first.sha256, second.sha256);
+        assert_eq!(
+            first.storage_key, second.storage_key,
+            "dedup should reuse the same storage_key"
+        );
+
+        // Only one blob file should exist on disk: the dedup blob was deleted
+        let file_count = count_files_recursive(dir.path());
+        assert_eq!(file_count, 1, "dedup should not store a second copy");
+    }
+
+    #[tokio::test]
+    async fn dedup_different_sha256_gets_separate_storage_key() {
+        let (_dir, sink, run_id, step_id) = sink_with_step().await;
+
+        let second_step_id = sink
+            .store
+            .create_step(NewStep {
+                run_id,
+                trace_id: step_trace_id(run_id, "test", 1),
+                name: "test".to_string(),
+                kind: StepKind::Shell,
+                position: 1,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("create step")
+            .id;
+
+        let first = sink
+            .put(
+                upload(run_id, step_id, "a.txt"),
+                stream_from_bytes(b"content A".to_vec()),
+            )
+            .await
+            .expect("first put");
+
+        let second = sink
+            .put(
+                upload(run_id, second_step_id, "b.txt"),
+                stream_from_bytes(b"content B".to_vec()),
+            )
+            .await
+            .expect("second put");
+
+        assert_ne!(first.sha256, second.sha256);
+        assert_ne!(
+            first.storage_key, second.storage_key,
+            "different content should get different storage keys"
+        );
     }
 
     #[tokio::test]

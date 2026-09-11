@@ -23,6 +23,14 @@
 //! | `PURGE_MAX_RUNS_PER_WORKFLOW` | no | `1000` | Max terminal runs kept per workflow |
 //! | `PURGE_DRY_RUN` | no | `false` | Log what would be purged without deleting |
 //! | `PURGE_INTERVAL_SECS` | no | `86400` | Seconds between purge ticks (min 60) |
+//! | `ARTIFACT_BACKEND` | no | `local` | Blob storage backend: `local` or `s3` |
+//! | `ARTIFACT_S3_BUCKET` | **if s3** | - | S3 bucket name |
+//! | `ARTIFACT_S3_REGION` | no | `eu-west-1` | S3 region |
+//! | `ARTIFACT_S3_ENDPOINT` | no | - | Custom S3 endpoint (MinIO, R2) |
+//! | `ARTIFACT_S3_PREFIX` | no | - | Key prefix within the bucket |
+//! | `ARTIFACT_GC_INTERVAL_SECS` | no | `86400` | Seconds between GC ticks (min 60) |
+//! | `ARTIFACT_GC_GRACE_DAYS` | no | `7` | Days before an orphan blob is deleted |
+//! | `ARTIFACT_GC_DRY_RUN` | no | `false` | Log what would be GC'd without deleting |
 //!
 //! # Examples
 //!
@@ -110,6 +118,22 @@ pub struct ServerConfig {
     /// Rate limit for general public API routes in requests per minute per IP.
     /// `None` disables rate limiting on these routes.
     pub rate_limit_general: Option<u32>,
+    /// Blob storage backend: `local` or `s3`.
+    pub artifact_backend: String,
+    /// S3 bucket name (required when `artifact_backend` is `s3`).
+    pub artifact_s3_bucket: Option<String>,
+    /// S3 region, defaults to `eu-west-1`.
+    pub artifact_s3_region: String,
+    /// Custom S3 endpoint for MinIO, R2, or GCS S3-compat.
+    pub artifact_s3_endpoint: Option<String>,
+    /// Key prefix within the S3 bucket.
+    pub artifact_s3_prefix: Option<String>,
+    /// Seconds between GC ticks, defaults to 86400 (once per day).
+    pub artifact_gc_interval_secs: u64,
+    /// Days before an orphan blob is eligible for deletion, defaults to 7.
+    pub artifact_gc_grace_days: u32,
+    /// When `true`, the GC logs what would be deleted without deleting.
+    pub artifact_gc_dry_run: bool,
 }
 
 /// Configuration validation error.
@@ -301,6 +325,54 @@ impl ServerConfig {
             None => 86400,
         };
 
+        let artifact_backend = env::var("ARTIFACT_BACKEND")
+            .unwrap_or_else(|_| "local".to_string())
+            .to_lowercase();
+        let artifact_s3_bucket = env::var("ARTIFACT_S3_BUCKET").ok();
+        let artifact_s3_region =
+            env::var("ARTIFACT_S3_REGION").unwrap_or_else(|_| "eu-west-1".to_string());
+        let artifact_s3_endpoint = env::var("ARTIFACT_S3_ENDPOINT").ok();
+        let artifact_s3_prefix = env::var("ARTIFACT_S3_PREFIX").ok();
+
+        if artifact_backend == "s3" && artifact_s3_bucket.is_none() {
+            errors.push("ARTIFACT_S3_BUCKET is required when ARTIFACT_BACKEND=s3".to_string());
+        }
+        if artifact_backend != "local" && artifact_backend != "s3" {
+            errors.push(format!(
+                "ARTIFACT_BACKEND must be 'local' or 's3', got: {artifact_backend}"
+            ));
+        }
+
+        let artifact_gc_interval_secs = match env::var("ARTIFACT_GC_INTERVAL_SECS").ok() {
+            Some(raw) => {
+                let parsed = raw.parse::<u64>().unwrap_or_else(|_| {
+                    errors.push(format!(
+                        "ARTIFACT_GC_INTERVAL_SECS must be a valid u64, got: {raw}"
+                    ));
+                    86400
+                });
+                if parsed < 60 {
+                    errors.push(format!(
+                        "ARTIFACT_GC_INTERVAL_SECS must be at least 60, got: {parsed}"
+                    ));
+                }
+                parsed
+            }
+            None => 86400,
+        };
+        let artifact_gc_grace_days = match env::var("ARTIFACT_GC_GRACE_DAYS").ok() {
+            Some(raw) => raw.parse::<u32>().unwrap_or_else(|_| {
+                errors.push(format!(
+                    "ARTIFACT_GC_GRACE_DAYS must be a valid u32, got: {raw}"
+                ));
+                7
+            }),
+            None => 7,
+        };
+        let artifact_gc_dry_run = env::var("ARTIFACT_GC_DRY_RUN")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+
         if !errors.is_empty() {
             return Err(ConfigError::new(errors));
         }
@@ -322,6 +394,14 @@ impl ServerConfig {
             purge_max_runs_per_workflow,
             purge_dry_run,
             purge_interval_secs,
+            artifact_backend,
+            artifact_s3_bucket,
+            artifact_s3_region,
+            artifact_s3_endpoint,
+            artifact_s3_prefix,
+            artifact_gc_interval_secs,
+            artifact_gc_grace_days,
+            artifact_gc_dry_run,
         })
     }
 }
@@ -354,6 +434,14 @@ mod tests {
             env::remove_var("PURGE_MAX_RUNS_PER_WORKFLOW");
             env::remove_var("PURGE_DRY_RUN");
             env::remove_var("PURGE_INTERVAL_SECS");
+            env::remove_var("ARTIFACT_BACKEND");
+            env::remove_var("ARTIFACT_S3_BUCKET");
+            env::remove_var("ARTIFACT_S3_REGION");
+            env::remove_var("ARTIFACT_S3_ENDPOINT");
+            env::remove_var("ARTIFACT_S3_PREFIX");
+            env::remove_var("ARTIFACT_GC_INTERVAL_SECS");
+            env::remove_var("ARTIFACT_GC_GRACE_DAYS");
+            env::remove_var("ARTIFACT_GC_DRY_RUN");
         }
     }
 
