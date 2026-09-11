@@ -23,6 +23,7 @@ pub mod retry_run;
 pub mod run_events;
 pub mod schedules;
 pub mod secrets;
+pub mod templates;
 #[cfg(test)]
 mod test_helpers;
 pub mod users;
@@ -283,6 +284,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route(
             "/schedules/{id}/trigger",
             post(schedules::trigger::trigger_schedule),
+        )
+        .route(
+            "/templates/registry",
+            get(templates::list_registry_templates),
         );
 
     #[cfg(feature = "prometheus")]

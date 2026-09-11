@@ -40,6 +40,9 @@
 //! }
 //! ```
 
+/// Engine version, compiled from `Cargo.toml` at build time.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod artifact;
 pub mod budget;
 pub mod config;

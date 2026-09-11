@@ -123,6 +123,10 @@ pub enum ApiError {
     /// Internal server error (500).
     #[error("internal server error")]
     Internal(String),
+
+    /// An upstream service is unreachable or returned an error (502).
+    #[error("upstream service unavailable")]
+    BadGateway(String),
 }
 
 impl From<StoreError> for ApiError {
@@ -163,6 +167,7 @@ impl ApiError {
             ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
+            ApiError::BadGateway(_) => "BAD_GATEWAY",
         }
     }
 
@@ -194,6 +199,7 @@ impl ApiError {
             ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::BadGateway(_) => StatusCode::BAD_GATEWAY,
         }
     }
 

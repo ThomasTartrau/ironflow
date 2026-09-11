@@ -26,6 +26,7 @@ utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_e
 ironflow-engine = { version = "2.34.0", path = "../ironflow-engine" }
 ironflow-core = { version = "3.15.1", path = "../ironflow-core" }
 ironflow-auth = { version = "2.4.13", path = "../ironflow-auth" }
+ironflow-templates = { version = "0.1.1", path = "../ironflow-templates" }
 ironflow-types = { version = "0.2.1", path = "../ironflow-types" }
 
 axum = { version = "0.8", features = ["json"] }
@@ -47,6 +48,7 @@ rand = "0.9"
 hex = "0.4"
 ironflow-artifacts = { version = "0.1.2", path = "../ironflow-artifacts" }
 croner = "2"
+semver = "1"
 tracing = "0.1"
 thiserror = "2"
 validator = { version = "0.20", features = ["derive"] }

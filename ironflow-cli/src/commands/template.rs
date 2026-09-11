@@ -8,8 +8,9 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use ironflow_templates::fetch::fetch_repo;
-use ironflow_templates::install::install_template;
 use ironflow_templates::registry::{discover_templates, find_template};
+
+mod registry_ops;
 
 /// Manage workflow templates.
 #[derive(Debug, Args)]
@@ -22,10 +23,16 @@ pub struct TemplateArgs {
 /// Template subcommands.
 #[derive(Debug, Subcommand)]
 pub enum TemplateCommands {
-    /// List available templates in a repository (local path or remote Git URL).
+    /// List available templates.
     List {
-        /// Local path or Git URL containing templates.
-        source: String,
+        /// Local path or Git URL containing templates (omit with --registry).
+        source: Option<String>,
+        /// List templates from the configured registry instead.
+        #[arg(long)]
+        registry: bool,
+        /// Registry URL (overrides config).
+        #[arg(long)]
+        registry_url: Option<String>,
     },
     /// Show details about a specific template.
     Info {
@@ -36,13 +43,23 @@ pub enum TemplateCommands {
     },
     /// Add a template from a repository into your project.
     Add {
-        /// Local path or Git URL containing templates.
-        source: String,
-        /// Template name to install.
+        /// Template name (or name@version).
         name: String,
+        /// Git URL to fetch from (bypasses registry).
+        #[arg(long)]
+        from: Option<String>,
+        /// Use the configured registry to resolve the template name.
+        #[arg(long)]
+        registry: bool,
+        /// Registry URL (overrides config).
+        #[arg(long)]
+        registry_url: Option<String>,
         /// Output directory (default: `src/workflows/<name>`).
         #[arg(long, short)]
         output: Option<PathBuf>,
+        /// Skip Ironflow version compatibility check.
+        #[arg(long)]
+        force: bool,
     },
     /// Create a new empty template scaffold.
     Create {
@@ -51,6 +68,17 @@ pub enum TemplateCommands {
         /// Output directory (default: `./<name>`).
         #[arg(long, short)]
         output: Option<PathBuf>,
+    },
+    /// Check for or apply template updates.
+    Update {
+        /// Template name to update (omit to check all).
+        name: Option<String>,
+        /// Only check for updates, do not modify files.
+        #[arg(long)]
+        check: bool,
+        /// Registry URL (overrides config).
+        #[arg(long)]
+        registry_url: Option<String>,
     },
 }
 
@@ -61,23 +89,43 @@ pub enum TemplateCommands {
 /// Returns an error if fetching, parsing, or installing fails.
 pub fn execute(args: &TemplateArgs) -> Result<()> {
     match &args.command {
-        TemplateCommands::List { source } => cmd_list(source),
+        TemplateCommands::List {
+            source,
+            registry,
+            registry_url,
+        } => {
+            if *registry || source.is_none() {
+                registry_ops::cmd_list_registry(registry_url.as_deref())
+            } else {
+                cmd_list(source.as_deref().unwrap())
+            }
+        }
         TemplateCommands::Info { source, name } => cmd_info(source, name),
         TemplateCommands::Add {
-            source,
             name,
+            from,
+            registry_url,
             output,
-        } => cmd_add(source, name, output.as_deref()),
+            force,
+            ..
+        } => registry_ops::cmd_add(
+            name,
+            from.as_deref(),
+            registry_url.as_deref(),
+            output.as_deref(),
+            *force,
+        ),
         TemplateCommands::Create { name, output } => cmd_create(name, output.as_deref()),
+        TemplateCommands::Update {
+            name,
+            check,
+            registry_url,
+        } => registry_ops::cmd_update(name.as_deref(), *check, registry_url.as_deref()),
     }
 }
 
 /// Resolve a source string to a local path.
-///
-/// If the source looks like a URL (contains `://`), clone it into a
-/// temporary directory and return the path. Otherwise treat it as a
-/// local path.
-fn resolve_source(source: &str) -> Result<ResolvedSource> {
+pub(crate) fn resolve_source(source: &str) -> Result<ResolvedSource> {
     if source.contains("://") {
         let tmp = fetch_repo(source)?;
         Ok(ResolvedSource::Cloned(tmp))
@@ -90,18 +138,40 @@ fn resolve_source(source: &str) -> Result<ResolvedSource> {
     }
 }
 
-enum ResolvedSource {
+pub(crate) enum ResolvedSource {
     Local(PathBuf),
     Cloned(tempfile::TempDir),
 }
 
 impl ResolvedSource {
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         match self {
             ResolvedSource::Local(p) => p,
             ResolvedSource::Cloned(tmp) => tmp.path(),
         }
     }
+}
+
+/// Parse `name@version` into `(name, Some(version))` or `(name, None)`.
+pub(crate) fn parse_name_version(input: &str) -> (&str, Option<&str>) {
+    match input.split_once('@') {
+        Some((name, version)) => (name, Some(version)),
+        None => (input, None),
+    }
+}
+
+/// Convert a kebab-case name to PascalCase.
+pub(crate) fn to_pascal_case(s: &str) -> String {
+    s.split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
+            }
+        })
+        .collect()
 }
 
 fn cmd_list(source: &str) -> Result<()> {
@@ -143,6 +213,9 @@ fn cmd_info(source: &str, name: &str) -> Result<()> {
     }
     if let Some(cat) = &manifest.template.category {
         println!("Category: {cat}");
+    }
+    if let Some(min_ver) = &manifest.template.min_ironflow_version {
+        println!("Requires Ironflow: >= {min_ver}");
     }
 
     if !manifest.dependencies.is_empty() {
@@ -219,47 +292,6 @@ impl WorkflowHandler for {handler_name} {{
     fs::write(src_dir.join("handler.rs"), handler)?;
 
     println!("Template '{name}' created at {}", dest.display());
-
-    Ok(())
-}
-
-fn to_pascal_case(s: &str) -> String {
-    s.split(['-', '_'])
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
-            }
-        })
-        .collect()
-}
-
-fn cmd_add(source: &str, name: &str, output: Option<&Path>) -> Result<()> {
-    let resolved = resolve_source(source)?;
-    let (manifest, template_dir) = find_template(resolved.path(), name)?;
-
-    let destination = match output {
-        Some(path) => path.to_path_buf(),
-        None => PathBuf::from(format!("src/workflows/{name}")),
-    };
-
-    let result = install_template(&manifest, &template_dir, &destination)?;
-
-    println!(
-        "Template '{name}' installed to {}",
-        result.destination.display()
-    );
-
-    if !result.dependencies.is_empty() {
-        println!();
-        println!("Add these dependencies to your Cargo.toml:");
-        println!();
-        for dep in &result.dependencies {
-            println!("  {dep}");
-        }
-    }
 
     Ok(())
 }

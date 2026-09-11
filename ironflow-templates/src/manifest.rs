@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use semver::Version;
 use serde::Deserialize;
 
 use crate::error::TemplateError;
@@ -80,6 +81,9 @@ pub struct TemplateMetadata {
     /// Category path for UI grouping (e.g. `"ci-cd"`).
     #[serde(default)]
     pub category: Option<String>,
+    /// Minimum Ironflow engine version required by this template.
+    #[serde(default)]
+    pub min_ironflow_version: Option<Version>,
 }
 
 /// A Cargo dependency specification.
@@ -103,6 +107,58 @@ pub struct DetailedDependency {
     /// Optional feature flags.
     #[serde(default)]
     pub features: Vec<String>,
+}
+
+/// Validate that a template name is safe for use in file paths and code.
+///
+/// Accepts only lowercase ASCII letters, digits, and hyphens. Rejects
+/// empty strings, leading/trailing hyphens, and names containing path
+/// traversal characters.
+///
+/// # Errors
+///
+/// Returns [`TemplateError::InvalidManifest`] if the name is rejected.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_templates::manifest::validate_template_name;
+///
+/// assert!(validate_template_name("ci-pipeline").is_ok());
+/// assert!(validate_template_name("hello123").is_ok());
+/// assert!(validate_template_name("../evil").is_err());
+/// assert!(validate_template_name("").is_err());
+/// ```
+pub fn validate_template_name(name: &str) -> Result<(), TemplateError> {
+    if name.is_empty() {
+        return Err(TemplateError::InvalidManifest(
+            "template name cannot be empty".to_string(),
+        ));
+    }
+
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(TemplateError::InvalidManifest(format!(
+            "template name contains forbidden characters: {name}"
+        )));
+    }
+
+    let valid = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+
+    if !valid {
+        return Err(TemplateError::InvalidManifest(format!(
+            "template name must contain only lowercase ASCII, digits, and hyphens: {name}"
+        )));
+    }
+
+    if name.starts_with('-') || name.ends_with('-') {
+        return Err(TemplateError::InvalidManifest(format!(
+            "template name must not start or end with a hyphen: {name}"
+        )));
+    }
+
+    Ok(())
 }
 
 impl TemplateManifest {
@@ -251,5 +307,71 @@ version = "0.1.0"
     fn parse_invalid_toml() {
         let result = TemplateManifest::parse("not valid toml [[[");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_min_ironflow_version() {
+        let toml = r#"
+[template]
+name = "versioned"
+description = "Has min version"
+version = "1.0.0"
+min_ironflow_version = "0.5.0"
+"#;
+
+        let manifest = TemplateManifest::parse(toml).unwrap();
+        assert_eq!(
+            manifest.template.min_ironflow_version,
+            Some(Version::parse("0.5.0").unwrap())
+        );
+    }
+
+    // ---- template name validation ----
+
+    #[test]
+    fn validate_name_accepts_valid() {
+        validate_template_name("ci-pipeline").unwrap();
+        validate_template_name("hello123").unwrap();
+        validate_template_name("a").unwrap();
+    }
+
+    #[test]
+    fn validate_name_rejects_path_traversal() {
+        assert!(validate_template_name("../evil").is_err());
+        assert!(validate_template_name("foo/bar").is_err());
+        assert!(validate_template_name("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_empty() {
+        assert!(validate_template_name("").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_uppercase() {
+        assert!(validate_template_name("MyTemplate").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_leading_hyphen() {
+        assert!(validate_template_name("-bad").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_trailing_hyphen() {
+        assert!(validate_template_name("bad-").is_err());
+    }
+
+    #[test]
+    fn parse_without_min_ironflow_version() {
+        let toml = r#"
+[template]
+name = "no-min"
+description = "No min version"
+version = "1.0.0"
+"#;
+
+        let manifest = TemplateManifest::parse(toml).unwrap();
+        assert!(manifest.template.min_ironflow_version.is_none());
     }
 }

@@ -3393,12 +3393,14 @@ dependencies = [
  "ironflow-core",
  "ironflow-engine",
  "ironflow-store",
+ "ironflow-templates",
  "ironflow-types",
  "metrics",
  "metrics-exporter-prometheus",
  "rand 0.9.5",
  "rust-embed",
  "rust_decimal",
+ "semver",
  "serde",
  "serde_json",
  "subtle",
@@ -3481,6 +3483,7 @@ dependencies = [
  "ironflow-templates",
  "ironflow-types",
  "open",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -3919,10 +3922,14 @@ dependencies = [
 name = "ironflow-templates"
 version = "0.1.1"
 dependencies = [
+ "chrono",
+ "semver",
  "serde",
  "tempfile",
  "thiserror 2.0.20",
  "toml",
+ "toml_edit 0.22.27",
+ "url",
 ]
 
 [[package]]

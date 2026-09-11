@@ -789,13 +789,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_template_add() {
+    fn parse_template_add_with_from() {
         let cli = parse(&[
             "ironflow-cli",
             "template",
             "add",
-            "https://github.com/user/templates",
             "ci-pipeline",
+            "--from",
+            "https://github.com/user/templates",
         ]);
         assert!(matches!(cli.command, Commands::Template(_)));
     }
@@ -806,11 +807,24 @@ mod tests {
             "ironflow-cli",
             "template",
             "add",
-            "https://github.com/user/templates",
             "ci-pipeline",
+            "--from",
+            "https://github.com/user/templates",
             "--output",
             "my/custom/path",
         ]);
+        assert!(matches!(cli.command, Commands::Template(_)));
+    }
+
+    #[test]
+    fn parse_template_list_registry() {
+        let cli = parse(&["ironflow-cli", "template", "list", "--registry"]);
+        assert!(matches!(cli.command, Commands::Template(_)));
+    }
+
+    #[test]
+    fn parse_template_update() {
+        let cli = parse(&["ironflow-cli", "template", "update"]);
         assert!(matches!(cli.command, Commands::Template(_)));
     }
 
