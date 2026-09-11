@@ -17,8 +17,8 @@ use ironflow_store::entities::{
     KeyVersionStatus, LeaseRequest, LogEntry, LogFilter, NewApiKey, NewArtifact, NewAuditLogEntry,
     NewLogEntries, NewRun, NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy,
     PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
-    RunStatus, RunUpdate, Schedule, ScheduleUpdate, Secret, SecretMetadata, Step, StepDependency,
-    StepUpdate, User,
+    RunStatus, RunUpdate, Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket,
+    StatsHistoryFilter, Step, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::log_store::LogStore;
@@ -349,6 +349,17 @@ impl RunStore for ApiRunStore {
         Box::pin(async move {
             Err(StoreError::Database(
                 "get_stats not supported via worker API".to_string(),
+            ))
+        })
+    }
+
+    fn get_stats_history(
+        &self,
+        _filter: StatsHistoryFilter,
+    ) -> StoreFuture<'_, Vec<StatsHistoryBucket>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "get_stats_history not supported via worker API".to_string(),
             ))
         })
     }

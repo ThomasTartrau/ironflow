@@ -11,6 +11,7 @@ pub mod events;
 pub mod get_run;
 pub mod get_run_logs;
 pub mod get_stats;
+pub mod get_stats_history;
 pub mod get_workflow;
 pub mod health_check;
 mod internal;
@@ -233,6 +234,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
         .route("/stats", get(get_stats::get_stats))
+        .route("/stats/history", get(get_stats_history::get_stats_history))
         .route("/audit-logs", get(audit_logs::list_audit_logs))
         .route("/events", get(events::events))
         .route(

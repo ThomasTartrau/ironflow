@@ -16,7 +16,8 @@ use crate::artifact_store::ArtifactStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
     LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeableRun, ReapedRun,
-    Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
+    Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
+    StatsHistoryFilter, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::log_store::LogStore;
@@ -172,6 +173,40 @@ pub trait RunStore: Send + Sync {
     ///
     /// Pass [`RunFilter::default()`] to get stats across all runs.
     fn get_stats(&self, filter: RunFilter) -> StoreFuture<'_, RunStats>;
+
+    /// Get time-bucketed historical statistics for trend charts.
+    ///
+    /// Aggregates runs into time buckets based on the filter's granularity,
+    /// counting terminal statuses and computing duration percentiles.
+    /// Returns buckets ordered by time ascending; empty periods are omitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Database`] on underlying store failures.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::entities::{StatsHistoryFilter, HistoryPeriod, HistoryGranularity};
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// let filter = StatsHistoryFilter {
+    ///     workflow_name: None,
+    ///     period: HistoryPeriod::SevenDays,
+    ///     granularity: HistoryGranularity::OneDay,
+    /// };
+    /// let buckets = store.get_stats_history(filter).await?;
+    /// for b in &buckets {
+    ///     println!("{}: {} completed, {} failed", b.time, b.completed, b.failed);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn get_stats_history(
+        &self,
+        filter: StatsHistoryFilter,
+    ) -> StoreFuture<'_, Vec<StatsHistoryBucket>>;
 
     /// Create step dependency edges in batch.
     ///

@@ -519,6 +519,43 @@ impl IronflowClient {
         self.send_envelope(self.get("/api/v1/stats")).await
     }
 
+    /// `GET /api/v1/stats/history` -- Time-bucketed historical statistics.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(client: &ironflow_sdk::IronflowClient) -> Result<(), ironflow_sdk::error::Error> {
+    /// let history = client.stats_history(Some("deploy"), Some("7d"), None).await?;
+    /// for bucket in &history.data.buckets {
+    ///     println!("{}: {} completed", bucket.time, bucket.completed);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401 or 400.
+    pub async fn stats_history(
+        &self,
+        workflow: Option<&str>,
+        period: Option<&str>,
+        granularity: Option<&str>,
+    ) -> Result<ApiResponse<types::StatsHistoryResponse>, Error> {
+        let mut params = Vec::new();
+        if let Some(w) = workflow {
+            params.push(("workflow", w));
+        }
+        if let Some(p) = period {
+            params.push(("period", p));
+        }
+        if let Some(g) = granularity {
+            params.push(("granularity", g));
+        }
+        let req = self.get("/api/v1/stats/history").query(&params);
+        self.send_envelope(req).await
+    }
+
     // ── Auth ───────────────────────────────────────────────────────
 
     /// `POST /api/v1/auth/sign-in` -- Sign in with credentials.

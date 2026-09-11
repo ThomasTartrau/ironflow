@@ -21,6 +21,7 @@ use crate::commands::logs::LogsArgs;
 use crate::commands::run::RunArgs;
 use crate::commands::schedule::ScheduleArgs;
 use crate::commands::secret::SecretArgs;
+use crate::commands::stats::StatsArgs;
 use crate::commands::template::TemplateArgs;
 use crate::commands::user::UserArgs;
 use crate::commands::workflow::WorkflowArgs;
@@ -74,8 +75,8 @@ pub enum Commands {
     Workflow(WorkflowArgs),
     /// Stream run logs via SSE.
     Logs(LogsArgs),
-    /// Show global statistics.
-    Stats,
+    /// Show statistics (aggregate or historical).
+    Stats(StatsArgs),
     /// Manage secrets (admin only).
     Secret(SecretArgs),
     /// Manage API keys.
@@ -159,7 +160,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::Run(args) => commands::run::execute(client, args, cli.json, cli.verbose).await,
         Commands::Workflow(args) => commands::workflow::execute(client, args, cli.json).await,
         Commands::Logs(args) => commands::logs::execute(client, args, cli.json).await,
-        Commands::Stats => commands::stats::execute(client, cli.json).await,
+        Commands::Stats(args) => commands::stats::execute(client, args, cli.json).await,
         Commands::Secret(args) => commands::secret::execute(client, args, cli.json).await,
         Commands::ApiKey(args) => commands::api_key::execute(client, args, cli.json).await,
         Commands::User(args) => commands::user::execute(client, args, cli.json).await,
@@ -327,7 +328,7 @@ mod tests {
     #[test]
     fn parse_stats() {
         let cli = parse(&["ironflow-cli", "stats"]);
-        assert!(matches!(cli.command, Commands::Stats));
+        assert!(matches!(cli.command, Commands::Stats(_)));
     }
 
     #[test]

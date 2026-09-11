@@ -12,7 +12,8 @@ use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::types::{
     ApiKeyResponse, ApiKeyScope, ArtifactResponse, AuditLogEntry, CreateApiKeyResponse,
     KeyVersionsResponse, RunDetailResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse,
-    StatsResponse, StepResponse, StepStatus, UserResponse, WorkflowDetailResponse, WorkflowSummary,
+    StatsHistoryResponse, StatsResponse, StepResponse, StepStatus, UserResponse,
+    WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
 use serde_json::to_string_pretty;
@@ -418,6 +419,34 @@ pub fn stats_table(stats: &StatsResponse) -> Table {
         Cell::new("Total duration"),
         Cell::new(format_duration_ms(stats.total_duration_ms)),
     ]);
+
+    table
+}
+
+/// Render historical stats as a table.
+pub fn stats_history_table(history: &StatsHistoryResponse) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        "Time",
+        "Completed",
+        "Failed",
+        "Cancelled",
+        "Avg (ms)",
+        "P95 (ms)",
+        "Cost",
+    ]);
+
+    for bucket in &history.buckets {
+        table.add_row(vec![
+            Cell::new(bucket.time),
+            Cell::new(bucket.completed).fg(Color::Green),
+            Cell::new(bucket.failed).fg(Color::Red),
+            Cell::new(bucket.cancelled).fg(Color::Grey),
+            Cell::new(bucket.avg_duration_ms),
+            Cell::new(bucket.p95_duration_ms),
+            Cell::new(format!("${:.4}", bucket.total_cost_usd)),
+        ]);
+    }
 
     table
 }

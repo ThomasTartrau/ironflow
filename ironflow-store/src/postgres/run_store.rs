@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::entities::{
     IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
     PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter, RunStats,
-    RunStatus, RunUpdate, Step, StepDependency, StepUpdate,
+    RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -1199,6 +1199,13 @@ impl RunStore for PostgresStore {
                 total_duration_ms: row.get::<i64, _>("total_duration") as u64,
             })
         })
+    }
+
+    fn get_stats_history(
+        &self,
+        filter: StatsHistoryFilter,
+    ) -> StoreFuture<'_, Vec<StatsHistoryBucket>> {
+        self.stats_history_impl(filter)
     }
 
     fn create_step_dependencies(&self, deps: Vec<NewStepDependency>) -> StoreFuture<'_, ()> {

@@ -91,6 +91,11 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
     ),
     // ── Stats ──
     ("GET", "/api/v1/stats", Coverage::Command(&["stats"])),
+    (
+        "GET",
+        "/api/v1/stats/history",
+        Coverage::Command(&["stats", "history"]),
+    ),
     // ── Secrets ──
     (
         "GET",

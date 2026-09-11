@@ -749,6 +749,28 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/stats/history": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get time-bucketed historical statistics for trend charts.
+		 * @description Returns aggregated run counts, duration metrics, and cost per time
+		 *     bucket. Accepts optional `workflow`, `period`, and `granularity`
+		 *     query parameters.
+		 */
+		get: operations["get_stats_history"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/users": {
 		parameters: {
 			query?: never;
@@ -1616,6 +1638,39 @@ export interface components {
 			step_id?: string | null;
 			stream?: null | components["schemas"]["LogStream"];
 		};
+		/**
+		 * @description Time bucket granularity for historical statistics.
+		 *
+		 *     Controls the size of each time bucket in the response.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::HistoryGranularity;
+		 *
+		 *     let gran = HistoryGranularity::OneDay;
+		 *     assert_eq!(gran.to_string(), "1d");
+		 *     assert_eq!(gran.pg_interval(), "day");
+		 *     ```
+		 * @enum {string}
+		 */
+		HistoryGranularity: "1h" | "1d" | "1w";
+		/**
+		 * @description Time period for historical statistics queries.
+		 *
+		 *     Controls how far back the query reaches from the current time.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::HistoryPeriod;
+		 *
+		 *     let period = HistoryPeriod::SevenDays;
+		 *     assert_eq!(period.to_string(), "7d");
+		 *     ```
+		 * @enum {string}
+		 */
+		HistoryPeriod: "24h" | "7d" | "30d" | "90d";
 		/** @description How the configured key ring lines up with the stored secrets. */
 		KeyVersionsResponse: {
 			/**
@@ -2131,6 +2186,71 @@ export interface components {
 			password: string;
 			/** @description Display username. */
 			username: string;
+		};
+		/**
+		 * @description One time bucket in the history response.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::StatsHistoryBucketResponse;
+		 *     ```
+		 */
+		StatsHistoryBucketResponse: {
+			/**
+			 * Format: int64
+			 * @description Average duration in milliseconds.
+			 */
+			avg_duration_ms: number;
+			/**
+			 * Format: int64
+			 * @description Number of cancelled runs in this bucket.
+			 */
+			cancelled: number;
+			/**
+			 * Format: int64
+			 * @description Number of completed runs in this bucket.
+			 */
+			completed: number;
+			/**
+			 * Format: int64
+			 * @description Number of failed runs in this bucket.
+			 */
+			failed: number;
+			/**
+			 * Format: int64
+			 * @description 95th percentile duration in milliseconds.
+			 */
+			p95_duration_ms: number;
+			/**
+			 * Format: date-time
+			 * @description Start of the time bucket.
+			 */
+			time: string;
+			/**
+			 * Format: double
+			 * @description Total cost in USD.
+			 */
+			total_cost_usd: number;
+		};
+		/**
+		 * @description Time-bucketed historical statistics response.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::StatsHistoryResponse;
+		 *     ```
+		 */
+		StatsHistoryResponse: {
+			/** @description Aggregated buckets, sorted by time ascending. */
+			buckets: components["schemas"]["StatsHistoryBucketResponse"][];
+			/** @description The granularity of each bucket. */
+			granularity: components["schemas"]["HistoryGranularity"];
+			/** @description The period that was queried. */
+			period: components["schemas"]["HistoryPeriod"];
+			/** @description Workflow name filter, if applied. */
+			workflow?: string | null;
 		};
 		/**
 		 * @description Aggregate statistics response.
@@ -4054,6 +4174,47 @@ export interface operations {
 				content: {
 					"application/json": components["schemas"]["StatsResponse"];
 				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	get_stats_history: {
+		parameters: {
+			query?: {
+				/** @description Filter by workflow name. Omit to aggregate all workflows. */
+				workflow?: string | null;
+				/** @description Time period to query. Defaults to `7d`. */
+				period?: null | components["schemas"]["HistoryPeriod"];
+				/** @description Bucket granularity. Auto-derived from period when omitted. */
+				granularity?: null | components["schemas"]["HistoryGranularity"];
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Historical statistics */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["StatsHistoryResponse"];
+				};
+			};
+			/** @description Invalid period or granularity */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
 			};
 			/** @description Unauthorized */
 			401: {
