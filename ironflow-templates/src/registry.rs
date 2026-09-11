@@ -1,7 +1,8 @@
-//! Template discovery from a local directory.
+//! Template discovery from a local directory and remote registry.
 //!
 //! Scans a directory for subdirectories containing a `template.toml` file
-//! and parses each manifest.
+//! and parses each manifest. Also supports fetching a remote registry
+//! index (`index.toml`) to resolve template names without a full URL.
 //!
 //! # Examples
 //!
@@ -22,8 +23,35 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::error::TemplateError;
+use std::env;
+
+use semver::Version;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{NameList, TemplateError};
+use crate::fetch::fetch_repo;
 use crate::manifest::{MANIFEST_FILENAME, TemplateManifest};
+
+/// Default template registry URL.
+pub const DEFAULT_REGISTRY_URL: &str = "https://gitlab.com/ironflow-templates/registry";
+
+/// Resolve the registry URL from an explicit value, the `IRONFLOW_REGISTRY_URL`
+/// environment variable, or the built-in default.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_templates::registry::resolve_registry_url;
+///
+/// let url = resolve_registry_url(None);
+/// assert!(url.starts_with("https://"));
+/// ```
+pub fn resolve_registry_url(explicit: Option<&str>) -> String {
+    explicit
+        .map(String::from)
+        .or_else(|| env::var("IRONFLOW_REGISTRY_URL").ok())
+        .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string())
+}
 
 /// A discovered template: its parsed manifest and the directory it lives in.
 pub type DiscoveredTemplate = (TemplateManifest, PathBuf);
@@ -124,13 +152,190 @@ pub fn find_template(
     match templates.remove(name) {
         Some((manifest, dir)) => Ok((manifest, dir)),
         None => {
-            let available = templates.into_keys().collect::<Vec<_>>().join(", ");
+            let available = NameList(templates.into_keys().collect());
             Err(TemplateError::TemplateNotFound {
                 name: name.to_string(),
                 available,
             })
         }
     }
+}
+
+/// The filename expected inside a registry repository.
+pub const REGISTRY_INDEX_FILENAME: &str = "index.toml";
+
+/// A remote template registry index parsed from `index.toml`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_templates::registry::RegistryIndex;
+///
+/// let toml = r#"
+/// [[templates]]
+/// name = "hello-world"
+/// description = "Minimal workflow handler"
+/// category = "getting-started"
+/// repo = "https://gitlab.com/ironflow/templates"
+/// "#;
+///
+/// let index: RegistryIndex = toml::from_str(toml)?;
+/// assert_eq!(index.templates.len(), 1);
+/// assert_eq!(index.templates[0].name, "hello-world");
+/// # Ok::<(), toml::de::Error>(())
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryIndex {
+    /// Available templates in the registry.
+    #[serde(default)]
+    pub templates: Vec<RegistryEntry>,
+}
+
+/// A single entry in the remote registry index.
+///
+/// # Examples
+///
+/// ```
+/// use semver::Version;
+/// use ironflow_templates::registry::RegistryEntry;
+///
+/// let entry = RegistryEntry {
+///     name: "ci-pipeline".to_string(),
+///     description: "Generic CI pipeline".to_string(),
+///     category: Some("ci-cd".to_string()),
+///     repo: "https://gitlab.com/ironflow/templates".to_string(),
+///     min_ironflow_version: Some(Version::new(0, 5, 0)),
+///     authors: vec!["Alice".to_string()],
+///     latest_version: Some(Version::new(1, 2, 0)),
+/// };
+/// assert_eq!(entry.name, "ci-pipeline");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryEntry {
+    /// Template name.
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Category for UI grouping.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Git repository URL containing this template.
+    pub repo: String,
+    /// Minimum Ironflow version required.
+    #[serde(default)]
+    pub min_ironflow_version: Option<Version>,
+    /// Template authors.
+    #[serde(default)]
+    pub authors: Vec<String>,
+    /// Latest published version.
+    #[serde(default)]
+    pub latest_version: Option<Version>,
+}
+
+/// Fetch and parse a remote registry index from a Git repository.
+///
+/// Clones the repository and reads `index.toml` from its root.
+///
+/// # Errors
+///
+/// Returns [`TemplateError::Git`] if cloning fails, or
+/// [`TemplateError::Registry`] if the index file is missing or invalid.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_templates::registry::fetch_registry_index;
+///
+/// # fn example() -> Result<(), ironflow_templates::error::TemplateError> {
+/// let index = fetch_registry_index("https://gitlab.com/ironflow/registry")?;
+/// for entry in &index.templates {
+///     println!("{}: {}", entry.name, entry.description);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub fn fetch_registry_index(url: &str) -> Result<RegistryIndex, TemplateError> {
+    let tmp = fetch_repo(url)?;
+    let index_path = tmp.path().join(REGISTRY_INDEX_FILENAME);
+
+    if !index_path.exists() {
+        return Err(TemplateError::Registry(format!(
+            "registry at {url} does not contain {REGISTRY_INDEX_FILENAME}"
+        )));
+    }
+
+    let content = fs::read_to_string(&index_path).map_err(TemplateError::Io)?;
+    parse_registry_index(&content)
+}
+
+/// Parse a registry index from a TOML string.
+///
+/// # Errors
+///
+/// Returns [`TemplateError::Registry`] if the TOML is malformed.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_templates::registry::parse_registry_index;
+///
+/// let index = parse_registry_index(r#"
+/// [[templates]]
+/// name = "hello"
+/// description = "Hello world"
+/// repo = "https://example.com/templates"
+/// "#)?;
+/// assert_eq!(index.templates[0].name, "hello");
+/// # Ok::<(), ironflow_templates::error::TemplateError>(())
+/// ```
+pub fn parse_registry_index(toml_str: &str) -> Result<RegistryIndex, TemplateError> {
+    toml::from_str(toml_str)
+        .map_err(|e| TemplateError::Registry(format!("invalid registry index: {e}")))
+}
+
+/// Resolve a template by name from a registry index.
+///
+/// # Errors
+///
+/// Returns [`TemplateError::NotInRegistry`] if no template with the given
+/// name exists in the index.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_templates::registry::{RegistryIndex, RegistryEntry, resolve_template_entry};
+///
+/// let index = RegistryIndex {
+///     templates: vec![RegistryEntry {
+///         name: "hello".to_string(),
+///         description: "Hello world".to_string(),
+///         category: None,
+///         repo: "https://example.com/templates".to_string(),
+///         min_ironflow_version: None,
+///         authors: vec![],
+///         latest_version: None,
+///     }],
+/// };
+///
+/// let entry = resolve_template_entry(&index, "hello")?;
+/// assert_eq!(entry.repo, "https://example.com/templates");
+/// # Ok::<(), ironflow_templates::error::TemplateError>(())
+/// ```
+pub fn resolve_template_entry<'a>(
+    index: &'a RegistryIndex,
+    name: &str,
+) -> Result<&'a RegistryEntry, TemplateError> {
+    index
+        .templates
+        .iter()
+        .find(|e| e.name == name)
+        .ok_or_else(|| {
+            let available = NameList(index.templates.iter().map(|e| e.name.clone()).collect());
+            TemplateError::NotInRegistry {
+                name: name.to_string(),
+                available,
+            }
+        })
 }
 
 #[cfg(test)]
@@ -275,5 +480,94 @@ version = "1.0.0"
         let templates = discover_templates(tmp.path()).unwrap();
         assert_eq!(templates.len(), 1);
         assert!(templates.contains_key("valid-template"));
+    }
+
+    // ---- remote registry ----
+
+    #[test]
+    fn parse_registry_index_valid() {
+        let toml = r#"
+[[templates]]
+name = "hello-world"
+description = "Minimal workflow handler"
+category = "getting-started"
+repo = "https://gitlab.com/ironflow/templates"
+min_ironflow_version = "0.5.0"
+
+[[templates]]
+name = "ci-pipeline"
+description = "Generic CI pipeline"
+repo = "https://gitlab.com/ironflow/templates"
+"#;
+
+        let index = parse_registry_index(toml).unwrap();
+        assert_eq!(index.templates.len(), 2);
+        assert_eq!(index.templates[0].name, "hello-world");
+        assert_eq!(
+            index.templates[0].min_ironflow_version,
+            Some(Version::parse("0.5.0").unwrap())
+        );
+        assert!(index.templates[1].min_ironflow_version.is_none());
+    }
+
+    #[test]
+    fn parse_registry_index_invalid() {
+        let err = parse_registry_index("not valid [[[").unwrap_err();
+        assert!(err.to_string().contains("registry"));
+    }
+
+    #[test]
+    fn parse_registry_index_empty() {
+        let index = parse_registry_index("").unwrap();
+        assert!(index.templates.is_empty());
+    }
+
+    #[test]
+    fn resolve_by_name() {
+        let index = RegistryIndex {
+            templates: vec![
+                RegistryEntry {
+                    name: "hello".to_string(),
+                    description: "Hello".to_string(),
+                    category: None,
+                    repo: "https://example.com/a".to_string(),
+                    min_ironflow_version: None,
+                    authors: vec![],
+                    latest_version: None,
+                },
+                RegistryEntry {
+                    name: "deploy".to_string(),
+                    description: "Deploy".to_string(),
+                    category: Some("ops".to_string()),
+                    repo: "https://example.com/b".to_string(),
+                    min_ironflow_version: None,
+                    authors: vec![],
+                    latest_version: None,
+                },
+            ],
+        };
+
+        let entry = resolve_template_entry(&index, "deploy").unwrap();
+        assert_eq!(entry.repo, "https://example.com/b");
+    }
+
+    #[test]
+    fn resolve_unknown_name() {
+        let index = RegistryIndex {
+            templates: vec![RegistryEntry {
+                name: "hello".to_string(),
+                description: "Hello".to_string(),
+                category: None,
+                repo: "https://example.com".to_string(),
+                min_ironflow_version: None,
+                authors: vec![],
+                latest_version: None,
+            }],
+        };
+
+        let err = resolve_template_entry(&index, "nope").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nope"), "should mention the name: {msg}");
+        assert!(msg.contains("hello"), "should list available: {msg}");
     }
 }

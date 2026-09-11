@@ -40,8 +40,11 @@
 //! # }
 //! ```
 
+pub mod auto_register;
+pub mod deps;
 pub mod error;
 pub mod fetch;
 pub mod install;
+pub mod lockfile;
 pub mod manifest;
 pub mod registry;

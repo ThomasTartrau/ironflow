@@ -22,6 +22,7 @@ interface MultiSelectProps {
 	onChange: (value: string[]) => void;
 	placeholder?: string;
 	className?: string;
+	maxDisplayed?: number;
 }
 
 export function MultiSelect({
@@ -31,6 +32,7 @@ export function MultiSelect({
 	onChange,
 	placeholder = "Select...",
 	className,
+	maxDisplayed = 2,
 }: MultiSelectProps) {
 	const [open, setOpen] = useState(false);
 	const [search, setSearch] = useState("");
@@ -76,40 +78,47 @@ export function MultiSelect({
 						id={id}
 						type="button"
 						className={cn(
-							"flex min-h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background",
-							"focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+							"flex h-8 w-full items-center justify-between rounded-lg border border-input bg-transparent px-2.5 text-sm transition-colors outline-none",
+							"focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
 							className,
 						)}
 					/>
 				}
 			>
-				<div className="flex flex-1 flex-wrap gap-1">
+				<div className="flex flex-1 flex-wrap gap-1 overflow-hidden">
 					{selectedLabels.length === 0 ? (
 						<span className="text-muted-foreground">{placeholder}</span>
 					) : (
-						selectedLabels.map((opt) => (
-							<Badge
-								key={opt.value}
-								variant="secondary"
-								className="text-xs gap-1"
-							>
-								{opt.label}
-								<button
-									type="button"
-									className="rounded-full outline-none hover:bg-muted-foreground/20"
-									onPointerDown={(e) => {
-										e.preventDefault();
-										e.stopPropagation();
-									}}
-									onClick={(e) => {
-										e.stopPropagation();
-										remove(opt.value);
-									}}
+						<>
+							{selectedLabels.slice(0, maxDisplayed).map((opt) => (
+								<Badge
+									key={opt.value}
+									variant="secondary"
+									className="text-xs gap-1"
 								>
-									<X className="h-3 w-3" />
-								</button>
-							</Badge>
-						))
+									{opt.label}
+									<button
+										type="button"
+										className="rounded-full outline-none hover:bg-muted-foreground/20"
+										onPointerDown={(e) => {
+											e.preventDefault();
+											e.stopPropagation();
+										}}
+										onClick={(e) => {
+											e.stopPropagation();
+											remove(opt.value);
+										}}
+									>
+										<X className="h-3 w-3" />
+									</button>
+								</Badge>
+							))}
+							{selectedLabels.length > maxDisplayed && (
+								<span className="text-xs text-muted-foreground self-center">
+									+{selectedLabels.length - maxDisplayed} more
+								</span>
+							)}
+						</>
 					)}
 				</div>
 				<ChevronDown className="h-4 w-4 shrink-0 opacity-50" />

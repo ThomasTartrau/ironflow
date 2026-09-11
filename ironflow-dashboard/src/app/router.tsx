@@ -101,6 +101,11 @@ export const router = createBrowserRouter([
 				errorElement: <ErrorBoundary />,
 			},
 			{
+				path: "/templates",
+				lazy: () => import("./routes/templates"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
 				path: "/profile",
 				lazy: () => import("./routes/profile"),
 				errorElement: <ErrorBoundary />,

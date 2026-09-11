@@ -27,12 +27,13 @@ serde_json = "1"
 comfy-table = "7"
 toml = "0.8"
 anyhow = "1"
+semver = "1"
 tempfile = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 futures-util = "0.3"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 open = "5"
 dialoguer = "0.11"
