@@ -96,6 +96,19 @@ pub trait BlobStore: Send + Sync {
     ///
     /// Returns [`ArtifactError::Io`] on a storage failure other than a missing key.
     fn delete<'a>(&'a self, key: &'a str) -> BlobFuture<'a, bool>;
+
+    /// List all keys under a prefix.
+    ///
+    /// Returns every key whose path starts with `prefix`. The keys are returned
+    /// in no particular order. An empty prefix lists every key in the store.
+    ///
+    /// Used by the garbage collector to enumerate blobs and cross-reference
+    /// them with the metadata store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArtifactError::Io`] on a storage failure.
+    fn list_keys<'a>(&'a self, prefix: &'a str) -> BlobFuture<'a, Vec<String>>;
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
 opentelemetry = ["ironflow-engine/opentelemetry"]
 openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi", "ironflow-types/openapi"]
+storage-s3 = ["ironflow-artifacts/storage-s3"]
 
 [dependencies]
 ironflow-store = { version = "2.29.0", path = "../ironflow-store" }

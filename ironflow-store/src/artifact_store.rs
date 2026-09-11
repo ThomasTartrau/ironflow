@@ -67,6 +67,25 @@ pub trait ArtifactStore: Send + Sync {
     /// produced by the step closest to the consumer. Returns `None` when
     /// nothing matches.
     fn find_artifact_for_input(&self, lookup: ArtifactLookup) -> StoreFuture<'_, Option<Artifact>>;
+
+    /// Find any artifact with the given SHA-256 hash.
+    ///
+    /// Returns the first matching artifact, or `None` when no artifact has
+    /// this hash. Used by the deduplication layer to reuse an existing blob
+    /// instead of storing a second copy.
+    fn find_artifact_by_sha256(&self, sha256: &str) -> StoreFuture<'_, Option<Artifact>>;
+
+    /// Count artifacts that share the same storage key.
+    ///
+    /// The result is effectively a reference count: a blob should only be
+    /// deleted from the blob store when this count reaches zero.
+    fn count_artifacts_by_storage_key(&self, storage_key: &str) -> StoreFuture<'_, u64>;
+
+    /// List every distinct storage key referenced by at least one artifact.
+    ///
+    /// Used by the garbage collector to cross-reference against the blob store
+    /// and identify orphaned blobs.
+    fn list_all_storage_keys(&self) -> StoreFuture<'_, Vec<String>>;
 }
 
 #[cfg(test)]

@@ -209,6 +209,56 @@ impl BlobStore for LocalBlobStore {
             }
         })
     }
+
+    fn list_keys<'a>(&'a self, prefix: &'a str) -> BlobFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            let mut keys = Vec::new();
+            collect_keys(&self.root, &self.root, prefix, &mut keys)?;
+            Ok(keys)
+        })
+    }
+}
+
+/// Walk a directory tree and collect storage keys relative to `root`.
+///
+/// Only regular files are returned; directories, symlinks and temporary
+/// `.part` files are skipped.
+fn collect_keys(
+    root: &Path,
+    dir: &Path,
+    prefix: &str,
+    keys: &mut Vec<String>,
+) -> Result<(), ArtifactError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(it) => it,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(ArtifactError::from)?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_keys(root, &path, prefix, keys)?;
+        } else if path.is_file() {
+            let is_part = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|name| name.starts_with('.') && name.ends_with(".part"));
+            if is_part {
+                continue;
+            }
+            if let Ok(relative) = path.strip_prefix(root) {
+                let key = relative.to_string_lossy().to_string();
+                if key.starts_with(prefix) {
+                    keys.push(key);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Remove a partially written temporary file, logging rather than failing.
@@ -399,6 +449,62 @@ mod tests {
                 "key {key:?} should have been rejected"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn list_keys_returns_all_stored_keys() {
+        let (_dir, store) = store();
+
+        store
+            .put("artifacts/a/b/one", stream_from_bytes(b"1".to_vec()))
+            .await
+            .expect("put 1");
+        store
+            .put("artifacts/a/b/two", stream_from_bytes(b"2".to_vec()))
+            .await
+            .expect("put 2");
+        store
+            .put("other/x/y/z", stream_from_bytes(b"3".to_vec()))
+            .await
+            .expect("put 3");
+
+        let mut keys = store.list_keys("").await.expect("list_keys");
+        keys.sort();
+
+        assert_eq!(
+            keys,
+            vec!["artifacts/a/b/one", "artifacts/a/b/two", "other/x/y/z"]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_keys_filters_by_prefix() {
+        let (_dir, store) = store();
+
+        store
+            .put("artifacts/run1/step/id1", stream_from_bytes(b"a".to_vec()))
+            .await
+            .expect("put 1");
+        store
+            .put("artifacts/run2/step/id2", stream_from_bytes(b"b".to_vec()))
+            .await
+            .expect("put 2");
+        store
+            .put("other/key", stream_from_bytes(b"c".to_vec()))
+            .await
+            .expect("put 3");
+
+        let keys = store.list_keys("artifacts/").await.expect("list_keys");
+        assert_eq!(keys.len(), 2);
+        assert!(keys.iter().all(|k| k.starts_with("artifacts/")));
+    }
+
+    #[tokio::test]
+    async fn list_keys_on_empty_store_returns_empty() {
+        let (_dir, store) = store();
+
+        let keys = store.list_keys("artifacts/").await.expect("list_keys");
+        assert!(keys.is_empty());
     }
 
     #[tokio::test]

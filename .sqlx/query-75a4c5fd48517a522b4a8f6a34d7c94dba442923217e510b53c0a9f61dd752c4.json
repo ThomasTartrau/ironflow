@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT id, run_id, step_id, name, storage_key, content_type, size_bytes, sha256, created_at, updated_at\n                FROM ironflow.step_artifacts\n                WHERE sha256 = $1\n                LIMIT 1\n                ",
+  "describe": {
+    "columns": [
+      { "ordinal": 0, "name": "id", "type_info": "Uuid" },
+      { "ordinal": 1, "name": "run_id", "type_info": "Uuid" },
+      { "ordinal": 2, "name": "step_id", "type_info": "Uuid" },
+      { "ordinal": 3, "name": "name", "type_info": "Varchar" },
+      { "ordinal": 4, "name": "storage_key", "type_info": "Text" },
+      { "ordinal": 5, "name": "content_type", "type_info": "Varchar" },
+      { "ordinal": 6, "name": "size_bytes", "type_info": "Int8" },
+      { "ordinal": 7, "name": "sha256", "type_info": "Bpchar" },
+      { "ordinal": 8, "name": "created_at", "type_info": "Timestamptz" },
+      { "ordinal": 9, "name": "updated_at", "type_info": "Timestamptz" }
+    ],
+    "parameters": { "Left": ["Text"] },
+    "nullable": [false, false, false, false, false, false, false, false, false, false]
+  },
+  "hash": "75a4c5fd48517a522b4a8f6a34d7c94dba442923217e510b53c0a9f61dd752c4"
+}

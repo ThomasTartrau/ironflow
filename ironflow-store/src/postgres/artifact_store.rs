@@ -154,4 +154,61 @@ impl ArtifactStore for PostgresStore {
             Ok(row.map(Artifact::from))
         })
     }
+
+    fn find_artifact_by_sha256(&self, sha256: &str) -> StoreFuture<'_, Option<Artifact>> {
+        let sha256 = sha256.to_string();
+        Box::pin(async move {
+            let row = sqlx::query_as!(
+                ArtifactRow,
+                r#"
+                SELECT id, run_id, step_id, name, storage_key, content_type, size_bytes, sha256, created_at, updated_at
+                FROM ironflow.step_artifacts
+                WHERE sha256 = $1
+                LIMIT 1
+                "#,
+                &sha256,
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(row.map(Artifact::from))
+        })
+    }
+
+    fn count_artifacts_by_storage_key(&self, storage_key: &str) -> StoreFuture<'_, u64> {
+        let storage_key = storage_key.to_string();
+        Box::pin(async move {
+            let count = sqlx::query_scalar!(
+                r#"
+                SELECT COUNT(*) as "count!"
+                FROM ironflow.step_artifacts
+                WHERE storage_key = $1
+                "#,
+                &storage_key,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(count as u64)
+        })
+    }
+
+    fn list_all_storage_keys(&self) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            let keys = sqlx::query_scalar!(
+                r#"
+                SELECT DISTINCT storage_key
+                FROM ironflow.step_artifacts
+                ORDER BY storage_key
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(keys)
+        })
+    }
 }

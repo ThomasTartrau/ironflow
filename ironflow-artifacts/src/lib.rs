@@ -12,6 +12,7 @@
 //! | Store | Feature | Description |
 //! |-------|---------|-------------|
 //! | [`LocalBlobStore`](local::LocalBlobStore) | `artifact-local` (default) | Local filesystem, for development, CI and shared-volume deployments. |
+//! | [`S3BlobStore`](s3::S3BlobStore) | `storage-s3` | S3-compatible object store (AWS, MinIO, R2, GCS). |
 //!
 //! # Quick start
 //!
@@ -31,10 +32,14 @@
 
 pub mod blob_store;
 pub mod error;
+pub mod gc;
 pub mod name;
 
 #[cfg(feature = "artifact-local")]
 pub mod local;
+
+#[cfg(feature = "storage-s3")]
+pub mod s3;
 
 use std::path::Path;
 
@@ -137,6 +142,9 @@ pub mod prelude {
 
     #[cfg(feature = "artifact-local")]
     pub use crate::local::{DEFAULT_MAX_ARTIFACT_BYTES, LocalBlobStore};
+
+    #[cfg(feature = "storage-s3")]
+    pub use crate::s3::S3BlobStore;
 }
 
 #[cfg(test)]
