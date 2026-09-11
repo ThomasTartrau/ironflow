@@ -184,6 +184,14 @@ impl RunPurger {
             Ok(storage_keys) => {
                 if let Some(ref blob_store) = self.blob_store {
                     for key in &storage_keys {
+                        let refcount = self
+                            .store
+                            .count_artifacts_by_storage_key(key)
+                            .await
+                            .unwrap_or(0);
+                        if refcount > 0 {
+                            continue;
+                        }
                         if let Err(err) = blob_store.delete(key).await {
                             error!(
                                 run_id = %run_id,
@@ -340,6 +348,118 @@ mod tests {
 
         assert!(store.get_run(pending.id).await.unwrap().is_some());
         assert!(store.get_run(running.id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn purge_does_not_delete_blob_when_shared_by_another_artifact() {
+        use ironflow_artifacts::local::LocalBlobStore;
+        use ironflow_artifacts::stream_from_bytes;
+        use ironflow_store::artifact_store::ArtifactStore;
+        use ironflow_store::entities::{NewArtifact, NewStep, StepKind, step_trace_id};
+        use ironflow_store::store::Store;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("temp dir");
+        let store = Arc::new(InMemoryStore::new());
+        let blob: Arc<dyn BlobStore> = Arc::new(LocalBlobStore::new(dir.path()));
+
+        // Create two runs, each with a step
+        let run_a = store.create_run(new_run("wf")).await.unwrap().into_run();
+        store
+            .update_run_status(run_a.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run_a.id, RunStatus::Completed)
+            .await
+            .unwrap();
+        backdate_run(&store, run_a.id, 100).await;
+
+        let step_a = store
+            .create_step(NewStep {
+                run_id: run_a.id,
+                trace_id: step_trace_id(run_a.id, "build", 0),
+                name: "build".to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+
+        let run_b = store.create_run(new_run("wf")).await.unwrap().into_run();
+        let step_b = store
+            .create_step(NewStep {
+                run_id: run_b.id,
+                trace_id: step_trace_id(run_b.id, "build", 0),
+                name: "build".to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+
+        // Upload one blob, share the storage_key
+        let shared_key = "artifacts/shared/blob";
+        blob.put(shared_key, stream_from_bytes(b"shared".to_vec()))
+            .await
+            .unwrap();
+
+        let id_a = Uuid::now_v7();
+        store
+            .create_artifact(NewArtifact {
+                id: id_a,
+                run_id: run_a.id,
+                step_id: step_a.id,
+                name: "report.txt".to_string(),
+                storage_key: shared_key.to_string(),
+                content_type: "text/plain".to_string(),
+                size_bytes: 6,
+                sha256: "abc".repeat(21),
+            })
+            .await
+            .unwrap();
+
+        let id_b = Uuid::now_v7();
+        store
+            .create_artifact(NewArtifact {
+                id: id_b,
+                run_id: run_b.id,
+                step_id: step_b.id,
+                name: "report.txt".to_string(),
+                storage_key: shared_key.to_string(),
+                content_type: "text/plain".to_string(),
+                size_bytes: 6,
+                sha256: "abc".repeat(21),
+            })
+            .await
+            .unwrap();
+
+        // Purge run_a (old) -- the blob should survive because run_b still references it
+        let policy = PurgePolicy {
+            max_age_days: 90,
+            max_runs_per_workflow: 10000,
+            dry_run: false,
+        };
+        let store_dyn: Arc<dyn Store> = store.clone();
+        let purger = RunPurger::new(store_dyn, policy).with_blob_store(Some(blob.clone()));
+        purger.tick().await;
+
+        assert!(
+            store.get_run(run_a.id).await.unwrap().is_none(),
+            "run_a purged"
+        );
+        assert!(
+            store.get_run(run_b.id).await.unwrap().is_some(),
+            "run_b kept"
+        );
+
+        // The blob should still exist
+        let get_result = blob.get(shared_key).await;
+        assert!(get_result.is_ok(), "shared blob should not be deleted");
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-artifacts"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -20,10 +20,17 @@ hex = "0.4"
 mime_guess = "2"
 thiserror = "2"
 tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+
+aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "http-1x"], optional = true }
+aws-config = { version = "1", optional = true }
+aws-credential-types = { version = "1", optional = true }
+aws-smithy-types = { version = "1", optional = true }
 
 [features]
 default = ["artifact-local"]
 artifact-local = []
+storage-s3 = ["aws-sdk-s3", "aws-config", "aws-credential-types", "aws-smithy-types"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

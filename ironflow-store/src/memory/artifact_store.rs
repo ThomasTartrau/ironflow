@@ -116,6 +116,45 @@ impl ArtifactStore for InMemoryStore {
                 .cloned())
         })
     }
+
+    fn find_artifact_by_sha256(&self, sha256: &str) -> StoreFuture<'_, Option<Artifact>> {
+        let sha256 = sha256.to_string();
+        Box::pin(async move {
+            let state = self.state.read().await;
+            Ok(state
+                .artifacts
+                .values()
+                .find(|a| a.sha256 == sha256)
+                .cloned())
+        })
+    }
+
+    fn count_artifacts_by_storage_key(&self, storage_key: &str) -> StoreFuture<'_, u64> {
+        let storage_key = storage_key.to_string();
+        Box::pin(async move {
+            let state = self.state.read().await;
+            let count = state
+                .artifacts
+                .values()
+                .filter(|a| a.storage_key == storage_key)
+                .count() as u64;
+            Ok(count)
+        })
+    }
+
+    fn list_all_storage_keys(&self) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            let mut keys: Vec<String> = state
+                .artifacts
+                .values()
+                .map(|a| a.storage_key.clone())
+                .collect();
+            keys.sort();
+            keys.dedup();
+            Ok(keys)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +449,118 @@ mod tests {
             .expect("lookup");
 
         assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_artifact_by_sha256_returns_existing_match() {
+        let store = InMemoryStore::new();
+        let (run_id, step_id) = run_with_step(&store, "build", 0).await;
+
+        let mut artifact = new_artifact(run_id, step_id, "report.html");
+        artifact.sha256 = "abc123".repeat(10);
+        let created = store.create_artifact(artifact).await.expect("create");
+
+        let found = store
+            .find_artifact_by_sha256(&created.sha256)
+            .await
+            .expect("lookup")
+            .expect("present");
+
+        assert_eq!(found.id, created.id);
+        assert_eq!(found.sha256, created.sha256);
+    }
+
+    #[tokio::test]
+    async fn find_artifact_by_sha256_returns_none_when_absent() {
+        let store = InMemoryStore::new();
+
+        let found = store
+            .find_artifact_by_sha256("nonexistent_hash")
+            .await
+            .expect("lookup");
+
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn count_artifacts_by_storage_key_counts_shared_keys() {
+        let store = InMemoryStore::new();
+        let (run_id, step_a) = run_with_step(&store, "build", 0).await;
+        let step_b = store
+            .create_step(NewStep {
+                run_id,
+                trace_id: step_trace_id(run_id, "test", 1),
+                name: "test".to_string(),
+                kind: StepKind::Shell,
+                position: 1,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("create step")
+            .id;
+
+        let shared_key = "artifacts/shared/blob/id".to_string();
+
+        let mut a1 = new_artifact(run_id, step_a, "report.html");
+        a1.storage_key = shared_key.clone();
+        store.create_artifact(a1).await.expect("create a1");
+
+        let mut a2 = new_artifact(run_id, step_b, "report.html");
+        a2.storage_key = shared_key.clone();
+        store.create_artifact(a2).await.expect("create a2");
+
+        let count = store
+            .count_artifacts_by_storage_key(&shared_key)
+            .await
+            .expect("count");
+        assert_eq!(count, 2);
+
+        let count_zero = store
+            .count_artifacts_by_storage_key("nonexistent/key")
+            .await
+            .expect("count");
+        assert_eq!(count_zero, 0);
+    }
+
+    #[tokio::test]
+    async fn list_all_storage_keys_returns_distinct_keys() {
+        let store = InMemoryStore::new();
+        let (run_id, step_a) = run_with_step(&store, "build", 0).await;
+        let step_b = store
+            .create_step(NewStep {
+                run_id,
+                trace_id: step_trace_id(run_id, "test", 1),
+                name: "test".to_string(),
+                kind: StepKind::Shell,
+                position: 1,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("create step")
+            .id;
+
+        let shared_key = "artifacts/shared/key".to_string();
+        let unique_key = "artifacts/unique/key".to_string();
+
+        let mut a1 = new_artifact(run_id, step_a, "a.txt");
+        a1.storage_key = shared_key.clone();
+        store.create_artifact(a1).await.expect("a1");
+
+        let mut a2 = new_artifact(run_id, step_b, "b.txt");
+        a2.storage_key = shared_key.clone();
+        store.create_artifact(a2).await.expect("a2");
+
+        let (run_id2, step_c) = run_with_step(&store, "deploy", 0).await;
+        let mut a3 = new_artifact(run_id2, step_c, "c.txt");
+        a3.storage_key = unique_key.clone();
+        store.create_artifact(a3).await.expect("a3");
+
+        let keys = store.list_all_storage_keys().await.expect("list");
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&shared_key));
+        assert!(keys.contains(&unique_key));
     }
 
     #[tokio::test]

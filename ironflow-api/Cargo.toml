@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.32.1"
+version = "2.33.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -18,13 +18,14 @@ dashboard = ["rust-embed", "rust-embed/interpolate-folder-path"]
 prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometheus"]
 opentelemetry = ["ironflow-engine/opentelemetry"]
 openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi", "ironflow-types/openapi"]
+storage-s3 = ["ironflow-artifacts/storage-s3"]
 
 [dependencies]
-ironflow-store = { version = "2.29.0", path = "../ironflow-store" }
+ironflow-store = { version = "2.30.0", path = "../ironflow-store" }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
-ironflow-engine = { version = "2.33.2", path = "../ironflow-engine" }
+ironflow-engine = { version = "2.34.0", path = "../ironflow-engine" }
 ironflow-core = { version = "3.15.1", path = "../ironflow-core" }
-ironflow-auth = { version = "2.4.12", path = "../ironflow-auth" }
+ironflow-auth = { version = "2.4.13", path = "../ironflow-auth" }
 ironflow-templates = { version = "0.1.1", path = "../ironflow-templates" }
 ironflow-types = { version = "0.2.1", path = "../ironflow-types" }
 
@@ -45,7 +46,7 @@ subtle = "2"
 dashmap = "6"
 rand = "0.9"
 hex = "0.4"
-ironflow-artifacts = { version = "0.1.1", path = "../ironflow-artifacts" }
+ironflow-artifacts = { version = "0.1.2", path = "../ironflow-artifacts" }
 croner = "2"
 semver = "1"
 tracing = "0.1"
@@ -59,6 +60,6 @@ tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
-ironflow-store = { version = "2.29.0", path = "../ironflow-store", features = ["store-memory", "secret-store"] }
+ironflow-store = { version = "2.30.0", path = "../ironflow-store", features = ["store-memory", "secret-store"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
