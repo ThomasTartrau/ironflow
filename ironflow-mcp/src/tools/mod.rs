@@ -34,7 +34,7 @@ pub use schedules::{
 pub use secrets::{
     CreateSecretTool, DeleteSecretTool, ListSecretsTool, RotateSecretKeyTool, UpdateSecretTool,
 };
-pub use stats::GetStatsTool;
+pub use stats::{GetStatsHistoryTool, GetStatsTool};
 pub use users::{CreateUserTool, DeleteUserTool, ListUsersTool, UpdateUserRoleTool};
 pub use workflows::{GetWorkflowTool, ListWorkflowsTool};
 
@@ -53,6 +53,7 @@ rust_mcp_sdk::tool_box!(
         RejectRunTool,
         RetryRunTool,
         GetStatsTool,
+        GetStatsHistoryTool,
         ListSecretsTool,
         CreateSecretTool,
         UpdateSecretTool,
@@ -222,6 +223,19 @@ mod tests {
                             "completed": 30,
                             "failed": 5,
                             "active": 7
+                        }
+                    }))
+                }),
+            )
+            .route(
+                "/api/v1/stats/history",
+                get(|| async {
+                    Json(json!({
+                        "data": {
+                            "period": "7d",
+                            "granularity": "1d",
+                            "workflow": null,
+                            "buckets": []
                         }
                     }))
                 }),
@@ -751,6 +765,28 @@ mod tests {
         assert_eq!(parsed["completed"], 30);
         assert_eq!(parsed["failed"], 5);
         assert_eq!(parsed["active"], 7);
+    }
+
+    // ---------------------------------------------------------------
+    // GetStatsHistoryTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_stats_history_returns_data() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = GetStatsHistoryTool {
+            workflow: None,
+            period: None,
+            granularity: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["data"]["period"], "7d");
+        assert_eq!(parsed["data"]["granularity"], "1d");
+        assert!(parsed["data"]["buckets"].as_array().unwrap().is_empty());
     }
 
     // ---------------------------------------------------------------

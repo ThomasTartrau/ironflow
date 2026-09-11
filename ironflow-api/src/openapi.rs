@@ -4,8 +4,9 @@ use crate::entities::{
     ArtifactResponse, ChangePasswordRequest, CreateRunRequest, CreateScheduleRequest,
     CreateUserRequest, CreatedBy, CreatedByKind, KeyVersionsResponse, ListRunsQuery, MeResponse,
     RotateSecretsRequest, RotateSecretsResponse, RunDetailResponse, RunResponse, ScheduleResponse,
-    SecretResponse, SetSecretRequest, SignInRequest, StatsResponse, StepResponse,
-    UpdateRoleRequest, UpdateScheduleRequest, UserResponse,
+    SecretResponse, SetSecretRequest, SignInRequest, StatsHistoryBucketResponse,
+    StatsHistoryResponse, StatsResponse, StepResponse, UpdateRoleRequest, UpdateScheduleRequest,
+    UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -19,8 +20,8 @@ use crate::routes::secrets::update::UpdateSecretRequest;
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approve_run, audit_logs, auth, cancel_run, create_run, download_artifact, get_run,
-    get_run_logs, get_stats, get_workflow, health_check, list_runs, list_workflows, retry_run,
-    run_events, schedules, secrets, users,
+    get_run_logs, get_stats, get_stats_history, get_workflow, health_check, list_runs,
+    list_workflows, retry_run, run_events, schedules, secrets, users,
 };
 use ironflow_engine::notify::{Event, WorkflowEvent};
 use ironflow_store::entities::{AuditLogEntry, LogEntry, LogStream};
@@ -72,6 +73,7 @@ mod with_signup {
             list_workflows::list_workflows,
             get_workflow::get_workflow,
             get_stats::get_stats,
+            get_stats_history::get_stats_history,
             auth::sign_up::sign_up,
             auth::sign_in::sign_in,
             auth::refresh::refresh,
@@ -113,6 +115,8 @@ mod with_signup {
                 CreatedByKind,
                 CreateRunRequest,
                 StatsResponse,
+                StatsHistoryResponse,
+                StatsHistoryBucketResponse,
                 MeResponse,
                 SignInRequest,
                 SignUpRequest,
@@ -193,6 +197,7 @@ mod without_signup {
             list_workflows::list_workflows,
             get_workflow::get_workflow,
             get_stats::get_stats,
+            get_stats_history::get_stats_history,
             auth::sign_in::sign_in,
             auth::refresh::refresh,
             auth::sign_out::sign_out,
@@ -233,6 +238,8 @@ mod without_signup {
                 CreatedByKind,
                 CreateRunRequest,
                 StatsResponse,
+                StatsHistoryResponse,
+                StatsHistoryBucketResponse,
                 MeResponse,
                 SignInRequest,
                 CreateUserRequest,

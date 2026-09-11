@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigation } from "react-router";
+import { useLoaderData, useNavigation, Link } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import {
 	createLoader,
@@ -8,18 +8,22 @@ import {
 } from "nuqs/server";
 import {
 	useQueryStates,
+	useQueryState,
 	parseAsArrayOf as parseAsArrayOfClient,
 	parseAsBoolean as parseAsBooleanClient,
 	parseAsString as parseAsStringClient,
+	parseAsStringLiteral,
 } from "nuqs";
 import { Info } from "lucide-react";
 import type { RunResponse, StatsResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
+import { CollapsibleSection } from "@/app/components/CollapsibleSection";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { useRevalidateOnEvent } from "@/app/hooks/use-revalidate-on-event";
 import { RunFilters } from "../runs/_components/RunFilters";
 import { StatsCards } from "./_components/StatsCards";
+import { StatsCharts, PERIODS, type Period } from "./_components/StatsCharts";
 import { RecentRuns } from "./_components/RecentRuns";
 
 export interface DashboardLoaderData {
@@ -80,6 +84,11 @@ export function Component() {
 		label: parseAsArrayOfClient(parseAsStringClient).withDefault([]),
 	});
 
+	const [period, setPeriod] = useQueryState(
+		"history_period",
+		parseAsStringLiteral(PERIODS).withDefault("7d"),
+	);
+
 	const activeCount = [
 		filters.workflow,
 		filters.status,
@@ -100,7 +109,7 @@ export function Component() {
 		>
 			<div className="space-y-6">
 				<RunFilters />
-				<section className="border-t border-border pt-6 space-y-6">
+				<div className="space-y-6">
 					{activeCount > 0 && (
 						<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded px-3 py-1.5">
 							<Info className="size-3.5 shrink-0" aria-hidden="true" />
@@ -120,11 +129,84 @@ export function Component() {
 								Loading dashboard data
 							</span>
 						)}
-						<StatsCards stats={stats} />
-						<RecentRuns runs={recentRuns} />
+						<div className="space-y-6">
+							<CollapsibleSection
+								storageKey="dashboard-overview"
+								title="Overview"
+								defaultOpen
+								accent="var(--chart-1)"
+								actions={
+									<span className="text-xs text-muted-foreground">
+										All time
+									</span>
+								}
+							>
+								<StatsCards stats={stats} />
+							</CollapsibleSection>
+							<CollapsibleSection
+								storageKey="dashboard-trends"
+								title="Trends"
+								defaultOpen
+								accent="var(--chart-2)"
+								actions={
+									<PeriodSelector
+										period={period}
+										onPeriodChange={(p) => setPeriod(p)}
+									/>
+								}
+							>
+								<StatsCharts
+									workflowFilter={filters.workflow}
+									period={period}
+								/>
+							</CollapsibleSection>
+							<CollapsibleSection
+								storageKey="dashboard-recent"
+								title="Recent Runs"
+								defaultOpen
+								accent="var(--chart-3)"
+								actions={
+									<Link
+										to="/runs"
+										className="text-xs font-medium text-primary hover:text-primary/80"
+									>
+										View All
+									</Link>
+								}
+							>
+								<RecentRuns runs={recentRuns} />
+							</CollapsibleSection>
+						</div>
 					</div>
-				</section>
+				</div>
 			</div>
 		</HeaderApp>
+	);
+}
+
+function PeriodSelector({
+	period,
+	onPeriodChange,
+}: {
+	period: Period;
+	onPeriodChange: (p: Period) => void;
+}) {
+	return (
+		<div className="flex gap-1">
+			{PERIODS.map((p) => (
+				<button
+					key={p}
+					type="button"
+					onClick={() => onPeriodChange(p)}
+					className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+						period === p
+							? "bg-foreground text-background"
+							: "bg-muted text-muted-foreground hover:bg-muted/80"
+					}`}
+				>
+					{p}
+				</button>
+			))}
+		</div>
 	);
 }

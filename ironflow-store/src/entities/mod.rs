@@ -45,7 +45,9 @@ pub use secret::{
     DEFAULT_ROTATION_BATCH_SIZE, KeyVersionStatus, MAX_ROTATION_BATCH_SIZE, RotationBatch,
     RotationRequest, Secret, SecretMetadata,
 };
-pub use stats::RunStats;
+pub use stats::{
+    HistoryGranularity, HistoryPeriod, RunStats, StatsHistoryBucket, StatsHistoryFilter,
+};
 pub use step::{NewStep, Step, StepUpdate, step_trace_id};
 pub use step_dependency::{NewStepDependency, StepDependency};
 pub use step_kind::StepKind;

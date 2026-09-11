@@ -25,6 +25,7 @@ mod log_store;
 mod run_store;
 mod schedule_store;
 mod secret_store;
+mod stats_history;
 mod user_store;
 
 #[cfg(feature = "secret-store")]

@@ -175,7 +175,10 @@ async fn stats_table_output() {
     let (base_url, token) = spawn_server().await;
     let client = make_client(&base_url, &token);
 
-    commands::stats::execute(&client, false).await.unwrap();
+    let args = commands::stats::StatsArgs { command: None };
+    commands::stats::execute(&client, &args, false)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -183,7 +186,10 @@ async fn stats_json_output() {
     let (base_url, token) = spawn_server().await;
     let client = make_client(&base_url, &token);
 
-    commands::stats::execute(&client, true).await.unwrap();
+    let args = commands::stats::StatsArgs { command: None };
+    commands::stats::execute(&client, &args, true)
+        .await
+        .unwrap();
 }
 
 // ── Workflow ───────────────────────────────────────────────────
@@ -524,7 +530,8 @@ async fn unauthorized_returns_error() {
     let (base_url, _) = spawn_server().await;
     let client = make_client(&base_url, "invalid-token");
 
-    let result = commands::stats::execute(&client, false).await;
+    let args = commands::stats::StatsArgs { command: None };
+    let result = commands::stats::execute(&client, &args, false).await;
     assert!(result.is_err());
 }
 

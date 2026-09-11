@@ -7,11 +7,13 @@ use uuid::Uuid;
 use crate::entities::{
     ApiKey, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page,
     PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter,
-    RunStats, RunStatus, RunUpdate, Step, StepDependency, StepStatus, StepUpdate, User,
+    RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepDependency,
+    StepStatus, StepUpdate, User,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
 
+use super::stats_history::aggregate_history_buckets;
 use super::{InMemoryStore, State};
 
 /// Resolve [`Run::created_by_label`] from the current users and API keys.
@@ -679,6 +681,26 @@ impl RunStore for InMemoryStore {
                 total_cost_usd,
                 total_duration_ms,
             })
+        })
+    }
+
+    fn get_stats_history(
+        &self,
+        filter: StatsHistoryFilter,
+    ) -> StoreFuture<'_, Vec<StatsHistoryBucket>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            let now = Utc::now();
+            let start = now - Duration::hours(filter.period.hours());
+            let granularity_secs = filter.granularity.seconds();
+            let buckets = aggregate_history_buckets(
+                state.runs.values(),
+                &filter.workflow_name,
+                start,
+                now,
+                granularity_secs,
+            );
+            Ok(buckets)
         })
     }
 

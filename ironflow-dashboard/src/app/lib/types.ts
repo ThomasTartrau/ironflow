@@ -37,6 +37,10 @@ export type ArtifactResponse = components["schemas"]["ArtifactResponse"];
 
 // -- Stats --
 export type StatsResponse = components["schemas"]["StatsResponse"];
+export type StatsHistoryResponse =
+	components["schemas"]["StatsHistoryResponse"];
+export type StatsHistoryBucketResponse =
+	components["schemas"]["StatsHistoryBucketResponse"];
 
 // -- Users --
 export type UserResponse = components["schemas"]["UserResponse"];

@@ -1887,6 +1887,85 @@
         ]
       }
     },
+    "/api/v1/stats/history": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get time-bucketed historical statistics for trend charts.",
+        "description": "Returns aggregated run counts, duration metrics, and cost per time\nbucket. Accepts optional `workflow`, `period`, and `granularity`\nquery parameters.",
+        "operationId": "get_stats_history",
+        "parameters": [
+          {
+            "name": "workflow",
+            "in": "query",
+            "description": "Filter by workflow name. Omit to aggregate all workflows.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "description": "Time period to query. Defaults to `7d`.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/HistoryPeriod"
+                }
+              ]
+            }
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "description": "Bucket granularity. Auto-derived from period when omitted.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/HistoryGranularity"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid period or granularity"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/users": {
       "get": {
         "tags": [
@@ -3327,6 +3406,25 @@
           }
         }
       },
+      "HistoryGranularity": {
+        "type": "string",
+        "description": "Time bucket granularity for historical statistics.\n\nControls the size of each time bucket in the response.\n\n# Examples\n\n```\nuse ironflow_store::entities::HistoryGranularity;\n\nlet gran = HistoryGranularity::OneDay;\nassert_eq!(gran.to_string(), \"1d\");\nassert_eq!(gran.pg_interval(), \"day\");\n```",
+        "enum": [
+          "1h",
+          "1d",
+          "1w"
+        ]
+      },
+      "HistoryPeriod": {
+        "type": "string",
+        "description": "Time period for historical statistics queries.\n\nControls how far back the query reaches from the current time.\n\n# Examples\n\n```\nuse ironflow_store::entities::HistoryPeriod;\n\nlet period = HistoryPeriod::SevenDays;\nassert_eq!(period.to_string(), \"7d\");\n```",
+        "enum": [
+          "24h",
+          "7d",
+          "30d",
+          "90d"
+        ]
+      },
       "KeyVersionsResponse": {
         "type": "object",
         "description": "How the configured key ring lines up with the stored secrets.",
@@ -4099,6 +4197,94 @@
           "username": {
             "type": "string",
             "description": "Display username."
+          }
+        }
+      },
+      "StatsHistoryBucketResponse": {
+        "type": "object",
+        "description": "One time bucket in the history response.\n\n# Examples\n\n```\nuse ironflow_api::entities::StatsHistoryBucketResponse;\n```",
+        "required": [
+          "time",
+          "completed",
+          "failed",
+          "cancelled",
+          "avg_duration_ms",
+          "p95_duration_ms",
+          "total_cost_usd"
+        ],
+        "properties": {
+          "avg_duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Average duration in milliseconds.",
+            "minimum": 0
+          },
+          "cancelled": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of cancelled runs in this bucket.",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of completed runs in this bucket.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of failed runs in this bucket.",
+            "minimum": 0
+          },
+          "p95_duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "95th percentile duration in milliseconds.",
+            "minimum": 0
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the time bucket."
+          },
+          "total_cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Total cost in USD."
+          }
+        }
+      },
+      "StatsHistoryResponse": {
+        "type": "object",
+        "description": "Time-bucketed historical statistics response.\n\n# Examples\n\n```\nuse ironflow_api::entities::StatsHistoryResponse;\n```",
+        "required": [
+          "period",
+          "granularity",
+          "buckets"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsHistoryBucketResponse"
+            },
+            "description": "Aggregated buckets, sorted by time ascending."
+          },
+          "granularity": {
+            "$ref": "#/components/schemas/HistoryGranularity",
+            "description": "The granularity of each bucket."
+          },
+          "period": {
+            "$ref": "#/components/schemas/HistoryPeriod",
+            "description": "The period that was queried."
+          },
+          "workflow": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Workflow name filter, if applied."
           }
         }
       },

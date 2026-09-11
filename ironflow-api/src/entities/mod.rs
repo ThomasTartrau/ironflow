@@ -29,6 +29,8 @@ pub use secret::{
     KeyVersionsResponse, RotateSecretsRequest, RotateSecretsResponse, SecretResponse,
     SetSecretRequest,
 };
-pub use stats::StatsResponse;
+pub use stats::{
+    StatsHistoryBucketResponse, StatsHistoryQuery, StatsHistoryResponse, StatsResponse,
+};
 pub use step::StepResponse;
 pub use user::{CreateUserRequest, UpdateRoleRequest, UserResponse};
