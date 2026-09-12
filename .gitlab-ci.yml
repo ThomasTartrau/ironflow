@@ -142,6 +142,23 @@ cargo-clippy:
   script:
     - cargo clippy --workspace --all-targets --exclude ironflow-example-server --features "$IRONFLOW_FEATURES" -- -D warnings
 
+# ironflow-store bundles its own .sqlx cache so downstream consumers can build
+# with SQLX_OFFLINE=true against the published crate. That cache lives in
+# ironflow-store/.sqlx and is independent from the workspace-root .sqlx used
+# when building ironflow-store as a workspace member -- `cargo check` from here
+# silently falls back to the root cache and would miss a stale crate-local one.
+# `cargo package` builds the crate in isolation (as crates.io would), so it's
+# the only way to actually catch this drift before it ships.
+sqlx-cache-check:
+  extends: .only-mr
+  stage: check
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
+  variables:
+    SQLX_OFFLINE: "true"
+  script:
+    - cargo package -p ironflow-store --features store-postgres,secret-store,openapi
+
 dashboard-check:
   extends: .only-mr
   stage: check
