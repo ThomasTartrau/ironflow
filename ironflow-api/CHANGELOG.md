@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.35.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.35.1...ironflow-api-v2.35.2) - 2026-09-12
+
+### Fixed
+
+- #80 make schedule created_by_user_id nullable for handler schedules
+
 ## [2.35.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.34.0...ironflow-api-v2.35.0) - 2026-09-11
 
 ### Added
