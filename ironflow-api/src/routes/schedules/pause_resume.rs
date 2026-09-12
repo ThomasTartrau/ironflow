@@ -180,7 +180,7 @@ mod tests {
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
-                created_by_user_id: user.id,
+                created_by_user_id: Some(user.id),
                 next_trigger_at: None,
             })
             .await

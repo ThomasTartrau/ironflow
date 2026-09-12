@@ -61,7 +61,7 @@ pub async fn create_schedule(
             cron_expression: req.cron_expression,
             inputs: req.inputs,
             source: ScheduleSource::Api,
-            created_by_user_id: auth.user_id,
+            created_by_user_id: Some(auth.user_id),
             next_trigger_at: next,
         })
         .await?;

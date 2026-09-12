@@ -18,7 +18,7 @@ struct ScheduleRow {
     disabled_at: Option<DateTime<Utc>>,
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
-    created_by_user_id: Uuid,
+    created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -50,7 +50,7 @@ struct ScheduleRowWithTotal {
     disabled_at: Option<DateTime<Utc>>,
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
-    created_by_user_id: Uuid,
+    created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     total_count: i64,

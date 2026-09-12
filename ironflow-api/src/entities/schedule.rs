@@ -28,8 +28,8 @@ pub struct ScheduleResponse {
     pub last_triggered_at: Option<DateTime<Utc>>,
     /// When the schedule will next fire.
     pub next_trigger_at: Option<DateTime<Utc>>,
-    /// User who created the schedule.
-    pub created_by_user_id: Uuid,
+    /// User who created the schedule. `None` for handler-declared schedules.
+    pub created_by_user_id: Option<Uuid>,
     /// When the schedule was created.
     pub created_at: DateTime<Utc>,
     /// When the schedule was last updated.

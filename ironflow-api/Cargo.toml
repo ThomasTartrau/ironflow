@@ -19,6 +19,9 @@ prometheus = ["metrics", "metrics-exporter-prometheus", "ironflow-engine/prometh
 opentelemetry = ["ironflow-engine/opentelemetry"]
 openapi = ["utoipa", "ironflow-store/openapi", "ironflow-engine/openapi", "ironflow-types/openapi"]
 storage-s3 = ["ironflow-artifacts/storage-s3"]
+# Enables the PostgreSQL store. Used by the `postgres_schedule_sync` integration
+# test to exercise the real foreign-key constraint that `InMemoryStore` lacks.
+store-postgres = ["ironflow-store/store-postgres"]
 
 [dependencies]
 ironflow-store = { version = "2.31.1", path = "../ironflow-store" }
@@ -60,6 +63,6 @@ tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
-ironflow-store = { version = "2.31.1", path = "../ironflow-store", features = ["store-memory", "secret-store"] }
+ironflow-store = { version = "2.31.1", path = "../ironflow-store", features = ["store-memory", "secret-store", "store-postgres"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
