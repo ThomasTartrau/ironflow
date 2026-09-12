@@ -138,7 +138,7 @@ mod tests {
             cron_expression: cron.to_string(),
             inputs: json!({}),
             source: ScheduleSource::Api,
-            created_by_user_id: Uuid::now_v7(),
+            created_by_user_id: Some(Uuid::now_v7()),
             next_trigger_at: Some(Utc::now()),
         }
     }
@@ -259,7 +259,7 @@ mod tests {
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
-                created_by_user_id: Uuid::now_v7(),
+                created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: Some(Utc::now() - TimeDelta::seconds(60)),
             })
             .await
@@ -271,7 +271,7 @@ mod tests {
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
-                created_by_user_id: Uuid::now_v7(),
+                created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: Some(Utc::now() + TimeDelta::seconds(3600)),
             })
             .await
@@ -283,7 +283,7 @@ mod tests {
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
-                created_by_user_id: Uuid::now_v7(),
+                created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: Some(Utc::now() - TimeDelta::seconds(60)),
             })
             .await

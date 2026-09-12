@@ -65,7 +65,7 @@ impl ScheduleSource {
 ///     disabled_at: None,
 ///     last_triggered_at: None,
 ///     next_trigger_at: Some(Utc::now()),
-///     created_by_user_id: Uuid::now_v7(),
+///     created_by_user_id: Some(Uuid::now_v7()),
 ///     created_at: Utc::now(),
 ///     updated_at: Utc::now(),
 /// };
@@ -90,8 +90,9 @@ pub struct Schedule {
     pub last_triggered_at: Option<DateTime<Utc>>,
     /// When the schedule will next fire.
     pub next_trigger_at: Option<DateTime<Utc>>,
-    /// User who created the schedule.
-    pub created_by_user_id: Uuid,
+    /// User who created the schedule. `None` for handler-declared schedules,
+    /// which have no human author.
+    pub created_by_user_id: Option<Uuid>,
     /// When the schedule was created.
     pub created_at: DateTime<Utc>,
     /// When the schedule was last updated.
@@ -120,7 +121,7 @@ impl Schedule {
 ///     cron_expression: "0 0 * * * *".to_string(),
 ///     inputs: json!({"env": "prod"}),
 ///     source: ScheduleSource::Api,
-///     created_by_user_id: Uuid::now_v7(),
+///     created_by_user_id: Some(Uuid::now_v7()),
 ///     next_trigger_at: Some(Utc::now()),
 /// };
 /// assert_eq!(new.workflow_name, "deploy");
@@ -135,8 +136,9 @@ pub struct NewSchedule {
     pub inputs: Value,
     /// Where this schedule originates.
     pub source: ScheduleSource,
-    /// User who creates the schedule.
-    pub created_by_user_id: Uuid,
+    /// User who creates the schedule. `None` for handler-declared schedules,
+    /// which have no human author.
+    pub created_by_user_id: Option<Uuid>,
     /// Pre-computed next trigger time.
     pub next_trigger_at: Option<DateTime<Utc>>,
 }
@@ -190,7 +192,7 @@ mod tests {
             disabled_at: None,
             last_triggered_at: None,
             next_trigger_at: Some(Utc::now()),
-            created_by_user_id: Uuid::now_v7(),
+            created_by_user_id: Some(Uuid::now_v7()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -212,7 +214,7 @@ mod tests {
             disabled_at: Some(Utc::now()),
             last_triggered_at: None,
             next_trigger_at: None,
-            created_by_user_id: Uuid::now_v7(),
+            created_by_user_id: Some(Uuid::now_v7()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

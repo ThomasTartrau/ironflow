@@ -4013,7 +4013,6 @@
           "cron_expression",
           "inputs",
           "source",
-          "created_by_user_id",
           "created_at",
           "updated_at"
         ],
@@ -4024,9 +4023,12 @@
             "description": "When the schedule was created."
           },
           "created_by_user_id": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid",
-            "description": "User who created the schedule."
+            "description": "User who created the schedule. `None` for handler-declared schedules."
           },
           "cron_expression": {
             "type": "string",

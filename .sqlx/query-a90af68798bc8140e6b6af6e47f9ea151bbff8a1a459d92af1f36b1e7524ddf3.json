@@ -60,7 +60,7 @@
       },
       {
         "ordinal": 11,
-        "name": "total_count!",
+        "name": "total_count!: i64",
         "type_info": "Int8"
       }
     ],
@@ -79,10 +79,10 @@
       true,
       true,
       true,
+      true,
       false,
       false,
-      false,
-      true
+      null
     ]
   },
   "hash": "a90af68798bc8140e6b6af6e47f9ea151bbff8a1a459d92af1f36b1e7524ddf3"

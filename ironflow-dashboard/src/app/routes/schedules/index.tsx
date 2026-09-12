@@ -63,7 +63,7 @@ interface ScheduleResponse {
 	disabled_at: string | null;
 	last_triggered_at: string | null;
 	next_trigger_at: string | null;
-	created_by_user_id: string;
+	created_by_user_id: string | null;
 	created_at: string;
 	updated_at: string;
 }

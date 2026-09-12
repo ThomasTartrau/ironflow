@@ -9,7 +9,6 @@ use ironflow_engine::engine::Engine;
 use ironflow_store::entities::{NewSchedule, ScheduleSource, ScheduleUpdate};
 use ironflow_store::store::Store;
 use tracing::info;
-use uuid::Uuid;
 
 use crate::schedule_ticker::next_trigger;
 
@@ -113,7 +112,7 @@ pub async fn sync_handler_schedules(
                         cron_expression: cron_str.to_string(),
                         inputs: serde_json::json!({}),
                         source: ScheduleSource::Handler,
-                        created_by_user_id: Uuid::nil(),
+                        created_by_user_id: None,
                         next_trigger_at: next,
                     })
                     .await?;
@@ -191,7 +190,7 @@ mod tests {
                 cron_expression: "*/5 * * * *".to_string(),
                 inputs: json!({"env": "prod"}),
                 source: ScheduleSource::Handler,
-                created_by_user_id: Uuid::now_v7(),
+                created_by_user_id: None,
                 next_trigger_at: None,
             })
             .await
@@ -224,7 +223,7 @@ mod tests {
                 cron_expression: "0 0 * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Handler,
-                created_by_user_id: Uuid::nil(),
+                created_by_user_id: None,
                 next_trigger_at: None,
             })
             .await
@@ -237,7 +236,7 @@ mod tests {
                 cron_expression: "0 12 * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
-                created_by_user_id: Uuid::now_v7(),
+                created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: None,
             })
             .await
@@ -265,7 +264,7 @@ mod tests {
                 cron_expression: "0 0 * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Handler,
-                created_by_user_id: Uuid::nil(),
+                created_by_user_id: None,
                 next_trigger_at: None,
             })
             .await

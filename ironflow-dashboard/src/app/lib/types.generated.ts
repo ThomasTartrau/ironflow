@@ -2077,9 +2077,9 @@ export interface components {
 			created_at: string;
 			/**
 			 * Format: uuid
-			 * @description User who created the schedule.
+			 * @description User who created the schedule. `None` for handler-declared schedules.
 			 */
-			created_by_user_id: string;
+			created_by_user_id?: string | null;
 			/** @description Cron expression. */
 			cron_expression: string;
 			/**

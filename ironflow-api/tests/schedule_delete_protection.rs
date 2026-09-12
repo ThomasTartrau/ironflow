@@ -21,7 +21,6 @@ use ironflow_store::store::Store;
 use serde_json::json;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
-use uuid::Uuid;
 
 struct TestWorkflow;
 
@@ -74,7 +73,7 @@ async fn delete_handler_schedule_returns_conflict() {
             cron_expression: "0 0 * * * *".to_string(),
             inputs: json!({}),
             source: ScheduleSource::Handler,
-            created_by_user_id: Uuid::nil(),
+            created_by_user_id: None,
             next_trigger_at: None,
         })
         .await

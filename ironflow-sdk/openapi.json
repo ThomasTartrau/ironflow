@@ -1608,8 +1608,9 @@
             "type": "string"
           },
           "created_by_user_id": {
-            "description": "User who created the schedule.",
+            "description": "User who created the schedule. `None` for handler-declared schedules.",
             "format": "uuid",
+            "nullable": true,
             "type": "string"
           },
           "cron_expression": {
@@ -1662,7 +1663,6 @@
           "cron_expression",
           "inputs",
           "source",
-          "created_by_user_id",
           "created_at",
           "updated_at"
         ],
