@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT DISTINCT storage_key\n                FROM ironflow.step_artifacts\n                ORDER BY storage_key\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "storage_key",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "188e95ff5eeba2ead4066d6afc9f99c62d11f389dd16201ad20365a8207e777c"
+}

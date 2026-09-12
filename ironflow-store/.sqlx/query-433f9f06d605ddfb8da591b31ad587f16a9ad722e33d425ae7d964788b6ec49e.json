@@ -1,0 +1,80 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                WITH due AS (\n                    SELECT id\n                    FROM ironflow.schedules\n                    WHERE disabled_at IS NULL\n                      AND next_trigger_at IS NOT NULL\n                      AND next_trigger_at <= NOW()\n                    FOR UPDATE SKIP LOCKED\n                )\n                UPDATE ironflow.schedules s\n                SET last_triggered_at = NOW(),\n                    next_trigger_at = NULL,\n                    updated_at = NOW()\n                FROM due\n                WHERE s.id = due.id\n                RETURNING s.id, s.workflow_name, s.cron_expression,\n                    s.inputs, s.source,\n                    s.disabled_at, s.last_triggered_at, s.next_trigger_at,\n                    s.created_by_user_id, s.created_at, s.updated_at\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "workflow_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "cron_expression",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "inputs",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "disabled_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_triggered_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "next_trigger_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_by_user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "433f9f06d605ddfb8da591b31ad587f16a9ad722e33d425ae7d964788b6ec49e"
+}
