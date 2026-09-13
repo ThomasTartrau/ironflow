@@ -9,7 +9,7 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::helpers::{blocking, to_value};
+use crate::helpers::{blocking, credentials_callbacks, to_value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchPushOutput {
@@ -69,7 +69,9 @@ impl FetchRemote {
             let repo = Repository::open(&repo_path)?;
             let mut remote = repo.find_remote(&remote_name)?;
             let refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-            remote.fetch(&refs, None, None)?;
+            let mut fetch_opts = git2::FetchOptions::new();
+            fetch_opts.remote_callbacks(credentials_callbacks());
+            remote.fetch(&refs, Some(&mut fetch_opts), None)?;
             Ok(FetchPushOutput {
                 remote: remote_name,
                 refspecs,
@@ -136,7 +138,9 @@ impl PushRemote {
             let repo = Repository::open(&repo_path)?;
             let mut remote = repo.find_remote(&remote_name)?;
             let refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-            remote.push(&refs, None)?;
+            let mut push_opts = git2::PushOptions::new();
+            push_opts.remote_callbacks(credentials_callbacks());
+            remote.push(&refs, Some(&mut push_opts))?;
             Ok(FetchPushOutput {
                 remote: remote_name,
                 refspecs,
@@ -283,4 +287,79 @@ impl Operation for RemoteDefaultBranch {
 
 impl TypedOperation for RemoteDefaultBranch {
     type Output = RemoteDefaultBranchOutput;
+}
+
+#[cfg(test)]
+mod tests {
+    use git2::Repository;
+
+    use super::*;
+    use crate::test_helpers::{ctx, init_repo};
+
+    // Push and fetch over a local bare remote (file://) never hit the
+    // credentials callback, but exercising them proves that wiring
+    // PushOptions/FetchOptions with RemoteCallbacks does not break the normal
+    // flow. The SSH-agent path (the literal issue symptom) needs a live SSH
+    // server and is covered in Out of Test Scope.
+    fn setup_with_bare_remote() -> (tempfile::TempDir, tempfile::TempDir) {
+        let work = tempfile::tempdir().unwrap();
+        init_repo(work.path());
+        let bare = tempfile::tempdir().unwrap();
+        Repository::init_bare(bare.path()).unwrap();
+        let repo = Repository::open(work.path()).unwrap();
+        repo.remote("origin", bare.path().to_str().unwrap())
+            .unwrap();
+        (work, bare)
+    }
+
+    #[tokio::test]
+    async fn push_to_local_bare_remote() {
+        let (work, bare) = setup_with_bare_remote();
+        let result = PushRemote::new(
+            work.path(),
+            "origin",
+            vec!["refs/heads/master:refs/heads/master"],
+        )
+        .run(&ctx())
+        .await
+        .unwrap();
+        assert_eq!(result.remote, "origin");
+        // The ref must exist on the remote side after the push.
+        let bare_repo = Repository::open(bare.path()).unwrap();
+        assert!(bare_repo.find_reference("refs/heads/master").is_ok());
+    }
+
+    #[tokio::test]
+    async fn fetch_from_local_bare_remote() {
+        let (work, bare) = setup_with_bare_remote();
+        PushRemote::new(
+            work.path(),
+            "origin",
+            vec!["refs/heads/master:refs/heads/master"],
+        )
+        .run(&ctx())
+        .await
+        .unwrap();
+        // A second clone fetching from the same bare remote must succeed.
+        let clone_dir = tempfile::tempdir().unwrap();
+        let clone = Repository::init(clone_dir.path()).unwrap();
+        clone
+            .remote("origin", bare.path().to_str().unwrap())
+            .unwrap();
+        let result = FetchRemote::new(clone_dir.path(), "origin", vec!["master"])
+            .run(&ctx())
+            .await
+            .unwrap();
+        assert_eq!(result.remote, "origin");
+    }
+
+    #[tokio::test]
+    async fn push_missing_remote_fails() {
+        let work = tempfile::tempdir().unwrap();
+        init_repo(work.path());
+        let result = PushRemote::new(work.path(), "nope", vec!["refs/heads/master"])
+            .run(&ctx())
+            .await;
+        assert!(result.is_err());
+    }
 }
