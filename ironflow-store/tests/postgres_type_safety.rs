@@ -4,6 +4,7 @@
 //! Verifies that NUMERIC(12,6) columns are correctly deserialized as `rust_decimal::Decimal`.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use ironflow_store::prelude::*;
 use ironflow_store::store::RunStore;
@@ -222,6 +223,101 @@ async fn cost_usd_updated_on_step() {
         retrieved_step.cost_usd, cost_value,
         "Step cost should match updated value"
     );
+}
+
+// ─── Run FSM Transition Tests ───────────────────────────────────
+
+#[tokio::test]
+#[ignore]
+async fn running_to_warning_transition_succeeds() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let store = get_store().await;
+        let run = store
+            .create_run(new_run("test-allow-failure"))
+            .await
+            .unwrap()
+            .into_run();
+
+        assert_eq!(run.status.state, RunStatus::Pending);
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        store
+            .update_run_status(run.id, RunStatus::Warning)
+            .await
+            .unwrap();
+
+        let updated = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(updated.status.state, RunStatus::Warning);
+        assert!(
+            updated.completed_at.is_some(),
+            "Warning is terminal, completed_at must be set"
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+#[ignore]
+async fn pending_to_warning_is_rejected() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let store = get_store().await;
+        let run = store
+            .create_run(new_run("test-invalid-warning"))
+            .await
+            .unwrap()
+            .into_run();
+
+        let err = store
+            .update_run_status(run.id, RunStatus::Warning)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, StoreError::InvalidTransition { .. }),
+            "Pending -> Warning must be rejected: {err:?}"
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+#[ignore]
+async fn warning_is_terminal() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let store = get_store().await;
+        let run = store
+            .create_run(new_run("test-warning-terminal"))
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Warning)
+            .await
+            .unwrap();
+
+        let err = store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, StoreError::InvalidTransition { .. }),
+            "Warning -> Running must be rejected: {err:?}"
+        );
+    })
+    .await
+    .expect("test timed out");
 }
 
 // ─── Stats Tests ────────────────────────────────────────────────
