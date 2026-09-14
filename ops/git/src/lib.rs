@@ -54,7 +54,7 @@
 //! | [`repository`] | Init, Open, Clone, Discover, State |
 //! | [`index`] | Add, AddAll, Remove, RemoveAll, UpdateAll, WriteTree |
 //! | [`commit`] | Create, Find, Amend, Signed |
-//! | [`branch`] | Create, Delete, Rename, List, Lookup, IsHead, SetUpstream |
+//! | [`branch`] | Create, Delete, Rename, List, Lookup, IsHead, SetUpstream, Checkout |
 //! | [`tag`] | CreateLightweight, CreateAnnotated, Delete, List, ListMatch |
 //! | [`remote`] | Create, Delete, Rename, SetUrl, List, Lookup |
 //! | [`fetch`] | Fetch, Push, Prune, DefaultBranch |

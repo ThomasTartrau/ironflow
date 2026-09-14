@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use git2::build::CheckoutBuilder;
 use git2::{BranchType, Repository};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
@@ -539,4 +540,75 @@ impl Operation for BranchSetUpstream {
 
 impl TypedOperation for BranchSetUpstream {
     type Output = BranchSetUpstreamOutput;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchCheckoutOutput {
+    pub name: String,
+}
+
+/// Checkout an existing local branch (set HEAD + update working directory).
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_ops_git::branch::BranchCheckout;
+/// use ironflow_core::operation::Operation;
+///
+/// let op = BranchCheckout::new("/path/to/repo", "feature-x");
+/// assert_eq!(op.kind(), "git");
+/// ```
+pub struct BranchCheckout {
+    repo_path: PathBuf,
+    name: String,
+}
+
+impl BranchCheckout {
+    /// Create a new `BranchCheckout` operation.
+    pub fn new(repo_path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
+        Self {
+            repo_path: repo_path.into(),
+            name: name.into(),
+        }
+    }
+
+    /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError`] if the repository cannot be opened, the
+    /// branch does not exist, or the working directory checkout fails.
+    pub async fn run(
+        &self,
+        _ctx: &OperationContext,
+    ) -> Result<BranchCheckoutOutput, OperationError> {
+        let repo_path = self.repo_path.clone();
+        let name = self.name.clone();
+        blocking(move || {
+            let repo = Repository::open(&repo_path)?;
+            repo.find_branch(&name, BranchType::Local)?;
+            let refname = format!("refs/heads/{name}");
+            repo.set_head(&refname)?;
+            repo.checkout_head(Some(CheckoutBuilder::new().force()))?;
+            Ok(BranchCheckoutOutput { name })
+        })
+        .await
+    }
+}
+
+#[async_trait]
+impl Operation for BranchCheckout {
+    fn kind(&self) -> &str {
+        "git"
+    }
+    async fn execute(&self, ctx: &OperationContext) -> Result<Value, OperationError> {
+        to_value(&self.run(ctx).await?)
+    }
+    fn input(&self) -> Option<Value> {
+        Some(serde_json::json!({ "repo_path": self.repo_path, "name": self.name }))
+    }
+}
+
+impl TypedOperation for BranchCheckout {
+    type Output = BranchCheckoutOutput;
 }

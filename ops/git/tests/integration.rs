@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use git2::{Repository, Signature};
 use ironflow_core::operation::{NoopSecretResolver, Operation, OperationContext};
-use ironflow_ops_git::branch::{BranchCreate, BranchList};
+use ironflow_ops_git::branch::{BranchCheckout, BranchCreate, BranchList};
 use ironflow_ops_git::diff::DiffIndexToWorkdir;
 use ironflow_ops_git::index::IndexAdd;
 use ironflow_ops_git::status::StatusList;
@@ -43,6 +43,43 @@ async fn branch_create_and_list() {
     let names: Vec<&str> = result.branches.iter().map(|b| b.name.as_str()).collect();
     assert!(names.contains(&"feature"));
     assert!(names.iter().any(|n| *n == "main" || *n == "master"));
+}
+
+#[tokio::test]
+async fn branch_checkout_switches_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+
+    BranchCreate::new(tmp.path(), "feature")
+        .run(&ctx())
+        .await
+        .unwrap();
+
+    let result = BranchCheckout::new(tmp.path(), "feature")
+        .run(&ctx())
+        .await
+        .unwrap();
+    assert_eq!(result.name, "feature");
+
+    let repo = Repository::open(tmp.path()).unwrap();
+    let head = repo.head().unwrap();
+    assert!(head.is_branch());
+    assert_eq!(
+        head.shorthand().unwrap(),
+        "feature",
+        "HEAD should point to the checked-out branch"
+    );
+}
+
+#[tokio::test]
+async fn branch_checkout_nonexistent_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo_with_commit(tmp.path());
+
+    let result = BranchCheckout::new(tmp.path(), "does-not-exist")
+        .run(&ctx())
+        .await;
+    assert!(result.is_err());
 }
 
 #[tokio::test]
