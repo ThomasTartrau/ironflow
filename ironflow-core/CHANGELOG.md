@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [3.16.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.15.1...ironflow-core-v3.16.0) - 2026-09-16
+
+### Added
+
+- #83 add nodeSelector support to K8s Claude providers
+
 ## [3.15.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.15.0...ironflow-core-v3.15.1) - 2026-09-10
 
 ### Fixed
