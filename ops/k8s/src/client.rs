@@ -240,6 +240,7 @@ impl fmt::Debug for KubeClient {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use std::sync::Arc;
 
     use ironflow_core::operation::{NoopSecretResolver, OperationContext};
@@ -248,6 +249,17 @@ mod tests {
 
     #[tokio::test]
     async fn from_context_fails_when_not_in_cluster() {
+        // `Config::incluster()` detects a cluster from KUBERNETES_SERVICE_HOST /
+        // KUBERNETES_SERVICE_PORT, which are set when the test itself runs inside
+        // a pod (e.g. the CI runner). Clear them so the not-in-cluster fallback is
+        // exercised deterministically regardless of where the suite runs.
+        // SAFETY: nextest runs each test in its own process, and the only other
+        // test in this binary does not read the environment.
+        unsafe {
+            env::remove_var("KUBERNETES_SERVICE_HOST");
+            env::remove_var("KUBERNETES_SERVICE_PORT");
+        }
+
         let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
         let err = KubeClient::from_context(&ctx).await.unwrap_err();
         assert!(
