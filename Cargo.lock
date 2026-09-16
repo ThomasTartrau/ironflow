@@ -3695,7 +3695,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-k8s"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3943,7 +3943,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.18.4"
+version = "2.18.5"
 dependencies = [
  "axum",
  "bytes",
