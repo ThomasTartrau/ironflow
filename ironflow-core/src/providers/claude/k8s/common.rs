@@ -177,6 +177,12 @@ pub struct PodConfig<'a> {
     /// Merged with hardcoded ironflow labels. Hardcoded labels always win
     /// in case of conflict.
     pub extra_labels: &'a BTreeMap<String, String>,
+    /// Node selector constraining which nodes the pod may be scheduled on.
+    ///
+    /// Each pair is a node label `key: value` the target node must carry.
+    /// When empty, no `spec.nodeSelector` is written and the scheduler is
+    /// free to place the pod on any node.
+    pub node_selector: &'a BTreeMap<String, String>,
     /// Host-path volumes to mount into the container.
     ///
     /// Each tuple is `(host_path, container_path)`. An empty slice means
@@ -438,6 +444,9 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
     if let Some(res) = limits {
         pod_json["spec"]["containers"][0]["resources"] = res;
     }
+    if !config.node_selector.is_empty() {
+        pod_json["spec"]["nodeSelector"] = json!(config.node_selector);
+    }
 
     serde_json::from_value(pod_json).map_err(|e| AgentError::ProcessFailed {
         exit_code: -1,
@@ -502,6 +511,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -528,6 +538,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &secrets,
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -556,6 +567,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -586,6 +598,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &extra,
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -620,6 +633,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &extra,
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -656,6 +670,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &extra,
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -674,6 +689,68 @@ mod tests {
     }
 
     #[test]
+    fn build_pod_spec_with_node_selector() {
+        let mut selector = BTreeMap::new();
+        selector.insert("kubernetes.io/hostname".to_string(), "ryzen1".to_string());
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            node_selector: &selector,
+            volumes: &[],
+            pvc_volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
+        })
+        .unwrap();
+        let ns = pod
+            .spec
+            .unwrap()
+            .node_selector
+            .expect("nodeSelector present");
+        assert_eq!(ns["kubernetes.io/hostname"], "ryzen1");
+    }
+
+    #[test]
+    fn build_pod_spec_without_node_selector_omits_key() {
+        let pod = build_pod_spec(&PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &K8sResources::default(),
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &ImagePullPolicy::default(),
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
+            volumes: &[],
+            pvc_volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
+        })
+        .unwrap();
+        assert!(
+            pod.spec.unwrap().node_selector.is_none(),
+            "no nodeSelector key when the map is empty"
+        );
+    }
+
+    #[test]
     fn build_pod_spec_without_volumes() {
         let pod = build_pod_spec(&PodConfig {
             name: "test-pod",
@@ -687,6 +764,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -719,6 +797,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &vols,
             pvc_volumes: &[],
             inputs: &[],
@@ -769,6 +848,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &pvcs,
             inputs: &[],
@@ -812,6 +892,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &vols,
             pvc_volumes: &pvcs,
             inputs: &[],
@@ -880,6 +961,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &inputs,
@@ -937,6 +1019,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &inputs,
@@ -976,6 +1059,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -1001,6 +1085,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -1040,6 +1125,7 @@ mod tests {
             env_vars: &[],
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
+            node_selector: &BTreeMap::new(),
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
