@@ -67,13 +67,19 @@
 //! returns a single [`Value`](serde_json::Value)). Access them directly via
 //! [`KubeClient::client`] and the [`kube::Api`] methods.
 
+pub mod apply;
 mod client;
 pub(crate) mod error;
 pub mod helpers;
+pub mod job_run;
 pub mod operation;
+pub mod pod_run;
 pub mod verb;
 
+pub use apply::{ApplyConfigMap, ApplyOutput, ApplySecret};
 pub use client::KubeClient;
+pub use job_run::{JobRun, JobRunOutput};
 pub use k8s_openapi;
 pub use kube;
 pub use operation::KubeOp;
+pub use pod_run::{PodRun, PodRunOutput};

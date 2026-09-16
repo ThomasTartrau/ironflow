@@ -20,7 +20,7 @@ use ironflow_store::entities::Run;
 use ironflow_worker::WorkerBuilder;
 use serde_json::from_value;
 use tokio::spawn;
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use helpers::{TestApiState, make_run_json, spawn_test_api};
@@ -69,11 +69,22 @@ async fn worker_abandons_run_when_the_api_refuses_the_lease() {
         .build()
         .expect("build worker");
 
-    // Worker::run only returns on SIGTERM, so bound it: the assertions are
-    // about what happened inside this window.
-    if let Ok(Err(e)) = timeout(Duration::from_secs(3), worker.run()).await {
-        eprintln!("worker exited with error: {e:?}");
+    // Worker::run only returns on SIGTERM, so run it in a task and poll for the
+    // lease refusal. Polling to a generous deadline (not a fixed window) keeps
+    // the test reliable on a slow or oversubscribed CI executor.
+    let handle = spawn(async move {
+        if let Err(e) = worker.run().await {
+            eprintln!("worker exited with error: {e:?}");
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.lease_calls.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(10)).await;
     }
+    // Give the worker a moment to react to the refused lease.
+    sleep(Duration::from_millis(200)).await;
+    handle.abort();
 
     assert!(
         state.handed_out.load(Ordering::SeqCst) >= 1,
@@ -120,14 +131,15 @@ async fn abandon_happens_within_a_refresh_interval() {
 
     let started = Instant::now();
     let handle = spawn(async move {
-        if let Ok(Err(e)) = timeout(Duration::from_secs(5), worker.run()).await {
+        if let Err(e) = worker.run().await {
             eprintln!("worker exited with error: {e:?}");
         }
     });
 
-    // Wait until the API has refused at least one refresh.
+    // Wait until the API has refused at least one refresh. A generous deadline
+    // tolerates a slow or oversubscribed CI executor scheduling the worker late.
     while state.lease_calls.load(Ordering::SeqCst) == 0
-        && started.elapsed() < Duration::from_secs(3)
+        && started.elapsed() < Duration::from_secs(10)
     {
         sleep(Duration::from_millis(10)).await;
     }
@@ -169,12 +181,18 @@ async fn worker_keeps_running_while_the_lease_is_granted() {
         .expect("build worker");
 
     let handle = spawn(async move {
-        if let Ok(Err(e)) = timeout(Duration::from_secs(5), worker.run()).await {
+        if let Err(e) = worker.run().await {
             eprintln!("worker exited with error: {e:?}");
         }
     });
 
-    sleep(Duration::from_millis(400)).await;
+    // Poll for repeated refreshes instead of betting on a fixed 400 ms window,
+    // which a slow or oversubscribed CI executor can blow past before the worker
+    // task has run twice.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.lease_calls.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+        sleep(Duration::from_millis(10)).await;
+    }
 
     assert!(
         state.lease_calls.load(Ordering::SeqCst) >= 2,

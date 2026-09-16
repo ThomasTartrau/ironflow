@@ -53,6 +53,34 @@ let list = pods.list(&ListParams::default()).await?;
 
 Verb structs in the `verb` module: `List`, `Get`, `Create`, `Update`, `Patch`, `Delete`, `DeleteCollection`.
 
+## Run-to-completion operations
+
+Higher-level operations that manage a full lifecycle as a single tracked step:
+
+| Operation | Description |
+|-----------|-------------|
+| `PodRun` | Create an ephemeral pod, run a `sh -c` command, wait for completion, collect logs, delete the pod |
+| `JobRun` | Same via a `batch/v1` Job (with `backoffLimit` retries) |
+| `ApplyConfigMap` | Server-side apply a `ConfigMap` from a key/value map |
+| `ApplySecret` | Server-side apply a `Secret` from a key/value map (`input()` logs keys only) |
+
+`PodRun`/`JobRun` treat a command that exits non-zero as `Ok { success: false }`,
+not an error; an `OperationError::External { origin: "kubernetes", .. }` is
+returned only for infrastructure failures (create, wait, timeout). The pod/Job
+is always deleted, including on timeout.
+
+```rust,ignore
+use ironflow_ops_k8s::{KubeClient, pod_run::PodRun};
+
+let kube = KubeClient::from_context(&ctx).await?;
+let run = PodRun::new(&kube, "run-tests", "rust:1.94", "cargo test")
+    .namespace("ci")
+    .pvc("workspace-claim", "/workspace")
+    .working_dir("/workspace");
+
+let output = ctx.operation("run-tests", &run).await?;
+```
+
 ## Authentication
 
 Register `kubeconfig` in your workflow's secret store. If not provided, falls back to in-cluster configuration:

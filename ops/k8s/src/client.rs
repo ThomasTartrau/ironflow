@@ -156,6 +156,15 @@ impl KubeClient {
         &self.inner
     }
 
+    /// Wrap a raw [`kube::Client`] (test-only).
+    ///
+    /// Lets test modules in other files build a `KubeClient` over a canned
+    /// `tower` transport without going through kubeconfig or in-cluster config.
+    #[cfg(test)]
+    pub(crate) fn from_raw(inner: Client) -> Self {
+        Self { inner }
+    }
+
     /// Construct a [`kube::Api`] handle for resource `R` in the given namespace.
     ///
     /// # Examples

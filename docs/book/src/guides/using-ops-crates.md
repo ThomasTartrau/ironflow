@@ -42,7 +42,7 @@ The step is tracked in the database with its input, output, kind, and status, ju
 | [`ironflow-ops-gitlab`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/gitlab) | GitLab API v4 (issues, MRs, pipelines, ...) via the gitlab crate | `cargo add ironflow-ops-gitlab` |
 | [`ironflow-ops-grafana`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/grafana) | Grafana API (dashboards, alerting, data sources, ...) | `cargo add ironflow-ops-grafana` |
 | [`ironflow-ops-helm`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/helm) | Helm CLI wrapper (install, upgrade, rollback, charts, repos) | `cargo add ironflow-ops-helm` |
-| [`ironflow-ops-k8s`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/k8s) | Kubernetes typed API via kube + k8s-openapi | `cargo add ironflow-ops-k8s` |
+| [`ironflow-ops-k8s`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/k8s) | Kubernetes typed API via kube + k8s-openapi, plus run-to-completion ops (PodRun, JobRun, ApplyConfigMap, ApplySecret) | `cargo add ironflow-ops-k8s` |
 | [`ironflow-ops-loki`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/loki) | Grafana Loki (log queries, ingest, rules, labels) | `cargo add ironflow-ops-loki` |
 | [`ironflow-ops-mimir`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/mimir) | Grafana Mimir (PromQL queries, remote write, rules, cardinality) | `cargo add ironflow-ops-mimir` |
 | [`ironflow-ops-postgres`](https://gitlab.com/ThomasTartrau/ironflow/-/tree/main/ops/postgres) | PostgreSQL queries and admin via sqlx | `cargo add ironflow-ops-postgres` |
