@@ -6,14 +6,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_worker::WorkerBuilder;
-use tokio::time::timeout;
+use tokio::spawn;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use helpers::{TestApiState, make_run_json, spawn_test_api};
@@ -55,17 +56,28 @@ async fn handler_ok_produces_completed_status() {
         .build()
         .expect("build worker");
 
-    // Worker::run loops until SIGTERM; the timeout bounds the test window.
-    if let Ok(Err(e)) = timeout(Duration::from_secs(3), worker.run()).await {
-        eprintln!("worker exited with error: {e:?}");
+    // Worker::run loops until SIGTERM, so run it in a task and poll for the
+    // outcome. A generous deadline (not a fixed sleep) keeps the test reliable
+    // on a slow or oversubscribed CI executor, where the worker task may be
+    // scheduled late.
+    let handle = spawn(async move {
+        if let Err(e) = worker.run().await {
+            eprintln!("worker exited with error: {e:?}");
+        }
+    });
+
+    // finalize_run calls update_run (PUT /runs/:id) with status Completed.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while state.run_updates.lock().unwrap().is_empty() && Instant::now() < deadline {
+        sleep(Duration::from_millis(20)).await;
     }
+    handle.abort();
 
     assert!(
         state.handed_out.load(Ordering::SeqCst) >= 1,
         "the worker never polled for a run"
     );
 
-    // finalize_run calls update_run (PUT /runs/:id) with status Completed.
     let updates = state.run_updates.lock().unwrap();
     assert!(!updates.is_empty(), "the worker never wrote the run status");
 
