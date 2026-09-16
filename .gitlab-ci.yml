@@ -38,7 +38,7 @@ variables:
   FF_USE_FASTZIP: 1
   CACHE_COMPRESSION_LEVEL: "fastest"
   RELEASE_PLZ_VERSION: "0.3.160"
-  CI_RUST_IMAGE_TAG: "1.94.1-v2"
+  CI_RUST_IMAGE_TAG: "1.94.1-v3"
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
   COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
@@ -73,6 +73,12 @@ variables:
       - ironflow-dashboard/node_modules/
       - .corepack/
 
+# Kaniko builds the image for the runner's own platform. The homelab runner and
+# every cluster node are amd64, so this publishes a linux/amd64 image -- which is
+# what fixes the "exec format error": the previous tag was an arm64-only image
+# built on a Mac. On main, the job rebuilds when either the Dockerfile OR the tag
+# (CI_RUST_IMAGE_TAG, defined in this file) changes, so bumping the tag is enough
+# to republish the image. The manual rule is a fallback to republish on demand.
 build-ci-images:
   stage: .pre
   image:
@@ -84,6 +90,10 @@ build-ci-images:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
         - ci/rust/Dockerfile
+        - .gitlab-ci.yml
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
   script:
     - mkdir -p /kaniko/.docker
     - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
