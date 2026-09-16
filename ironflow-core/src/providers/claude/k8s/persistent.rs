@@ -123,6 +123,7 @@ pub struct K8sPersistentProvider {
     cluster_config: K8sClusterConfig,
     timeout: Duration,
     pod_labels: BTreeMap<String, String>,
+    node_selector: BTreeMap<String, String>,
 }
 
 impl K8sPersistentProvider {
@@ -143,6 +144,7 @@ impl K8sPersistentProvider {
             cluster_config: K8sClusterConfig::default(),
             timeout: DEFAULT_TIMEOUT,
             pod_labels: BTreeMap::new(),
+            node_selector: BTreeMap::new(),
         }
     }
 
@@ -254,6 +256,27 @@ impl K8sPersistentProvider {
         self
     }
 
+    /// Constrain the worker pod to nodes carrying a given label.
+    ///
+    /// Inserts a `key: value` pair into the pod's `spec.nodeSelector`. Call
+    /// multiple times to require several labels; the scheduler only places the
+    /// pod on nodes matching every pair. With no call, the pod may land on any
+    /// schedulable node.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sPersistentProvider;
+    ///
+    /// let provider = K8sPersistentProvider::new("img:v1")
+    ///     .node_selector("kubernetes.io/hostname", "ryzen1");
+    /// ```
+    pub fn node_selector(mut self, key: &str, value: &str) -> Self {
+        self.node_selector
+            .insert(key.to_string(), value.to_string());
+        self
+    }
+
     /// Ensure the worker pod is running, creating it if necessary.
     async fn ensure_pod_running(&self, pods: &Api<Pod>) -> Result<(), AgentError> {
         let needs_create = match pods.get(&self.pod_name).await {
@@ -309,6 +332,7 @@ impl K8sPersistentProvider {
                 env_vars: &self.env_vars,
                 image_pull_secrets: &self.image_pull_secrets,
                 extra_labels: &self.pod_labels,
+                node_selector: &self.node_selector,
                 volumes: &[],
                 pvc_volumes: &[],
                 inputs: &[],
@@ -589,6 +613,22 @@ mod tests {
         assert_eq!(provider.pod_labels.len(), 2);
         assert_eq!(provider.pod_labels["env"], "prod");
         assert_eq!(provider.pod_labels["team"], "infra");
+    }
+
+    #[test]
+    fn persistent_provider_node_selector_default_empty() {
+        let provider = K8sPersistentProvider::new("img:v1");
+        assert!(provider.node_selector.is_empty());
+    }
+
+    #[test]
+    fn persistent_provider_node_selector_accumulates() {
+        let provider = K8sPersistentProvider::new("img:v1")
+            .node_selector("kubernetes.io/hostname", "ryzen1")
+            .node_selector("workload", "agent");
+        assert_eq!(provider.node_selector.len(), 2);
+        assert_eq!(provider.node_selector["kubernetes.io/hostname"], "ryzen1");
+        assert_eq!(provider.node_selector["workload"], "agent");
     }
 
     #[test]

@@ -112,6 +112,7 @@ pub struct K8sEphemeralProvider {
     volumes: Vec<(String, String)>,
     pvc_volumes: Vec<(String, String)>,
     input_init_image: String,
+    node_selector: BTreeMap<String, String>,
 }
 
 impl K8sEphemeralProvider {
@@ -134,6 +135,7 @@ impl K8sEphemeralProvider {
             volumes: Vec::new(),
             pvc_volumes: Vec::new(),
             input_init_image: DEFAULT_INPUT_INIT_IMAGE.to_string(),
+            node_selector: BTreeMap::new(),
         }
     }
 
@@ -317,6 +319,27 @@ impl K8sEphemeralProvider {
         self.input_init_image = image.to_string();
         self
     }
+
+    /// Constrain the agent pod to nodes carrying a given label.
+    ///
+    /// Inserts a `key: value` pair into the pod's `spec.nodeSelector`. Call
+    /// multiple times to require several labels; the scheduler only places the
+    /// pod on nodes matching every pair. With no call, the pod may land on any
+    /// schedulable node.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::new("img:v1")
+    ///     .node_selector("kubernetes.io/hostname", "ryzen1");
+    /// ```
+    pub fn node_selector(mut self, key: &str, value: &str) -> Self {
+        self.node_selector
+            .insert(key.to_string(), value.to_string());
+        self
+    }
 }
 
 /// Path inside the container where the prompt ConfigMap is mounted.
@@ -446,6 +469,7 @@ impl K8sEphemeralProvider {
             env_vars: &self.env_vars,
             image_pull_secrets: &self.image_pull_secrets,
             extra_labels: &merged_labels,
+            node_selector: &self.node_selector,
             volumes: &self.volumes,
             pvc_volumes: &self.pvc_volumes,
             inputs: &config.inputs,
@@ -885,5 +909,21 @@ mod tests {
     fn ephemeral_provider_pvc_volumes_default_empty() {
         let provider = K8sEphemeralProvider::new("img:v1");
         assert!(provider.pvc_volumes.is_empty());
+    }
+
+    #[test]
+    fn ephemeral_provider_node_selector_default_empty() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        assert!(provider.node_selector.is_empty());
+    }
+
+    #[test]
+    fn ephemeral_provider_node_selector_accumulates() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .node_selector("kubernetes.io/hostname", "ryzen1")
+            .node_selector("workload", "agent");
+        assert_eq!(provider.node_selector.len(), 2);
+        assert_eq!(provider.node_selector["kubernetes.io/hostname"], "ryzen1");
+        assert_eq!(provider.node_selector["workload"], "agent");
     }
 }
