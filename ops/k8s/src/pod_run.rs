@@ -126,6 +126,8 @@ pub struct PodRun {
     pvc: Option<PvcMount>,
     resources: Option<ResourceSpec>,
     security: Option<SecuritySpec>,
+    automount_service_account_token: Option<bool>,
+    allow_privilege_escalation: Option<bool>,
     timeout: Duration,
     poll_interval: Duration,
 }
@@ -148,6 +150,8 @@ impl PodRun {
             pvc: None,
             resources: None,
             security: None,
+            automount_service_account_token: None,
+            allow_privilege_escalation: None,
             timeout: DEFAULT_TIMEOUT,
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
@@ -206,6 +210,29 @@ impl PodRun {
         self
     }
 
+    /// Set `PodSpec.automountServiceAccountToken`.
+    ///
+    /// Pass `false` to prevent the default ServiceAccount token from being
+    /// mounted into the pod, hardening it against token exfiltration. Opt-in:
+    /// if this builder is never called the field is left absent and Kubernetes
+    /// applies its default (mount the token).
+    #[must_use]
+    pub fn automount_service_account_token(mut self, automount: bool) -> Self {
+        self.automount_service_account_token = Some(automount);
+        self
+    }
+
+    /// Set the container's `SecurityContext.allowPrivilegeEscalation`.
+    ///
+    /// Pass `false` to forbid a process from gaining more privileges than its
+    /// parent, hardening the container. Opt-in: if this builder is never called
+    /// the field is left absent and Kubernetes applies its default.
+    #[must_use]
+    pub fn allow_privilege_escalation(mut self, allow: bool) -> Self {
+        self.allow_privilege_escalation = Some(allow);
+        self
+    }
+
     /// Set the wall-clock timeout for the whole run (create -> terminal phase).
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
@@ -240,13 +267,21 @@ impl PodRun {
             container.resources = Some(build_resources(res));
         }
 
-        if let Some(sec) = &self.security {
-            container.security_context = Some(SecurityContext {
-                run_as_non_root: Some(true),
-                run_as_user: Some(sec.run_as_user),
-                run_as_group: Some(sec.run_as_group),
+        // Build a container SecurityContext when either the non-root spec or the
+        // privilege-escalation toggle is set, merging both so neither overwrites
+        // the other. Left absent entirely when neither is set (opt-in, no
+        // regression for existing callers).
+        if self.security.is_some() || self.allow_privilege_escalation.is_some() {
+            let mut sc = SecurityContext {
+                allow_privilege_escalation: self.allow_privilege_escalation,
                 ..Default::default()
-            });
+            };
+            if let Some(sec) = &self.security {
+                sc.run_as_non_root = Some(true);
+                sc.run_as_user = Some(sec.run_as_user);
+                sc.run_as_group = Some(sec.run_as_group);
+            }
+            container.security_context = Some(sc);
         }
 
         let mut volumes = Vec::new();
@@ -300,6 +335,7 @@ impl PodRun {
                     Some(volumes)
                 },
                 security_context,
+                automount_service_account_token: self.automount_service_account_token,
                 ..Default::default()
             }),
             ..Default::default()

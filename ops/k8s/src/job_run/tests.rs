@@ -68,6 +68,34 @@ async fn kind_and_input() {
     assert_eq!(input["backoff_limit"], 2);
 }
 
+#[tokio::test]
+async fn build_job_sets_automount_service_account_token() {
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up")
+        .automount_service_account_token(false)
+        .build_job();
+    let pod_spec = job.spec.unwrap().template.spec.unwrap();
+    assert_eq!(pod_spec.automount_service_account_token, Some(false));
+}
+
+#[tokio::test]
+async fn build_job_sets_allow_privilege_escalation() {
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up")
+        .allow_privilege_escalation(false)
+        .build_job();
+    let pod_spec = job.spec.unwrap().template.spec.unwrap();
+    let csc = pod_spec.containers[0].security_context.clone().unwrap();
+    assert_eq!(csc.allow_privilege_escalation, Some(false));
+}
+
+#[tokio::test]
+async fn build_job_omits_hardening_by_default() {
+    // Opt-in strict: no builder called -> both fields absent, no regression.
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up").build_job();
+    let pod_spec = job.spec.unwrap().template.spec.unwrap();
+    assert_eq!(pod_spec.automount_service_account_token, None);
+    assert!(pod_spec.containers[0].security_context.is_none());
+}
+
 // -- run(): condition transitions via a stateful routing service --
 
 /// Route by method + path. `conditions` are consumed in order for each GET on
