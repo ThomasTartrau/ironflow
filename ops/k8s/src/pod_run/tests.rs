@@ -96,6 +96,83 @@ async fn build_pod_applies_security_context() {
 }
 
 #[tokio::test]
+async fn build_pod_sets_automount_service_account_token() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .automount_service_account_token(false)
+        .build_pod();
+    assert_eq!(
+        pod.spec.unwrap().automount_service_account_token,
+        Some(false)
+    );
+}
+
+#[tokio::test]
+async fn build_pod_omits_automount_by_default() {
+    // Opt-in strict: the field stays absent unless the builder is called.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    assert_eq!(pod.spec.unwrap().automount_service_account_token, None);
+}
+
+#[tokio::test]
+async fn build_pod_sets_allow_privilege_escalation() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .allow_privilege_escalation(false)
+        .build_pod();
+    let csc = pod.spec.unwrap().containers[0]
+        .security_context
+        .clone()
+        .unwrap();
+    assert_eq!(csc.allow_privilege_escalation, Some(false));
+}
+
+#[tokio::test]
+async fn build_pod_allow_privilege_escalation_without_security_spec() {
+    // The container SecurityContext must be created even when security() was
+    // never called, otherwise the toggle would be silently dropped.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .allow_privilege_escalation(false)
+        .build_pod();
+    let csc = pod.spec.unwrap().containers[0]
+        .security_context
+        .clone()
+        .unwrap();
+    assert_eq!(csc.allow_privilege_escalation, Some(false));
+    assert_eq!(csc.run_as_non_root, None);
+    assert_eq!(csc.run_as_user, None);
+    assert_eq!(csc.run_as_group, None);
+}
+
+#[tokio::test]
+async fn build_pod_combines_security_and_allow_privilege_escalation() {
+    // Both set: the two must coexist in the same SecurityContext with neither
+    // overwriting the other.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .security(SecuritySpec {
+            run_as_user: 1000,
+            run_as_group: 3000,
+            fs_group: 2000,
+        })
+        .allow_privilege_escalation(false)
+        .build_pod();
+    let csc = pod.spec.unwrap().containers[0]
+        .security_context
+        .clone()
+        .unwrap();
+    assert_eq!(csc.allow_privilege_escalation, Some(false));
+    assert_eq!(csc.run_as_non_root, Some(true));
+    assert_eq!(csc.run_as_user, Some(1000));
+    assert_eq!(csc.run_as_group, Some(3000));
+}
+
+#[tokio::test]
+async fn build_pod_omits_privilege_escalation_context_by_default() {
+    // No security() and no allow_privilege_escalation(): the container carries
+    // no SecurityContext at all (no regression for existing callers).
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    assert!(pod.spec.unwrap().containers[0].security_context.is_none());
+}
+
+#[tokio::test]
 async fn build_pod_mounts_pvc_and_working_dir() {
     let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
         .pvc("shared-claim", "/workspace")

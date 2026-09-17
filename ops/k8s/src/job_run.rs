@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
-use k8s_openapi::api::core::v1::{Container, Pod, PodSpec, PodTemplateSpec};
+use k8s_openapi::api::core::v1::{Container, Pod, PodSpec, PodTemplateSpec, SecurityContext};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{Api, DeleteParams, ListParams, LogParams, PostParams, PropagationPolicy};
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,8 @@ pub struct JobRun {
     image: String,
     command: String,
     backoff_limit: i32,
+    automount_service_account_token: Option<bool>,
+    allow_privilege_escalation: Option<bool>,
     timeout: Duration,
     poll_interval: Duration,
 }
@@ -99,6 +101,8 @@ impl JobRun {
             image: image.to_string(),
             command: command.to_string(),
             backoff_limit: 0,
+            automount_service_account_token: None,
+            allow_privilege_escalation: None,
             timeout: DEFAULT_TIMEOUT,
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
@@ -115,6 +119,30 @@ impl JobRun {
     #[must_use]
     pub fn backoff_limit(mut self, backoff_limit: i32) -> Self {
         self.backoff_limit = backoff_limit;
+        self
+    }
+
+    /// Set `automountServiceAccountToken` on the Job's pod template.
+    ///
+    /// Pass `false` to prevent the default ServiceAccount token from being
+    /// mounted into the Job's pods, hardening them against token exfiltration.
+    /// Opt-in: if this builder is never called the field is left absent and
+    /// Kubernetes applies its default (mount the token).
+    #[must_use]
+    pub fn automount_service_account_token(mut self, automount: bool) -> Self {
+        self.automount_service_account_token = Some(automount);
+        self
+    }
+
+    /// Set the container's `SecurityContext.allowPrivilegeEscalation` in the
+    /// Job's pod template.
+    ///
+    /// Pass `false` to forbid a process from gaining more privileges than its
+    /// parent, hardening the container. Opt-in: if this builder is never called
+    /// the field is left absent and Kubernetes applies its default.
+    #[must_use]
+    pub fn allow_privilege_escalation(mut self, allow: bool) -> Self {
+        self.allow_privilege_escalation = Some(allow);
         self
     }
 
@@ -136,7 +164,7 @@ impl JobRun {
     ///
     /// Exposed for testing the manifest without a cluster.
     pub fn build_job(&self) -> Job {
-        let container = Container {
+        let mut container = Container {
             name: self.name.clone(),
             image: Some(self.image.clone()),
             command: Some(vec![
@@ -146,6 +174,15 @@ impl JobRun {
             ]),
             ..Default::default()
         };
+
+        // Container SecurityContext is built only when the hardening toggle is
+        // set, otherwise left absent (opt-in, no regression for existing jobs).
+        if self.allow_privilege_escalation.is_some() {
+            container.security_context = Some(SecurityContext {
+                allow_privilege_escalation: self.allow_privilege_escalation,
+                ..Default::default()
+            });
+        }
 
         Job {
             metadata: ObjectMeta {
@@ -160,6 +197,7 @@ impl JobRun {
                     spec: Some(PodSpec {
                         containers: vec![container],
                         restart_policy: Some("Never".to_string()),
+                        automount_service_account_token: self.automount_service_account_token,
                         ..Default::default()
                     }),
                 },
