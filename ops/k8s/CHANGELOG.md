@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.7](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.6...ironflow-ops-k8s-v0.1.7) - 2026-09-17
+
+### Added
+
+- #86 add pod/job security hardening builders (ops-k8s)
+
 ## [0.1.6](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.5...ironflow-ops-k8s-v0.1.6) - 2026-09-16
 
 ### Added
