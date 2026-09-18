@@ -75,11 +75,16 @@ use ironflow_ops_k8s::{KubeClient, pod_run::PodRun};
 let kube = KubeClient::from_context(&ctx).await?;
 let run = PodRun::new(&kube, "run-tests", "rust:1.94", "cargo test")
     .namespace("ci")
-    .pvc("workspace-claim", "/workspace")
+    .pvc("workspace-claim", "/workspace")   // first PVC -> volume "workspace"
+    .pvc("cargo-cache", "/cache")           // additive: second PVC -> volume "workspace-1"
     .working_dir("/workspace");
 
 let output = ctx.operation("run-tests", &run).await?;
 ```
+
+`.pvc()` is additive on both `PodRun` and `JobRun`: call it once per volume to
+mount several PVCs in the same pod (e.g. an RWX workspace plus a node-local
+cache). A single call reproduces the historical single-volume manifest exactly.
 
 ## Authentication
 

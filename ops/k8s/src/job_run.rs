@@ -15,6 +15,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::KubeClient;
 use crate::error::k8s_external;
+use crate::pod_run::{PvcMount, build_pvc_volumes};
 
 #[cfg(test)]
 mod tests;
@@ -82,6 +83,7 @@ pub struct JobRun {
     image: String,
     command: String,
     backoff_limit: i32,
+    pvcs: Vec<PvcMount>,
     automount_service_account_token: Option<bool>,
     allow_privilege_escalation: Option<bool>,
     timeout: Duration,
@@ -101,6 +103,7 @@ impl JobRun {
             image: image.to_string(),
             command: command.to_string(),
             backoff_limit: 0,
+            pvcs: Vec::new(),
             automount_service_account_token: None,
             allow_privilege_escalation: None,
             timeout: DEFAULT_TIMEOUT,
@@ -119,6 +122,22 @@ impl JobRun {
     #[must_use]
     pub fn backoff_limit(mut self, backoff_limit: i32) -> Self {
         self.backoff_limit = backoff_limit;
+        self
+    }
+
+    /// Mount a PersistentVolumeClaim at the given path in the Job's pod.
+    ///
+    /// Additive: every call appends one volume and its mount, so a Job's pod can
+    /// carry several PVCs at once. The first call keeps the volume name
+    /// `"workspace"`; each further call gets a unique deterministic name
+    /// (`"workspace-1"`, `"workspace-2"`, ...), matching
+    /// [`PodRun::pvc`](crate::pod_run::PodRun::pvc).
+    #[must_use]
+    pub fn pvc(mut self, claim: &str, mount_path: &str) -> Self {
+        self.pvcs.push(PvcMount {
+            claim: claim.to_string(),
+            mount_path: mount_path.to_string(),
+        });
         self
     }
 
@@ -184,6 +203,11 @@ impl JobRun {
             });
         }
 
+        let (volumes, volume_mounts) = build_pvc_volumes(&self.pvcs);
+        if !volume_mounts.is_empty() {
+            container.volume_mounts = Some(volume_mounts);
+        }
+
         Job {
             metadata: ObjectMeta {
                 name: Some(self.name.clone()),
@@ -197,6 +221,11 @@ impl JobRun {
                     spec: Some(PodSpec {
                         containers: vec![container],
                         restart_policy: Some("Never".to_string()),
+                        volumes: if volumes.is_empty() {
+                            None
+                        } else {
+                            Some(volumes)
+                        },
                         automount_service_account_token: self.automount_service_account_token,
                         ..Default::default()
                     }),
