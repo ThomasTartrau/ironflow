@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [3.17.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.16.0...ironflow-core-v3.17.0) - 2026-09-18
+
+### Added
+
+- #88 add DecisionProvider and ctx.decision step
+
+
+### Fixed
+
+- #88 doctests - use local DecisionProvider impl instead of feature-gated TypeSafeProvider
+
 ## [3.16.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.15.1...ironflow-core-v3.16.0) - 2026-09-16
 
 ### Added
