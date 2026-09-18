@@ -181,14 +181,86 @@ async fn build_pod_mounts_pvc_and_working_dir() {
     let spec = pod.spec.unwrap();
     let c = &spec.containers[0];
     assert_eq!(c.working_dir.as_deref(), Some("/workspace"));
-    let mount = &c.volume_mounts.as_ref().unwrap()[0];
+    let mounts = c.volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts.len(), 1);
+    let mount = &mounts[0];
     assert_eq!(mount.mount_path, "/workspace");
-    let vol = &spec.volumes.as_ref().unwrap()[0];
+    let volumes = spec.volumes.as_ref().unwrap();
+    assert_eq!(volumes.len(), 1);
+    let vol = &volumes[0];
     assert_eq!(
         vol.persistent_volume_claim.as_ref().unwrap().claim_name,
         "shared-claim"
     );
+    // Retrocompat strict: a single .pvc() keeps the historical "workspace" name.
+    assert_eq!(vol.name, "workspace");
+    assert_eq!(mount.name, "workspace");
     assert_eq!(vol.name, mount.name);
+}
+
+#[tokio::test]
+async fn build_pod_without_pvc_has_no_volumes() {
+    // Zero .pvc() must leave volumes and volume_mounts absent (0.1.7 manifest).
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    let spec = pod.spec.unwrap();
+    assert!(spec.volumes.is_none());
+    assert!(spec.containers[0].volume_mounts.is_none());
+}
+
+#[tokio::test]
+async fn build_pod_mounts_multiple_pvcs() {
+    // Two .pvc() calls must be additive: 2 volumes + 2 mounts with distinct names.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc("workspace-claim", "/workspace")
+        .pvc("cache-claim", "/cache")
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(
+        volumes.len(),
+        2,
+        "second .pvc() must not overwrite the first"
+    );
+    assert_eq!(mounts.len(), 2);
+    let names: Vec<&str> = volumes.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, vec!["workspace", "workspace-1"]);
+    // Volume names must be unique.
+    assert_ne!(volumes[0].name, volumes[1].name);
+}
+
+#[tokio::test]
+async fn build_pod_multiple_pvcs_map_claims() {
+    // Each volume maps the right claim, and each mount its matching volume + path.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc("workspace-claim", "/workspace")
+        .pvc("cache-claim", "/cache")
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+
+    assert_eq!(
+        volumes[0]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap()
+            .claim_name,
+        "workspace-claim"
+    );
+    assert_eq!(
+        volumes[1]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap()
+            .claim_name,
+        "cache-claim"
+    );
+
+    assert_eq!(mounts[0].name, volumes[0].name);
+    assert_eq!(mounts[0].mount_path, "/workspace");
+    assert_eq!(mounts[1].name, volumes[1].name);
+    assert_eq!(mounts[1].mount_path, "/cache");
 }
 
 #[tokio::test]

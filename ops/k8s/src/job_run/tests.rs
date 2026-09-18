@@ -60,6 +60,68 @@ async fn build_job_sets_template_backoff_and_restart_policy() {
 }
 
 #[tokio::test]
+async fn build_job_without_pvc_has_no_volumes() {
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up").build_job();
+    let pod_spec = job.spec.unwrap().template.spec.unwrap();
+    assert!(pod_spec.volumes.is_none());
+    assert!(pod_spec.containers[0].volume_mounts.is_none());
+}
+
+#[tokio::test]
+async fn build_job_mounts_single_pvc() {
+    // A single .pvc() keeps the "workspace" volume name, mirroring PodRun.
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up")
+        .pvc("workspace-claim", "/workspace")
+        .build_job();
+    let pod_spec = job.spec.unwrap().template.spec.unwrap();
+    let volumes = pod_spec.volumes.as_ref().unwrap();
+    let mounts = pod_spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(volumes[0].name, "workspace");
+    assert_eq!(mounts[0].name, "workspace");
+    assert_eq!(mounts[0].mount_path, "/workspace");
+    assert_eq!(
+        volumes[0]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap()
+            .claim_name,
+        "workspace-claim"
+    );
+}
+
+#[tokio::test]
+async fn build_job_mounts_multiple_pvcs() {
+    // Two .pvc() calls are additive: 2 volumes + 2 mounts, distinct names.
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up")
+        .pvc("workspace-claim", "/workspace")
+        .pvc("cache-claim", "/cache")
+        .build_job();
+    let pod_spec = job.spec.unwrap().template.spec.unwrap();
+    let volumes = pod_spec.volumes.as_ref().unwrap();
+    let mounts = pod_spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(
+        volumes.len(),
+        2,
+        "second .pvc() must not overwrite the first"
+    );
+    assert_eq!(mounts.len(), 2);
+    let names: Vec<&str> = volumes.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, vec!["workspace", "workspace-1"]);
+    assert_eq!(
+        volumes[1]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap()
+            .claim_name,
+        "cache-claim"
+    );
+    assert_eq!(mounts[1].name, volumes[1].name);
+    assert_eq!(mounts[1].mount_path, "/cache");
+}
+
+#[tokio::test]
 async fn kind_and_input() {
     let op = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up").backoff_limit(2);
     assert_eq!(op.kind(), "k8s");

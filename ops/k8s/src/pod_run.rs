@@ -123,7 +123,7 @@ pub struct PodRun {
     working_dir: Option<String>,
     node_selector: BTreeMap<String, String>,
     image_pull_secret: Option<String>,
-    pvc: Option<PvcMount>,
+    pvcs: Vec<PvcMount>,
     resources: Option<ResourceSpec>,
     security: Option<SecuritySpec>,
     automount_service_account_token: Option<bool>,
@@ -147,7 +147,7 @@ impl PodRun {
             working_dir: None,
             node_selector: BTreeMap::new(),
             image_pull_secret: None,
-            pvc: None,
+            pvcs: Vec::new(),
             resources: None,
             security: None,
             automount_service_account_token: None,
@@ -187,9 +187,15 @@ impl PodRun {
     }
 
     /// Mount a PersistentVolumeClaim at the given path.
+    ///
+    /// Additive: every call appends one volume and its mount, so a pod can carry
+    /// several PVCs at once (e.g. an RWX workspace plus a node-local cache). The
+    /// first call keeps the historical volume name `"workspace"`; each further
+    /// call gets a unique deterministic name (`"workspace-1"`, `"workspace-2"`,
+    /// ...), so a single call reproduces the pre-multi-volume manifest exactly.
     #[must_use]
     pub fn pvc(mut self, claim: &str, mount_path: &str) -> Self {
-        self.pvc = Some(PvcMount {
+        self.pvcs.push(PvcMount {
             claim: claim.to_string(),
             mount_path: mount_path.to_string(),
         });
@@ -284,21 +290,9 @@ impl PodRun {
             container.security_context = Some(sc);
         }
 
-        let mut volumes = Vec::new();
-        if let Some(pvc) = &self.pvc {
-            container.volume_mounts = Some(vec![VolumeMount {
-                name: "workspace".to_string(),
-                mount_path: pvc.mount_path.clone(),
-                ..Default::default()
-            }]);
-            volumes.push(Volume {
-                name: "workspace".to_string(),
-                persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                    claim_name: pvc.claim.clone(),
-                    read_only: None,
-                }),
-                ..Default::default()
-            });
+        let (volumes, volume_mounts) = build_pvc_volumes(&self.pvcs);
+        if !volume_mounts.is_empty() {
+            container.volume_mounts = Some(volume_mounts);
         }
 
         let node_selector = if self.node_selector.is_empty() {
@@ -395,6 +389,50 @@ impl PodRun {
 
             sleep(self.poll_interval).await;
         }
+    }
+}
+
+/// Build the `(volumes, volume_mounts)` pair for a list of [`PvcMount`]s.
+///
+/// Each entry produces one [`Volume`] backed by its PVC and one [`VolumeMount`]
+/// sharing the same generated name, so the mount always resolves to its volume.
+/// Names are deterministic and unique: the first entry keeps the historical
+/// `"workspace"` name (strict retro-compat with the single-volume manifest),
+/// each subsequent entry becomes `"workspace-1"`, `"workspace-2"`, ... Returns
+/// two empty vectors when `pvcs` is empty, so callers leave both fields absent.
+///
+/// Shared by [`PodRun::build_pod`] and [`JobRun::build_job`](crate::job_run::JobRun::build_job).
+pub(crate) fn build_pvc_volumes(pvcs: &[PvcMount]) -> (Vec<Volume>, Vec<VolumeMount>) {
+    let mut volumes = Vec::with_capacity(pvcs.len());
+    let mut mounts = Vec::with_capacity(pvcs.len());
+    for (index, pvc) in pvcs.iter().enumerate() {
+        let name = volume_name(index);
+        mounts.push(VolumeMount {
+            name: name.clone(),
+            mount_path: pvc.mount_path.clone(),
+            ..Default::default()
+        });
+        volumes.push(Volume {
+            name,
+            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                claim_name: pvc.claim.clone(),
+                read_only: None,
+            }),
+            ..Default::default()
+        });
+    }
+    (volumes, mounts)
+}
+
+/// Deterministic, unique volume name for the PVC at `index`.
+///
+/// Index `0` is `"workspace"` (retro-compat); every later index is
+/// `"workspace-{index}"`.
+fn volume_name(index: usize) -> String {
+    if index == 0 {
+        "workspace".to_string()
+    } else {
+        format!("workspace-{index}")
     }
 }
 
