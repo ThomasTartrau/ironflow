@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.35.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.35.4...ironflow-api-v2.35.5) - 2026-09-18
+
+### Fixed
+
+- #87 reject insecure JWT_SECRET/WORKER_TOKEN in production
+
 ## [2.35.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.35.1...ironflow-api-v2.35.2) - 2026-09-12
 
 ### Fixed
