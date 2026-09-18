@@ -16,8 +16,8 @@ The repository includes a complete example server:
 |----------|---------|-------------|
 | `IRONFLOW_ENV` | `development` | `production` or `development` |
 | `DATABASE_URL` | -- | PostgreSQL URL (required in production) |
-| `JWT_SECRET` | dev secret | JWT signing key (**required in production, do not use the default**) |
-| `WORKER_TOKEN` | dev token | Shared secret for worker auth (**required in production, do not use the default**) |
+| `JWT_SECRET` | dev secret | JWT signing key (**in production: mandatory, >= 32 bytes, must not start with `ironflow-dev-`**) |
+| `WORKER_TOKEN` | dev token | Shared secret for worker auth (**in production: mandatory, >= 32 bytes, must not start with `ironflow-dev-`**) |
 | `PORT` | `3000` | HTTP listen port |
 | `ALLOWED_ORIGINS` | same-origin | Comma-separated CORS origins |
 | `ARTIFACTS_DIR` | -- | Filesystem root for step artifacts |
