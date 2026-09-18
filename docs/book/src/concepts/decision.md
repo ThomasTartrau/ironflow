@@ -27,8 +27,10 @@ network.
 
 OpenRouter serves the same System One wire contract on its Decisions endpoint, so
 the same provider reaches Jev with only the base URL and key changing. Use the
-`openrouter` constructor and select the OpenRouter-namespaced model slug on the
-config (`typesafe/jev-latest`, exposed as `OPENROUTER_MODEL`):
+`openrouter` constructor and select the OpenRouter model slug on the config
+(`typesafe/jev-1.13`, exposed as `OPENROUTER_MODEL`). OpenRouter requires this
+concrete versioned slug; the `jev-latest` alias returns `400 "Model does not
+exist"`:
 
 ```rust,ignore
 use ironflow_core::providers::http::typesafe::OPENROUTER_MODEL;

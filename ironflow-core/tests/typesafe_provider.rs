@@ -209,7 +209,7 @@ fn triage_request(model: &str) -> DecisionRequest {
 #[ignore = "hits the real OpenRouter Decisions API; run manually to refresh the fixture"]
 async fn record_triage_fixture_from_openrouter() {
     let key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set");
-    let model = std::env::var("JEV_MODEL").unwrap_or_else(|_| "typesafe/jev-latest".to_string());
+    let model = std::env::var("JEV_MODEL").unwrap_or_else(|_| "typesafe/jev-1.13".to_string());
 
     let provider = TypeSafeProvider::openrouter(key);
     let request = triage_request(&model);

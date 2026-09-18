@@ -34,10 +34,11 @@ pub const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/alpha/decisions
 
 /// Model slug to request when routing through OpenRouter.
 ///
-/// OpenRouter namespaces the model, so the native [`DEFAULT_MODEL`] (`jev-latest`)
-/// must be sent as `typesafe/jev-latest`. Set it on the request via
-/// `DecisionConfig::model(OPENROUTER_MODEL)`.
-pub const OPENROUTER_MODEL: &str = "typesafe/jev-latest";
+/// OpenRouter requires the concrete, versioned TypeSafe slug: the native
+/// [`DEFAULT_MODEL`] alias (`jev-latest`) and its namespaced form
+/// `typesafe/jev-latest` both return `400 "Model does not exist"`. Set it on
+/// the request via `DecisionConfig::model(OPENROUTER_MODEL)`.
+pub const OPENROUTER_MODEL: &str = "typesafe/jev-1.13";
 
 const PROVIDER_NAME: &str = "typesafe";
 
@@ -83,8 +84,8 @@ impl TypeSafeProvider {
     ///
     /// The wire contract is identical to the native TypeSafe API; only the base
     /// URL and key differ. Remember to select the OpenRouter model slug
-    /// ([`OPENROUTER_MODEL`]) on the request, since `jev-latest` alone is not
-    /// namespaced for OpenRouter.
+    /// ([`OPENROUTER_MODEL`]) on the request, since OpenRouter rejects the
+    /// `jev-latest` alias and requires the concrete versioned slug.
     ///
     /// # Examples
     ///
@@ -214,6 +215,6 @@ mod tests {
     fn openrouter_uses_alpha_decisions_endpoint() {
         let provider = TypeSafeProvider::openrouter("sk-or");
         assert_eq!(provider.endpoint(), OPENROUTER_ENDPOINT);
-        assert_eq!(OPENROUTER_MODEL, "typesafe/jev-latest");
+        assert_eq!(OPENROUTER_MODEL, "typesafe/jev-1.13");
     }
 }

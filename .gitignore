@@ -16,3 +16,5 @@ ironflow-api/dashboard/
 # mdBook build output
 /book/
 docs/book/book/
+
+.worktrees
