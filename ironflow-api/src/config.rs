@@ -177,6 +177,35 @@ impl std::error::Error for ConfigError {}
 const DEV_JWT_SECRET: &str = "ironflow-dev-secret";
 const DEV_WORKER_TOKEN: &str = "ironflow-dev-worker-token";
 
+/// Prefix shared by every known development secret default. In production a
+/// secret carrying this prefix is refused outright, so a fresh deploy that
+/// copied the setup template verbatim cannot boot with a value published in
+/// the repository.
+const DEV_SECRET_PREFIX: &str = "ironflow-dev-";
+
+/// Minimum accepted length, in bytes, for a production secret. A value shorter
+/// than this is trivially brute-forced against an HS256 signature.
+const MIN_PROD_SECRET_BYTES: usize = 32;
+
+/// Reject a production secret that is a known development default or too short.
+///
+/// Pushes at most one message to `errors` (a known default is reported as such,
+/// not also as "too short"), so the collect-all pattern lists each faulty
+/// secret exactly once. Called only in production and only for a secret that
+/// was explicitly set; an unset secret is handled by the "required" check.
+fn reject_insecure_secret(name: &str, value: &str, errors: &mut Vec<String>) {
+    if value.starts_with(DEV_SECRET_PREFIX) {
+        errors.push(format!(
+            "{name} must not use a known development default in production"
+        ));
+    } else if value.len() < MIN_PROD_SECRET_BYTES {
+        errors.push(format!(
+            "{name} must be at least {MIN_PROD_SECRET_BYTES} bytes in production, got {}",
+            value.len()
+        ));
+    }
+}
+
 /// Parse an optional u32 env var. Returns `Some(default)` if unset,
 /// `Some(value)` if set to a positive number, `None` if set to `0`
 /// (meaning disabled). Pushes to `errors` if the value is not a valid u32.
@@ -200,7 +229,8 @@ impl ServerConfig {
     /// Load configuration from environment variables and validate.
     ///
     /// In production mode (`IRONFLOW_ENV=production`), `JWT_SECRET` and
-    /// `WORKER_TOKEN` must be explicitly set (dev defaults are rejected).
+    /// `WORKER_TOKEN` must be explicitly set, must not carry the known
+    /// development prefix `ironflow-dev-`, and must be at least 32 bytes long.
     /// `DATABASE_URL` is required in production.
     ///
     /// In development mode, insecure defaults are used with a warning.
@@ -234,7 +264,12 @@ impl ServerConfig {
 
         let jwt_secret_env = env::var("JWT_SECRET").ok();
         let jwt_secret = match jwt_secret_env {
-            Some(val) => val,
+            Some(val) => {
+                if is_production {
+                    reject_insecure_secret("JWT_SECRET", &val, &mut errors);
+                }
+                val
+            }
             None if is_production => {
                 errors.push("JWT_SECRET is required in production".to_string());
                 String::new()
@@ -247,7 +282,12 @@ impl ServerConfig {
 
         let worker_token_env = env::var("WORKER_TOKEN").ok();
         let worker_token = match worker_token_env {
-            Some(val) => val,
+            Some(val) => {
+                if is_production {
+                    reject_insecure_secret("WORKER_TOKEN", &val, &mut errors);
+                }
+                val
+            }
             None if is_production => {
                 errors.push("WORKER_TOKEN is required in production".to_string());
                 String::new()
@@ -625,5 +665,195 @@ mod tests {
         assert!(err.errors.iter().any(|e| e.contains("PURGE_MAX_AGE_DAYS")));
 
         unsafe { env::remove_var("PURGE_MAX_AGE_DAYS") };
+    }
+
+    // Strong secrets: >= 32 bytes and not carrying the dev prefix.
+    const STRONG_JWT: &str = "prod-jwt-secret-0123456789abcdef0123456789";
+    const STRONG_WORKER: &str = "prod-worker-token-0123456789abcdef01234567";
+
+    /// Wipe the environment, then set production mode with the given secrets.
+    ///
+    /// # Safety
+    ///
+    /// Mutates process-global environment variables; must be called while
+    /// holding `ENV_LOCK` so no other test observes a torn environment.
+    unsafe fn setup_prod(jwt: &str, worker: &str) {
+        unsafe {
+            clear_env();
+            env::set_var("IRONFLOW_ENV", "production");
+            env::set_var("DATABASE_URL", "postgres://x");
+            env::set_var("JWT_SECRET", jwt);
+            env::set_var("WORKER_TOKEN", worker);
+        }
+    }
+
+    #[test]
+    fn from_env_production_rejects_known_dev_jwt_secret() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // "ironflow-dev-jwt-secret" is the exact value the setup template shipped.
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_prod("ironflow-dev-jwt-secret", STRONG_WORKER) };
+
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.contains("JWT_SECRET") && e.contains("known development default")),
+            "expected a known-default rejection for JWT_SECRET, got {:?}",
+            err.errors
+        );
+        assert!(
+            !err.errors.iter().any(|e| e.contains("WORKER_TOKEN")),
+            "a strong WORKER_TOKEN must not be flagged, got {:?}",
+            err.errors
+        );
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_production_rejects_known_dev_worker_token() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_prod(STRONG_JWT, DEV_WORKER_TOKEN) };
+
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.contains("WORKER_TOKEN") && e.contains("known development default")),
+            "expected a known-default rejection for WORKER_TOKEN, got {:?}",
+            err.errors
+        );
+        assert!(!err.errors.iter().any(|e| e.contains("JWT_SECRET")));
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_production_rejects_short_jwt_secret() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // "shortsecret" is not a dev default, but is under 32 bytes.
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_prod("shortsecret", STRONG_WORKER) };
+
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.contains("JWT_SECRET") && e.contains("32 bytes")),
+            "expected a length rejection for JWT_SECRET, got {:?}",
+            err.errors
+        );
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_production_rejects_short_worker_token() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_prod(STRONG_JWT, "tinytoken") };
+
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.contains("WORKER_TOKEN") && e.contains("32 bytes")),
+            "expected a length rejection for WORKER_TOKEN, got {:?}",
+            err.errors
+        );
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_production_accepts_strong_secrets() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_prod(STRONG_JWT, STRONG_WORKER) };
+
+        let config = ServerConfig::from_env().expect("strong secrets should be accepted");
+        assert!(config.is_production);
+        assert_eq!(config.jwt_secret, STRONG_JWT);
+        assert_eq!(config.worker_token, STRONG_WORKER);
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_production_secret_length_boundary() {
+        // Exactly 32 bytes is accepted; 31 is rejected. Guards the `<` in the
+        // length check against an off-by-one drift to `<=`.
+        let exactly_32: &str = "0123456789abcdef0123456789abcdef";
+        let just_under: &str = "0123456789abcdef0123456789abcde";
+        assert_eq!(exactly_32.len(), 32);
+        assert_eq!(just_under.len(), 31);
+
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_prod(exactly_32, STRONG_WORKER) };
+        let config = ServerConfig::from_env().expect("a 32-byte secret is accepted");
+        assert_eq!(config.jwt_secret, exactly_32);
+
+        // SAFETY: ENV_LOCK still held.
+        unsafe { setup_prod(just_under, STRONG_WORKER) };
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.contains("JWT_SECRET") && e.contains("32 bytes")),
+            "31 bytes must be rejected, got {:?}",
+            err.errors
+        );
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_development_accepts_weak_secret() {
+        // The value/length checks run in production only: a short, dev-prefixed
+        // secret set outside production is accepted and used unchanged.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe {
+            clear_env();
+            env::set_var("IRONFLOW_ENV", "development");
+            env::set_var("JWT_SECRET", "ironflow-dev-jwt-secret");
+            env::set_var("WORKER_TOKEN", "tinytoken");
+        }
+
+        let config = ServerConfig::from_env().expect("weak secrets are allowed outside production");
+        assert!(!config.is_production);
+        assert_eq!(config.jwt_secret, "ironflow-dev-jwt-secret");
+        assert_eq!(config.worker_token, "tinytoken");
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_production_lists_all_insecure_secrets() {
+        // Non-regression: the exact state a fresh deploy reached by copying the
+        // setup template `.env.example` verbatim and flipping IRONFLOW_ENV to
+        // production. It used to boot silently; it must now be refused, with
+        // both secrets named.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_prod("ironflow-dev-jwt-secret", "ironflow-dev-worker-token") };
+
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.errors.iter().any(|e| e.contains("JWT_SECRET")),
+            "JWT_SECRET must be listed, got {:?}",
+            err.errors
+        );
+        assert!(
+            err.errors.iter().any(|e| e.contains("WORKER_TOKEN")),
+            "WORKER_TOKEN must be listed, got {:?}",
+            err.errors
+        );
+
+        unsafe { clear_env() };
     }
 }
