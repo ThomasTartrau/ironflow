@@ -107,12 +107,22 @@ impl RecordReplayDecisionProvider {
     /// # Examples
     ///
     /// ```no_run
-    /// use ironflow_core::providers::http::TypeSafeProvider;
+    /// use ironflow_core::decision::{DecideFuture, DecisionOutput, DecisionProvider, DecisionRequest, DecisionUsage};
     /// use ironflow_core::providers::record_replay_decision::RecordReplayDecisionProvider;
+    /// use std::collections::BTreeMap;
     /// use std::sync::Arc;
     ///
+    /// struct MyBackend;
+    /// impl DecisionProvider for MyBackend {
+    ///     fn decide<'a>(&'a self, _request: &'a DecisionRequest) -> DecideFuture<'a> {
+    ///         Box::pin(async {
+    ///             Ok(DecisionOutput { model: None, answers: BTreeMap::new(), usage: DecisionUsage::default() })
+    ///         })
+    ///     }
+    /// }
+    ///
     /// let provider = RecordReplayDecisionProvider::with_inner(
-    ///     Arc::new(TypeSafeProvider::new("sk-test")),
+    ///     Arc::new(MyBackend),
     ///     "tests/fixtures/decisions",
     /// );
     /// ```
@@ -133,12 +143,22 @@ impl RecordReplayDecisionProvider {
     /// # Examples
     ///
     /// ```no_run
-    /// use ironflow_core::providers::http::TypeSafeProvider;
+    /// use ironflow_core::decision::{DecideFuture, DecisionOutput, DecisionProvider, DecisionRequest, DecisionUsage};
     /// use ironflow_core::providers::record_replay_decision::RecordReplayDecisionProvider;
+    /// use std::collections::BTreeMap;
     /// use std::sync::Arc;
     ///
+    /// struct MyBackend;
+    /// impl DecisionProvider for MyBackend {
+    ///     fn decide<'a>(&'a self, _request: &'a DecisionRequest) -> DecideFuture<'a> {
+    ///         Box::pin(async {
+    ///             Ok(DecisionOutput { model: None, answers: BTreeMap::new(), usage: DecisionUsage::default() })
+    ///         })
+    ///     }
+    /// }
+    ///
     /// let provider = RecordReplayDecisionProvider::record(
-    ///     Arc::new(TypeSafeProvider::new("sk-test")),
+    ///     Arc::new(MyBackend),
     ///     "tests/fixtures/decisions",
     /// );
     /// ```
