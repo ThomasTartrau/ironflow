@@ -42,6 +42,7 @@ use crate::log_sender::LogSender;
 use crate::notify::{Event, EventPublisher, EventSubscriber, WorkflowEventBus};
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
+use ironflow_core::decision::DecisionProvider;
 
 /// Result of a workflow execution, carrying the final [`Run`] and per-step
 /// metrics collected during execution.
@@ -161,6 +162,7 @@ pub struct Engine {
     artifact_sink: Option<Arc<dyn ArtifactSink>>,
     guard_config: Option<WorkflowGuardConfig>,
     event_bus: Option<WorkflowEventBus>,
+    decision_provider: Option<Arc<dyn DecisionProvider>>,
 }
 
 /// Validate a workflow category path.
@@ -226,7 +228,33 @@ impl Engine {
             artifact_sink: None,
             guard_config: None,
             event_bus: None,
+            decision_provider: None,
         }
+    }
+
+    /// Wire a [`DecisionProvider`] backend for `ctx.decision(...)` steps.
+    ///
+    /// Without this, a workflow that reaches a decision step fails with
+    /// [`EngineError::NoDecisionProvider`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_core::providers::record_replay_decision::RecordReplayDecisionProvider;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// )
+    /// .with_decision_provider(Arc::new(RecordReplayDecisionProvider::replay("tests/fixtures")));
+    /// ```
+    pub fn with_decision_provider(mut self, provider: Arc<dyn DecisionProvider>) -> Self {
+        self.decision_provider = Some(provider);
+        self
     }
 
     /// Apply cost guardrails to this engine.
@@ -389,6 +417,9 @@ impl Engine {
         }
         if let Some(ref bus) = self.event_bus {
             ctx.set_event_bus(bus.clone());
+        }
+        if let Some(ref provider) = self.decision_provider {
+            ctx.set_decision_provider(provider.clone());
         }
         ctx
     }

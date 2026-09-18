@@ -37,6 +37,8 @@ pub enum StepKind {
     Workflow,
     /// A human approval gate.
     Approval,
+    /// A typed machine decision (System One / Jev).
+    Decision,
     /// A user-defined operation (e.g. `"gitlab"`, `"gmail"`, `"slack"`).
     Custom(String),
 }
@@ -49,6 +51,7 @@ impl Serialize for StepKind {
             StepKind::Agent => "agent",
             StepKind::Workflow => "workflow",
             StepKind::Approval => "approval",
+            StepKind::Decision => "decision",
             StepKind::Custom(name) => name.as_str(),
         };
         serializer.serialize_str(s)
@@ -64,6 +67,7 @@ impl<'de> Deserialize<'de> for StepKind {
             "agent" => StepKind::Agent,
             "workflow" => StepKind::Workflow,
             "approval" => StepKind::Approval,
+            "decision" => StepKind::Decision,
             _ => StepKind::Custom(s),
         })
     }
@@ -77,6 +81,7 @@ impl std::fmt::Display for StepKind {
             StepKind::Agent => f.write_str("Agent"),
             StepKind::Workflow => f.write_str("Workflow"),
             StepKind::Approval => f.write_str("Approval"),
+            StepKind::Decision => f.write_str("Decision"),
             StepKind::Custom(name) => write!(f, "Custom({name})"),
         }
     }

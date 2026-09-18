@@ -100,6 +100,8 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::ArtifactsUnavailable(_)
         | EngineError::Artifact(_)
         | EngineError::WorkflowGuardRejected(_)
+        | EngineError::Decision(_)
+        | EngineError::NoDecisionProvider { .. }
         | EngineError::DelaySleeping { .. } => false,
     }
 }

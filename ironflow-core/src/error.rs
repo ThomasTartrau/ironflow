@@ -241,6 +241,38 @@ pub enum AgentError {
     },
 }
 
+/// Error raised when accessing a typed answer on a
+/// [`DecisionOutput`](crate::decision::DecisionOutput) by name.
+///
+/// Distinct from [`AgentError`]: this is a lookup error on an already-received
+/// decision result, not a backend failure.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::error::DecisionError;
+///
+/// let err = DecisionError::NotFound("dept".to_string());
+/// assert_eq!(err.to_string(), "no decision answer named 'dept'");
+/// ```
+#[derive(Debug, Error)]
+pub enum DecisionError {
+    /// No answer exists under the requested name.
+    #[error("no decision answer named '{0}'")]
+    NotFound(String),
+
+    /// An answer exists but is a different kind than requested.
+    #[error("decision answer '{name}' is a {actual}, not a {expected}")]
+    TypeMismatch {
+        /// The answer name that was looked up.
+        name: String,
+        /// The kind the caller requested (`"noul"`, `"choice"`, or `"score"`).
+        expected: &'static str,
+        /// The kind the answer actually is.
+        actual: &'static str,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

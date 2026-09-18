@@ -15,6 +15,7 @@
 - [Operations](concepts/operations.md)
 - [Engine & Worker](concepts/engine-worker.md)
 - [Approval Gates](concepts/approval-gates.md)
+- [Decisions](concepts/decision.md)
 
 # Guides
 

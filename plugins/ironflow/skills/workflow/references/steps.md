@@ -147,6 +147,48 @@ The run moves to `AwaitingApproval`. `POST /api/v1/runs/{id}/approve` (dashboard
 MCP) resumes it: the handler is replayed from the top. Rejection fails the run. Read
 `approval-replay.md` before putting code between steps around a gate.
 
+## Decision
+
+A typed machine decision (System One / Jev): classify, route, score, or yes/no, with a
+calibrated confidence instead of free text. Cheaper and faster than an agent for a
+structured verdict. Wire a `DecisionProvider` into the engine
+(`Engine::with_decision_provider(...)`); without one, a decision step fails with
+`NoDecisionProvider`.
+
+```rust,no_run
+use ironflow_engine::config::{DecisionConfig, ShellConfig};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let out = ctx
+        .decision(
+            "triage",
+            DecisionConfig::new("Payouts have been failing for 3 days")
+                .noul("is_urgent", "Does this convey urgency?")
+                .choice("team", "Which team?", &["billing", "technical", "sales"])
+                .score("mood", "How frustrated?", &["Calm", "Frustrated", "Very angry"])
+                // Below 0.7 confidence, suspend for human review.
+                .escalate_below(0.7),
+        )
+        .await?;
+
+    // Answers are read by name, typed.
+    let urgent = out.noul("is_urgent")?; // f64 in [0, 1]
+    let team = &out.choice("team")?.choice; // selected option
+    let _mood = out.score("mood")?.score; // weighted score
+    let _ = urgent;
+
+    let cmd = format!("echo routed to {team}");
+    ctx.shell("route", ShellConfig::new(&cmd)).await?;
+    Ok(())
+}
+```
+
+When any answer's confidence falls below `escalate_below`, the run moves to
+`AwaitingApproval` exactly like an approval gate. On resume the decision is **not**
+re-run: the stored answers are replayed as-is, so the routing above stays stable.
+
 ## Sub-workflow
 
 ```rust,no_run

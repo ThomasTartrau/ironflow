@@ -67,6 +67,7 @@
 //! # }
 //! ```
 
+pub mod decision;
 pub mod dry_run;
 pub mod error;
 pub mod metric_names;
@@ -94,8 +95,12 @@ pub mod operations {
 
 /// Re-exports of the most commonly used types.
 pub mod prelude {
+    pub use crate::decision::{
+        ChoiceAnswer, DecisionAnswer, DecisionOutput, DecisionProvider, DecisionQuestion,
+        DecisionRequest, DecisionUsage, NoulAnswer, NoulCriteria, ScoreAnswer,
+    };
     pub use crate::dry_run::{DryRunGuard, is_dry_run, set_dry_run};
-    pub use crate::error::{AgentError, OperationError};
+    pub use crate::error::{AgentError, DecisionError, OperationError};
     pub use crate::operation::{
         NoopSecretResolver, Operation, OperationContext, SecretResolver, SecretValue,
         TypedOperation,
@@ -108,6 +113,10 @@ pub mod prelude {
     pub use crate::provider::{AgentConfig, AgentProvider, DebugMessage, DebugToolCall, LogSink};
     pub use crate::providers::claude::ClaudeCodeProvider;
     pub use crate::providers::record_replay::RecordReplayProvider;
+    pub use crate::providers::record_replay_decision::RecordReplayDecisionProvider;
+
+    #[cfg(feature = "provider-typesafe")]
+    pub use crate::providers::http::TypeSafeProvider;
     pub use crate::retry::RetryPolicy;
     pub use crate::trace_context::WorkflowTraceContext;
     pub use crate::tracker::WorkflowTracker;

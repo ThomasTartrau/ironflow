@@ -1,6 +1,6 @@
 ---
 name: workflow
-description: Write an Ironflow WorkflowHandler - typed input schema, steps (shell, http, agent, approval, sub-workflow, parallel), registration in handlers(). Loaded by the ironflow hub for the workflow verb.
+description: Write an Ironflow WorkflowHandler - typed input schema, steps (shell, http, agent, approval, decision, sub-workflow, parallel), registration in handlers(). Loaded by the ironflow hub for the workflow verb.
 user-invocable: false
 ---
 

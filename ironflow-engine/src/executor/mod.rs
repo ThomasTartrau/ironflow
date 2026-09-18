@@ -5,6 +5,7 @@
 //! to the appropriate executor based on the [`StepConfig`] variant.
 
 mod agent;
+mod decision;
 mod http;
 mod shell;
 
@@ -24,6 +25,7 @@ use crate::error::EngineError;
 use crate::log_sender::StepLogSender;
 
 pub use agent::AgentExecutor;
+pub use decision::{DecisionExecution, execute_decision};
 pub use http::HttpExecutor;
 pub use shell::ShellExecutor;
 
@@ -439,6 +441,7 @@ pub async fn execute_step_config(
         StepConfig::Agent(_) => "agent",
         StepConfig::Workflow(_) => "workflow",
         StepConfig::Approval(_) => "approval",
+        StepConfig::Decision(_) => "decision",
         StepConfig::Delay(_) => "delay",
     };
     tracing::Span::current().record("step.kind", kind);
@@ -464,6 +467,9 @@ pub async fn execute_step_config(
         )),
         StepConfig::Approval(_) => Err(EngineError::StepConfig(
             "approval steps are executed by WorkflowContext, not the executor".to_string(),
+        )),
+        StepConfig::Decision(_) => Err(EngineError::StepConfig(
+            "decision steps are executed by WorkflowContext, not the executor".to_string(),
         )),
         StepConfig::Delay(_) => Err(EngineError::StepConfig(
             "delay steps are executed by WorkflowContext, not the executor".to_string(),
