@@ -37,6 +37,21 @@ pub enum EngineError {
     #[error("step config error: {0}")]
     StepConfig(String),
 
+    /// A decision answer was accessed by name with the wrong type or a missing key.
+    #[error("decision error: {0}")]
+    Decision(#[from] ironflow_core::error::DecisionError),
+
+    /// A decision step was reached but no [`DecisionProvider`](ironflow_core::decision::DecisionProvider)
+    /// is wired into the engine.
+    #[error(
+        "decision step '{step}' requires a decision provider; \
+         wire one with Engine::with_decision_provider(...)"
+    )]
+    NoDecisionProvider {
+        /// The decision step that could not run.
+        step: String,
+    },
+
     /// JSON serialization error.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),

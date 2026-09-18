@@ -13,7 +13,7 @@ A file path, or a handler name to locate with `grep -rn "impl WorkflowHandler fo
 
 ## Background you need
 
-- A handler's `execute()` is replayed from its first line after an approval gate resumes, and on every retry. Completed steps (`ctx.shell`, `ctx.http`, `ctx.agent`, `ctx.operation`, `ctx.workflow`, `ctx.parallel`) return their cached output by **step name**. Everything else runs again.
+- A handler's `execute()` is replayed from its first line after an approval gate resumes, and on every retry. Completed steps (`ctx.shell`, `ctx.http`, `ctx.agent`, `ctx.operation`, `ctx.workflow`, `ctx.parallel`, `ctx.decision`) return their cached output by **step name**. Everything else runs again.
 - Step outputs, step inputs (`Operation::input()`), shell command lines and logs are persisted and shown in the dashboard.
 - `handlers()` in the workflows crate is the only registration point; a handler absent from it exists nowhere.
 

@@ -22,6 +22,8 @@ sha2 = "0.10"
 thiserror = "2"
 tracing = "0.1"
 futures-util = "0.3"
+rust_decimal = { version = "1", features = ["serde-float"] }
+strum = { version = "0.27", features = ["derive"] }
 metrics = { version = "0.24", optional = true }
 
 # OpenTelemetry
@@ -54,6 +56,7 @@ provider-mistral = []
 provider-gemini = []
 provider-anthropic-api = []
 provider-nvidia = []
+provider-typesafe = []
 tool-bash = []
 tool-mcp = []
 tool-read-file = []

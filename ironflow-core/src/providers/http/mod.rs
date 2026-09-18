@@ -25,7 +25,13 @@ pub mod anthropic;
 #[cfg(feature = "provider-gemini")]
 pub mod gemini;
 
+#[cfg(feature = "provider-typesafe")]
+pub mod typesafe;
+
 pub use adapter::HttpAgentProvider;
+
+#[cfg(feature = "provider-typesafe")]
+pub use typesafe::TypeSafeProvider;
 
 #[cfg(feature = "provider-openai")]
 pub use openai_compat::{OpenAiModel, OpenAiProvider};

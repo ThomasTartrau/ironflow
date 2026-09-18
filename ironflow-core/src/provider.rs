@@ -1052,6 +1052,14 @@ pub trait AgentProvider: Send + Sync {
     }
 }
 
+// The decision abstraction lives beside `AgentProvider`: re-exported here so
+// `ironflow_core::provider::DecisionProvider` resolves alongside it, while the
+// types themselves live in the `decision` module.
+pub use crate::decision::{
+    ChoiceAnswer, DecideFuture, DecisionAnswer, DecisionOutput, DecisionProvider, DecisionQuestion,
+    DecisionRequest, DecisionUsage, NoulAnswer, NoulCriteria, ScoreAnswer,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

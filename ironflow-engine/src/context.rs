@@ -36,7 +36,10 @@ use tokio::task::{Id, JoinSet};
 use tracing::{Span, error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::decision::{DecisionOutput, DecisionProvider};
 use ironflow_core::error::{AgentError, OperationError};
+
+mod decision_impl;
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::trace_context::WorkflowTraceContext;
 use ironflow_store::models::{
@@ -54,7 +57,8 @@ use crate::artifact::{
 };
 use crate::budget::step_budget_usd;
 use crate::config::{
-    AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig, WorkflowStepConfig,
+    AgentStepConfig, ApprovalConfig, DecisionConfig, HttpConfig, ShellConfig, StepConfig,
+    WorkflowStepConfig,
 };
 use crate::error::EngineError;
 use crate::executor::{ParallelStepResult, StepOutput, StepResult, execute_step_config};
@@ -94,6 +98,10 @@ pub struct WorkflowContext {
     workflow_name: String,
     store: Arc<dyn Store>,
     provider: Arc<dyn AgentProvider>,
+    /// Optional decision backend (System One / Jev) for `ctx.decision(...)`.
+    /// `None` when no decision provider was wired: a decision step then fails
+    /// explicitly instead of silently doing nothing.
+    decision_provider: Option<Arc<dyn DecisionProvider>>,
     handler_resolver: Option<HandlerResolver>,
     position: u32,
     /// IDs of the last executed step(s) -- used to record DAG dependencies.
@@ -166,6 +174,7 @@ impl WorkflowContext {
             workflow_name,
             store,
             provider,
+            decision_provider: None,
             handler_resolver: None,
             position: 0,
             last_step_ids: Vec::new(),
@@ -207,6 +216,7 @@ impl WorkflowContext {
             workflow_name,
             store,
             provider,
+            decision_provider: None,
             handler_resolver: Some(resolver),
             position: 0,
             last_step_ids: Vec::new(),
@@ -301,6 +311,14 @@ impl WorkflowContext {
     /// [`WorkflowEvent`](crate::notify::WorkflowEvent)s to the bus.
     pub fn set_event_bus(&mut self, bus: crate::notify::WorkflowEventBus) {
         self.event_bus = Some(bus);
+    }
+
+    /// Attach a [`DecisionProvider`] backend for `ctx.decision(...)` steps.
+    ///
+    /// Not typically called directly -- the [`Engine`](crate::engine::Engine)
+    /// wires this from [`Engine::with_decision_provider`](crate::engine::Engine::with_decision_provider).
+    pub fn set_decision_provider(&mut self, provider: Arc<dyn DecisionProvider>) {
+        self.decision_provider = Some(provider);
     }
 
     /// The artifact backend, or an explicit error when none is configured.
@@ -1376,6 +1394,29 @@ impl WorkflowContext {
         })
     }
 
+    /// Execute a typed machine-decision step (System One / Jev).
+    ///
+    /// See [`DecisionConfig`]. Returns a
+    /// [`DecisionOutput`] whose answers are accessed by name. When
+    /// `escalate_below` is set and any answer falls below it, the run suspends
+    /// with [`EngineError::ApprovalRequired`] and replays the stored answers on
+    /// resume without re-calling the provider.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NoDecisionProvider`], [`EngineError::ApprovalRequired`], or
+    /// [`EngineError::Operation`].
+    pub async fn decision(
+        &mut self,
+        name: &str,
+        config: DecisionConfig,
+    ) -> Result<DecisionOutput, EngineError> {
+        if let Some(output) = self.decision_replay(name, &config).await? {
+            return Ok(output);
+        }
+        self.decision_execute(name, config).await
+    }
+
     /// Record a step as explicitly skipped.
     ///
     /// Use this inside an `if`/`else` branch when a step should not execute
@@ -1871,6 +1912,7 @@ impl WorkflowContext {
             workflow_name: config.workflow_name.clone(),
             store: self.store.clone(),
             provider: self.provider.clone(),
+            decision_provider: self.decision_provider.clone(),
             handler_resolver: self.handler_resolver.clone(),
             position: 0,
             last_step_ids: Vec::new(),
@@ -2025,6 +2067,7 @@ impl WorkflowContext {
             StepKind::Agent => "agent",
             StepKind::Workflow => "workflow",
             StepKind::Approval => "approval",
+            StepKind::Decision => "decision",
             StepKind::Custom(_) => "custom",
         };
         Span::current().record("step.kind", kind_str);
@@ -2729,7 +2772,10 @@ fn inject_error_context(
                 error_msg.to_string(),
             ));
         }
-        StepConfig::Workflow(_) | StepConfig::Approval(_) | StepConfig::Delay(_) => {}
+        StepConfig::Workflow(_)
+        | StepConfig::Approval(_)
+        | StepConfig::Decision(_)
+        | StepConfig::Delay(_) => {}
     }
 }
 
