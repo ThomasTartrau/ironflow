@@ -13,7 +13,7 @@ use ironflow_core::operation::Operation;
 use tower::Service;
 use tower::service_fn;
 
-use super::{PodRun, ResourceSpec, SecuritySpec};
+use super::{PodRun, ResourceSpec, SecuritySpec, active_deadline_secs};
 use crate::KubeClient;
 
 /// Wrap a canned `tower` service as a [`KubeClient`].
@@ -111,6 +111,37 @@ async fn build_pod_omits_automount_by_default() {
     // Opt-in strict: the field stays absent unless the builder is called.
     let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
     assert_eq!(pod.spec.unwrap().automount_service_account_token, None);
+}
+
+#[tokio::test]
+async fn build_pod_sets_active_deadline_seconds() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .active_deadline_seconds(Duration::from_secs(120))
+        .build_pod();
+    assert_eq!(pod.spec.unwrap().active_deadline_seconds, Some(120));
+}
+
+#[tokio::test]
+async fn build_pod_omits_active_deadline_seconds_by_default() {
+    // Opt-in strict: no pod deadline unless the builder is called.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    assert_eq!(pod.spec.unwrap().active_deadline_seconds, None);
+}
+
+#[test]
+fn active_deadline_secs_maps_and_saturates() {
+    assert_eq!(active_deadline_secs(None), None);
+    assert_eq!(
+        active_deadline_secs(Some(Duration::from_secs(120))),
+        Some(120)
+    );
+    // Sub-second truncates to zero, never negative.
+    assert_eq!(
+        active_deadline_secs(Some(Duration::from_millis(500))),
+        Some(0)
+    );
+    // Beyond i64::MAX seconds saturates instead of wrapping negative.
+    assert_eq!(active_deadline_secs(Some(Duration::MAX)), Some(i64::MAX));
 }
 
 #[tokio::test]

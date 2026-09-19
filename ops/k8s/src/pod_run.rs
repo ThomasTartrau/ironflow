@@ -128,6 +128,7 @@ pub struct PodRun {
     security: Option<SecuritySpec>,
     automount_service_account_token: Option<bool>,
     allow_privilege_escalation: Option<bool>,
+    active_deadline_seconds: Option<Duration>,
     timeout: Duration,
     poll_interval: Duration,
 }
@@ -152,6 +153,7 @@ impl PodRun {
             security: None,
             automount_service_account_token: None,
             allow_privilege_escalation: None,
+            active_deadline_seconds: None,
             timeout: DEFAULT_TIMEOUT,
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
@@ -236,6 +238,39 @@ impl PodRun {
     #[must_use]
     pub fn allow_privilege_escalation(mut self, allow: bool) -> Self {
         self.allow_privilege_escalation = Some(allow);
+        self
+    }
+
+    /// Set a Kubernetes `activeDeadlineSeconds` on the pod (server-side deadline).
+    ///
+    /// Written into `PodSpec.activeDeadlineSeconds` as whole seconds (a
+    /// sub-second `duration` is truncated). Unlike [`timeout`](Self::timeout),
+    /// which bounds the caller's own wait loop client-side, this deadline is
+    /// enforced by Kubernetes itself: the cluster kills the pod once it elapses,
+    /// even if the calling process died (worker OOM, eviction, hard shutdown).
+    /// It is an independent server-side safety net for orphaned pods.
+    ///
+    /// Opt-in: if this builder is never called the field is left absent and no
+    /// pod deadline is set (unchanged behaviour). Kubernetes requires a value of
+    /// at least one second; a shorter `duration` truncates to zero and is
+    /// rejected by the API server.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_ops_k8s::pod_run::PodRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = PodRun::new(kube, "run-tests", "rust:1.94", "cargo test")
+    ///     .active_deadline_seconds(Duration::from_secs(3600));
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn active_deadline_seconds(mut self, duration: Duration) -> Self {
+        self.active_deadline_seconds = Some(duration);
         self
     }
 
@@ -330,6 +365,7 @@ impl PodRun {
                 },
                 security_context,
                 automount_service_account_token: self.automount_service_account_token,
+                active_deadline_seconds: active_deadline_secs(self.active_deadline_seconds),
                 ..Default::default()
             }),
             ..Default::default()
@@ -422,6 +458,19 @@ pub(crate) fn build_pvc_volumes(pvcs: &[PvcMount]) -> (Vec<Volume>, Vec<VolumeMo
         });
     }
     (volumes, mounts)
+}
+
+/// Convert an optional deadline into whole seconds for a Kubernetes
+/// `activeDeadlineSeconds` field.
+///
+/// `None` maps to `None` (no deadline). Sub-second durations are truncated via
+/// [`Duration::as_secs`]. A value exceeding [`i64::MAX`] seconds (unreachable
+/// for any real [`Duration`]) saturates to [`i64::MAX`] rather than wrapping to
+/// a negative deadline Kubernetes would reject.
+///
+/// Shared by [`PodRun::build_pod`] and [`JobRun::build_job`](crate::job_run::JobRun::build_job).
+pub(crate) fn active_deadline_secs(duration: Option<Duration>) -> Option<i64> {
+    duration.map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// Deterministic, unique volume name for the PVC at `index`.
