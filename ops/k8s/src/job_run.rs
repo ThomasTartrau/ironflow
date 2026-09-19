@@ -15,7 +15,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::KubeClient;
 use crate::error::k8s_external;
-use crate::pod_run::{PvcMount, build_pvc_volumes};
+use crate::pod_run::{PvcMount, active_deadline_secs, build_pvc_volumes};
 
 #[cfg(test)]
 mod tests;
@@ -86,6 +86,7 @@ pub struct JobRun {
     pvcs: Vec<PvcMount>,
     automount_service_account_token: Option<bool>,
     allow_privilege_escalation: Option<bool>,
+    active_deadline_seconds: Option<Duration>,
     timeout: Duration,
     poll_interval: Duration,
 }
@@ -106,6 +107,7 @@ impl JobRun {
             pvcs: Vec::new(),
             automount_service_account_token: None,
             allow_privilege_escalation: None,
+            active_deadline_seconds: None,
             timeout: DEFAULT_TIMEOUT,
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
@@ -165,6 +167,48 @@ impl JobRun {
         self
     }
 
+    /// Set a Kubernetes `activeDeadlineSeconds` on the Job (server-side deadline).
+    ///
+    /// Written into both [`JobSpec.activeDeadlineSeconds`] and the pod template's
+    /// `PodSpec.activeDeadlineSeconds` as whole seconds (a sub-second `duration`
+    /// is truncated). The `JobSpec` deadline bounds the whole Job wall-clock,
+    /// retries included, so a Job with a non-zero [`backoff_limit`] can never run
+    /// longer than `duration`; the template deadline additionally caps each
+    /// individual pod attempt.
+    ///
+    /// Unlike [`timeout`](Self::timeout), which bounds the caller's own wait loop
+    /// client-side, this deadline is enforced by Kubernetes itself: the cluster
+    /// kills the Job once it elapses, even if the calling process died. It is an
+    /// independent server-side safety net for orphaned Jobs.
+    ///
+    /// Opt-in: if this builder is never called the field is left absent and no
+    /// deadline is set (unchanged behaviour). Kubernetes requires a value of at
+    /// least one second; a shorter `duration` truncates to zero and is rejected
+    /// by the API server.
+    ///
+    /// [`JobSpec.activeDeadlineSeconds`]: k8s_openapi::api::batch::v1::JobSpec::active_deadline_seconds
+    /// [`backoff_limit`]: Self::backoff_limit
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_ops_k8s::job_run::JobRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = JobRun::new(kube, "migrate", "migrate:latest", "migrate up")
+    ///     .backoff_limit(2)
+    ///     .active_deadline_seconds(Duration::from_secs(600));
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn active_deadline_seconds(mut self, duration: Duration) -> Self {
+        self.active_deadline_seconds = Some(duration);
+        self
+    }
+
     /// Set the wall-clock timeout for the whole run.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
@@ -208,6 +252,10 @@ impl JobRun {
             container.volume_mounts = Some(volume_mounts);
         }
 
+        // Set on both the JobSpec (bounds the whole Job, retries included) and
+        // the pod template (caps each individual pod attempt).
+        let deadline_secs = active_deadline_secs(self.active_deadline_seconds);
+
         Job {
             metadata: ObjectMeta {
                 name: Some(self.name.clone()),
@@ -216,6 +264,7 @@ impl JobRun {
             },
             spec: Some(JobSpec {
                 backoff_limit: Some(self.backoff_limit),
+                active_deadline_seconds: deadline_secs,
                 template: PodTemplateSpec {
                     metadata: None,
                     spec: Some(PodSpec {
@@ -227,6 +276,7 @@ impl JobRun {
                             Some(volumes)
                         },
                         automount_service_account_token: self.automount_service_account_token,
+                        active_deadline_seconds: deadline_secs,
                         ..Default::default()
                     }),
                 },

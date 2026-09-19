@@ -158,6 +158,46 @@ async fn build_job_omits_hardening_by_default() {
     assert!(pod_spec.containers[0].security_context.is_none());
 }
 
+#[tokio::test]
+async fn build_job_sets_active_deadline_seconds_on_jobspec_and_template() {
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up")
+        .active_deadline_seconds(Duration::from_secs(300))
+        .build_job();
+    let job_spec = job.spec.unwrap();
+    // JobSpec deadline bounds the whole Job (retries included)...
+    assert_eq!(job_spec.active_deadline_seconds, Some(300));
+    // ...and the template deadline caps each individual pod attempt.
+    assert_eq!(
+        job_spec.template.spec.unwrap().active_deadline_seconds,
+        Some(300)
+    );
+}
+
+#[tokio::test]
+async fn build_job_deadline_bounds_total_with_retries() {
+    // With backoff_limit > 0, only the JobSpec deadline bounds the total
+    // wall-clock; the per-pod template deadline alone would not.
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up")
+        .backoff_limit(2)
+        .active_deadline_seconds(Duration::from_secs(300))
+        .build_job();
+    let job_spec = job.spec.unwrap();
+    assert_eq!(job_spec.backoff_limit, Some(2));
+    assert_eq!(job_spec.active_deadline_seconds, Some(300));
+}
+
+#[tokio::test]
+async fn build_job_omits_active_deadline_seconds_by_default() {
+    // Opt-in strict: no deadline on JobSpec or template unless the builder is called.
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up").build_job();
+    let job_spec = job.spec.unwrap();
+    assert_eq!(job_spec.active_deadline_seconds, None);
+    assert_eq!(
+        job_spec.template.spec.unwrap().active_deadline_seconds,
+        None
+    );
+}
+
 // -- run(): condition transitions via a stateful routing service --
 
 /// Route by method + path. `conditions` are consumed in order for each GET on

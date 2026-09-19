@@ -113,6 +113,19 @@ pub struct K8sEphemeralProvider {
     pvc_volumes: Vec<(String, String)>,
     input_init_image: String,
     node_selector: BTreeMap<String, String>,
+    active_deadline_seconds: Option<Duration>,
+}
+
+/// Apply a Kubernetes `activeDeadlineSeconds` onto a built pod, in whole seconds.
+///
+/// No-op when `deadline` is `None`, leaving the field absent. Sub-second
+/// durations are truncated by [`Duration::as_secs`]; a value exceeding
+/// [`i64::MAX`] seconds (unreachable for any real [`Duration`]) saturates to
+/// [`i64::MAX`] rather than wrapping to a negative deadline.
+fn apply_active_deadline_seconds(pod: &mut Pod, deadline: Option<Duration>) {
+    if let (Some(d), Some(spec)) = (deadline, pod.spec.as_mut()) {
+        spec.active_deadline_seconds = Some(i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    }
 }
 
 impl K8sEphemeralProvider {
@@ -136,6 +149,7 @@ impl K8sEphemeralProvider {
             pvc_volumes: Vec::new(),
             input_init_image: DEFAULT_INPUT_INIT_IMAGE.to_string(),
             node_selector: BTreeMap::new(),
+            active_deadline_seconds: None,
         }
     }
 
@@ -242,6 +256,32 @@ impl K8sEphemeralProvider {
     /// Override the default timeout (default: 5 minutes).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set a Kubernetes `activeDeadlineSeconds` on every pod this provider creates.
+    ///
+    /// Written into `PodSpec.activeDeadlineSeconds` as whole seconds (a
+    /// sub-second `duration` is truncated). Unlike [`timeout`](Self::timeout),
+    /// which bounds the caller's own wait loop client-side, this deadline is
+    /// enforced by Kubernetes itself: the cluster kills the pod once it elapses,
+    /// even if the calling process died (worker OOM, eviction, hard shutdown).
+    /// It is an independent server-side safety net for orphaned pods.
+    ///
+    /// Opt-in: if this builder is never called the field is left absent and no
+    /// pod deadline is set (unchanged behaviour).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::new("img:v1")
+    ///     .active_deadline_seconds(Duration::from_secs(3600));
+    /// ```
+    pub fn active_deadline_seconds(mut self, duration: Duration) -> Self {
+        self.active_deadline_seconds = Some(duration);
         self
     }
 
@@ -477,6 +517,11 @@ impl K8sEphemeralProvider {
             prompt_configmap: prompt_configmap_name.as_deref(),
             prompt_mount_path: PROMPT_MOUNT_PATH,
         })?;
+
+        // Applied after build_pod_spec: the shared PodConfig builder does not
+        // carry this field, so it is set on the built pod here.
+        let mut pod_spec = pod_spec;
+        apply_active_deadline_seconds(&mut pod_spec, self.active_deadline_seconds);
 
         pods.create(&PostParams::default(), &pod_spec)
             .await
@@ -782,6 +827,8 @@ impl AgentProvider for K8sEphemeralProvider {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::from_value;
+
     use super::*;
 
     #[test]
@@ -925,5 +972,34 @@ mod tests {
         assert_eq!(provider.node_selector.len(), 2);
         assert_eq!(provider.node_selector["kubernetes.io/hostname"], "ryzen1");
         assert_eq!(provider.node_selector["workload"], "agent");
+    }
+
+    #[test]
+    fn ephemeral_provider_active_deadline_default_and_builder() {
+        let default = K8sEphemeralProvider::new("img:v1");
+        assert!(default.active_deadline_seconds.is_none());
+
+        let provider =
+            K8sEphemeralProvider::new("img:v1").active_deadline_seconds(Duration::from_secs(900));
+        assert_eq!(
+            provider.active_deadline_seconds,
+            Some(Duration::from_secs(900))
+        );
+    }
+
+    #[test]
+    fn apply_active_deadline_sets_field_in_seconds() {
+        let mut pod: Pod =
+            from_value(json!({"spec": {"containers": []}})).expect("valid minimal pod");
+        apply_active_deadline_seconds(&mut pod, Some(Duration::from_secs(600)));
+        assert_eq!(pod.spec.unwrap().active_deadline_seconds, Some(600));
+    }
+
+    #[test]
+    fn apply_active_deadline_none_leaves_field_absent() {
+        let mut pod: Pod =
+            from_value(json!({"spec": {"containers": []}})).expect("valid minimal pod");
+        apply_active_deadline_seconds(&mut pod, None);
+        assert_eq!(pod.spec.unwrap().active_deadline_seconds, None);
     }
 }
