@@ -273,13 +273,28 @@ mod tests {
         accumulated
     }
 
+    /// Wait until the SSE handler has subscribed to the broadcast channel.
+    ///
+    /// Sending before a receiver exists makes `broadcast::Sender::send` return
+    /// `SendError`, so a fixed sleep is racy on slow runners. Poll the receiver
+    /// count instead.
+    async fn wait_for_subscriber(sender: &broadcast::Sender<Event>) {
+        let ready = timeout(Duration::from_secs(5), async {
+            while sender.receiver_count() == 0 {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(ready.is_ok(), "SSE handler did not subscribe in time");
+    }
+
     #[tokio::test]
     async fn sse_stream_receives_events() {
         let state = test_state();
         let (addr, sender, auth) = start_sse_server(state).await;
         let mut reader = connect_sse(&addr, "", &auth).await;
 
-        sleep(Duration::from_millis(50)).await;
+        wait_for_subscriber(&sender).await;
 
         let run_id = Uuid::now_v7();
         sender.send(sample_run_event(run_id)).unwrap();
@@ -300,7 +315,7 @@ mod tests {
         let other_run = Uuid::now_v7();
 
         let mut reader = connect_sse(&addr, &format!("?run_id={target_run}"), &auth).await;
-        sleep(Duration::from_millis(50)).await;
+        wait_for_subscriber(&sender).await;
 
         sender.send(sample_run_event(other_run)).unwrap();
         sender.send(sample_run_event(target_run)).unwrap();
@@ -318,7 +333,7 @@ mod tests {
         let (addr, sender, auth) = start_sse_server(state).await;
 
         let mut reader = connect_sse(&addr, "?types=user_signed_in", &auth).await;
-        sleep(Duration::from_millis(50)).await;
+        wait_for_subscriber(&sender).await;
 
         let run_id = Uuid::now_v7();
         sender.send(sample_run_event(run_id)).unwrap();
