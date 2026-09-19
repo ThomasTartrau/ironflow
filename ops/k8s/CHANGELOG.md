@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.10](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.9...ironflow-ops-k8s-v0.1.10) - 2026-09-19
+
+### Added
+
+- #90 add activeDeadlineSeconds to k8s pod/job runs and ephemeral provider
+
 ## [0.1.8](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.7...ironflow-ops-k8s-v0.1.8) - 2026-09-18
 
 ### Added
