@@ -90,6 +90,35 @@ unordered collections).
 
 ## Rejection and timeout
 
-Rejection makes the approval step `Failed` and the run `Failed`. `with_timeout_seconds`
-expires the gate the same way. Neither resumes the handler, so there is no "else" branch to
+Rejection makes the approval step `Rejected` and the run `Failed`. An expired SLA
+deadline (`with_deadline`, or the legacy `with_timeout_seconds`) resolves the gate the
+same way by default. Neither resumes the handler, so there is no "else" branch to
 write: put the rollback in an `on_error` handler registered before the gate.
+
+`EscalationPolicy::AutoApprove` is the one exception: it completes the gate with
+`approved_by: "system:timeout"` and resumes the handler exactly like a human approval,
+so the post-gate steps run. Everything in `## The safe pattern` above applies
+unchanged — the replay is the same replay.
+
+```rust,no_run
+use std::time::Duration;
+
+use ironflow_engine::config::{ApprovalConfig, EscalationPolicy};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn ships_anyway(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    // Nobody answered in an hour: ship it, and record who decided.
+    ctx.approval(
+        "gate",
+        ApprovalConfig::new("Continue?")
+            .with_deadline(Duration::from_secs(3600))
+            .on_timeout(EscalationPolicy::AutoApprove),
+    )
+    .await?;
+    Ok(())
+}
+```
+
+`EscalationPolicy::Notify` and `EscalationPolicy::Escalate` leave the gate open and
+restart the timer, so the handler stays suspended: they never trigger a replay.

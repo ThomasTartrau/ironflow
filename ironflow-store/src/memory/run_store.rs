@@ -417,6 +417,37 @@ impl RunStore for InMemoryStore {
         })
     }
 
+    fn claim_due_approval_deadlines(&self, limit: u32) -> StoreFuture<'_, Vec<Step>> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let now = Utc::now();
+
+            let mut due: Vec<(DateTime<Utc>, Uuid)> = state
+                .steps
+                .values()
+                .filter(|s| {
+                    s.status.state == StepStatus::AwaitingApproval
+                        && s.approval_deadline_at.is_some_and(|at| at <= now)
+                })
+                .map(|s| (s.approval_deadline_at.expect("deadline is set"), s.id))
+                .collect();
+            due.sort_unstable();
+            due.truncate(limit as usize);
+
+            let mut claimed = Vec::with_capacity(due.len());
+            for (_, id) in due {
+                let step = state.steps.get_mut(&id).expect("step exists");
+                // Clone before clearing so the caller still sees the deadline
+                // that fired.
+                claimed.push(step.clone());
+                step.approval_deadline_at = None;
+                step.updated_at = now;
+            }
+
+            Ok(claimed)
+        })
+    }
+
     fn list_purgeable_runs(
         &self,
         policy: &PurgePolicy,
@@ -546,6 +577,9 @@ impl RunStore for InMemoryStore {
                 completed_at: None,
                 debug_messages: None,
                 is_error_handler: req.is_error_handler,
+                approval_deadline_at: None,
+                approval_stage: 0,
+                approval_assignee: None,
             };
 
             state.steps.insert(step.id, step.clone());
@@ -609,6 +643,19 @@ impl RunStore for InMemoryStore {
             }
             if let Some(debug_msgs) = update.debug_messages {
                 step.debug_messages = Some(debug_msgs);
+            }
+            // Clearing wins over setting: an update that resolves the gate and
+            // reschedules at once would otherwise leave a live timer behind.
+            if update.clear_approval_deadline {
+                step.approval_deadline_at = None;
+            } else if let Some(deadline) = update.approval_deadline_at {
+                step.approval_deadline_at = Some(deadline);
+            }
+            if let Some(stage) = update.approval_stage {
+                step.approval_stage = stage;
+            }
+            if let Some(assignee) = update.approval_assignee {
+                step.approval_assignee = Some(assignee);
             }
 
             step.updated_at = now;

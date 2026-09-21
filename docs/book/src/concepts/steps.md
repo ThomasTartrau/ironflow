@@ -35,6 +35,39 @@ let response = ctx.http("fetch-data", HttpConfig::get("https://api.example.com/d
 let result = ctx.agent("analyze", AgentStepConfig::new("Analyze this log file")).await?;
 ```
 
+## Approval steps
+
+```rust,ignore
+ctx.approval("prod-gate", ApprovalConfig::new("Deploy to production?")).await?;
+```
+
+The run suspends on `AwaitingApproval` until a human answers. A gate can also
+carry an SLA: a deadline persisted on the step and an escalation policy applied
+when it expires.
+
+```rust,ignore
+use std::time::Duration;
+
+ctx.approval(
+    "prod-gate",
+    ApprovalConfig::new("Deploy to production?")
+        .assigned_to(Assignee::group("release-managers"))
+        .with_deadline(Duration::from_secs(3600))
+        .on_timeout(EscalationPolicy::AutoReject),
+).await?;
+```
+
+| Field | Builder | Meaning |
+|-------|---------|---------|
+| `message` | `ApprovalConfig::new` | Prompt shown to reviewers |
+| `assignee` | `assigned_to` | `Assignee::user` / `Assignee::group` expected to answer |
+| `deadline_secs` | `with_deadline` / `with_deadline_secs` | SLA window, in seconds |
+| `on_timeout` | `on_timeout` | `EscalationPolicy` applied when the deadline fires (defaults to `AutoReject`) |
+| `timeout_seconds` | `with_timeout_seconds` | Legacy spelling of a deadline with an implicit `AutoReject` |
+
+See [Approval Gates](approval-gates.md) for the full list of escalation policies
+and where the remaining time surfaces.
+
 ## Decision steps
 
 A decision step asks a [`DecisionProvider`](decision.md) (System One / Jev) a map of

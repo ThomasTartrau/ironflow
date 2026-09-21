@@ -170,6 +170,10 @@ mod tests {
             started_at: None,
             completed_at: None,
             debug_messages: None,
+            approval_deadline_at: None,
+            approval_stage: None,
+            approval_assignee: None,
+            clear_approval_deadline: false,
         };
 
         let req = Request::builder()
@@ -214,6 +218,10 @@ mod tests {
             started_at: None,
             completed_at: None,
             debug_messages: None,
+            approval_deadline_at: None,
+            approval_stage: None,
+            approval_assignee: None,
+            clear_approval_deadline: false,
         };
 
         let req = Request::builder()

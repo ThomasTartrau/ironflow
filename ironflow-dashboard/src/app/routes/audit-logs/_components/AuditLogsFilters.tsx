@@ -21,6 +21,7 @@ const EVENT_KINDS: EventKind[] = [
 	"approval_requested",
 	"approval_granted",
 	"approval_rejected",
+	"approval_escalated",
 	"log_line",
 	"user_signed_in",
 	"user_signed_up",

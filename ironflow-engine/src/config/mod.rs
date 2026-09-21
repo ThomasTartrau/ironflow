@@ -9,6 +9,7 @@ mod approval;
 mod artifact;
 mod decision;
 pub mod delay;
+mod escalation;
 mod http;
 mod shell;
 mod workflow;
@@ -18,7 +19,11 @@ pub use approval::ApprovalConfig;
 pub use artifact::{ArtifactInput, ArtifactOutput};
 pub use decision::{DEFAULT_DECISION_MODEL, DecisionConfig};
 pub use delay::DelayConfig;
+pub use escalation::{EscalationPolicy, NotificationTarget};
 pub use http::HttpConfig;
+// Re-exported so workflow authors can name approval assignees without depending
+// on `ironflow-store` directly.
+pub use ironflow_store::entities::Assignee;
 pub use shell::ShellConfig;
 pub use workflow::WorkflowStepConfig;
 
@@ -195,5 +200,35 @@ mod tests {
             let json2 = serde_json::to_string(&back).expect("serialize2");
             assert_eq!(json, json2);
         }
+    }
+
+    #[test]
+    fn approval_with_escalation_roundtrips() {
+        let config = StepConfig::Approval(
+            ApprovalConfig::new("Deploy to production?")
+                .with_deadline_secs(3600)
+                .assigned_to(Assignee::group("release-managers"))
+                .on_timeout(EscalationPolicy::Chain(vec![
+                    EscalationPolicy::Notify(vec![NotificationTarget::Webhook {
+                        url: "https://example.com/sla".to_string(),
+                    }]),
+                    EscalationPolicy::AutoReject,
+                ])),
+        );
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: StepConfig = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&back).expect("serialize2");
+        assert_eq!(json, json2);
+
+        let StepConfig::Approval(approval) = back else {
+            panic!("expected an approval config");
+        };
+        assert_eq!(approval.effective_deadline_secs(), Some(3600));
+        assert_eq!(
+            approval.assignee(),
+            Some(&Assignee::group("release-managers"))
+        );
+        assert_eq!(approval.effective_policy().len(), 2);
     }
 }

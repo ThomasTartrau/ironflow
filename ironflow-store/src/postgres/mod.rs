@@ -496,6 +496,7 @@ impl PostgresStore {
             (StepStatus::Running, StepStatus::Failed) => Ok("failed"),
             (StepStatus::Running, StepStatus::AwaitingApproval) => Ok("suspended"),
             (StepStatus::AwaitingApproval, StepStatus::Running) => Ok("resumed"),
+            (StepStatus::AwaitingApproval, StepStatus::Completed) => Ok("approved"),
             (StepStatus::AwaitingApproval, StepStatus::Rejected) => Ok("rejected"),
             (StepStatus::AwaitingApproval, StepStatus::Failed) => Ok("failed"),
             _ => Err(StoreError::Database(format!(

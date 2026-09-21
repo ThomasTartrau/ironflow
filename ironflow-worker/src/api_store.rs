@@ -259,6 +259,12 @@ impl RunStore for ApiRunStore {
         Box::pin(async move { Ok(Vec::new()) })
     }
 
+    fn claim_due_approval_deadlines(&self, _limit: u32) -> StoreFuture<'_, Vec<Step>> {
+        // Escalation is an API-server responsibility: the worker has no route for
+        // it and must never resolve a gate it does not own.
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
     fn list_purgeable_runs(
         &self,
         _policy: &PurgePolicy,

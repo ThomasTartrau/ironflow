@@ -6,6 +6,7 @@
 pub mod api_key;
 pub mod api_key_scope;
 mod artifact;
+mod assignee;
 mod audit_log;
 mod event_kind;
 mod fsm_state;
@@ -28,6 +29,7 @@ mod user;
 pub use api_key::{ApiKey, ApiKeyUpdate, NewApiKey};
 pub use api_key_scope::ApiKeyScope;
 pub use artifact::{Artifact, ArtifactLookup, NewArtifact};
+pub use assignee::{Assignee, AssigneeParseError};
 pub use audit_log::{AuditLogEntry, AuditLogFilter, NewAuditLogEntry};
 pub use event_kind::EventKind;
 pub use fsm_state::FsmState;

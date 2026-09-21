@@ -50,6 +50,7 @@ pub mod context;
 mod control_flow;
 pub mod engine;
 pub mod error;
+pub mod escalation;
 pub mod executor;
 pub mod fsm;
 pub mod guard;
@@ -66,7 +67,8 @@ pub mod prelude {
     pub use crate::artifact::{ArtifactSink, ArtifactUpload, DirectArtifactSink};
     pub use crate::budget::BudgetConfig;
     pub use crate::config::{
-        AgentStepConfig, ApprovalConfig, DelayConfig, HttpConfig, ShellConfig, StepConfig,
+        AgentStepConfig, ApprovalConfig, DelayConfig, EscalationPolicy, HttpConfig,
+        NotificationTarget, ShellConfig, StepConfig,
     };
     pub use crate::context::WorkflowContext;
     pub use crate::engine::{Engine, EnqueueOptions, WorkflowResult};

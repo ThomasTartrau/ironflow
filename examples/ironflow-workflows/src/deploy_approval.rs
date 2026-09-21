@@ -1,6 +1,10 @@
 //! Deploy workflow with human approval gate before production.
 
-use ironflow_engine::config::{ApprovalConfig, ShellConfig};
+use std::time::Duration;
+
+use ironflow_engine::config::{
+    ApprovalConfig, Assignee, EscalationPolicy, NotificationTarget, ShellConfig,
+};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
@@ -19,6 +23,11 @@ use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 ///
 /// If the approval is rejected, the run transitions to `Failed`.
 /// If cancelled, the run transitions to `Cancelled`.
+///
+/// The gate carries a one-hour SLA. If nobody answers in time, the escalation
+/// chain runs one policy per expiry: the first hour pings a webhook and keeps
+/// waiting, the second gives up and fails the run. The deadline lives in the
+/// database, so it survives an API or worker restart.
 pub struct DeployApproval;
 
 impl WorkflowHandler for DeployApproval {
@@ -67,7 +76,16 @@ impl WorkflowHandler for DeployApproval {
             ctx.approval(
                 "prod-approval",
                 ApprovalConfig::new("Staging looks good. Deploy to production?")
-                    .with_timeout_seconds(3600),
+                    .assigned_to(Assignee::group("release-managers"))
+                    .with_deadline(Duration::from_secs(3600))
+                    .on_timeout(EscalationPolicy::Chain(vec![
+                        // After 1 h without an answer: warn, keep waiting.
+                        EscalationPolicy::Notify(vec![NotificationTarget::Webhook {
+                            url: "https://example.com/hooks/deploy-sla".to_string(),
+                        }]),
+                        // After 2 h: give up rather than ship unreviewed.
+                        EscalationPolicy::AutoReject,
+                    ])),
             )
             .await?;
 

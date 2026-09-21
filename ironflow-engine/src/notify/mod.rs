@@ -44,9 +44,9 @@ mod webhook;
 pub use audit_log::AuditLogSubscriber;
 pub use betterstack::BetterStackSubscriber;
 pub use event::{
-    ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent, Event, LogLineEvent,
-    LogStream, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent, RunFailedEvent,
-    RunStatusChangedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
+    ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
+    Event, LogLineEvent, LogStream, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent,
+    RunFailedEvent, RunStatusChangedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
     UserSignedOutEvent, UserSignedUpEvent,
 };
 pub use event_bus::{

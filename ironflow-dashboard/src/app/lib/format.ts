@@ -51,3 +51,28 @@ export function formatBytes(bytes: number): string {
 	}
 	return `${value.toFixed(value < 10 ? 1 : 0)} ${BYTE_UNITS[unit]}`;
 }
+
+/**
+ * Display name for an approval assignee.
+ *
+ * The API sends a prefixed string (`user:{name}` or `group:{name}`); this
+ * strips the prefix down to the bare name for display.
+ */
+export function formatAssignee(assignee: string): string {
+	const separator = assignee.indexOf(":");
+	return separator === -1 ? assignee : assignee.slice(separator + 1);
+}
+
+/** Countdown to an SLA deadline, in seconds. Clamped at zero. */
+export function formatRemaining(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds <= 0) return "expired";
+
+	const total = Math.floor(seconds);
+	const hours = Math.floor(total / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const secs = total % 60;
+
+	if (hours > 0) return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+	if (minutes > 0) return secs === 0 ? `${minutes}m` : `${minutes}m ${secs}s`;
+	return `${secs}s`;
+}

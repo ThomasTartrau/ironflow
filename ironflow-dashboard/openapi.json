@@ -2372,6 +2372,66 @@
           "admin"
         ]
       },
+      "ApprovalEscalatedEvent": {
+        "type": "object",
+        "description": "Payload of the `Event::ApprovalEscalated` event.\n\nEmitted every time an approval gate misses its SLA deadline, including the\nrepeated firings of a bare `Notify`/`Escalate` policy and the final\n\"chain exhausted\" notice. The audit log persists it verbatim, so the whole\nescalation history of a gate is reconstructable from it.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalEscalatedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalEscalatedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"prod-gate\".to_string(),\n    stage: 0,\n    policy: \"auto_reject\".to_string(),\n    action: \"rejected\".to_string(),\n    reason: \"approval deadline of 3600s expired\".to_string(),\n    assignee: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.policy, \"auto_reject\");\n```",
+        "required": [
+          "run_id",
+          "step_id",
+          "step_name",
+          "stage",
+          "policy",
+          "action",
+          "reason",
+          "at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "What the escalation did, for the audit log."
+          },
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Assignee after the escalation, when it reassigned the gate."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the escalation ran."
+          },
+          "policy": {
+            "type": "string",
+            "description": "Policy applied, e.g. `\"auto_reject\"`, `\"notify\"`, `\"escalate\"`."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it fired, e.g. `\"approval deadline of 3600s expired\"`."
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Run identifier."
+          },
+          "stage": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Escalation stage that fired (0-based index into the policy chain).",
+            "minimum": 0
+          },
+          "step_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Approval step identifier."
+          },
+          "step_name": {
+            "type": "string",
+            "description": "Human-readable step name."
+          }
+        }
+      },
       "ApprovalGrantedEvent": {
         "type": "object",
         "description": "Payload of the `Event::ApprovalGranted` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalGrantedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalGrantedEvent {\n    run_id: Uuid::now_v7(),\n    approved_by: \"alice\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.approved_by, \"alice\");\n```",
@@ -3051,6 +3111,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ApprovalEscalatedEvent",
+                "description": "An approval gate missed its SLA deadline and an escalation policy ran."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "approval_escalated"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "An approval gate missed its SLA deadline and an escalation policy ran."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/LogLineEvent",
                 "description": "A log line emitted during step execution.\n\nPushed by the worker in real time so that SSE clients can stream\nstep output as it happens, without waiting for step completion."
               },
@@ -3156,6 +3239,7 @@
           "approval_requested",
           "approval_granted",
           "approval_rejected",
+          "approval_escalated",
           "log_line",
           "user_signed_in",
           "user_signed_up",
@@ -4525,6 +4609,29 @@
           "dependencies"
         ],
         "properties": {
+          "approval_assignee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who the approval is currently assigned to.\n\nSerialized as a prefixed string: `user:{name}` or `group:{name}`."
+          },
+          "approval_deadline_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this approval gate expires, if it carries an SLA deadline."
+          },
+          "approval_seconds_remaining": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds left before the gate escalates. Clamped at 0, `None` when the\nstep has no deadline."
+          },
           "artifacts": {
             "type": "array",
             "items": {

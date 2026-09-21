@@ -51,6 +51,8 @@ pub enum EventKind {
     ApprovalGranted,
     /// A run was rejected.
     ApprovalRejected,
+    /// An approval gate missed its deadline and an escalation policy ran.
+    ApprovalEscalated,
     /// A log line was emitted by a running step.
     LogLine,
     /// A user signed in.
@@ -77,6 +79,7 @@ impl EventKind {
         Self::ApprovalRequested,
         Self::ApprovalGranted,
         Self::ApprovalRejected,
+        Self::ApprovalEscalated,
         Self::LogLine,
         Self::UserSignedIn,
         Self::UserSignedUp,
@@ -115,7 +118,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 15);
+        assert_eq!(EventKind::ALL.len(), 16);
     }
 
     #[test]
