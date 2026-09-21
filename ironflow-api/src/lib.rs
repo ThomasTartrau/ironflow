@@ -72,6 +72,7 @@ pub mod config;
 pub mod dashboard;
 pub mod entities;
 pub mod error;
+pub mod escalator;
 pub mod middleware;
 #[cfg(feature = "openapi")]
 pub mod openapi;

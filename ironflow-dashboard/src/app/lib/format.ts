@@ -51,3 +51,21 @@ export function formatBytes(bytes: number): string {
 	}
 	return `${value.toFixed(value < 10 ? 1 : 0)} ${BYTE_UNITS[unit]}`;
 }
+
+/** Countdown to an SLA deadline, in seconds. Clamped at zero. */
+export function formatRemaining(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds <= 0) return "expired";
+
+	const total = Math.floor(seconds);
+	if (total < 60) return `${total}s`;
+
+	const minutes = Math.floor(total / 60);
+	if (minutes < 60) {
+		const rest = total % 60;
+		return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+	}
+
+	const hours = Math.floor(minutes / 60);
+	const rest = minutes % 60;
+	return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}

@@ -128,7 +128,9 @@ timeline shown in the dashboard.
 ## Approval
 
 ```rust,no_run
-use ironflow_engine::config::ApprovalConfig;
+use std::time::Duration;
+
+use ironflow_engine::config::{ApprovalConfig, EscalationPolicy};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 
@@ -136,7 +138,9 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     ctx.approval(
         "approve-production",
         ApprovalConfig::new("Staging looks good. Deploy to production?")
-            .with_timeout_seconds(3600),
+            .assigned_to("release-managers")
+            .with_deadline(Duration::from_secs(3600))
+            .on_timeout(EscalationPolicy::AutoReject),
     )
     .await?;
     Ok(())
@@ -146,6 +150,55 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 The run moves to `AwaitingApproval`. `POST /api/v1/runs/{id}/approve` (dashboard, CLI,
 MCP) resumes it: the handler is replayed from the top. Rejection fails the run. Read
 `approval-replay.md` before putting code between steps around a gate.
+
+### SLA and escalation
+
+`with_deadline` (or `with_deadline_secs`) arms a timer persisted on the step, so it
+survives an API or worker restart. `on_timeout` says what happens when it fires;
+without one, an expired deadline auto-rejects. `assigned_to` records who is expected
+to answer and shows up in the API, the dashboard and `ironflow run steps`.
+
+| `EscalationPolicy` | On expiry |
+|--------------------|-----------|
+| `AutoApprove` | Completes the gate as `system:timeout` and resumes the run |
+| `AutoReject` | Fails the step and the run with `approval timeout` (default) |
+| `Notify(targets)` | Posts the event to each `NotificationTarget`, keeps the gate open, restarts the timer |
+| `Escalate(assignee)` | Reassigns the gate, keeps it open, restarts the timer |
+| `Chain(policies)` | One policy per expiry, in order |
+
+On their own, `Notify` and `Escalate` repeat at every expiry until a human answers;
+inside a `Chain` they advance to the next policy instead. Once a chain runs out, the
+gate stays open with no timer — it is never silently auto-rejected.
+
+```rust,no_run
+use std::time::Duration;
+
+use ironflow_engine::config::{ApprovalConfig, EscalationPolicy, NotificationTarget};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn escalating(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    ctx.approval(
+        "approve-production",
+        ApprovalConfig::new("Deploy to production?")
+            .with_deadline(Duration::from_secs(3600))
+            .on_timeout(EscalationPolicy::Chain(vec![
+                // After 1 h: ping the on-call channel, keep waiting.
+                EscalationPolicy::Notify(vec![NotificationTarget::Slack {
+                    webhook_url: "https://hooks.slack.com/services/T/B/X".to_string(),
+                    channel: "#deploys".to_string(),
+                }]),
+                // After 2 h: give up.
+                EscalationPolicy::AutoReject,
+            ])),
+    )
+    .await?;
+    Ok(())
+}
+```
+
+Every firing is recorded in the audit log as an `approval_escalated` event with the
+stage, the policy, what it did and why.
 
 ## Decision
 

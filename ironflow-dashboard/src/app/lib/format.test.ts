@@ -5,6 +5,7 @@ import {
 	formatDuration,
 	formatPercent,
 	formatCost,
+	formatRemaining,
 	shortenStepName,
 } from "./format";
 
@@ -161,5 +162,29 @@ describe("formatCost", () => {
 
 	it("formats large cost", () => {
 		expect(formatCost(99.99)).toBe("$99.99");
+	});
+});
+
+describe("formatRemaining", () => {
+	it("reports an elapsed deadline as expired", () => {
+		expect(formatRemaining(0)).toBe("expired");
+		expect(formatRemaining(-120)).toBe("expired");
+		expect(formatRemaining(Number.NaN)).toBe("expired");
+	});
+
+	it("keeps raw seconds below a minute", () => {
+		expect(formatRemaining(45)).toBe("45s");
+		expect(formatRemaining(59)).toBe("59s");
+	});
+
+	it("switches to minutes at the minute boundary", () => {
+		expect(formatRemaining(60)).toBe("1m");
+		expect(formatRemaining(750)).toBe("12m 30s");
+		expect(formatRemaining(3599)).toBe("59m 59s");
+	});
+
+	it("switches to hours at the hour boundary", () => {
+		expect(formatRemaining(3600)).toBe("1h");
+		expect(formatRemaining(7500)).toBe("2h 5m");
 	});
 });

@@ -28,7 +28,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures_util::StreamExt;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
@@ -1250,6 +1250,13 @@ impl WorkflowContext {
     /// past it. Multiple approval gates in the same handler work -- each
     /// one pauses and resumes independently.
     ///
+    /// When the config carries an SLA
+    /// ([`ApprovalConfig::with_deadline`](crate::config::ApprovalConfig::with_deadline),
+    /// or the legacy `with_timeout_seconds`), the deadline is persisted on the
+    /// step so the API server's escalator can apply the configured
+    /// [`EscalationPolicy`](crate::config::EscalationPolicy) when it fires. The
+    /// timer is cleared as soon as the gate resolves.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::ApprovalRequired`] to pause the run on
@@ -1289,6 +1296,8 @@ impl WorkflowContext {
                         StepUpdate {
                             status: Some(StepStatus::Completed),
                             completed_at: Some(Utc::now()),
+                            // An approved gate must never be escalated afterwards.
+                            clear_approval_deadline: true,
                             ..StepUpdate::default()
                         },
                     )
@@ -1366,13 +1375,21 @@ impl WorkflowContext {
 
         self.start_step(step.id, Utc::now()).await?;
 
-        // Transition the step to AwaitingApproval so it reflects
-        // the suspended state on the dashboard.
+        // Transition the step to AwaitingApproval so it reflects the suspended
+        // state on the dashboard, and arm the SLA timer in the same update. The
+        // deadline lives in the store, so it survives an API or worker restart.
+        let deadline_at = config
+            .effective_deadline_secs()
+            .map(|secs| Utc::now() + TimeDelta::seconds(secs as i64));
+
         self.store
             .update_step(
                 step.id,
                 StepUpdate {
                     status: Some(StepStatus::AwaitingApproval),
+                    approval_deadline_at: deadline_at,
+                    approval_stage: Some(0),
+                    approval_assignee: config.assignee().map(str::to_string),
                     ..StepUpdate::default()
                 },
             )
@@ -3485,5 +3502,121 @@ mod tests {
 
         // last_step_ids should now contain only step2's ID
         assert_eq!(ctx.last_step_ids.len(), 1);
+    }
+
+    // -- approval SLA timers --
+
+    /// A context wired to a freshly created run on a shared store.
+    async fn context_with_run() -> (Arc<InMemoryStore>, WorkflowContext) {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .expect("failed to create run")
+            .into_run();
+
+        let ctx = WorkflowContext::new(
+            run.id,
+            "test".to_string(),
+            store.clone(),
+            create_test_provider(),
+        );
+        (store, ctx)
+    }
+
+    #[tokio::test]
+    async fn approval_without_deadline_leaves_timer_unset() {
+        let (store, mut ctx) = context_with_run().await;
+
+        let err = ctx
+            .approval("gate", ApprovalConfig::new("Approve?"))
+            .await
+            .expect_err("approval suspends the run");
+        assert!(matches!(err, EngineError::ApprovalRequired { .. }));
+
+        let steps = store.list_steps(ctx.run_id()).await.expect("list steps");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status.state, StepStatus::AwaitingApproval);
+        assert!(steps[0].approval_deadline_at.is_none());
+        assert_eq!(steps[0].approval_stage, 0);
+        assert!(steps[0].approval_assignee.is_none());
+    }
+
+    #[tokio::test]
+    async fn approval_with_deadline_arms_timer() {
+        let (store, mut ctx) = context_with_run().await;
+
+        let before = Utc::now();
+        let config = ApprovalConfig::new("Approve?")
+            .with_deadline_secs(3600)
+            .assigned_to("release-managers");
+        ctx.approval("gate", config)
+            .await
+            .expect_err("approval suspends the run");
+
+        let steps = store.list_steps(ctx.run_id()).await.expect("list steps");
+        let deadline = steps[0].approval_deadline_at.expect("timer is armed");
+        assert!(deadline >= before + TimeDelta::seconds(3600));
+        assert!(deadline <= Utc::now() + TimeDelta::seconds(3600));
+        assert_eq!(steps[0].approval_stage, 0);
+        assert_eq!(steps[0].approval_assignee.as_deref(), Some("release-managers"));
+    }
+
+    #[tokio::test]
+    async fn approval_honours_the_legacy_timeout_seconds() {
+        let (store, mut ctx) = context_with_run().await;
+
+        ctx.approval(
+            "gate",
+            ApprovalConfig::new("Approve?").with_timeout_seconds(60),
+        )
+        .await
+        .expect_err("approval suspends the run");
+
+        let steps = store.list_steps(ctx.run_id()).await.expect("list steps");
+        assert!(steps[0].approval_deadline_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn approval_replay_clears_deadline() {
+        let (store, mut ctx) = context_with_run().await;
+
+        ctx.approval(
+            "gate",
+            ApprovalConfig::new("Approve?").with_deadline_secs(3600),
+        )
+        .await
+        .expect_err("approval suspends the run");
+
+        // Replay the handler the way resume_run does.
+        let mut resumed = WorkflowContext::new(
+            ctx.run_id(),
+            "test".to_string(),
+            store.clone(),
+            create_test_provider(),
+        );
+        resumed.load_replay_steps().await.expect("load replay steps");
+        resumed
+            .approval(
+                "gate",
+                ApprovalConfig::new("Approve?").with_deadline_secs(3600),
+            )
+            .await
+            .expect("replayed gate continues");
+
+        let steps = store.list_steps(ctx.run_id()).await.expect("list steps");
+        assert_eq!(steps[0].status.state, StepStatus::Completed);
+        assert!(steps[0].approval_deadline_at.is_none());
     }
 }

@@ -364,6 +364,56 @@ pub struct ApprovalRejectedEvent {
     pub at: DateTime<Utc>,
 }
 
+/// Payload of the `Event::ApprovalEscalated` event.
+///
+/// Emitted every time an approval gate misses its SLA deadline, including the
+/// repeated firings of a bare `Notify`/`Escalate` policy and the final
+/// "chain exhausted" notice. The audit log persists it verbatim, so the whole
+/// escalation history of a gate is reconstructable from it.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::ApprovalEscalatedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = ApprovalEscalatedEvent {
+///     run_id: Uuid::now_v7(),
+///     step_id: Uuid::now_v7(),
+///     step_name: "prod-gate".to_string(),
+///     stage: 0,
+///     policy: "auto_reject".to_string(),
+///     action: "rejected".to_string(),
+///     reason: "approval deadline of 3600s expired".to_string(),
+///     assignee: None,
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.policy, "auto_reject");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ApprovalEscalatedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Approval step identifier.
+    pub step_id: Uuid,
+    /// Human-readable step name.
+    pub step_name: String,
+    /// Escalation stage that fired (0-based index into the policy chain).
+    pub stage: u32,
+    /// Policy applied, e.g. `"auto_reject"`, `"notify"`, `"escalate"`.
+    pub policy: String,
+    /// What the escalation did, for the audit log.
+    pub action: String,
+    /// Why it fired, e.g. `"approval deadline of 3600s expired"`.
+    pub reason: String,
+    /// Assignee after the escalation, when it reassigned the gate.
+    pub assignee: Option<String>,
+    /// When the escalation ran.
+    pub at: DateTime<Utc>,
+}
+
 /// Payload of the `Event::LogLine` event.
 ///
 /// # Examples
@@ -562,6 +612,9 @@ pub enum Event {
     /// A run was rejected by a human.
     ApprovalRejected(ApprovalRejectedEvent),
 
+    /// An approval gate missed its SLA deadline and an escalation policy ran.
+    ApprovalEscalated(ApprovalEscalatedEvent),
+
     // -- Log streaming --
     /// A log line emitted during step execution.
     ///
@@ -601,6 +654,8 @@ impl Event {
     pub const APPROVAL_GRANTED: &'static str = "approval_granted";
     /// Event type constant for [`ApprovalRejected`](Event::ApprovalRejected).
     pub const APPROVAL_REJECTED: &'static str = "approval_rejected";
+    /// Event type constant for [`ApprovalEscalated`](Event::ApprovalEscalated).
+    pub const APPROVAL_ESCALATED: &'static str = "approval_escalated";
     /// Event type constant for [`LogLine`](Event::LogLine).
     pub const LOG_LINE: &'static str = "log_line";
     /// Event type constant for [`UserSignedIn`](Event::UserSignedIn).
@@ -635,6 +690,7 @@ impl Event {
         Self::APPROVAL_REQUESTED,
         Self::APPROVAL_GRANTED,
         Self::APPROVAL_REJECTED,
+        Self::APPROVAL_ESCALATED,
         Self::LOG_LINE,
         Self::USER_SIGNED_IN,
         Self::USER_SIGNED_UP,
@@ -673,6 +729,7 @@ impl Event {
             Event::ApprovalRequested(_) => Self::APPROVAL_REQUESTED,
             Event::ApprovalGranted(_) => Self::APPROVAL_GRANTED,
             Event::ApprovalRejected(_) => Self::APPROVAL_REJECTED,
+            Event::ApprovalEscalated(_) => Self::APPROVAL_ESCALATED,
             Event::LogLine(_) => Self::LOG_LINE,
             Event::UserSignedIn(_) => Self::USER_SIGNED_IN,
             Event::UserSignedUp(_) => Self::USER_SIGNED_UP,
@@ -715,6 +772,7 @@ impl Event {
             Event::ApprovalRequested(e) => Some(e.run_id),
             Event::ApprovalGranted(e) => Some(e.run_id),
             Event::ApprovalRejected(e) => Some(e.run_id),
+            Event::ApprovalEscalated(e) => Some(e.run_id),
             Event::LogLine(e) => Some(e.run_id),
             Event::UserSignedIn(_) | Event::UserSignedUp(_) | Event::UserSignedOut(_) => None,
         }
@@ -723,8 +781,9 @@ impl Event {
     /// Returns the step this event belongs to, if any.
     ///
     /// Only [`StepCompleted`](Event::StepCompleted),
-    /// [`StepFailed`](Event::StepFailed) and
-    /// [`ApprovalRequested`](Event::ApprovalRequested) carry a step
+    /// [`StepFailed`](Event::StepFailed),
+    /// [`ApprovalRequested`](Event::ApprovalRequested) and
+    /// [`ApprovalEscalated`](Event::ApprovalEscalated) carry a step
     /// identifier; every other variant returns `None`.
     ///
     /// # Examples
@@ -752,6 +811,7 @@ impl Event {
             Event::StepCompleted(e) => Some(e.step_id),
             Event::StepFailed(e) => Some(e.step_id),
             Event::ApprovalRequested(e) => Some(e.step_id),
+            Event::ApprovalEscalated(e) => Some(e.step_id),
             Event::RunCreated(_)
             | Event::RunStatusChanged(_)
             | Event::RunFailed(_)
@@ -804,6 +864,7 @@ impl Event {
             | Event::ApprovalRequested(_)
             | Event::ApprovalGranted(_)
             | Event::ApprovalRejected(_)
+            | Event::ApprovalEscalated(_)
             | Event::LogLine(_) => None,
         }
     }
@@ -1422,6 +1483,20 @@ mod tests {
                 "approval_rejected",
             ),
             (
+                Event::ApprovalEscalated(ApprovalEscalatedEvent {
+                    run_id: id,
+                    step_id: id,
+                    step_name: "prod-gate".to_string(),
+                    stage: 0,
+                    policy: "auto_reject".to_string(),
+                    action: "rejected".to_string(),
+                    reason: "approval deadline of 3600s expired".to_string(),
+                    assignee: None,
+                    at: now,
+                }),
+                "approval_escalated",
+            ),
+            (
                 Event::LogLine(LogLineEvent {
                     run_id: id,
                     step_id: id,
@@ -1466,5 +1541,54 @@ mod tests {
         for (event, expected_type) in cases {
             assert_eq!(event.event_type(), expected_type);
         }
+    }
+
+    #[test]
+    fn approval_escalated_serde_roundtrip() {
+        let run_id = Uuid::now_v7();
+        let step_id = Uuid::now_v7();
+        let event = Event::ApprovalEscalated(ApprovalEscalatedEvent {
+            run_id,
+            step_id,
+            step_name: "prod-gate".to_string(),
+            stage: 1,
+            policy: "escalate".to_string(),
+            action: "reassigned to sre-oncall".to_string(),
+            reason: "approval deadline of 3600s expired".to_string(),
+            assignee: Some("sre-oncall".to_string()),
+            at: Utc::now(),
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"approval_escalated\""), "got {json}");
+
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        let Event::ApprovalEscalated(payload) = back else {
+            panic!("expected an approval_escalated event");
+        };
+        assert_eq!(payload.run_id, run_id);
+        assert_eq!(payload.stage, 1);
+        assert_eq!(payload.assignee.as_deref(), Some("sre-oncall"));
+    }
+
+    #[test]
+    fn approval_escalated_carries_run_and_step_ids() {
+        let run_id = Uuid::now_v7();
+        let step_id = Uuid::now_v7();
+        let event = Event::ApprovalEscalated(ApprovalEscalatedEvent {
+            run_id,
+            step_id,
+            step_name: "prod-gate".to_string(),
+            stage: 0,
+            policy: "notify".to_string(),
+            action: "notified 1 target".to_string(),
+            reason: "approval deadline of 60s expired".to_string(),
+            assignee: None,
+            at: Utc::now(),
+        });
+
+        assert_eq!(event.run_id(), Some(run_id));
+        assert_eq!(event.step_id(), Some(step_id));
+        assert_eq!(event.user_id(), None);
     }
 }

@@ -145,6 +145,22 @@ pub trait RunStore: Send + Sync {
     /// failing orphaned steps and publishing status-change events.
     fn reap_expired_leases(&self, limit: u32) -> StoreFuture<'_, Vec<ReapedRun>>;
 
+    /// Atomically claim approval steps whose SLA deadline has passed.
+    ///
+    /// Returns the claimed steps with their *pre-claim* `approval_deadline_at`
+    /// still populated, so the caller can report which deadline fired. The
+    /// timer is cleared in the same transaction, so a deadline fires at most
+    /// once even with several API instances running the escalator (the
+    /// PostgreSQL implementation uses `FOR UPDATE SKIP LOCKED`).
+    ///
+    /// Only steps still in [`StepStatus::AwaitingApproval`](crate::entities::StepStatus::AwaitingApproval)
+    /// are returned.
+    ///
+    /// Delivery is at most once: a caller that crashes between the claim and
+    /// the escalation leaves the gate open with no timer, the same trade-off
+    /// [`reap_expired_leases`](Self::reap_expired_leases) accepts.
+    fn claim_due_approval_deadlines(&self, limit: u32) -> StoreFuture<'_, Vec<Step>>;
+
     /// Create a new step for a run.
     ///
     /// # Errors

@@ -78,6 +78,13 @@ pub struct StepResponse {
     /// configured on the server.
     #[serde(default)]
     pub artifacts: Vec<ArtifactResponse>,
+    /// When this approval gate expires, if it carries an SLA deadline.
+    pub approval_deadline_at: Option<DateTime<Utc>>,
+    /// Seconds left before the gate escalates. Clamped at 0, `None` when the
+    /// step has no deadline.
+    pub approval_seconds_remaining: Option<i64>,
+    /// Who the approval is currently assigned to.
+    pub approval_assignee: Option<String>,
 }
 
 impl StepResponse {
@@ -96,6 +103,10 @@ impl StepResponse {
         dependencies: Vec<Uuid>,
         artifacts: Vec<ArtifactResponse>,
     ) -> Self {
+        let approval_seconds_remaining = step
+            .approval_deadline_at
+            .map(|at| (at - Utc::now()).num_seconds().max(0));
+
         StepResponse {
             id: step.id,
             trace_id: step.trace_id,
@@ -119,6 +130,9 @@ impl StepResponse {
             dependencies,
             debug_messages: step.debug_messages,
             artifacts,
+            approval_deadline_at: step.approval_deadline_at,
+            approval_seconds_remaining,
+            approval_assignee: step.approval_assignee,
         }
     }
 }
@@ -205,6 +219,94 @@ mod tests {
     async fn artifacts_serialize_as_a_json_array() {
         let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
         assert!(body["artifacts"].is_array());
+    }
+
+    /// An approval step whose deadline is `offset_secs` from now.
+    async fn gate_with_deadline(offset_secs: i64) -> Step {
+        use chrono::TimeDelta;
+        use ironflow_store::models::StepUpdate;
+
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .expect("create run")
+            .into_run();
+
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "prod-gate", 0),
+                name: "prod-gate".to_string(),
+                kind: StepKind::Approval,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("create step");
+
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("to running");
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::AwaitingApproval),
+                    approval_deadline_at: Some(Utc::now() + TimeDelta::seconds(offset_secs)),
+                    approval_assignee: Some("release-managers".to_string()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("arm timer");
+
+        store.get_step(step.id).await.expect("get").expect("exists")
+    }
+
+    #[tokio::test]
+    async fn a_step_without_a_deadline_reports_no_sla() {
+        let response = StepResponse::from(step().await);
+        assert!(response.approval_deadline_at.is_none());
+        assert!(response.approval_seconds_remaining.is_none());
+        assert!(response.approval_assignee.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_future_deadline_reports_the_remaining_seconds() {
+        let response = StepResponse::from(gate_with_deadline(3600).await);
+
+        assert!(response.approval_deadline_at.is_some());
+        let remaining = response
+            .approval_seconds_remaining
+            .expect("a deadline yields a countdown");
+        assert!(remaining > 0 && remaining <= 3600, "got {remaining}");
+        assert_eq!(response.approval_assignee.as_deref(), Some("release-managers"));
+    }
+
+    #[tokio::test]
+    async fn a_past_deadline_clamps_the_countdown_at_zero() {
+        let response = StepResponse::from(gate_with_deadline(-3600).await);
+        assert_eq!(response.approval_seconds_remaining, Some(0));
     }
 
     #[tokio::test]

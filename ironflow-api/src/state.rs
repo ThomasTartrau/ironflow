@@ -23,6 +23,7 @@ use ironflow_store::entities::Run;
 use ironflow_store::store::Store;
 
 use crate::error::ApiError;
+use crate::escalator::Escalator;
 use crate::reaper::Reaper;
 use crate::schedule_sync::sync_handler_schedules;
 use crate::schedule_ticker::ScheduleTicker;
@@ -221,6 +222,7 @@ impl AppState {
     /// - **Schedule sync**: seeds DB rows for handler-declared schedules.
     /// - **Schedule ticker**: polls due schedules and creates runs.
     /// - **Reaper**: recovers runs abandoned by dead workers.
+    /// - **Escalator**: resolves approval gates that missed their SLA deadline.
     ///
     /// Call this once after building the `AppState`, before serving requests.
     /// Drop the returned [`CancellationToken`] (or call `.cancel()`) to stop
@@ -245,6 +247,7 @@ impl AppState {
         let shutdown = CancellationToken::new();
         tokio::spawn(ScheduleTicker::new(self.store.clone()).run(shutdown.clone()));
         tokio::spawn(Reaper::new(self.store.clone(), self.engine.clone()).run(shutdown.clone()));
+        tokio::spawn(Escalator::new(self.engine.clone()).run(shutdown.clone()));
         shutdown
     }
 }

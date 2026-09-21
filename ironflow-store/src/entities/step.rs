@@ -111,6 +111,18 @@ pub struct Step {
     /// Whether this step is an error handler (`on_error`) rather than a normal step.
     #[serde(default)]
     pub is_error_handler: bool,
+    /// When the approval gate on this step expires, if it carries an SLA deadline.
+    ///
+    /// Only ever set while the step is [`StepStatus::AwaitingApproval`]. Cleared
+    /// the moment the gate resolves (approved, rejected, or escalated).
+    #[serde(default)]
+    pub approval_deadline_at: Option<DateTime<Utc>>,
+    /// Index of the next escalation policy to apply when the deadline fires.
+    #[serde(default)]
+    pub approval_stage: u32,
+    /// User or group the approval is currently assigned to, after reassignment.
+    #[serde(default)]
+    pub approval_assignee: Option<String>,
 }
 
 /// Request to create a new step.
@@ -190,6 +202,20 @@ pub struct StepUpdate {
     pub completed_at: Option<DateTime<Utc>>,
     /// Debug messages (verbose conversation trace), stored as JSON.
     pub debug_messages: Option<Value>,
+    /// New approval deadline. `None` leaves it unchanged — use
+    /// `clear_approval_deadline` to remove it.
+    #[serde(default)]
+    pub approval_deadline_at: Option<DateTime<Utc>>,
+    /// New escalation stage index.
+    #[serde(default)]
+    pub approval_stage: Option<u32>,
+    /// New approval assignee.
+    #[serde(default)]
+    pub approval_assignee: Option<String>,
+    /// Clear the approval deadline (sets it to `NULL`). Wins over
+    /// `approval_deadline_at` when both are set.
+    #[serde(default)]
+    pub clear_approval_deadline: bool,
 }
 
 #[cfg(test)]
@@ -248,6 +274,9 @@ mod tests {
             completed_at: Some(now),
             debug_messages: None,
             is_error_handler: false,
+            approval_deadline_at: Some(now),
+            approval_stage: 2,
+            approval_assignee: Some("sre-oncall".to_string()),
         };
 
         let json = serde_json::to_string(&step).expect("serialize");
@@ -267,6 +296,41 @@ mod tests {
         assert_eq!(back.cost_usd, step.cost_usd);
         assert_eq!(back.input_tokens, step.input_tokens);
         assert_eq!(back.output_tokens, step.output_tokens);
+        assert_eq!(back.approval_deadline_at, step.approval_deadline_at);
+        assert_eq!(back.approval_stage, step.approval_stage);
+        assert_eq!(back.approval_assignee, step.approval_assignee);
+    }
+
+    #[test]
+    fn step_serde_defaults_approval_fields_when_absent() {
+        let run_id = Uuid::now_v7();
+        let payload = json!({
+            "id": Uuid::now_v7(),
+            "trace_id": step_trace_id(run_id, "legacy", 0),
+            "run_id": run_id,
+            "name": "legacy",
+            "kind": "shell",
+            "position": 0,
+            "status": {"state": "pending", "state_machine_id": Uuid::now_v7()},
+            "input": null,
+            "output": null,
+            "error": null,
+            "duration_ms": 0,
+            "cost_usd": 0.0,
+            "input_tokens": null,
+            "output_tokens": null,
+            "created_at": "2026-09-21T12:00:00Z",
+            "updated_at": "2026-09-21T12:00:00Z",
+            "started_at": null,
+            "completed_at": null,
+            "debug_messages": null
+        });
+
+        let step: Step = serde_json::from_value(payload).expect("deserialize");
+
+        assert_eq!(step.approval_stage, 0);
+        assert!(step.approval_deadline_at.is_none());
+        assert!(step.approval_assignee.is_none());
     }
 
     #[test]
@@ -282,6 +346,10 @@ mod tests {
         assert!(update.started_at.is_none());
         assert!(update.completed_at.is_none());
         assert!(update.debug_messages.is_none());
+        assert!(update.approval_deadline_at.is_none());
+        assert!(update.approval_stage.is_none());
+        assert!(update.approval_assignee.is_none());
+        assert!(!update.clear_approval_deadline);
     }
 
     #[test]
@@ -297,6 +365,10 @@ mod tests {
             started_at: None,
             completed_at: None,
             debug_messages: None,
+            approval_deadline_at: Some(Utc::now()),
+            approval_stage: Some(1),
+            approval_assignee: Some("sre-oncall".to_string()),
+            clear_approval_deadline: false,
         };
 
         let json = serde_json::to_string(&update).expect("serialize");
@@ -308,6 +380,10 @@ mod tests {
         assert_eq!(back.cost_usd, update.cost_usd);
         assert_eq!(back.input_tokens, update.input_tokens);
         assert_eq!(back.output_tokens, update.output_tokens);
+        assert_eq!(back.approval_deadline_at, update.approval_deadline_at);
+        assert_eq!(back.approval_stage, update.approval_stage);
+        assert_eq!(back.approval_assignee, update.approval_assignee);
+        assert_eq!(back.clear_approval_deadline, update.clear_approval_deadline);
     }
 
     #[test]

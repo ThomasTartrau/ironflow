@@ -781,6 +781,60 @@ impl RunStore for PostgresStore {
         })
     }
 
+    fn claim_due_approval_deadlines(&self, limit: u32) -> StoreFuture<'_, Vec<Step>> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // SKIP LOCKED lets concurrent escalators work on disjoint gates;
+            // clearing the timer below makes a deadline fire exactly once.
+            let rows = sqlx::query(
+                r#"
+                SELECT s.*, ast.name as state_name
+                FROM ironflow.steps s
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = s.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE ast.name = 'awaiting_approval'
+                  AND s.approval_deadline_at IS NOT NULL
+                  AND s.approval_deadline_at < NOW()
+                ORDER BY s.approval_deadline_at ASC
+                LIMIT $1
+                FOR UPDATE OF s SKIP LOCKED
+                "#,
+            )
+            .bind(limit as i64)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let steps: Vec<Step> = rows.iter().map(row_to_step).collect::<Result<_, _>>()?;
+            let ids: Vec<Uuid> = steps.iter().map(|s| s.id).collect();
+
+            if !ids.is_empty() {
+                sqlx::query(
+                    r#"
+                    UPDATE ironflow.steps
+                    SET approval_deadline_at = NULL, updated_at = NOW()
+                    WHERE id = ANY($1)
+                    "#,
+                )
+                .bind(&ids)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(steps)
+        })
+    }
+
     fn list_purgeable_runs(
         &self,
         policy: &PurgePolicy,
@@ -1067,6 +1121,14 @@ impl RunStore for PostgresStore {
             push_set!("started_at", update.started_at);
             push_set!("completed_at", update.completed_at);
             push_set!("debug_messages", update.debug_messages);
+            // Clearing needs no bind: it is a literal NULL in the SET clause.
+            if update.clear_approval_deadline {
+                sets.push("approval_deadline_at = NULL".to_string());
+            } else {
+                push_set!("approval_deadline_at", update.approval_deadline_at);
+            }
+            push_set!("approval_stage", update.approval_stage);
+            push_set!("approval_assignee", update.approval_assignee);
 
             let sql = format!(
                 "UPDATE ironflow.steps SET {} WHERE id = ${bind_idx}",
@@ -1101,6 +1163,17 @@ impl RunStore for PostgresStore {
             }
             if let Some(ref debug_msgs) = update.debug_messages {
                 query = query.bind(debug_msgs);
+            }
+            if !update.clear_approval_deadline
+                && let Some(deadline) = update.approval_deadline_at
+            {
+                query = query.bind(deadline);
+            }
+            if let Some(stage) = update.approval_stage {
+                query = query.bind(stage as i32);
+            }
+            if let Some(ref assignee) = update.approval_assignee {
+                query = query.bind(assignee.as_str());
             }
 
             query = query.bind(id);

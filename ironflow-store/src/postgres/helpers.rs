@@ -197,6 +197,9 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
         completed_at: row.get("completed_at"),
         debug_messages: row.get("debug_messages"),
         is_error_handler: row.try_get("is_error_handler").unwrap_or(false),
+        approval_deadline_at: row.try_get("approval_deadline_at").unwrap_or(None),
+        approval_stage: row.try_get::<i32, _>("approval_stage").unwrap_or(0) as u32,
+        approval_assignee: row.try_get("approval_assignee").unwrap_or(None),
     })
 }
 

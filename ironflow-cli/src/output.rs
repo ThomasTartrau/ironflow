@@ -57,6 +57,80 @@ fn format_optional_datetime(dt: &Option<DateTime<Utc>>) -> String {
     dt.as_ref().map_or("-".to_string(), format_datetime)
 }
 
+/// Fraction of the original SLA window below which the countdown turns yellow.
+const SLA_WARNING_RATIO: f64 = 0.1;
+
+/// Format a countdown in seconds as a coarse duration.
+///
+/// `None` renders as `"-"` (no deadline), a non-positive count as `"expired"`.
+fn format_remaining_secs(remaining: Option<i64>) -> String {
+    let Some(remaining) = remaining else {
+        return "-".to_string();
+    };
+    if remaining <= 0 {
+        return "expired".to_string();
+    }
+
+    if remaining < 60 {
+        return format!("{remaining}s");
+    }
+
+    let minutes = remaining / 60;
+    if minutes < 60 {
+        let rest = remaining % 60;
+        return if rest == 0 {
+            format!("{minutes}m")
+        } else {
+            format!("{minutes}m {rest}s")
+        };
+    }
+
+    let hours = minutes / 60;
+    let rest = minutes % 60;
+    if rest == 0 {
+        format!("{hours}h")
+    } else {
+        format!("{hours}h {rest}m")
+    }
+}
+
+/// Colour for a countdown: red once expired, yellow in the last
+/// [`SLA_WARNING_RATIO`] of the window, plain otherwise.
+fn remaining_color(remaining: Option<i64>, window_secs: Option<i64>) -> Option<Color> {
+    let remaining = remaining?;
+    if remaining <= 0 {
+        return Some(Color::Red);
+    }
+
+    let window = window_secs?;
+    if window > 0 && (remaining as f64) < (window as f64) * SLA_WARNING_RATIO {
+        return Some(Color::Yellow);
+    }
+
+    None
+}
+
+/// Format the remaining SLA of an approval gate.
+///
+/// Returns `"-"` for a step without a deadline, `"expired"` once the countdown
+/// reaches zero, and a coarse duration (`"45s"`, `"12m 30s"`, `"1h 12m"`)
+/// otherwise.
+fn format_sla(step: &StepResponse) -> String {
+    format_remaining_secs(step.approval_seconds_remaining)
+}
+
+/// Colour of the SLA cell.
+///
+/// The window is derived from the gate's own timestamps (`started_at` to
+/// `approval_deadline_at`), so no configuration parsing is needed.
+fn sla_color(step: &StepResponse) -> Option<Color> {
+    let window = match (step.approval_deadline_at, step.started_at) {
+        (Some(deadline), Some(started)) => Some((deadline - started).num_seconds()),
+        _ => None,
+    };
+    remaining_color(step.approval_seconds_remaining, window)
+}
+
 /// Format milliseconds as a human-readable duration.
 fn format_duration_ms(ms: i64) -> String {
     if ms < 1000 {
@@ -306,6 +380,7 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
         "ID",
         "Name",
         "Status",
+        "SLA",
         "Attempt",
         "Duration",
         "Cost",
@@ -317,12 +392,18 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
     for step in steps {
         let color = step_status_color(&step.status);
 
+        let mut sla = Cell::new(format_sla(step)).set_alignment(CellAlignment::Center);
+        if let Some(sla_fg) = sla_color(step) {
+            sla = sla.fg(sla_fg);
+        }
+
         table.add_row(vec![
             Cell::new(step.id.to_string().split('-').next().unwrap_or("")),
             Cell::new(&step.name),
             Cell::new(step.status)
                 .fg(color)
                 .set_alignment(CellAlignment::Center),
+            sla,
             Cell::new(step.attempt).set_alignment(CellAlignment::Center),
             Cell::new(format_duration_ms(step.duration_ms)),
             Cell::new(format!("${:.4}", step.cost_usd)),
@@ -969,6 +1050,53 @@ mod tests {
     fn format_duration_ms_hours() {
         assert_eq!(format_duration_ms(3_600_000), "1h 0m");
         assert_eq!(format_duration_ms(5_400_000), "1h 30m");
+    }
+
+    #[test]
+    fn format_sla_without_a_deadline_is_a_dash() {
+        assert_eq!(format_remaining_secs(None), "-");
+    }
+
+    #[test]
+    fn format_sla_reports_an_elapsed_deadline_as_expired() {
+        assert_eq!(format_remaining_secs(Some(0)), "expired");
+        assert_eq!(format_remaining_secs(Some(-30)), "expired");
+    }
+
+    #[test]
+    fn format_sla_uses_coarse_units() {
+        assert_eq!(format_remaining_secs(Some(45)), "45s");
+        assert_eq!(format_remaining_secs(Some(59)), "59s");
+        assert_eq!(format_remaining_secs(Some(60)), "1m");
+        assert_eq!(format_remaining_secs(Some(750)), "12m 30s");
+        assert_eq!(format_remaining_secs(Some(3599)), "59m 59s");
+        assert_eq!(format_remaining_secs(Some(3600)), "1h");
+        assert_eq!(format_remaining_secs(Some(4320)), "1h 12m");
+    }
+
+    #[test]
+    fn sla_has_no_colour_without_a_deadline() {
+        assert_eq!(remaining_color(None, None), None);
+        assert_eq!(remaining_color(None, Some(3600)), None);
+    }
+
+    #[test]
+    fn sla_turns_red_once_expired() {
+        assert_eq!(remaining_color(Some(0), Some(3600)), Some(Color::Red));
+        assert_eq!(remaining_color(Some(-1), None), Some(Color::Red));
+    }
+
+    #[test]
+    fn sla_turns_yellow_in_the_last_tenth_of_the_window() {
+        assert_eq!(remaining_color(Some(359), Some(3600)), Some(Color::Yellow));
+        assert_eq!(remaining_color(Some(360), Some(3600)), None);
+        assert_eq!(remaining_color(Some(3000), Some(3600)), None);
+    }
+
+    #[test]
+    fn sla_has_no_colour_without_a_measurable_window() {
+        assert_eq!(remaining_color(Some(120), None), None);
+        assert_eq!(remaining_color(Some(120), Some(0)), None);
     }
 
     #[test]

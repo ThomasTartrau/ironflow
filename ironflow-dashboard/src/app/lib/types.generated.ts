@@ -951,6 +951,67 @@ export interface components {
 			| "stats_read"
 			| "admin";
 		/**
+		 * @description Payload of the `Event::ApprovalEscalated` event.
+		 *
+		 *     Emitted every time an approval gate misses its SLA deadline, including the
+		 *     repeated firings of a bare `Notify`/`Escalate` policy and the final
+		 *     "chain exhausted" notice. The audit log persists it verbatim, so the whole
+		 *     escalation history of a gate is reconstructable from it.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::ApprovalEscalatedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = ApprovalEscalatedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         step_name: "prod-gate".to_string(),
+		 *         stage: 0,
+		 *         policy: "auto_reject".to_string(),
+		 *         action: "rejected".to_string(),
+		 *         reason: "approval deadline of 3600s expired".to_string(),
+		 *         assignee: None,
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.policy, "auto_reject");
+		 *     ```
+		 */
+		ApprovalEscalatedEvent: {
+			/** @description What the escalation did, for the audit log. */
+			action: string;
+			/** @description Assignee after the escalation, when it reassigned the gate. */
+			assignee?: string | null;
+			/**
+			 * Format: date-time
+			 * @description When the escalation ran.
+			 */
+			at: string;
+			/** @description Policy applied, e.g. `"auto_reject"`, `"notify"`, `"escalate"`. */
+			policy: string;
+			/** @description Why it fired, e.g. `"approval deadline of 3600s expired"`. */
+			reason: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/**
+			 * Format: int32
+			 * @description Escalation stage that fired (0-based index into the policy chain).
+			 */
+			stage: number;
+			/**
+			 * Format: uuid
+			 * @description Approval step identifier.
+			 */
+			step_id: string;
+			/** @description Human-readable step name. */
+			step_name: string;
+		};
+		/**
 		 * @description Payload of the `Event::ApprovalGranted` event.
 		 *
 		 *     # Examples
@@ -1417,6 +1478,10 @@ export interface components {
 					/** @enum {string} */
 					type: "approval_rejected";
 			  })
+			| (components["schemas"]["ApprovalEscalatedEvent"] & {
+					/** @enum {string} */
+					type: "approval_escalated";
+			  })
 			| (components["schemas"]["LogLineEvent"] & {
 					/** @enum {string} */
 					type: "log_line";
@@ -1459,6 +1524,7 @@ export interface components {
 			| "approval_requested"
 			| "approval_granted"
 			| "approval_rejected"
+			| "approval_escalated"
 			| "log_line"
 			| "user_signed_in"
 			| "user_signed_up"
@@ -2544,6 +2610,19 @@ export interface components {
 		 *     ```
 		 */
 		StepResponse: {
+			/** @description Who the approval is currently assigned to. */
+			approval_assignee?: string | null;
+			/**
+			 * Format: date-time
+			 * @description When this approval gate expires, if it carries an SLA deadline.
+			 */
+			approval_deadline_at?: string | null;
+			/**
+			 * Format: int64
+			 * @description Seconds left before the gate escalates. Clamped at 0, `None` when the
+			 *     step has no deadline.
+			 */
+			approval_seconds_remaining?: number | null;
 			/**
 			 * @description Files this step produced, downloadable through the artifact route.
 			 *

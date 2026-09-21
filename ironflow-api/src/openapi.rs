@@ -24,8 +24,8 @@ use crate::routes::{
     list_workflows, retry_run, run_events, schedules, secrets, users,
 };
 use ironflow_engine::notify::{
-    ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent, Event, LogLineEvent,
-    RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent, RunFailedEvent,
+    ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
+    Event, LogLineEvent, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent, RunFailedEvent,
     RunStatusChangedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
     UserSignedOutEvent, UserSignedUpEvent, WorkflowAgentStepTokensUsedEvent,
     WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowStepCompletedEvent,
@@ -158,6 +158,7 @@ mod with_signup {
                 ApprovalRequestedEvent,
                 ApprovalGrantedEvent,
                 ApprovalRejectedEvent,
+                ApprovalEscalatedEvent,
                 LogLineEvent,
                 UserSignedInEvent,
                 UserSignedUpEvent,

@@ -30,7 +30,12 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
-import { formatDuration, formatCost, shortenStepName } from "@/app/lib/format";
+import {
+	formatDuration,
+	formatCost,
+	formatRemaining,
+	shortenStepName,
+} from "@/app/lib/format";
 import {
 	Tooltip,
 	TooltipContent,
@@ -56,6 +61,34 @@ function RunningDot() {
 			<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--status-running-fg)] opacity-75" />
 			<span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--status-running-fg)]" />
 		</span>
+	);
+}
+
+/**
+ * Countdown badge for an approval gate carrying an SLA deadline.
+ *
+ * Renders nothing for any other step, or for a gate without a deadline.
+ */
+function ApprovalSla({ step }: { step: StepResponse }) {
+	if (
+		step.status !== "awaiting_approval" ||
+		step.approval_seconds_remaining === null ||
+		step.approval_seconds_remaining === undefined
+	) {
+		return null;
+	}
+
+	const expired = step.approval_seconds_remaining <= 0;
+
+	return (
+		<Badge
+			variant={expired ? "destructive" : "outline"}
+			className="text-[10px] font-medium shrink-0 flex items-center gap-1"
+		>
+			<Clock className="w-3 h-3" />
+			{formatRemaining(step.approval_seconds_remaining)}
+			{step.approval_assignee ? ` · ${step.approval_assignee}` : ""}
+		</Badge>
 	);
 }
 
@@ -210,6 +243,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 					{step.kind}
 				</Badge>
 				<StatusBadge status={step.status} />
+				<ApprovalSla step={step} />
 				<span className="text-xs text-muted-foreground ml-auto shrink-0">
 					{formatDuration(step.duration_ms)}
 				</span>
@@ -630,7 +664,10 @@ function StepRow({ step }: { step: StepResponse }) {
 					</Badge>
 				</TableCell>
 				<TableCell>
-					<StatusBadge status={step.status} />
+					<div className="flex items-center gap-2">
+						<StatusBadge status={step.status} />
+						<ApprovalSla step={step} />
+					</div>
 				</TableCell>
 				<TableCell>{formatDuration(step.duration_ms)}</TableCell>
 				<TableCell>{formatCost(step.cost_usd)}</TableCell>

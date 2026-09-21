@@ -96,23 +96,30 @@ async fn resolve_approval(
 
     // On rejection, mark the approval step as Rejected so the dashboard reflects it.
     // On approval, the step is transitioned by the replay in resume_run.
-    if target_status == RunStatus::Failed {
-        let steps = state.store.list_steps(id).await?;
-        for step in &steps {
-            if step.status.state == StepStatus::AwaitingApproval {
-                state
-                    .store
-                    .update_step(
-                        step.id,
-                        StepUpdate {
-                            status: Some(StepStatus::Rejected),
-                            completed_at: Some(chrono::Utc::now()),
-                            ..StepUpdate::default()
-                        },
-                    )
-                    .await?;
-            }
+    //
+    // Either way the SLA timer is disarmed here: the run resumes asynchronously,
+    // and the escalator must not claim a gate a human just resolved.
+    let steps = state.store.list_steps(id).await?;
+    for step in &steps {
+        if step.status.state != StepStatus::AwaitingApproval {
+            continue;
         }
+
+        let update = if target_status == RunStatus::Failed {
+            StepUpdate {
+                status: Some(StepStatus::Rejected),
+                completed_at: Some(Utc::now()),
+                clear_approval_deadline: true,
+                ..StepUpdate::default()
+            }
+        } else {
+            StepUpdate {
+                clear_approval_deadline: true,
+                ..StepUpdate::default()
+            }
+        };
+
+        state.store.update_step(step.id, update).await?;
     }
 
     state.store.update_run_status(id, target_status).await?;
@@ -503,6 +510,100 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), HttpStatusCode::BAD_REQUEST);
+    }
+
+    /// A run awaiting approval whose gate carries a live SLA deadline.
+    async fn run_with_armed_gate(store: &Arc<InMemoryStore>) -> (Uuid, Uuid) {
+        use chrono::TimeDelta;
+
+        let run = create_awaiting_approval_run(store).await;
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "gate", 0),
+                name: "gate".to_string(),
+                kind: StepKind::Approval,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::AwaitingApproval),
+                    approval_deadline_at: Some(Utc::now() + TimeDelta::seconds(3600)),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        (run.id, step.id)
+    }
+
+    /// Hit `/{id}/{verb}` and return the HTTP status.
+    async fn resolve(store: Arc<InMemoryStore>, run_id: Uuid, verb: &str) -> HttpStatusCode {
+        let state = test_state(store);
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/approve", post(approve_run))
+            .route("/{id}/reject", post(reject_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{run_id}/{verb}"))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        app.oneshot(req).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn approve_clears_the_approval_deadline() {
+        let store = Arc::new(InMemoryStore::new());
+        let (run_id, step_id) = run_with_armed_gate(&store).await;
+
+        assert_eq!(
+            resolve(store.clone(), run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert!(
+            step.approval_deadline_at.is_none(),
+            "an approved gate must never be escalated afterwards"
+        );
+    }
+
+    #[tokio::test]
+    async fn reject_clears_the_approval_deadline() {
+        let store = Arc::new(InMemoryStore::new());
+        let (run_id, step_id) = run_with_armed_gate(&store).await;
+
+        assert_eq!(
+            resolve(store.clone(), run_id, "reject").await,
+            HttpStatusCode::OK
+        );
+
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Rejected);
+        assert!(step.approval_deadline_at.is_none());
     }
 
     #[tokio::test]
