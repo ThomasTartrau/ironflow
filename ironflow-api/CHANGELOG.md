@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.36.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.35.10...ironflow-api-v2.36.0) - 2026-09-21
+
+### Added
+
+- #91 add SLA deadlines and escalation policies to approval gates
+
+
+### Fixed
+
+- #91 resolve MR findings on approval gate assignee typing
+
 ## [2.35.10](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.35.9...ironflow-api-v2.35.10) - 2026-09-21
 
 ### Changed
