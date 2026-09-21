@@ -2177,7 +2177,7 @@
         "description": "Step response DTO — public API representation of a step.\n\n# Examples\n\n```\nuse ironflow_store::models::Step;\nuse ironflow_api::entities::StepResponse;\n```",
         "properties": {
           "approval_assignee": {
-            "description": "Who the approval is currently assigned to.",
+            "description": "Who the approval is currently assigned to.\n\nSerialized as a prefixed string: `user:{name}` or `group:{name}`.",
             "nullable": true,
             "type": "string"
           },

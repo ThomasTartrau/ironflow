@@ -1173,7 +1173,7 @@ impl RunStore for PostgresStore {
                 query = query.bind(stage as i32);
             }
             if let Some(ref assignee) = update.approval_assignee {
-                query = query.bind(assignee.as_str());
+                query = query.bind(assignee.to_string());
             }
 
             query = query.bind(id);

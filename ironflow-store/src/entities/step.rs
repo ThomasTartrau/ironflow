@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{FsmState, StepKind, StepStatus};
+use super::{Assignee, FsmState, StepKind, StepStatus};
 
 /// Attempt number assigned to steps deserialized from payloads predating the
 /// `attempt` field.
@@ -122,7 +122,7 @@ pub struct Step {
     pub approval_stage: u32,
     /// User or group the approval is currently assigned to, after reassignment.
     #[serde(default)]
-    pub approval_assignee: Option<String>,
+    pub approval_assignee: Option<Assignee>,
 }
 
 /// Request to create a new step.
@@ -211,7 +211,7 @@ pub struct StepUpdate {
     pub approval_stage: Option<u32>,
     /// New approval assignee.
     #[serde(default)]
-    pub approval_assignee: Option<String>,
+    pub approval_assignee: Option<Assignee>,
     /// Clear the approval deadline (sets it to `NULL`). Wins over
     /// `approval_deadline_at` when both are set.
     #[serde(default)]
@@ -276,7 +276,7 @@ mod tests {
             is_error_handler: false,
             approval_deadline_at: Some(now),
             approval_stage: 2,
-            approval_assignee: Some("sre-oncall".to_string()),
+            approval_assignee: Some(Assignee::group("sre-oncall")),
         };
 
         let json = serde_json::to_string(&step).expect("serialize");
@@ -367,7 +367,7 @@ mod tests {
             debug_messages: None,
             approval_deadline_at: Some(Utc::now()),
             approval_stage: Some(1),
-            approval_assignee: Some("sre-oncall".to_string()),
+            approval_assignee: Some(Assignee::group("sre-oncall")),
             clear_approval_deadline: false,
         };
 

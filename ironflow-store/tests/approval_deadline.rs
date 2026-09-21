@@ -104,7 +104,7 @@ async fn deadline_is_persisted_and_read_back() {
             StepUpdate {
                 approval_deadline_at: Some(at),
                 approval_stage: Some(1),
-                approval_assignee: Some("sre-oncall".to_string()),
+                approval_assignee: Some(Assignee::group("sre-oncall")),
                 ..StepUpdate::default()
             },
         )
@@ -114,7 +114,10 @@ async fn deadline_is_persisted_and_read_back() {
     let fetched = store.get_step(step.id).await.expect("get").expect("exists");
     assert_eq!(fetched.approval_deadline_at, Some(at));
     assert_eq!(fetched.approval_stage, 1);
-    assert_eq!(fetched.approval_assignee.as_deref(), Some("sre-oncall"));
+    assert_eq!(
+        fetched.approval_assignee,
+        Some(Assignee::group("sre-oncall"))
+    );
 
     let listed = store.list_steps(run_id).await.expect("list");
     assert_eq!(listed[0].approval_deadline_at, Some(at));
@@ -284,7 +287,7 @@ async fn deadline_reset_reschedules_and_bumps_the_stage() {
             StepUpdate {
                 approval_deadline_at: Some(next),
                 approval_stage: Some(1),
-                approval_assignee: Some("sre-oncall".to_string()),
+                approval_assignee: Some(Assignee::group("sre-oncall")),
                 ..StepUpdate::default()
             },
         )
@@ -294,7 +297,10 @@ async fn deadline_reset_reschedules_and_bumps_the_stage() {
     let stored = store.get_step(step.id).await.expect("get").expect("exists");
     assert_eq!(stored.approval_deadline_at, Some(next));
     assert_eq!(stored.approval_stage, 1);
-    assert_eq!(stored.approval_assignee.as_deref(), Some("sre-oncall"));
+    assert_eq!(
+        stored.approval_assignee,
+        Some(Assignee::group("sre-oncall"))
+    );
     assert!(
         store
             .claim_due_approval_deadlines(10)

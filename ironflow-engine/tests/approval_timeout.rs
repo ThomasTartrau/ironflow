@@ -21,7 +21,9 @@ use uuid::Uuid;
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
-use ironflow_engine::config::{ApprovalConfig, EscalationPolicy, NotificationTarget, ShellConfig};
+use ironflow_engine::config::{
+    ApprovalConfig, Assignee, EscalationPolicy, NotificationTarget, ShellConfig,
+};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::escalation::{
@@ -298,8 +300,8 @@ async fn approval_timeout_escalate_reassigns_and_resets_timer() {
         let store = Arc::new(InMemoryStore::new());
         let config = ApprovalConfig::new("Deploy?")
             .with_deadline_secs(600)
-            .assigned_to("release-managers")
-            .on_timeout(EscalationPolicy::Escalate("sre-oncall".to_string()));
+            .assigned_to(Assignee::group("release-managers"))
+            .on_timeout(EscalationPolicy::Escalate(Assignee::group("sre-oncall")));
         let engine = Arc::new(engine_with(store.clone(), config));
 
         let run_id = suspended_run(&engine).await;
@@ -313,7 +315,7 @@ async fn approval_timeout_escalate_reassigns_and_resets_timer() {
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].action,
-            EscalationAction::Reassigned("sre-oncall".to_string())
+            EscalationAction::Reassigned(Assignee::group("sre-oncall"))
         );
 
         let run = store.get_run(run_id).await.unwrap().unwrap();
@@ -321,7 +323,7 @@ async fn approval_timeout_escalate_reassigns_and_resets_timer() {
 
         let gate = store.get_step(step_id).await.unwrap().unwrap();
         assert_eq!(gate.status.state, StepStatus::AwaitingApproval);
-        assert_eq!(gate.approval_assignee.as_deref(), Some("sre-oncall"));
+        assert_eq!(gate.approval_assignee, Some(Assignee::group("sre-oncall")));
         assert!(gate.approval_deadline_at.expect("timer rearmed") > Utc::now());
     })
     .await
@@ -380,7 +382,7 @@ async fn approval_timeout_chain_exhausted_leaves_the_gate_open() {
         let config = ApprovalConfig::new("Deploy?")
             .with_deadline_secs(600)
             .on_timeout(EscalationPolicy::Chain(vec![EscalationPolicy::Escalate(
-                "sre-oncall".to_string(),
+                Assignee::group("sre-oncall"),
             )]));
         let engine = Arc::new(engine_with(store.clone(), config));
         let escalator = ApprovalEscalator::new(engine.clone());

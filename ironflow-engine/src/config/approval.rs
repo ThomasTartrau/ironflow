@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use ironflow_store::entities::Assignee;
 use serde::{Deserialize, Serialize};
 
 use super::EscalationPolicy;
@@ -36,7 +37,7 @@ pub struct ApprovalConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     on_timeout: Option<EscalationPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    assignee: Option<String>,
+    assignee: Option<Assignee>,
 }
 
 impl ApprovalConfig {
@@ -150,22 +151,23 @@ impl ApprovalConfig {
     ///
     /// # Panics
     ///
-    /// Panics if `assignee` is empty or only whitespace.
+    /// Panics if the assignee name is empty or only whitespace.
     ///
     /// # Examples
     ///
     /// ```
     /// use ironflow_engine::config::ApprovalConfig;
+    /// use ironflow_store::entities::Assignee;
     ///
-    /// let config = ApprovalConfig::new("Approve?").assigned_to("release-managers");
-    /// assert_eq!(config.assignee(), Some("release-managers"));
+    /// let config = ApprovalConfig::new("Approve?").assigned_to(Assignee::group("release-managers"));
+    /// assert_eq!(config.assignee(), Some(&Assignee::group("release-managers")));
     /// ```
-    pub fn assigned_to(mut self, assignee: &str) -> Self {
+    pub fn assigned_to(mut self, assignee: Assignee) -> Self {
         assert!(
-            !assignee.trim().is_empty(),
+            !assignee.name().trim().is_empty(),
             "approval assignee must not be empty"
         );
-        self.assignee = Some(assignee.to_string());
+        self.assignee = Some(assignee);
         self
     }
 
@@ -205,8 +207,8 @@ impl ApprovalConfig {
     }
 
     /// The user or group the gate is assigned to, if any.
-    pub fn assignee(&self) -> Option<&str> {
-        self.assignee.as_deref()
+    pub fn assignee(&self) -> Option<&Assignee> {
+        self.assignee.as_ref()
     }
 
     /// The deadline actually enforced, in seconds.
@@ -291,8 +293,12 @@ mod tests {
 
     #[test]
     fn assigned_to_stores_the_assignee() {
-        let config = ApprovalConfig::new("Approve?").assigned_to("release-managers");
-        assert_eq!(config.assignee(), Some("release-managers"));
+        let config =
+            ApprovalConfig::new("Approve?").assigned_to(Assignee::group("release-managers"));
+        assert_eq!(
+            config.assignee(),
+            Some(&Assignee::group("release-managers"))
+        );
     }
 
     #[test]
@@ -346,7 +352,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "approval assignee must not be empty")]
     fn assigned_to_rejects_blank() {
-        let _ = ApprovalConfig::new("Approve?").assigned_to("  ");
+        let _ = ApprovalConfig::new("Approve?").assigned_to(Assignee::group("  "));
     }
 
     #[test]
@@ -354,8 +360,8 @@ mod tests {
         let config = ApprovalConfig::new("Deploy to prod?")
             .with_timeout_seconds(3600)
             .with_deadline_secs(1800)
-            .on_timeout(EscalationPolicy::Escalate("sre-oncall".to_string()))
-            .assigned_to("release-managers");
+            .on_timeout(EscalationPolicy::Escalate(Assignee::group("sre-oncall")))
+            .assigned_to(Assignee::group("release-managers"));
 
         let json = serde_json::to_string(&config).expect("serialize");
         let back: ApprovalConfig = serde_json::from_str(&json).expect("deserialize");

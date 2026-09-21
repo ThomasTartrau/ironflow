@@ -31,6 +31,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import {
+	formatAssignee,
 	formatDuration,
 	formatCost,
 	formatRemaining,
@@ -87,7 +88,9 @@ function ApprovalSla({ step }: { step: StepResponse }) {
 		>
 			<Clock className="w-3 h-3" />
 			{formatRemaining(step.approval_seconds_remaining)}
-			{step.approval_assignee ? ` · ${step.approval_assignee}` : ""}
+			{step.approval_assignee
+				? ` · ${formatAssignee(step.approval_assignee)}`
+				: ""}
 		</Badge>
 	);
 }

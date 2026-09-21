@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use ironflow_store::entities::LogStream;
-use ironflow_store::models::{RunStatus, StepKind};
+use ironflow_store::models::{Assignee, RunStatus, StepKind};
 
 /// Payload of the `Event::RunCreated` event.
 ///
@@ -409,7 +409,8 @@ pub struct ApprovalEscalatedEvent {
     /// Why it fired, e.g. `"approval deadline of 3600s expired"`.
     pub reason: String,
     /// Assignee after the escalation, when it reassigned the gate.
-    pub assignee: Option<String>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub assignee: Option<Assignee>,
     /// When the escalation ran.
     pub at: DateTime<Utc>,
 }
@@ -1555,7 +1556,7 @@ mod tests {
             policy: "escalate".to_string(),
             action: "reassigned to sre-oncall".to_string(),
             reason: "approval deadline of 3600s expired".to_string(),
-            assignee: Some("sre-oncall".to_string()),
+            assignee: Some(Assignee::group("sre-oncall")),
             at: Utc::now(),
         });
 
@@ -1571,7 +1572,7 @@ mod tests {
         };
         assert_eq!(payload.run_id, run_id);
         assert_eq!(payload.stage, 1);
-        assert_eq!(payload.assignee.as_deref(), Some("sre-oncall"));
+        assert_eq!(payload.assignee, Some(Assignee::group("sre-oncall")));
     }
 
     #[test]

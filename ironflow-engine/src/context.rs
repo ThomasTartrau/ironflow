@@ -1389,7 +1389,7 @@ impl WorkflowContext {
                     status: Some(StepStatus::AwaitingApproval),
                     approval_deadline_at: deadline_at,
                     approval_stage: Some(0),
-                    approval_assignee: config.assignee().map(str::to_string),
+                    approval_assignee: config.assignee().cloned(),
                     ..StepUpdate::default()
                 },
             )
@@ -2926,7 +2926,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{Run, RunActor, RunFilter};
+    use ironflow_store::models::{Assignee, Run, RunActor, RunFilter};
     use ironflow_store::store::RunStore;
     use serde_json::json;
     use std::sync::Arc;
@@ -3560,7 +3560,7 @@ mod tests {
         let before = Utc::now();
         let config = ApprovalConfig::new("Approve?")
             .with_deadline_secs(3600)
-            .assigned_to("release-managers");
+            .assigned_to(Assignee::group("release-managers"));
         ctx.approval("gate", config)
             .await
             .expect_err("approval suspends the run");
@@ -3571,8 +3571,8 @@ mod tests {
         assert!(deadline <= Utc::now() + TimeDelta::seconds(3600));
         assert_eq!(steps[0].approval_stage, 0);
         assert_eq!(
-            steps[0].approval_assignee.as_deref(),
-            Some("release-managers")
+            steps[0].approval_assignee,
+            Some(Assignee::group("release-managers"))
         );
     }
 

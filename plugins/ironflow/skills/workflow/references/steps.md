@@ -130,7 +130,7 @@ timeline shown in the dashboard.
 ```rust,no_run
 use std::time::Duration;
 
-use ironflow_engine::config::{ApprovalConfig, EscalationPolicy};
+use ironflow_engine::config::{ApprovalConfig, Assignee, EscalationPolicy};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 
@@ -138,7 +138,7 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     ctx.approval(
         "approve-production",
         ApprovalConfig::new("Staging looks good. Deploy to production?")
-            .assigned_to("release-managers")
+            .assigned_to(Assignee::group("release-managers"))
             .with_deadline(Duration::from_secs(3600))
             .on_timeout(EscalationPolicy::AutoReject),
     )
@@ -155,15 +155,17 @@ MCP) resumes it: the handler is replayed from the top. Rejection fails the run. 
 
 `with_deadline` (or `with_deadline_secs`) arms a timer persisted on the step, so it
 survives an API or worker restart. `on_timeout` says what happens when it fires;
-without one, an expired deadline auto-rejects. `assigned_to` records who is expected
-to answer and shows up in the API, the dashboard and `ironflow run steps`.
+without one, an expired deadline auto-rejects. `assigned_to` takes an `Assignee`
+(`Assignee::user("alice")` or `Assignee::group("sre-oncall")`) recording who is
+expected to answer; it shows up in the API, the dashboard and `ironflow run steps`.
+The assignee is advisory (notification/audit), not an authorization check.
 
 | `EscalationPolicy` | On expiry |
 |--------------------|-----------|
 | `AutoApprove` | Completes the gate as `system:timeout` and resumes the run |
 | `AutoReject` | Fails the step and the run with `approval timeout` (default) |
 | `Notify(targets)` | Posts the event to each `NotificationTarget`, keeps the gate open, restarts the timer |
-| `Escalate(assignee)` | Reassigns the gate, keeps it open, restarts the timer |
+| `Escalate(Assignee)` | Reassigns the gate to a user or group, keeps it open, restarts the timer |
 | `Chain(policies)` | One policy per expiry, in order |
 
 On their own, `Notify` and `Escalate` repeat at every expiry until a human answers;

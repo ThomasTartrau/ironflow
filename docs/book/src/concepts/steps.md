@@ -51,7 +51,7 @@ use std::time::Duration;
 ctx.approval(
     "prod-gate",
     ApprovalConfig::new("Deploy to production?")
-        .assigned_to("release-managers")
+        .assigned_to(Assignee::group("release-managers"))
         .with_deadline(Duration::from_secs(3600))
         .on_timeout(EscalationPolicy::AutoReject),
 ).await?;
@@ -60,7 +60,7 @@ ctx.approval(
 | Field | Builder | Meaning |
 |-------|---------|---------|
 | `message` | `ApprovalConfig::new` | Prompt shown to reviewers |
-| `assignee` | `assigned_to` | User or group expected to answer |
+| `assignee` | `assigned_to` | `Assignee::user` / `Assignee::group` expected to answer |
 | `deadline_secs` | `with_deadline` / `with_deadline_secs` | SLA window, in seconds |
 | `on_timeout` | `on_timeout` | `EscalationPolicy` applied when the deadline fires (defaults to `AutoReject`) |
 | `timeout_seconds` | `with_timeout_seconds` | Legacy spelling of a deadline with an implicit `AutoReject` |

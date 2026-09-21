@@ -13,7 +13,9 @@
 //! cycle leaves an audit entry, so the loop is never silent. Wrap them in a
 //! [`Chain`](EscalationPolicy::Chain) to advance one policy per expiry instead.
 
+use ironflow_store::entities::Assignee;
 use serde::{Deserialize, Serialize};
+use strum::IntoStaticStr;
 
 /// What to do when an approval gate misses its SLA deadline.
 ///
@@ -32,8 +34,9 @@ use serde::{Deserialize, Serialize};
 /// ]);
 /// assert_eq!(policy.len(), 2);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum EscalationPolicy {
     /// Complete the step with `approved_by: "system:timeout"` and resume the run.
     AutoApprove,
@@ -42,7 +45,7 @@ pub enum EscalationPolicy {
     /// Notify each target without changing state, then restart the timer.
     Notify(Vec<NotificationTarget>),
     /// Reassign the approval to another user or group, then restart the timer.
-    Escalate(String),
+    Escalate(Assignee),
     /// Apply the policies one per expiry, in order.
     Chain(Vec<EscalationPolicy>),
 }
@@ -94,13 +97,14 @@ impl EscalationPolicy {
     ///
     /// ```
     /// use ironflow_engine::config::EscalationPolicy;
+    /// use ironflow_store::entities::Assignee;
     ///
     /// let single = EscalationPolicy::AutoReject;
     /// assert_eq!(single.stage(0), Some(&EscalationPolicy::AutoReject));
     /// assert_eq!(single.stage(1), None);
     ///
     /// let chain = EscalationPolicy::Chain(vec![
-    ///     EscalationPolicy::Escalate("sre-oncall".to_string()),
+    ///     EscalationPolicy::Escalate(Assignee::group("sre-oncall")),
     ///     EscalationPolicy::AutoReject,
     /// ]);
     /// assert_eq!(chain.stage(1), Some(&EscalationPolicy::AutoReject));
@@ -119,10 +123,11 @@ impl EscalationPolicy {
     ///
     /// ```
     /// use ironflow_engine::config::EscalationPolicy;
+    /// use ironflow_store::entities::Assignee;
     ///
     /// assert!(EscalationPolicy::AutoApprove.is_terminal());
     /// assert!(EscalationPolicy::AutoReject.is_terminal());
-    /// assert!(!EscalationPolicy::Escalate("sre".to_string()).is_terminal());
+    /// assert!(!EscalationPolicy::Escalate(Assignee::group("sre")).is_terminal());
     /// ```
     pub fn is_terminal(&self) -> bool {
         matches!(
@@ -141,9 +146,10 @@ impl EscalationPolicy {
     ///
     /// ```
     /// use ironflow_engine::config::EscalationPolicy;
+    /// use ironflow_store::entities::Assignee;
     ///
     /// assert!(EscalationPolicy::Notify(Vec::new()).is_repeating());
-    /// assert!(EscalationPolicy::Escalate("sre".to_string()).is_repeating());
+    /// assert!(EscalationPolicy::Escalate(Assignee::group("sre")).is_repeating());
     /// assert!(!EscalationPolicy::AutoApprove.is_repeating());
     /// ```
     pub fn is_repeating(&self) -> bool {
@@ -231,9 +237,9 @@ mod tests {
 
     #[test]
     fn escalate_is_externally_tagged() {
-        let policy = EscalationPolicy::Escalate("sre-oncall".to_string());
+        let policy = EscalationPolicy::Escalate(Assignee::group("sre-oncall"));
         let json = serde_json::to_string(&policy).expect("serialize");
-        assert_eq!(json, "{\"escalate\":\"sre-oncall\"}");
+        assert_eq!(json, "{\"escalate\":\"group:sre-oncall\"}");
 
         let back: EscalationPolicy = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, policy);
@@ -290,7 +296,7 @@ mod tests {
     fn stage_walks_a_chain_in_order() {
         let policy = EscalationPolicy::Chain(vec![
             EscalationPolicy::Notify(vec![slack()]),
-            EscalationPolicy::Escalate("sre-oncall".to_string()),
+            EscalationPolicy::Escalate(Assignee::group("sre-oncall")),
             EscalationPolicy::AutoReject,
         ]);
 
@@ -300,7 +306,7 @@ mod tests {
         );
         assert_eq!(
             policy.stage(1),
-            Some(&EscalationPolicy::Escalate("sre-oncall".to_string()))
+            Some(&EscalationPolicy::Escalate(Assignee::group("sre-oncall")))
         );
         assert_eq!(policy.stage(2), Some(&EscalationPolicy::AutoReject));
         assert!(policy.stage(3).is_none());
@@ -312,7 +318,11 @@ mod tests {
             (EscalationPolicy::AutoApprove, true, false),
             (EscalationPolicy::AutoReject, true, false),
             (EscalationPolicy::Notify(vec![slack()]), false, true),
-            (EscalationPolicy::Escalate("sre".to_string()), false, true),
+            (
+                EscalationPolicy::Escalate(Assignee::group("sre")),
+                false,
+                true,
+            ),
             (EscalationPolicy::Chain(Vec::new()), false, false),
         ];
 
@@ -325,7 +335,7 @@ mod tests {
     #[test]
     fn len_reports_chain_length_and_one_otherwise() {
         assert_eq!(EscalationPolicy::AutoApprove.len(), 1);
-        assert_eq!(EscalationPolicy::Escalate("sre".to_string()).len(), 1);
+        assert_eq!(EscalationPolicy::Escalate(Assignee::group("sre")).len(), 1);
         assert_eq!(
             EscalationPolicy::Chain(vec![
                 EscalationPolicy::AutoApprove,

@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use ironflow_engine::config::{ApprovalConfig, EscalationPolicy, NotificationTarget, ShellConfig};
+use ironflow_engine::config::{
+    ApprovalConfig, Assignee, EscalationPolicy, NotificationTarget, ShellConfig,
+};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
@@ -74,7 +76,7 @@ impl WorkflowHandler for DeployApproval {
             ctx.approval(
                 "prod-approval",
                 ApprovalConfig::new("Staging looks good. Deploy to production?")
-                    .assigned_to("release-managers")
+                    .assigned_to(Assignee::group("release-managers"))
                     .with_deadline(Duration::from_secs(3600))
                     .on_timeout(EscalationPolicy::Chain(vec![
                         // After 1 h without an answer: warn, keep waiting.

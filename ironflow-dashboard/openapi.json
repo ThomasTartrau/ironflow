@@ -4614,7 +4614,7 @@
               "string",
               "null"
             ],
-            "description": "Who the approval is currently assigned to."
+            "description": "Who the approval is currently assigned to.\n\nSerialized as a prefixed string: `user:{name}` or `group:{name}`."
           },
           "approval_deadline_at": {
             "type": [

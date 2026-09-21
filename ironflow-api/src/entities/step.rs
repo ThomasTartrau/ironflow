@@ -1,7 +1,7 @@
 //! Step-related DTOs.
 
 use chrono::{DateTime, Utc};
-use ironflow_store::models::{Step, StepKind, StepStatus};
+use ironflow_store::models::{Assignee, Step, StepKind, StepStatus};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -84,7 +84,10 @@ pub struct StepResponse {
     /// step has no deadline.
     pub approval_seconds_remaining: Option<i64>,
     /// Who the approval is currently assigned to.
-    pub approval_assignee: Option<String>,
+    ///
+    /// Serialized as a prefixed string: `user:{name}` or `group:{name}`.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub approval_assignee: Option<Assignee>,
 }
 
 impl StepResponse {
@@ -147,8 +150,9 @@ impl From<Step> for StepResponse {
 mod tests {
     use std::collections::HashMap;
 
+    use chrono::TimeDelta;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewStep, TriggerKind, step_trace_id};
+    use ironflow_store::models::{NewRun, NewStep, StepUpdate, TriggerKind, step_trace_id};
     use ironflow_store::store::RunStore;
     use serde_json::json;
 
@@ -223,9 +227,6 @@ mod tests {
 
     /// An approval step whose deadline is `offset_secs` from now.
     async fn gate_with_deadline(offset_secs: i64) -> Step {
-        use chrono::TimeDelta;
-        use ironflow_store::models::StepUpdate;
-
         let store = InMemoryStore::new();
         let run = store
             .create_run(NewRun {
@@ -273,7 +274,7 @@ mod tests {
                 StepUpdate {
                     status: Some(StepStatus::AwaitingApproval),
                     approval_deadline_at: Some(Utc::now() + TimeDelta::seconds(offset_secs)),
-                    approval_assignee: Some("release-managers".to_string()),
+                    approval_assignee: Some(Assignee::group("release-managers")),
                     ..StepUpdate::default()
                 },
             )
@@ -301,8 +302,8 @@ mod tests {
             .expect("a deadline yields a countdown");
         assert!(remaining > 0 && remaining <= 3600, "got {remaining}");
         assert_eq!(
-            response.approval_assignee.as_deref(),
-            Some("release-managers")
+            response.approval_assignee,
+            Some(Assignee::group("release-managers"))
         );
     }
 

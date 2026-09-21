@@ -25,7 +25,8 @@ use serde_json::json;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use ironflow_store::models::{RunStatus, RunUpdate, Step, StepStatus, StepUpdate};
+use ironflow_store::models::{Assignee, RunStatus, RunUpdate, Step, StepStatus, StepUpdate};
+use strum::IntoStaticStr;
 
 use crate::config::{ApprovalConfig, EscalationPolicy, NotificationTarget};
 use crate::engine::Engine;
@@ -54,7 +55,8 @@ pub const DEFAULT_ESCALATION_BATCH_SIZE: u32 = 50;
 /// assert_eq!(EscalationAction::Notified(2), EscalationAction::Notified(2));
 /// assert_ne!(EscalationAction::Approved, EscalationAction::Rejected);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum EscalationAction {
     /// Gate auto-approved; the run was resumed.
     Approved,
@@ -63,7 +65,7 @@ pub enum EscalationAction {
     /// `n` notifications sent; the timer was restarted.
     Notified(usize),
     /// Gate reassigned; the timer was restarted.
-    Reassigned(String),
+    Reassigned(Assignee),
     /// The policy chain ran out; the gate stays open with no timer.
     Exhausted,
     /// The gate resolved between the claim and the escalation — nothing to do.
@@ -82,14 +84,7 @@ impl EscalationAction {
     /// assert_eq!(EscalationAction::Notified(3).label(), "notified");
     /// ```
     pub fn label(&self) -> &'static str {
-        match self {
-            EscalationAction::Approved => "approved",
-            EscalationAction::Rejected => "rejected",
-            EscalationAction::Notified(_) => "notified",
-            EscalationAction::Reassigned(_) => "reassigned",
-            EscalationAction::Exhausted => "exhausted",
-            EscalationAction::Stale => "stale",
-        }
+        self.into()
     }
 }
 
@@ -491,10 +486,10 @@ impl ApprovalEscalator {
         step: &Step,
         config: &ApprovalConfig,
         policy: &EscalationPolicy,
-        assignee: &str,
+        assignee: &Assignee,
     ) -> Result<EscalationAction, EngineError> {
         self.rearm(step, config, policy, Some(assignee)).await?;
-        Ok(EscalationAction::Reassigned(assignee.to_string()))
+        Ok(EscalationAction::Reassigned(assignee.clone()))
     }
 
     /// Restart the timer for a policy that left the gate open.
@@ -507,7 +502,7 @@ impl ApprovalEscalator {
         step: &Step,
         config: &ApprovalConfig,
         policy: &EscalationPolicy,
-        assignee: Option<&str>,
+        assignee: Option<&Assignee>,
     ) -> Result<(), EngineError> {
         let next_stage = next_stage(policy, step.approval_stage);
         let deadline = config
@@ -521,7 +516,7 @@ impl ApprovalEscalator {
                 StepUpdate {
                     approval_deadline_at: deadline,
                     approval_stage: Some(next_stage),
-                    approval_assignee: assignee.map(str::to_string),
+                    approval_assignee: assignee.cloned(),
                     ..StepUpdate::default()
                 },
             )
@@ -538,7 +533,7 @@ impl ApprovalEscalator {
         policy: &str,
         action: &str,
         reason: &str,
-        assignee: Option<String>,
+        assignee: Option<Assignee>,
     ) -> ApprovalEscalatedEvent {
         ApprovalEscalatedEvent {
             run_id: step.run_id,
@@ -561,7 +556,7 @@ impl ApprovalEscalator {
         policy: &str,
         action: &EscalationAction,
         reason: &str,
-        assignee: Option<String>,
+        assignee: Option<Assignee>,
     ) {
         let event = self.escalated_event(step, stage, policy, action.label(), reason, assignee);
 
@@ -674,8 +669,8 @@ mod tests {
         assert_eq!(EscalationAction::Notified(2), EscalationAction::Notified(2));
         assert_ne!(EscalationAction::Notified(2), EscalationAction::Notified(3));
         assert_eq!(
-            EscalationAction::Reassigned("sre".to_string()),
-            EscalationAction::Reassigned("sre".to_string())
+            EscalationAction::Reassigned(Assignee::group("sre")),
+            EscalationAction::Reassigned(Assignee::group("sre"))
         );
         assert_ne!(EscalationAction::Approved, EscalationAction::Rejected);
     }
@@ -686,7 +681,7 @@ mod tests {
             EscalationAction::Approved.label(),
             EscalationAction::Rejected.label(),
             EscalationAction::Notified(1).label(),
-            EscalationAction::Reassigned("sre".to_string()).label(),
+            EscalationAction::Reassigned(Assignee::group("sre")).label(),
             EscalationAction::Exhausted.label(),
             EscalationAction::Stale.label(),
         ];
@@ -706,7 +701,7 @@ mod tests {
         assert_eq!(next_stage(&notify, 0), 0);
         assert_eq!(next_stage(&notify, 7), 7);
 
-        let escalate = EscalationPolicy::Escalate("sre".to_string());
+        let escalate = EscalationPolicy::Escalate(Assignee::group("sre"));
         assert_eq!(next_stage(&escalate, 3), 3);
     }
 
@@ -763,7 +758,7 @@ mod tests {
             "notify"
         );
         assert_eq!(
-            policy_label(&EscalationPolicy::Escalate("sre".to_string())),
+            policy_label(&EscalationPolicy::Escalate(Assignee::group("sre"))),
             "escalate"
         );
         assert_eq!(policy_label(&EscalationPolicy::Chain(Vec::new())), "chain");

@@ -27,10 +27,14 @@ performed by the server instead of a human -- see
 use std::time::Duration;
 
 ApprovalConfig::new("Deploy to production?")
-    .assigned_to("release-managers")          // Who is expected to answer
-    .with_deadline(Duration::from_secs(3600)) // SLA: one hour to answer
-    .on_timeout(EscalationPolicy::AutoReject) // What happens when it expires
+    .assigned_to(Assignee::group("release-managers")) // Who is expected to answer
+    .with_deadline(Duration::from_secs(3600))         // SLA: one hour to answer
+    .on_timeout(EscalationPolicy::AutoReject)         // What happens when it expires
 ```
+
+`assigned_to` takes an `Assignee` -- `Assignee::user("alice")` or
+`Assignee::group("release-managers")`. It is advisory (it drives notification
+routing and audit); it is not an authorization check on who may resolve the gate.
 
 Everything past the message is optional. Without a deadline, the run waits
 indefinitely.
@@ -60,7 +64,7 @@ auto-rejects.
 | `AutoApprove` | Completes the gate with `approved_by: "system:timeout"` and resumes the run. |
 | `AutoReject` | Fails the step and the run with `approval timeout`. The default. |
 | `Notify(targets)` | Posts the escalation event to each target, leaves the gate open, restarts the timer. |
-| `Escalate(assignee)` | Reassigns the gate to another user or group, leaves it open, restarts the timer. |
+| `Escalate(Assignee)` | Reassigns the gate to another user or group, leaves it open, restarts the timer. |
 | `Chain(policies)` | Applies one policy per expiry, in order. |
 
 `Notify` and `Escalate` do not resolve the gate: on their own, they fire again at

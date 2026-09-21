@@ -2610,7 +2610,11 @@ export interface components {
 		 *     ```
 		 */
 		StepResponse: {
-			/** @description Who the approval is currently assigned to. */
+			/**
+			 * @description Who the approval is currently assigned to.
+			 *
+			 *     Serialized as a prefixed string: `user:{name}` or `group:{name}`.
+			 */
 			approval_assignee?: string | null;
 			/**
 			 * Format: date-time

@@ -170,6 +170,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode as HttpStatusCode};
     use axum::routing::post;
+    use chrono::TimeDelta;
     use http_body_util::BodyExt;
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -514,8 +515,6 @@ mod tests {
 
     /// A run awaiting approval whose gate carries a live SLA deadline.
     async fn run_with_armed_gate(store: &Arc<InMemoryStore>) -> (Uuid, Uuid) {
-        use chrono::TimeDelta;
-
         let run = create_awaiting_approval_run(store).await;
         let step = store
             .create_step(NewStep {

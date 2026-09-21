@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
 	capitalize,
+	formatAssignee,
 	formatBytes,
 	formatDuration,
 	formatPercent,
@@ -186,5 +187,19 @@ describe("formatRemaining", () => {
 	it("switches to hours at the hour boundary", () => {
 		expect(formatRemaining(3600)).toBe("1h");
 		expect(formatRemaining(7500)).toBe("2h 5m");
+	});
+});
+
+describe("formatAssignee", () => {
+	it("strips the user prefix", () => {
+		expect(formatAssignee("user:alice")).toBe("alice");
+	});
+
+	it("strips the group prefix", () => {
+		expect(formatAssignee("group:sre-oncall")).toBe("sre-oncall");
+	});
+
+	it("returns an unprefixed value unchanged", () => {
+		expect(formatAssignee("release-managers")).toBe("release-managers");
 	});
 });
