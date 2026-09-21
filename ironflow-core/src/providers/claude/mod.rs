@@ -33,4 +33,5 @@ pub use docker::DockerProvider;
 #[cfg(feature = "transport-k8s")]
 pub use k8s::{
     ImagePullPolicy, K8sClusterConfig, K8sEphemeralProvider, K8sPersistentProvider, K8sResources,
+    K8sToleration, TolerationEffect, TolerationOperator,
 };

@@ -10,6 +10,7 @@ use serde_json::json;
 
 use crate::error::AgentError;
 use crate::provider::AgentInput;
+use crate::providers::claude::k8s::toleration::K8sToleration;
 
 /// Default image used by the input-fetch initContainer.
 ///
@@ -183,6 +184,11 @@ pub struct PodConfig<'a> {
     /// When empty, no `spec.nodeSelector` is written and the scheduler is
     /// free to place the pod on any node.
     pub node_selector: &'a BTreeMap<String, String>,
+    /// Tolerations letting the pod schedule onto tainted nodes.
+    ///
+    /// When empty, no `spec.tolerations` is written. Each entry lets the pod
+    /// tolerate one taint (e.g. a dedicated worker node's `NoSchedule` taint).
+    pub tolerations: &'a [K8sToleration],
     /// Host-path volumes to mount into the container.
     ///
     /// Each tuple is `(host_path, container_path)`. An empty slice means
@@ -447,6 +453,9 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
     if !config.node_selector.is_empty() {
         pod_json["spec"]["nodeSelector"] = json!(config.node_selector);
     }
+    if !config.tolerations.is_empty() {
+        pod_json["spec"]["tolerations"] = json!(config.tolerations);
+    }
 
     serde_json::from_value(pod_json).map_err(|e| AgentError::ProcessFailed {
         exit_code: -1,
@@ -512,6 +521,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -539,6 +549,7 @@ mod tests {
             image_pull_secrets: &secrets,
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -568,6 +579,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -599,6 +611,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -634,6 +647,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -671,6 +685,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &extra,
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -705,6 +720,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &selector,
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -736,6 +752,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -765,6 +782,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -798,6 +816,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &vols,
             pvc_volumes: &[],
             inputs: &[],
@@ -849,6 +868,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &pvcs,
             inputs: &[],
@@ -893,6 +913,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &vols,
             pvc_volumes: &pvcs,
             inputs: &[],
@@ -962,6 +983,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &inputs,
@@ -1020,6 +1042,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &inputs,
@@ -1060,6 +1083,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -1086,6 +1110,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],
@@ -1126,6 +1151,7 @@ mod tests {
             image_pull_secrets: &[],
             extra_labels: &BTreeMap::new(),
             node_selector: &BTreeMap::new(),
+            tolerations: &[],
             volumes: &[],
             pvc_volumes: &[],
             inputs: &[],

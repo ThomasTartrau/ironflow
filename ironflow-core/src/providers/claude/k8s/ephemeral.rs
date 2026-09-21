@@ -50,6 +50,7 @@ use super::common::{
     DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig,
     build_credentials_prefix, build_pod_spec, create_client, generate_pod_name,
 };
+use super::toleration::K8sToleration;
 
 fn is_terminal_phase(phase: &str) -> bool {
     phase == "Succeeded" || phase == "Failed"
@@ -113,6 +114,7 @@ pub struct K8sEphemeralProvider {
     pvc_volumes: Vec<(String, String)>,
     input_init_image: String,
     node_selector: BTreeMap<String, String>,
+    tolerations: Vec<K8sToleration>,
     active_deadline_seconds: Option<Duration>,
 }
 
@@ -149,6 +151,7 @@ impl K8sEphemeralProvider {
             pvc_volumes: Vec::new(),
             input_init_image: DEFAULT_INPUT_INIT_IMAGE.to_string(),
             node_selector: BTreeMap::new(),
+            tolerations: Vec::new(),
             active_deadline_seconds: None,
         }
     }
@@ -380,6 +383,33 @@ impl K8sEphemeralProvider {
             .insert(key.to_string(), value.to_string());
         self
     }
+
+    /// Let the agent pod schedule onto tainted nodes.
+    ///
+    /// Appends one [`K8sToleration`] to the pod's `spec.tolerations`. Call
+    /// multiple times to tolerate several taints. Without any call the pod
+    /// carries no toleration and stays `Pending` on a `NoSchedule`-tainted node
+    /// (e.g. a dedicated worker node).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::{
+    ///     K8sEphemeralProvider, K8sToleration, TolerationEffect, TolerationOperator,
+    /// };
+    ///
+    /// let provider = K8sEphemeralProvider::new("img:v1").toleration(K8sToleration {
+    ///     key: "dedicated".to_string(),
+    ///     operator: TolerationOperator::Equal,
+    ///     value: Some("worker".to_string()),
+    ///     effect: TolerationEffect::NoSchedule,
+    ///     toleration_seconds: None,
+    /// });
+    /// ```
+    pub fn toleration(mut self, toleration: K8sToleration) -> Self {
+        self.tolerations.push(toleration);
+        self
+    }
 }
 
 /// Path inside the container where the prompt ConfigMap is mounted.
@@ -510,6 +540,7 @@ impl K8sEphemeralProvider {
             image_pull_secrets: &self.image_pull_secrets,
             extra_labels: &merged_labels,
             node_selector: &self.node_selector,
+            tolerations: &self.tolerations,
             volumes: &self.volumes,
             pvc_volumes: &self.pvc_volumes,
             inputs: &config.inputs,
@@ -829,6 +860,7 @@ impl AgentProvider for K8sEphemeralProvider {
 mod tests {
     use serde_json::from_value;
 
+    use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
 
     #[test]
@@ -972,6 +1004,34 @@ mod tests {
         assert_eq!(provider.node_selector.len(), 2);
         assert_eq!(provider.node_selector["kubernetes.io/hostname"], "ryzen1");
         assert_eq!(provider.node_selector["workload"], "agent");
+    }
+
+    #[test]
+    fn ephemeral_provider_toleration_default_empty() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        assert!(provider.tolerations.is_empty());
+    }
+
+    #[test]
+    fn ephemeral_provider_toleration_accumulates() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .toleration(K8sToleration {
+                key: "dedicated".to_string(),
+                operator: TolerationOperator::Equal,
+                value: Some("worker".to_string()),
+                effect: TolerationEffect::NoSchedule,
+                toleration_seconds: None,
+            })
+            .toleration(K8sToleration {
+                key: "gpu".to_string(),
+                operator: TolerationOperator::Exists,
+                value: None,
+                effect: TolerationEffect::NoExecute,
+                toleration_seconds: None,
+            });
+        assert_eq!(provider.tolerations.len(), 2);
+        assert_eq!(provider.tolerations[0].key, "dedicated");
+        assert_eq!(provider.tolerations[1].operator, TolerationOperator::Exists);
     }
 
     #[test]
