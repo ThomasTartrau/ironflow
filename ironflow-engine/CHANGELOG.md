@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.36.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.36.3...ironflow-engine-v2.36.4) - 2026-09-21
+
+### Changed
+
+- #95 typer fortement les events du bus (reprise manuelle)
+
 ## [2.36.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.35.5...ironflow-engine-v2.36.0) - 2026-09-18
 
 ### Added

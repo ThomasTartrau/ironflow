@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.22](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.21...ironflow-sdk-v0.1.22) - 2026-09-21
+
+### Changed
+
+- #95 typer fortement les events du bus (reprise manuelle)
+
 ## [0.1.21](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.20...ironflow-sdk-v0.1.21) - 2026-09-12
 
 ### Fixed
