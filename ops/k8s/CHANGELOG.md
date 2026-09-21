@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.11](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.10...ironflow-ops-k8s-v0.1.11) - 2026-09-21
+
+### Added
+
+- #99 add configurable pod tolerations to k8s providers
+
 ## [0.1.10](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.9...ironflow-ops-k8s-v0.1.10) - 2026-09-19
 
 ### Added
