@@ -144,12 +144,19 @@ async fn approval_timeout_auto_approve_completes_step_and_resumes_run() {
         let run_id = suspended_run(&engine).await;
         let step_id = expire_gate(&store, run_id).await;
 
-        let records = ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].action, EscalationAction::Approved);
         assert_eq!(records[0].step_id, step_id);
-        assert!(records[0].reason.contains("1s"), "got {}", records[0].reason);
+        assert!(
+            records[0].reason.contains("1s"),
+            "got {}",
+            records[0].reason
+        );
 
         let gate = store.get_step(step_id).await.unwrap().unwrap();
         assert_eq!(gate.status.state, StepStatus::Completed);
@@ -161,7 +168,11 @@ async fn approval_timeout_auto_approve_completes_step_and_resumes_run() {
 
         let run = store.get_run(run_id).await.unwrap().unwrap();
         assert_eq!(run.status.state, RunStatus::Completed);
-        assert!(step_names(&store, run_id).await.contains(&"deploy".to_string()));
+        assert!(
+            step_names(&store, run_id)
+                .await
+                .contains(&"deploy".to_string())
+        );
     })
     .await
     .expect("test timed out");
@@ -179,7 +190,10 @@ async fn approval_timeout_auto_reject_fails_step_and_run() {
         let run_id = suspended_run(&engine).await;
         let step_id = expire_gate(&store, run_id).await;
 
-        let records = ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].action, EscalationAction::Rejected);
@@ -192,7 +206,11 @@ async fn approval_timeout_auto_reject_fails_step_and_run() {
         let run = store.get_run(run_id).await.unwrap().unwrap();
         assert_eq!(run.status.state, RunStatus::Failed);
         assert_eq!(run.error.as_deref(), Some(APPROVAL_TIMEOUT_ERROR));
-        assert!(!step_names(&store, run_id).await.contains(&"deploy".to_string()));
+        assert!(
+            !step_names(&store, run_id)
+                .await
+                .contains(&"deploy".to_string())
+        );
     })
     .await
     .expect("test timed out");
@@ -209,7 +227,9 @@ async fn record(State(received): State<Received>, Json(body): Json<Value>) -> &'
 /// Spin a real HTTP server that records every posted JSON body.
 async fn recording_server() -> (SocketAddr, Received) {
     let received: Received = Arc::new(Mutex::new(Vec::new()));
-    let app = Router::new().route("/hook", post(record)).with_state(received.clone());
+    let app = Router::new()
+        .route("/hook", post(record))
+        .with_state(received.clone());
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local addr");
@@ -227,15 +247,20 @@ async fn approval_timeout_notify_posts_to_webhook_and_resets_timer() {
         let store = Arc::new(InMemoryStore::new());
         let config = ApprovalConfig::new("Deploy?")
             .with_deadline_secs(600)
-            .on_timeout(EscalationPolicy::Notify(vec![NotificationTarget::Webhook {
-                url: format!("http://{addr}/hook"),
-            }]));
+            .on_timeout(EscalationPolicy::Notify(vec![
+                NotificationTarget::Webhook {
+                    url: format!("http://{addr}/hook"),
+                },
+            ]));
         let engine = Arc::new(engine_with(store.clone(), config));
 
         let run_id = suspended_run(&engine).await;
         let step_id = expire_gate(&store, run_id).await;
 
-        let records = ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].action, EscalationAction::Notified(1));
@@ -280,7 +305,10 @@ async fn approval_timeout_escalate_reassigns_and_resets_timer() {
         let run_id = suspended_run(&engine).await;
         let step_id = expire_gate(&store, run_id).await;
 
-        let records = ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -387,7 +415,10 @@ async fn approval_timeout_without_deadline_never_fires() {
         let gate = gate_step(&store, run_id).await;
         assert!(gate.approval_deadline_at.is_none());
 
-        let records = ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         assert!(records.is_empty());
         let run = store.get_run(run_id).await.unwrap().unwrap();
@@ -415,7 +446,10 @@ async fn approval_timeout_ignores_a_gate_approved_in_the_meantime() {
             .await
             .expect("approve");
 
-        let records = ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].action, EscalationAction::Stale);
@@ -470,7 +504,10 @@ async fn approval_timeout_legacy_timeout_seconds_auto_rejects() {
         let run_id = suspended_run(&engine).await;
         let step_id = expire_gate(&store, run_id).await;
 
-        let records = ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         assert_eq!(records[0].action, EscalationAction::Rejected);
         assert!(
@@ -507,7 +544,10 @@ async fn approval_timeout_writes_an_audit_entry_with_the_reason() {
         let run_id = suspended_run(&engine).await;
         expire_gate(&store, run_id).await;
 
-        ApprovalEscalator::new(engine.clone()).tick().await.expect("tick");
+        ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
 
         // Subscribers run in spawned tasks; give them a turn to persist.
         tokio::task::yield_now().await;

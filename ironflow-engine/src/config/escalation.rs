@@ -294,7 +294,10 @@ mod tests {
             EscalationPolicy::AutoReject,
         ]);
 
-        assert_eq!(policy.stage(0), Some(&EscalationPolicy::Notify(vec![slack()])));
+        assert_eq!(
+            policy.stage(0),
+            Some(&EscalationPolicy::Notify(vec![slack()]))
+        );
         assert_eq!(
             policy.stage(1),
             Some(&EscalationPolicy::Escalate("sre-oncall".to_string()))

@@ -307,7 +307,14 @@ impl ApprovalEscalator {
                 stage,
                 "escalation chain exhausted; the approval gate stays open with no timer"
             );
-            self.publish(step, stage, "chain", &EscalationAction::Exhausted, &reason, None);
+            self.publish(
+                step,
+                stage,
+                "chain",
+                &EscalationAction::Exhausted,
+                &reason,
+                None,
+            );
             return Ok(EscalationRecord {
                 run_id: step.run_id,
                 step_id: step.id,
@@ -321,7 +328,8 @@ impl ApprovalEscalator {
             EscalationPolicy::AutoApprove => self.auto_approve(step, &reason).await?,
             EscalationPolicy::AutoReject => self.auto_reject(step).await?,
             EscalationPolicy::Notify(targets) => {
-                self.notify(step, &config, &policy, targets, &reason).await?
+                self.notify(step, &config, &policy, targets, &reason)
+                    .await?
             }
             EscalationPolicy::Escalate(assignee) => {
                 self.reassign(step, &config, &policy, assignee).await?
@@ -334,7 +342,14 @@ impl ApprovalEscalator {
             EscalationAction::Reassigned(to) => Some(to.clone()),
             _ => step.approval_assignee.clone(),
         };
-        self.publish(step, stage, policy_label(current), &action, &reason, assignee);
+        self.publish(
+            step,
+            stage,
+            policy_label(current),
+            &action,
+            &reason,
+            assignee,
+        );
 
         Ok(EscalationRecord {
             run_id: step.run_id,
@@ -743,7 +758,10 @@ mod tests {
     fn policy_labels_match_the_wire_format() {
         assert_eq!(policy_label(&EscalationPolicy::AutoApprove), "auto_approve");
         assert_eq!(policy_label(&EscalationPolicy::AutoReject), "auto_reject");
-        assert_eq!(policy_label(&EscalationPolicy::Notify(Vec::new())), "notify");
+        assert_eq!(
+            policy_label(&EscalationPolicy::Notify(Vec::new())),
+            "notify"
+        );
         assert_eq!(
             policy_label(&EscalationPolicy::Escalate("sre".to_string())),
             "escalate"

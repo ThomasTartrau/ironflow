@@ -1560,7 +1560,10 @@ mod tests {
         });
 
         let json = serde_json::to_string(&event).expect("serialize");
-        assert!(json.contains("\"type\":\"approval_escalated\""), "got {json}");
+        assert!(
+            json.contains("\"type\":\"approval_escalated\""),
+            "got {json}"
+        );
 
         let back: Event = serde_json::from_str(&json).expect("deserialize");
         let Event::ApprovalEscalated(payload) = back else {

@@ -300,7 +300,10 @@ mod tests {
             .approval_seconds_remaining
             .expect("a deadline yields a countdown");
         assert!(remaining > 0 && remaining <= 3600, "got {remaining}");
-        assert_eq!(response.approval_assignee.as_deref(), Some("release-managers"));
+        assert_eq!(
+            response.approval_assignee.as_deref(),
+            Some("release-managers")
+        );
     }
 
     #[tokio::test]

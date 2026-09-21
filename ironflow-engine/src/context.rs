@@ -3570,7 +3570,10 @@ mod tests {
         assert!(deadline >= before + TimeDelta::seconds(3600));
         assert!(deadline <= Utc::now() + TimeDelta::seconds(3600));
         assert_eq!(steps[0].approval_stage, 0);
-        assert_eq!(steps[0].approval_assignee.as_deref(), Some("release-managers"));
+        assert_eq!(
+            steps[0].approval_assignee.as_deref(),
+            Some("release-managers")
+        );
     }
 
     #[tokio::test]
@@ -3606,7 +3609,10 @@ mod tests {
             store.clone(),
             create_test_provider(),
         );
-        resumed.load_replay_steps().await.expect("load replay steps");
+        resumed
+            .load_replay_steps()
+            .await
+            .expect("load replay steps");
         resumed
             .approval(
                 "gate",
