@@ -13,7 +13,9 @@
 pub mod common;
 pub mod ephemeral;
 pub mod persistent;
+pub mod toleration;
 
 pub use common::{ImagePullPolicy, K8sClusterConfig, K8sResources};
 pub use ephemeral::K8sEphemeralProvider;
 pub use persistent::K8sPersistentProvider;
+pub use toleration::{K8sToleration, TolerationEffect, TolerationOperator};

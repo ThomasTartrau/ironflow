@@ -8,7 +8,7 @@ use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use k8s_openapi::api::core::v1::{
     Container, LocalObjectReference, PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext,
-    PodSpec, ResourceRequirements, SecurityContext, Volume, VolumeMount,
+    PodSpec, ResourceRequirements, SecurityContext, Toleration, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -122,6 +122,7 @@ pub struct PodRun {
     command: String,
     working_dir: Option<String>,
     node_selector: BTreeMap<String, String>,
+    tolerations: Vec<Toleration>,
     image_pull_secret: Option<String>,
     pvcs: Vec<PvcMount>,
     resources: Option<ResourceSpec>,
@@ -147,6 +148,7 @@ impl PodRun {
             command: command.to_string(),
             working_dir: None,
             node_selector: BTreeMap::new(),
+            tolerations: Vec::new(),
             image_pull_secret: None,
             pvcs: Vec::new(),
             resources: None,
@@ -178,6 +180,38 @@ impl PodRun {
     pub fn node_selector(mut self, key: &str, value: &str) -> Self {
         self.node_selector
             .insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Add a `toleration` letting the pod schedule onto tainted nodes.
+    ///
+    /// Additive: every call appends one [`Toleration`] to `spec.tolerations`, so
+    /// the pod can tolerate several taints at once. A pod targeting a node with a
+    /// `NoSchedule` taint (e.g. a dedicated worker node) stays `Pending` forever
+    /// unless it carries a matching toleration. With no call the field is left
+    /// absent, unchanged behaviour for existing callers.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::pod_run::PodRun;
+    /// use k8s_openapi::api::core::v1::Toleration;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = PodRun::new(kube, "run-tests", "rust:1.94", "cargo test").toleration(Toleration {
+    ///     key: Some("dedicated".to_string()),
+    ///     operator: Some("Equal".to_string()),
+    ///     value: Some("worker".to_string()),
+    ///     effect: Some("NoSchedule".to_string()),
+    ///     ..Default::default()
+    /// });
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn toleration(mut self, toleration: Toleration) -> Self {
+        self.tolerations.push(toleration);
         self
     }
 
@@ -330,11 +364,8 @@ impl PodRun {
             container.volume_mounts = Some(volume_mounts);
         }
 
-        let node_selector = if self.node_selector.is_empty() {
-            None
-        } else {
-            Some(self.node_selector.clone())
-        };
+        let node_selector = (!self.node_selector.is_empty()).then(|| self.node_selector.clone());
+        let tolerations = (!self.tolerations.is_empty()).then(|| self.tolerations.clone());
 
         let image_pull_secrets = self
             .image_pull_secret
@@ -357,6 +388,7 @@ impl PodRun {
                 containers: vec![container],
                 restart_policy: Some("Never".to_string()),
                 node_selector,
+                tolerations,
                 image_pull_secrets,
                 volumes: if volumes.is_empty() {
                     None

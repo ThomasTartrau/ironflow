@@ -13,6 +13,8 @@ use ironflow_core::operation::Operation;
 use tower::Service;
 use tower::service_fn;
 
+use k8s_openapi::api::core::v1::Toleration;
+
 use super::{PodRun, ResourceSpec, SecuritySpec, active_deadline_secs};
 use crate::KubeClient;
 
@@ -65,6 +67,58 @@ async fn build_pod_applies_node_selector() {
         .build_pod();
     let ns = pod.spec.unwrap().node_selector.unwrap();
     assert_eq!(ns.get("disktype").map(String::as_str), Some("ssd"));
+}
+
+#[tokio::test]
+async fn build_pod_applies_toleration() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .toleration(Toleration {
+            key: Some("dedicated".to_string()),
+            operator: Some("Equal".to_string()),
+            value: Some("worker".to_string()),
+            effect: Some("NoSchedule".to_string()),
+            ..Default::default()
+        })
+        .build_pod();
+    let tolerations = pod.spec.unwrap().tolerations.unwrap();
+    assert_eq!(tolerations.len(), 1);
+    let t = &tolerations[0];
+    assert_eq!(t.key.as_deref(), Some("dedicated"));
+    assert_eq!(t.operator.as_deref(), Some("Equal"));
+    assert_eq!(t.value.as_deref(), Some("worker"));
+    assert_eq!(t.effect.as_deref(), Some("NoSchedule"));
+}
+
+#[tokio::test]
+async fn build_pod_applies_multiple_tolerations() {
+    // Additive: two toleration() calls must both land in the pod spec.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .toleration(Toleration {
+            key: Some("dedicated".to_string()),
+            operator: Some("Equal".to_string()),
+            value: Some("worker".to_string()),
+            effect: Some("NoSchedule".to_string()),
+            ..Default::default()
+        })
+        .toleration(Toleration {
+            key: Some("gpu".to_string()),
+            operator: Some("Exists".to_string()),
+            effect: Some("NoExecute".to_string()),
+            ..Default::default()
+        })
+        .build_pod();
+    let tolerations = pod.spec.unwrap().tolerations.unwrap();
+    assert_eq!(tolerations.len(), 2);
+    assert_eq!(tolerations[0].key.as_deref(), Some("dedicated"));
+    assert_eq!(tolerations[1].key.as_deref(), Some("gpu"));
+    assert_eq!(tolerations[1].operator.as_deref(), Some("Exists"));
+}
+
+#[tokio::test]
+async fn build_pod_without_toleration_has_no_tolerations() {
+    // Opt-in strict: the field stays absent unless the builder is called.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    assert!(pod.spec.unwrap().tolerations.is_none());
 }
 
 #[tokio::test]
