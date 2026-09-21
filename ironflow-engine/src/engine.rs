@@ -39,7 +39,10 @@ use crate::executor::StepResult;
 use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
-use crate::notify::{Event, EventPublisher, EventSubscriber, WorkflowEventBus};
+use crate::notify::{
+    Event, EventPublisher, EventSubscriber, RunBudgetExceededEvent, RunFailedEvent,
+    RunStatusChangedEvent, WorkflowEventBus,
+};
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
 use ironflow_core::decision::DecisionProvider;
@@ -1407,14 +1410,15 @@ impl Engine {
         )
         .increment(1);
 
-        self.event_publisher.publish(Event::RunBudgetExceeded {
-            run_id,
-            workflow_name: workflow_name.to_string(),
-            limit_usd: *limit_usd,
-            spent_usd: *spent_usd,
-            step_budget_usd: *step_budget_usd,
-            at: Utc::now(),
-        });
+        self.event_publisher
+            .publish(Event::RunBudgetExceeded(RunBudgetExceededEvent {
+                run_id,
+                workflow_name: workflow_name.to_string(),
+                limit_usd: *limit_usd,
+                spent_usd: *spent_usd,
+                step_budget_usd: *step_budget_usd,
+                at: Utc::now(),
+            }));
     }
 
     /// Publish a run status changed event to all registered subscribers.
@@ -1436,28 +1440,30 @@ impl Engine {
         let cost_usd = ctx.total_cost_usd();
         let wf = workflow_name.to_string();
 
-        self.event_publisher.publish(Event::RunStatusChanged {
-            run_id,
-            workflow_name: wf.clone(),
-            from: RunStatus::Running,
-            to,
-            error: error.clone(),
-            cost_usd,
-            duration_ms,
-            labels: labels.clone(),
-            at: now,
-        });
-
-        if to == RunStatus::Failed {
-            self.event_publisher.publish(Event::RunFailed {
+        self.event_publisher
+            .publish(Event::RunStatusChanged(RunStatusChangedEvent {
                 run_id,
-                workflow_name: wf,
-                error,
+                workflow_name: wf.clone(),
+                from: RunStatus::Running,
+                to,
+                error: error.clone(),
                 cost_usd,
                 duration_ms,
-                labels,
+                labels: labels.clone(),
                 at: now,
-            });
+            }));
+
+        if to == RunStatus::Failed {
+            self.event_publisher
+                .publish(Event::RunFailed(RunFailedEvent {
+                    run_id,
+                    workflow_name: wf,
+                    error,
+                    cost_usd,
+                    duration_ms,
+                    labels,
+                    at: now,
+                }));
         }
     }
 }

@@ -428,66 +428,44 @@ impl EventSubscriber for EventTrigger {
         "event-trigger"
     }
 
+    #[deny(unreachable_patterns)]
     fn handle<'a>(&'a self, event: &'a Event) -> SubscriberFuture<'a> {
         Box::pin(async move {
             let internal = match event {
-                Event::RunFailed {
-                    run_id,
-                    workflow_name,
-                    error,
-                    cost_usd,
-                    duration_ms,
-                    labels,
-                    ..
-                } => InternalEvent {
-                    run_id: *run_id,
-                    workflow_name: workflow_name.clone(),
+                Event::RunFailed(e) => InternalEvent {
+                    run_id: e.run_id,
+                    workflow_name: e.workflow_name.clone(),
                     event_kind: EventKind::RunFailed,
-                    error: error.clone(),
-                    labels: labels.clone(),
-                    cost_usd: *cost_usd,
-                    duration_ms: *duration_ms,
+                    error: e.error.clone(),
+                    labels: e.labels.clone(),
+                    cost_usd: e.cost_usd,
+                    duration_ms: e.duration_ms,
                 },
-                Event::RunStatusChanged {
-                    run_id,
-                    workflow_name,
-                    error,
-                    cost_usd,
-                    duration_ms,
-                    labels,
-                    ..
-                } => InternalEvent {
-                    run_id: *run_id,
-                    workflow_name: workflow_name.clone(),
+                Event::RunStatusChanged(e) => InternalEvent {
+                    run_id: e.run_id,
+                    workflow_name: e.workflow_name.clone(),
                     event_kind: EventKind::RunStatusChanged,
-                    error: error.clone(),
-                    labels: labels.clone(),
-                    cost_usd: *cost_usd,
-                    duration_ms: *duration_ms,
+                    error: e.error.clone(),
+                    labels: e.labels.clone(),
+                    cost_usd: e.cost_usd,
+                    duration_ms: e.duration_ms,
                 },
-                Event::StepFailed {
-                    run_id,
-                    step_name,
-                    error,
-                    ..
-                } => InternalEvent {
-                    run_id: *run_id,
-                    workflow_name: step_name.clone(),
+                // `step_name` lands in `workflow_name` here, matching the
+                // pre-refactor behaviour of this subscriber.
+                Event::StepFailed(e) => InternalEvent {
+                    run_id: e.run_id,
+                    workflow_name: e.step_name.clone(),
                     event_kind: EventKind::StepFailed,
-                    error: Some(error.clone()),
+                    error: Some(e.error.clone()),
                     labels: HashMap::new(),
                     cost_usd: Decimal::ZERO,
                     duration_ms: 0,
                 },
-                Event::ApprovalRejected {
-                    run_id,
-                    rejected_by,
-                    ..
-                } => InternalEvent {
-                    run_id: *run_id,
+                Event::ApprovalRejected(e) => InternalEvent {
+                    run_id: e.run_id,
                     workflow_name: String::new(),
                     event_kind: EventKind::ApprovalRejected,
-                    error: Some(format!("rejected by {rejected_by}")),
+                    error: Some(format!("rejected by {}", e.rejected_by)),
                     labels: HashMap::new(),
                     cost_usd: Decimal::ZERO,
                     duration_ms: 0,
@@ -507,6 +485,7 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
+    use ironflow_engine::notify::{RunCreatedEvent, RunFailedEvent};
     use rust_decimal::Decimal;
     use tokio::time::timeout;
 
@@ -705,7 +684,7 @@ mod tests {
     async fn event_subscriber_forwards_run_failed() {
         let trigger = make_trigger(vec![deploy_to_rollback_rule()]);
 
-        let event = Event::RunFailed {
+        let event = Event::RunFailed(RunFailedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             error: Some("crash".to_string()),
@@ -713,7 +692,7 @@ mod tests {
             duration_ms: 0,
             labels: HashMap::new(),
             at: Utc::now(),
-        };
+        });
 
         // Call the EventSubscriber::handle method
         EventSubscriber::handle(&trigger, &event).await;
@@ -729,11 +708,11 @@ mod tests {
     async fn event_subscriber_ignores_irrelevant_events() {
         let trigger = make_trigger(vec![deploy_to_rollback_rule()]);
 
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             at: Utc::now(),
-        };
+        });
 
         EventSubscriber::handle(&trigger, &event).await;
 

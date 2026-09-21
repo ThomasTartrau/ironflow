@@ -52,6 +52,7 @@ pub trait EventSubscriber: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notify::RunCreatedEvent;
 
     struct TestSubscriber {
         name: String,
@@ -123,11 +124,11 @@ mod tests {
         };
 
         // Create a dummy event for testing
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: uuid::Uuid::now_v7(),
             workflow_name: "test-wf".to_string(),
             at: Utc::now(),
-        };
+        });
 
         // Should complete without error
         sub.handle(&event).await;
@@ -140,11 +141,11 @@ mod tests {
             name: "async_test".to_string(),
         };
 
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: uuid::Uuid::now_v7(),
             workflow_name: "test".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let start = std::time::Instant::now();
         sub.handle(&event).await;
@@ -164,11 +165,11 @@ mod tests {
             name: "sub2".to_string(),
         };
 
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: uuid::Uuid::now_v7(),
             workflow_name: "test".to_string(),
             at: Utc::now(),
-        };
+        });
 
         // Both should handle without issue
         sub1.handle(&event).await;
@@ -189,11 +190,11 @@ mod tests {
             name: "boxed_test".to_string(),
         };
 
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: uuid::Uuid::now_v7(),
             workflow_name: "test".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let future = sub.handle(&event);
         // The future should be a Pin<Box<_>> and awaitable

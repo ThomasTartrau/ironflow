@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, RunStatusChangedEvent};
 use ironflow_store::entities::{ReapedRun, RunStatus};
 use ironflow_store::store::{LEASE_EXPIRED_ERROR, Store};
 use tokio::time::interval;
@@ -177,7 +177,7 @@ impl Reaper {
 
         self.engine
             .event_publisher()
-            .publish(Event::RunStatusChanged {
+            .publish(Event::RunStatusChanged(RunStatusChangedEvent {
                 run_id: run.id,
                 workflow_name: run.workflow_name.clone(),
                 from: entry.from,
@@ -187,7 +187,7 @@ impl Reaper {
                 duration_ms: run.duration_ms,
                 labels: run.labels.clone(),
                 at: Utc::now(),
-            });
+            }));
     }
 }
 
@@ -391,13 +391,7 @@ mod tests {
             .events()
             .into_iter()
             .filter_map(|event| match event {
-                Event::RunStatusChanged {
-                    run_id: id,
-                    from,
-                    to,
-                    error,
-                    ..
-                } if id == run_id => Some((from, to, error)),
+                Event::RunStatusChanged(e) if e.run_id == run_id => Some((e.from, e.to, e.error)),
                 _ => None,
             })
             .collect();
@@ -420,8 +414,10 @@ mod tests {
         let matched = recorder.events().into_iter().any(|event| {
             matches!(
                 event,
-                Event::RunStatusChanged { run_id: id, to, error: Some(err), .. }
-                    if id == run_id && to == RunStatus::Failed && err == LEASE_EXPIRED_ERROR
+                Event::RunStatusChanged(ref e)
+                    if e.run_id == run_id
+                        && e.to == RunStatus::Failed
+                        && e.error.as_deref() == Some(LEASE_EXPIRED_ERROR)
             )
         });
         assert!(matched, "expected a failed status change with an error");

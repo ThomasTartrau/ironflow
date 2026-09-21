@@ -248,6 +248,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::notify::{RunCreatedEvent, RunStatusChangedEvent};
 
     type HmacSha256 = Hmac<Sha256>;
     type CapturedRequest = Arc<Mutex<Option<(HeaderMap, Vec<u8>)>>>;
@@ -353,11 +354,11 @@ mod tests {
         });
 
         let sub = WebhookSubscriber::new(&format!("http://{}", addr));
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             at: Utc::now(),
-        };
+        });
 
         sub.handle(&event).await;
 
@@ -391,7 +392,7 @@ mod tests {
         });
 
         let sub = WebhookSubscriber::with_signing_secret(&format!("http://{}", addr), secret);
-        let event = Event::RunStatusChanged {
+        let event = Event::RunStatusChanged(RunStatusChangedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             from: RunStatus::Pending,
@@ -401,7 +402,7 @@ mod tests {
             duration_ms: 0,
             labels: HashMap::new(),
             at: Utc::now(),
-        };
+        });
 
         sub.handle(&event).await;
 

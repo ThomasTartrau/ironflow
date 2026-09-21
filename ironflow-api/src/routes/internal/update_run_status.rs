@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use serde_json::json;
 
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, RunFailedEvent, RunStatusChangedEvent};
 use ironflow_store::entities::{RunStatus, RunUpdate};
 
 use crate::error::ApiError;
@@ -76,7 +76,7 @@ pub async fn update_run_status(
 
     if previous.status.state != new_status {
         let publisher = state.engine.event_publisher();
-        publisher.publish(Event::RunStatusChanged {
+        publisher.publish(Event::RunStatusChanged(RunStatusChangedEvent {
             run_id: id,
             workflow_name: previous.workflow_name.clone(),
             from: previous.status.state,
@@ -86,9 +86,9 @@ pub async fn update_run_status(
             duration_ms,
             labels: previous.labels.clone(),
             at: now,
-        });
+        }));
         if new_status == RunStatus::Failed {
-            publisher.publish(Event::RunFailed {
+            publisher.publish(Event::RunFailed(RunFailedEvent {
                 run_id: id,
                 workflow_name: previous.workflow_name,
                 error: error_msg,
@@ -96,7 +96,7 @@ pub async fn update_run_status(
                 duration_ms,
                 labels: previous.labels,
                 at: now,
-            });
+            }));
         }
     }
 

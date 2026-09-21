@@ -99,7 +99,7 @@ impl FormattedMessage {
 /// # Examples
 ///
 /// ```
-/// use ironflow_engine::notify::{Event, FormattedMessage, MessageFormatter};
+/// use ironflow_engine::notify::{Event, FormattedMessage, MessageFormatter, RunCreatedEvent};
 ///
 /// struct PlainTextFormatter;
 ///
@@ -113,11 +113,11 @@ impl FormattedMessage {
 /// }
 ///
 /// let formatter = PlainTextFormatter;
-/// let event = Event::RunCreated {
+/// let event = Event::RunCreated(RunCreatedEvent {
 ///     run_id: uuid::Uuid::now_v7(),
 ///     workflow_name: "deploy".to_string(),
 ///     at: chrono::Utc::now(),
-/// };
+/// });
 /// let msg = formatter.format(&event).unwrap();
 /// assert!(msg.body().contains("run_created"));
 /// ```
@@ -134,6 +134,7 @@ pub trait MessageFormatter: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notify::{RunCreatedEvent, UserSignedInEvent};
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -167,8 +168,8 @@ mod tests {
 
         fn format(&self, event: &Event) -> Option<FormattedMessage> {
             match event {
-                Event::RunCreated { workflow_name, .. } => {
-                    let body = format!(r#"{{"text":"Run created for {}"}}"#, workflow_name);
+                Event::RunCreated(e) => {
+                    let body = format!(r#"{{"text":"Run created for {}"}}"#, e.workflow_name);
                     Some(FormattedMessage::json(&body))
                 }
                 _ => None,
@@ -179,11 +180,11 @@ mod tests {
     #[test]
     fn formatter_formats_matching_event() {
         let formatter = TestFormatter;
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let msg = formatter.format(&event);
         assert!(msg.is_some());
@@ -195,11 +196,11 @@ mod tests {
     #[test]
     fn formatter_skips_non_matching_event() {
         let formatter = TestFormatter;
-        let event = Event::UserSignedIn {
+        let event = Event::UserSignedIn(UserSignedInEvent {
             user_id: Uuid::now_v7(),
             username: "alice".to_string(),
             at: Utc::now(),
-        };
+        });
 
         assert!(formatter.format(&event).is_none());
     }

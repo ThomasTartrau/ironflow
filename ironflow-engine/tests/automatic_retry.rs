@@ -404,16 +404,13 @@ async fn scheduling_a_retry_does_not_publish_run_failed() {
 
     let events = collector.events.lock().expect("collector lock").clone();
     assert!(
-        !events.iter().any(|e| matches!(e, Event::RunFailed { .. })),
+        !events.iter().any(|e| matches!(e, Event::RunFailed(_))),
         "a scheduled retry is not a run failure"
     );
     assert!(
         events.iter().any(|e| matches!(
             e,
-            Event::RunStatusChanged {
-                to: RunStatus::Retrying,
-                ..
-            }
+            Event::RunStatusChanged(payload) if payload.to == RunStatus::Retrying
         )),
         "the move to Retrying must be published"
     );

@@ -10,21 +10,494 @@ use uuid::Uuid;
 pub use ironflow_store::entities::LogStream;
 use ironflow_store::models::{RunStatus, StepKind};
 
+/// Payload of the `Event::RunCreated` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::RunCreatedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = RunCreatedEvent {
+///     run_id: Uuid::now_v7(),
+///     workflow_name: "deploy".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.workflow_name, "deploy");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RunCreatedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Workflow name.
+    pub workflow_name: String,
+    /// When the run was created.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::RunStatusChanged` event.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+///
+/// use chrono::Utc;
+/// use ironflow_engine::notify::RunStatusChangedEvent;
+/// use ironflow_store::models::RunStatus;
+/// use rust_decimal::Decimal;
+/// use uuid::Uuid;
+///
+/// let payload = RunStatusChangedEvent {
+///     run_id: Uuid::now_v7(),
+///     workflow_name: "deploy".to_string(),
+///     from: RunStatus::Running,
+///     to: RunStatus::Completed,
+///     error: None,
+///     cost_usd: Decimal::ZERO,
+///     duration_ms: 5000,
+///     labels: HashMap::new(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.to, RunStatus::Completed);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RunStatusChangedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Workflow name.
+    pub workflow_name: String,
+    /// Previous status.
+    pub from: RunStatus,
+    /// New status.
+    pub to: RunStatus,
+    /// Error message (when transitioning to Failed).
+    pub error: Option<String>,
+    /// Aggregated cost in USD at the time of transition.
+    pub cost_usd: Decimal,
+    /// Aggregated duration in milliseconds at the time of transition.
+    pub duration_ms: u64,
+    /// Labels of the run at the time of the transition.
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
+    /// When the transition occurred.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::RunFailed` event.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+///
+/// use chrono::Utc;
+/// use ironflow_engine::notify::RunFailedEvent;
+/// use rust_decimal::Decimal;
+/// use uuid::Uuid;
+///
+/// let payload = RunFailedEvent {
+///     run_id: Uuid::now_v7(),
+///     workflow_name: "deploy".to_string(),
+///     error: Some("step crashed".to_string()),
+///     cost_usd: Decimal::ZERO,
+///     duration_ms: 3000,
+///     labels: HashMap::new(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.error.as_deref(), Some("step crashed"));
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RunFailedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Workflow name.
+    pub workflow_name: String,
+    /// Error message.
+    pub error: Option<String>,
+    /// Aggregated cost in USD at the time of failure.
+    pub cost_usd: Decimal,
+    /// Aggregated duration in milliseconds at the time of failure.
+    pub duration_ms: u64,
+    /// Labels of the run at the time of the failure.
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
+    /// When the failure occurred.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::RunBudgetExceeded` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::RunBudgetExceededEvent;
+/// use rust_decimal::Decimal;
+/// use uuid::Uuid;
+///
+/// let payload = RunBudgetExceededEvent {
+///     run_id: Uuid::now_v7(),
+///     workflow_name: "deploy".to_string(),
+///     limit_usd: Decimal::new(200, 2),
+///     spent_usd: Decimal::new(180, 2),
+///     step_budget_usd: Decimal::new(50, 2),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.limit_usd, Decimal::new(200, 2));
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RunBudgetExceededEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Workflow name.
+    pub workflow_name: String,
+    /// The configured cost cap in USD.
+    pub limit_usd: Decimal,
+    /// Cost already consumed when the cap was reached, in USD.
+    pub spent_usd: Decimal,
+    /// Declared budget of the refused step, in USD.
+    pub step_budget_usd: Decimal,
+    /// When the refusal occurred.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::RetryForced` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::RetryForcedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = RetryForcedEvent {
+///     run_id: Uuid::now_v7(),
+///     workflow_name: "deploy".to_string(),
+///     original_version: "1".to_string(),
+///     current_version: "2".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.current_version, "2");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RetryForcedEvent {
+    /// The new run created by the forced retry.
+    pub run_id: Uuid,
+    /// Workflow name.
+    pub workflow_name: String,
+    /// Version stored on the original run.
+    pub original_version: String,
+    /// Current version of the handler.
+    pub current_version: String,
+    /// When the forced retry occurred.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::StepCompleted` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::StepCompletedEvent;
+/// use ironflow_store::models::StepKind;
+/// use rust_decimal::Decimal;
+/// use uuid::Uuid;
+///
+/// let payload = StepCompletedEvent {
+///     run_id: Uuid::now_v7(),
+///     step_id: Uuid::now_v7(),
+///     step_name: "build".to_string(),
+///     kind: StepKind::Shell,
+///     duration_ms: 1200,
+///     cost_usd: Decimal::ZERO,
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.step_name, "build");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct StepCompletedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Step identifier.
+    pub step_id: Uuid,
+    /// Human-readable step name.
+    pub step_name: String,
+    /// Step operation kind.
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
+    pub kind: StepKind,
+    /// Step duration in milliseconds.
+    pub duration_ms: u64,
+    /// Step cost in USD.
+    pub cost_usd: Decimal,
+    /// When the step completed.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::StepFailed` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::StepFailedEvent;
+/// use ironflow_store::models::StepKind;
+/// use uuid::Uuid;
+///
+/// let payload = StepFailedEvent {
+///     run_id: Uuid::now_v7(),
+///     step_id: Uuid::now_v7(),
+///     step_name: "build".to_string(),
+///     kind: StepKind::Shell,
+///     error: "exit code 1".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.error, "exit code 1");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct StepFailedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Step identifier.
+    pub step_id: Uuid,
+    /// Human-readable step name.
+    pub step_name: String,
+    /// Step operation kind.
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
+    pub kind: StepKind,
+    /// Error message.
+    pub error: String,
+    /// When the step failed.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::ApprovalRequested` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::ApprovalRequestedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = ApprovalRequestedEvent {
+///     run_id: Uuid::now_v7(),
+///     step_id: Uuid::now_v7(),
+///     message: "Deploy to prod?".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.message, "Deploy to prod?");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ApprovalRequestedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Approval step identifier.
+    pub step_id: Uuid,
+    /// Message displayed to reviewers.
+    pub message: String,
+    /// When the approval was requested.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::ApprovalGranted` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::ApprovalGrantedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = ApprovalGrantedEvent {
+///     run_id: Uuid::now_v7(),
+///     approved_by: "alice".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.approved_by, "alice");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ApprovalGrantedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// User who approved (ID or username).
+    pub approved_by: String,
+    /// When the approval was granted.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::ApprovalRejected` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::ApprovalRejectedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = ApprovalRejectedEvent {
+///     run_id: Uuid::now_v7(),
+///     rejected_by: "bob".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.rejected_by, "bob");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ApprovalRejectedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// User who rejected (ID or username).
+    pub rejected_by: String,
+    /// When the rejection occurred.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::LogLine` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::{LogLineEvent, LogStream};
+/// use uuid::Uuid;
+///
+/// let payload = LogLineEvent {
+///     run_id: Uuid::now_v7(),
+///     step_id: Uuid::now_v7(),
+///     step_name: "build".to_string(),
+///     stream: LogStream::Stdout,
+///     line: "Compiling ironflow v0.1.0".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.line, "Compiling ironflow v0.1.0");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct LogLineEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// Step identifier.
+    pub step_id: Uuid,
+    /// Human-readable step name.
+    pub step_name: String,
+    /// Output stream.
+    pub stream: LogStream,
+    /// The log line content.
+    pub line: String,
+    /// When the line was emitted.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::UserSignedIn` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::UserSignedInEvent;
+/// use uuid::Uuid;
+///
+/// let payload = UserSignedInEvent {
+///     user_id: Uuid::now_v7(),
+///     username: "alice".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.username, "alice");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserSignedInEvent {
+    /// User identifier.
+    pub user_id: Uuid,
+    /// Username.
+    pub username: String,
+    /// When the sign-in occurred.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::UserSignedUp` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::UserSignedUpEvent;
+/// use uuid::Uuid;
+///
+/// let payload = UserSignedUpEvent {
+///     user_id: Uuid::now_v7(),
+///     username: "alice".to_string(),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.username, "alice");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserSignedUpEvent {
+    /// User identifier.
+    pub user_id: Uuid,
+    /// Username.
+    pub username: String,
+    /// When the sign-up occurred.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::UserSignedOut` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::UserSignedOutEvent;
+/// use uuid::Uuid;
+///
+/// let user_id = Uuid::now_v7();
+/// let payload = UserSignedOutEvent {
+///     user_id,
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.user_id, user_id);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UserSignedOutEvent {
+    /// User identifier.
+    pub user_id: Uuid,
+    /// When the sign-out occurred.
+    pub at: DateTime<Utc>,
+}
+
 /// A domain event emitted by the ironflow system.
 ///
 /// Covers the full lifecycle: runs, steps, approvals, and authentication.
 /// Subscribers receive these via [`EventPublisher`](super::EventPublisher)
 /// and pattern-match on the variants they care about.
 ///
+/// Each variant wraps a dedicated payload struct. The serialized form stays
+/// flat: the `type` discriminant sits next to the payload fields, so
+/// `{"type":"run_created","run_id":...}` round-trips unchanged.
+///
 /// # Examples
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use ironflow_engine::notify::Event;
+/// use ironflow_engine::notify::{Event, RunStatusChangedEvent};
 /// use ironflow_store::models::RunStatus;
 /// use uuid::Uuid;
 ///
-/// let event = Event::RunStatusChanged {
+/// let event = Event::RunStatusChanged(RunStatusChangedEvent {
 ///     run_id: Uuid::now_v7(),
 ///     workflow_name: "deploy".to_string(),
 ///     from: RunStatus::Running,
@@ -34,7 +507,8 @@ use ironflow_store::models::{RunStatus, StepKind};
 ///     duration_ms: 5000,
 ///     labels: HashMap::new(),
 ///     at: chrono::Utc::now(),
-/// };
+/// });
+/// assert_eq!(event.event_type(), "run_status_changed");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -42,60 +516,17 @@ use ironflow_store::models::{RunStatus, StepKind};
 pub enum Event {
     // -- Run lifecycle --
     /// A new run was created (status: Pending).
-    RunCreated {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Workflow name.
-        workflow_name: String,
-        /// When the run was created.
-        at: DateTime<Utc>,
-    },
+    RunCreated(RunCreatedEvent),
 
     /// A run changed status.
-    RunStatusChanged {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Workflow name.
-        workflow_name: String,
-        /// Previous status.
-        from: RunStatus,
-        /// New status.
-        to: RunStatus,
-        /// Error message (when transitioning to Failed).
-        error: Option<String>,
-        /// Aggregated cost in USD at the time of transition.
-        cost_usd: Decimal,
-        /// Aggregated duration in milliseconds at the time of transition.
-        duration_ms: u64,
-        /// Labels of the run at the time of the transition.
-        #[serde(default)]
-        labels: HashMap<String, String>,
-        /// When the transition occurred.
-        at: DateTime<Utc>,
-    },
+    RunStatusChanged(RunStatusChangedEvent),
 
     /// A run transitioned to [`Failed`](ironflow_store::models::RunStatus::Failed).
     ///
     /// This is a convenience event emitted alongside [`RunStatusChanged`](Event::RunStatusChanged)
     /// when the target status is `Failed`. Subscribe to this instead of
     /// `RUN_STATUS_CHANGED` when you only care about failures.
-    RunFailed {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Workflow name.
-        workflow_name: String,
-        /// Error message.
-        error: Option<String>,
-        /// Aggregated cost in USD at the time of failure.
-        cost_usd: Decimal,
-        /// Aggregated duration in milliseconds at the time of failure.
-        duration_ms: u64,
-        /// Labels of the run at the time of the failure.
-        #[serde(default)]
-        labels: HashMap<String, String>,
-        /// When the failure occurred.
-        at: DateTime<Utc>,
-    },
+    RunFailed(RunFailedEvent),
 
     /// A run was stopped because it reached its cumulative cost cap.
     ///
@@ -104,20 +535,7 @@ pub enum Event {
     /// [`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step
     /// is never launched, so the reported spend is what the run had already
     /// consumed.
-    RunBudgetExceeded {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Workflow name.
-        workflow_name: String,
-        /// The configured cost cap in USD.
-        limit_usd: Decimal,
-        /// Cost already consumed when the cap was reached, in USD.
-        spent_usd: Decimal,
-        /// Declared budget of the refused step, in USD.
-        step_budget_usd: Decimal,
-        /// When the refusal occurred.
-        at: DateTime<Utc>,
-    },
+    RunBudgetExceeded(RunBudgetExceededEvent),
 
     /// A manual retry was forced despite a handler version mismatch.
     ///
@@ -125,137 +543,41 @@ pub enum Event {
     /// handler version differs from the run's recorded version. This is
     /// an audit event: it means the new code will execute on the old
     /// payload without the handler explicitly declaring compatibility.
-    RetryForced {
-        /// The new run created by the forced retry.
-        run_id: Uuid,
-        /// Workflow name.
-        workflow_name: String,
-        /// Version stored on the original run.
-        original_version: String,
-        /// Current version of the handler.
-        current_version: String,
-        /// When the forced retry occurred.
-        at: DateTime<Utc>,
-    },
+    RetryForced(RetryForcedEvent),
 
     // -- Step lifecycle --
     /// A step completed successfully.
-    StepCompleted {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Step identifier.
-        step_id: Uuid,
-        /// Human-readable step name.
-        step_name: String,
-        /// Step operation kind.
-        #[cfg_attr(feature = "openapi", schema(value_type = String))]
-        kind: StepKind,
-        /// Step duration in milliseconds.
-        duration_ms: u64,
-        /// Step cost in USD.
-        cost_usd: Decimal,
-        /// When the step completed.
-        at: DateTime<Utc>,
-    },
+    StepCompleted(StepCompletedEvent),
 
     /// A step failed.
-    StepFailed {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Step identifier.
-        step_id: Uuid,
-        /// Human-readable step name.
-        step_name: String,
-        /// Step operation kind.
-        #[cfg_attr(feature = "openapi", schema(value_type = String))]
-        kind: StepKind,
-        /// Error message.
-        error: String,
-        /// When the step failed.
-        at: DateTime<Utc>,
-    },
+    StepFailed(StepFailedEvent),
 
     // -- Approval --
     /// A run is waiting for human approval.
-    ApprovalRequested {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Approval step identifier.
-        step_id: Uuid,
-        /// Message displayed to reviewers.
-        message: String,
-        /// When the approval was requested.
-        at: DateTime<Utc>,
-    },
+    ApprovalRequested(ApprovalRequestedEvent),
 
     /// A run was approved by a human.
-    ApprovalGranted {
-        /// Run identifier.
-        run_id: Uuid,
-        /// User who approved (ID or username).
-        approved_by: String,
-        /// When the approval was granted.
-        at: DateTime<Utc>,
-    },
+    ApprovalGranted(ApprovalGrantedEvent),
 
     /// A run was rejected by a human.
-    ApprovalRejected {
-        /// Run identifier.
-        run_id: Uuid,
-        /// User who rejected (ID or username).
-        rejected_by: String,
-        /// When the rejection occurred.
-        at: DateTime<Utc>,
-    },
+    ApprovalRejected(ApprovalRejectedEvent),
 
     // -- Log streaming --
     /// A log line emitted during step execution.
     ///
     /// Pushed by the worker in real time so that SSE clients can stream
     /// step output as it happens, without waiting for step completion.
-    LogLine {
-        /// Run identifier.
-        run_id: Uuid,
-        /// Step identifier.
-        step_id: Uuid,
-        /// Human-readable step name.
-        step_name: String,
-        /// Output stream.
-        stream: LogStream,
-        /// The log line content.
-        line: String,
-        /// When the line was emitted.
-        at: DateTime<Utc>,
-    },
+    LogLine(LogLineEvent),
 
     // -- Authentication --
     /// A user signed in.
-    UserSignedIn {
-        /// User identifier.
-        user_id: Uuid,
-        /// Username.
-        username: String,
-        /// When the sign-in occurred.
-        at: DateTime<Utc>,
-    },
+    UserSignedIn(UserSignedInEvent),
 
     /// A new user signed up.
-    UserSignedUp {
-        /// User identifier.
-        user_id: Uuid,
-        /// Username.
-        username: String,
-        /// When the sign-up occurred.
-        at: DateTime<Utc>,
-    },
+    UserSignedUp(UserSignedUpEvent),
 
     /// A user signed out.
-    UserSignedOut {
-        /// User identifier.
-        user_id: Uuid,
-        /// When the sign-out occurred.
-        at: DateTime<Utc>,
-    },
+    UserSignedOut(UserSignedOutEvent),
 }
 
 impl Event {
@@ -327,33 +649,162 @@ impl Event {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::notify::Event;
+    /// use ironflow_engine::notify::{Event, UserSignedInEvent};
     /// use uuid::Uuid;
     /// use chrono::Utc;
     ///
-    /// let event = Event::UserSignedIn {
+    /// let event = Event::UserSignedIn(UserSignedInEvent {
     ///     user_id: Uuid::now_v7(),
     ///     username: "alice".to_string(),
     ///     at: Utc::now(),
-    /// };
+    /// });
     /// assert_eq!(event.event_type(), "user_signed_in");
     /// ```
+    #[deny(unreachable_patterns)]
     pub fn event_type(&self) -> &'static str {
         match self {
-            Event::RunCreated { .. } => Self::RUN_CREATED,
-            Event::RunStatusChanged { .. } => Self::RUN_STATUS_CHANGED,
-            Event::RunFailed { .. } => Self::RUN_FAILED,
-            Event::RunBudgetExceeded { .. } => Self::RUN_BUDGET_EXCEEDED,
-            Event::StepCompleted { .. } => Self::STEP_COMPLETED,
-            Event::StepFailed { .. } => Self::STEP_FAILED,
-            Event::ApprovalRequested { .. } => Self::APPROVAL_REQUESTED,
-            Event::ApprovalGranted { .. } => Self::APPROVAL_GRANTED,
-            Event::ApprovalRejected { .. } => Self::APPROVAL_REJECTED,
-            Event::LogLine { .. } => Self::LOG_LINE,
-            Event::UserSignedIn { .. } => Self::USER_SIGNED_IN,
-            Event::UserSignedUp { .. } => Self::USER_SIGNED_UP,
-            Event::UserSignedOut { .. } => Self::USER_SIGNED_OUT,
-            Event::RetryForced { .. } => Self::RETRY_FORCED,
+            Event::RunCreated(_) => Self::RUN_CREATED,
+            Event::RunStatusChanged(_) => Self::RUN_STATUS_CHANGED,
+            Event::RunFailed(_) => Self::RUN_FAILED,
+            Event::RunBudgetExceeded(_) => Self::RUN_BUDGET_EXCEEDED,
+            Event::RetryForced(_) => Self::RETRY_FORCED,
+            Event::StepCompleted(_) => Self::STEP_COMPLETED,
+            Event::StepFailed(_) => Self::STEP_FAILED,
+            Event::ApprovalRequested(_) => Self::APPROVAL_REQUESTED,
+            Event::ApprovalGranted(_) => Self::APPROVAL_GRANTED,
+            Event::ApprovalRejected(_) => Self::APPROVAL_REJECTED,
+            Event::LogLine(_) => Self::LOG_LINE,
+            Event::UserSignedIn(_) => Self::USER_SIGNED_IN,
+            Event::UserSignedUp(_) => Self::USER_SIGNED_UP,
+            Event::UserSignedOut(_) => Self::USER_SIGNED_OUT,
+        }
+    }
+
+    /// Returns the run this event belongs to, if any.
+    ///
+    /// Auth events ([`UserSignedIn`](Event::UserSignedIn),
+    /// [`UserSignedUp`](Event::UserSignedUp),
+    /// [`UserSignedOut`](Event::UserSignedOut)) are not tied to a run and
+    /// return `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::notify::{Event, RunCreatedEvent};
+    /// use uuid::Uuid;
+    /// use chrono::Utc;
+    ///
+    /// let run_id = Uuid::now_v7();
+    /// let event = Event::RunCreated(RunCreatedEvent {
+    ///     run_id,
+    ///     workflow_name: "deploy".to_string(),
+    ///     at: Utc::now(),
+    /// });
+    /// assert_eq!(event.run_id(), Some(run_id));
+    /// ```
+    #[deny(unreachable_patterns)]
+    pub fn run_id(&self) -> Option<Uuid> {
+        match self {
+            Event::RunCreated(e) => Some(e.run_id),
+            Event::RunStatusChanged(e) => Some(e.run_id),
+            Event::RunFailed(e) => Some(e.run_id),
+            Event::RunBudgetExceeded(e) => Some(e.run_id),
+            Event::RetryForced(e) => Some(e.run_id),
+            Event::StepCompleted(e) => Some(e.run_id),
+            Event::StepFailed(e) => Some(e.run_id),
+            Event::ApprovalRequested(e) => Some(e.run_id),
+            Event::ApprovalGranted(e) => Some(e.run_id),
+            Event::ApprovalRejected(e) => Some(e.run_id),
+            Event::LogLine(e) => Some(e.run_id),
+            Event::UserSignedIn(_) | Event::UserSignedUp(_) | Event::UserSignedOut(_) => None,
+        }
+    }
+
+    /// Returns the step this event belongs to, if any.
+    ///
+    /// Only [`StepCompleted`](Event::StepCompleted),
+    /// [`StepFailed`](Event::StepFailed) and
+    /// [`ApprovalRequested`](Event::ApprovalRequested) carry a step
+    /// identifier; every other variant returns `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::notify::{Event, StepFailedEvent};
+    /// use ironflow_store::models::StepKind;
+    /// use uuid::Uuid;
+    /// use chrono::Utc;
+    ///
+    /// let step_id = Uuid::now_v7();
+    /// let event = Event::StepFailed(StepFailedEvent {
+    ///     run_id: Uuid::now_v7(),
+    ///     step_id,
+    ///     step_name: "build".to_string(),
+    ///     kind: StepKind::Shell,
+    ///     error: "exit code 1".to_string(),
+    ///     at: Utc::now(),
+    /// });
+    /// assert_eq!(event.step_id(), Some(step_id));
+    /// ```
+    #[deny(unreachable_patterns)]
+    pub fn step_id(&self) -> Option<Uuid> {
+        match self {
+            Event::StepCompleted(e) => Some(e.step_id),
+            Event::StepFailed(e) => Some(e.step_id),
+            Event::ApprovalRequested(e) => Some(e.step_id),
+            Event::RunCreated(_)
+            | Event::RunStatusChanged(_)
+            | Event::RunFailed(_)
+            | Event::RunBudgetExceeded(_)
+            | Event::RetryForced(_)
+            | Event::ApprovalGranted(_)
+            | Event::ApprovalRejected(_)
+            | Event::LogLine(_)
+            | Event::UserSignedIn(_)
+            | Event::UserSignedUp(_)
+            | Event::UserSignedOut(_) => None,
+        }
+    }
+
+    /// Returns the user this event belongs to, if any.
+    ///
+    /// Only the auth events ([`UserSignedIn`](Event::UserSignedIn),
+    /// [`UserSignedUp`](Event::UserSignedUp),
+    /// [`UserSignedOut`](Event::UserSignedOut)) carry a user identifier;
+    /// every other variant returns `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::notify::{Event, UserSignedInEvent};
+    /// use uuid::Uuid;
+    /// use chrono::Utc;
+    ///
+    /// let user_id = Uuid::now_v7();
+    /// let event = Event::UserSignedIn(UserSignedInEvent {
+    ///     user_id,
+    ///     username: "alice".to_string(),
+    ///     at: Utc::now(),
+    /// });
+    /// assert_eq!(event.user_id(), Some(user_id));
+    /// ```
+    #[deny(unreachable_patterns)]
+    pub fn user_id(&self) -> Option<Uuid> {
+        match self {
+            Event::UserSignedIn(e) => Some(e.user_id),
+            Event::UserSignedUp(e) => Some(e.user_id),
+            Event::UserSignedOut(e) => Some(e.user_id),
+            Event::RunCreated(_)
+            | Event::RunStatusChanged(_)
+            | Event::RunFailed(_)
+            | Event::RunBudgetExceeded(_)
+            | Event::RetryForced(_)
+            | Event::StepCompleted(_)
+            | Event::StepFailed(_)
+            | Event::ApprovalRequested(_)
+            | Event::ApprovalGranted(_)
+            | Event::ApprovalRejected(_)
+            | Event::LogLine(_) => None,
         }
     }
 }
@@ -364,7 +815,7 @@ mod tests {
 
     #[test]
     fn run_status_changed_serde_roundtrip() {
-        let event = Event::RunStatusChanged {
+        let event = Event::RunStatusChanged(RunStatusChangedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             from: RunStatus::Running,
@@ -374,7 +825,7 @@ mod tests {
             duration_ms: 5000,
             labels: HashMap::new(),
             at: Utc::now(),
-        };
+        });
 
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -385,7 +836,7 @@ mod tests {
 
     #[test]
     fn run_failed_serde_roundtrip() {
-        let event = Event::RunFailed {
+        let event = Event::RunFailed(RunFailedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             error: Some("step crashed".to_string()),
@@ -393,7 +844,7 @@ mod tests {
             duration_ms: 3000,
             labels: HashMap::new(),
             at: Utc::now(),
-        };
+        });
 
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -405,14 +856,14 @@ mod tests {
 
     #[test]
     fn run_budget_exceeded_serde_roundtrip() {
-        let event = Event::RunBudgetExceeded {
+        let event = Event::RunBudgetExceeded(RunBudgetExceededEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             limit_usd: Decimal::new(200, 2),
             spent_usd: Decimal::new(180, 2),
             step_budget_usd: Decimal::new(50, 2),
             at: Utc::now(),
-        };
+        });
 
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -430,11 +881,11 @@ mod tests {
 
     #[test]
     fn user_signed_in_serde_roundtrip() {
-        let event = Event::UserSignedIn {
+        let event = Event::UserSignedIn(UserSignedInEvent {
             user_id: Uuid::now_v7(),
             username: "alice".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -445,14 +896,14 @@ mod tests {
 
     #[test]
     fn step_failed_serde_roundtrip() {
-        let event = Event::StepFailed {
+        let event = Event::StepFailed(StepFailedEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             step_name: "build".to_string(),
             kind: StepKind::Shell,
             error: "exit code 1".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -462,12 +913,12 @@ mod tests {
 
     #[test]
     fn approval_requested_serde_roundtrip() {
-        let event = Event::ApprovalRequested {
+        let event = Event::ApprovalRequested(ApprovalRequestedEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             message: "Deploy to prod?".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("approval_requested"));
@@ -475,14 +926,14 @@ mod tests {
 
     #[test]
     fn log_line_serde_roundtrip() {
-        let event = Event::LogLine {
+        let event = Event::LogLine(LogLineEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             step_name: "build".to_string(),
             stream: LogStream::Stdout,
             line: "Compiling ironflow v0.1.0".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -492,6 +943,375 @@ mod tests {
         assert!(json.contains("Compiling ironflow"));
     }
 
+    /// The pre-refactor wire format used flat inline-struct variants. Newtype
+    /// variants over named-field payloads produce and accept the exact same
+    /// JSON, so audit rows and in-flight payloads written before the refactor
+    /// still deserialize. No data migration is required.
+    #[test]
+    fn legacy_flat_json_deserializes_into_typed_payload() {
+        let run_id: Uuid = "01890000-0000-7000-8000-000000000000"
+            .parse()
+            .expect("valid uuid");
+
+        let raw = r#"{"type":"run_created","run_id":"01890000-0000-7000-8000-000000000000","workflow_name":"deploy","at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("legacy payload must deserialize");
+        match event {
+            Event::RunCreated(e) => {
+                assert_eq!(e.run_id, run_id);
+                assert_eq!(e.workflow_name, "deploy");
+            }
+            other => panic!("expected RunCreated, got {other:?}"),
+        }
+
+        let raw = r#"{"type":"run_status_changed","run_id":"01890000-0000-7000-8000-000000000000","workflow_name":"deploy","from":"running","to":"completed","error":null,"cost_usd":0.5,"duration_ms":5000,"labels":{"env":"prod"},"at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("legacy payload must deserialize");
+        match event {
+            Event::RunStatusChanged(e) => {
+                assert_eq!(e.from, RunStatus::Running);
+                assert_eq!(e.to, RunStatus::Completed);
+                assert_eq!(e.cost_usd, Decimal::new(5, 1));
+                assert_eq!(e.duration_ms, 5000);
+                assert_eq!(e.labels.get("env").map(String::as_str), Some("prod"));
+            }
+            other => panic!("expected RunStatusChanged, got {other:?}"),
+        }
+
+        // `labels` predates no payload: omitting it must still work via `#[serde(default)]`.
+        let raw = r#"{"type":"run_status_changed","run_id":"01890000-0000-7000-8000-000000000000","workflow_name":"deploy","from":"running","to":"failed","error":"boom","cost_usd":0,"duration_ms":0,"at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("missing labels must default");
+        match event {
+            Event::RunStatusChanged(e) => {
+                assert!(e.labels.is_empty());
+                assert_eq!(e.error.as_deref(), Some("boom"));
+            }
+            other => panic!("expected RunStatusChanged, got {other:?}"),
+        }
+
+        let raw = r#"{"type":"run_failed","run_id":"01890000-0000-7000-8000-000000000000","workflow_name":"deploy","error":"boom","cost_usd":0.25,"duration_ms":3000,"at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("legacy payload must deserialize");
+        match event {
+            Event::RunFailed(e) => {
+                assert_eq!(e.error.as_deref(), Some("boom"));
+                assert!(e.labels.is_empty());
+            }
+            other => panic!("expected RunFailed, got {other:?}"),
+        }
+
+        let raw = r#"{"type":"step_failed","run_id":"01890000-0000-7000-8000-000000000000","step_id":"01890000-0000-7000-8000-000000000001","step_name":"build","kind":"shell","error":"exit code 1","at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("legacy payload must deserialize");
+        match event {
+            Event::StepFailed(e) => {
+                assert_eq!(e.kind, StepKind::Shell);
+                assert_eq!(e.error, "exit code 1");
+            }
+            other => panic!("expected StepFailed, got {other:?}"),
+        }
+
+        let raw = r#"{"type":"log_line","run_id":"01890000-0000-7000-8000-000000000000","step_id":"01890000-0000-7000-8000-000000000001","step_name":"build","stream":"stdout","line":"hello","at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("legacy payload must deserialize");
+        match event {
+            Event::LogLine(e) => {
+                assert_eq!(e.stream, LogStream::Stdout);
+                assert_eq!(e.line, "hello");
+            }
+            other => panic!("expected LogLine, got {other:?}"),
+        }
+
+        let raw = r#"{"type":"user_signed_in","user_id":"01890000-0000-7000-8000-000000000000","username":"alice","at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("legacy payload must deserialize");
+        match event {
+            Event::UserSignedIn(e) => assert_eq!(e.username, "alice"),
+            other => panic!("expected UserSignedIn, got {other:?}"),
+        }
+    }
+
+    /// Guards the internally-tagged representation: payload fields must stay
+    /// siblings of `type`, never nested under a variant key.
+    #[test]
+    fn serialized_event_is_flat_with_type_tag() {
+        let run_id = Uuid::now_v7();
+        let event = Event::RunCreated(RunCreatedEvent {
+            run_id,
+            workflow_name: "deploy".to_string(),
+            at: Utc::now(),
+        });
+
+        let value: serde_json::Value = serde_json::to_value(&event).expect("serialize");
+        let object = value.as_object().expect("event serializes to an object");
+
+        assert_eq!(
+            object.get("type").and_then(|v| v.as_str()),
+            Some("run_created")
+        );
+        assert_eq!(
+            object.get("workflow_name").and_then(|v| v.as_str()),
+            Some("deploy")
+        );
+        assert_eq!(
+            object.get("run_id").and_then(|v| v.as_str()),
+            Some(run_id.to_string().as_str())
+        );
+        assert!(object.contains_key("at"));
+        assert_eq!(object.len(), 4, "no nesting: {object:?}");
+        assert!(!object.contains_key("RunCreated"));
+    }
+
+    #[test]
+    fn run_id_returns_some_for_run_events() {
+        let run_id = Uuid::now_v7();
+        let now = Utc::now();
+
+        let events = vec![
+            Event::RunCreated(RunCreatedEvent {
+                run_id,
+                workflow_name: "w".to_string(),
+                at: now,
+            }),
+            Event::RunStatusChanged(RunStatusChangedEvent {
+                run_id,
+                workflow_name: "w".to_string(),
+                from: RunStatus::Pending,
+                to: RunStatus::Running,
+                error: None,
+                cost_usd: Decimal::ZERO,
+                duration_ms: 0,
+                labels: HashMap::new(),
+                at: now,
+            }),
+            Event::RunFailed(RunFailedEvent {
+                run_id,
+                workflow_name: "w".to_string(),
+                error: None,
+                cost_usd: Decimal::ZERO,
+                duration_ms: 0,
+                labels: HashMap::new(),
+                at: now,
+            }),
+            Event::RunBudgetExceeded(RunBudgetExceededEvent {
+                run_id,
+                workflow_name: "w".to_string(),
+                limit_usd: Decimal::ZERO,
+                spent_usd: Decimal::ZERO,
+                step_budget_usd: Decimal::ZERO,
+                at: now,
+            }),
+            Event::RetryForced(RetryForcedEvent {
+                run_id,
+                workflow_name: "w".to_string(),
+                original_version: "1".to_string(),
+                current_version: "2".to_string(),
+                at: now,
+            }),
+            Event::StepCompleted(StepCompletedEvent {
+                run_id,
+                step_id: Uuid::now_v7(),
+                step_name: "s".to_string(),
+                kind: StepKind::Shell,
+                duration_ms: 0,
+                cost_usd: Decimal::ZERO,
+                at: now,
+            }),
+            Event::StepFailed(StepFailedEvent {
+                run_id,
+                step_id: Uuid::now_v7(),
+                step_name: "s".to_string(),
+                kind: StepKind::Shell,
+                error: "e".to_string(),
+                at: now,
+            }),
+            Event::ApprovalRequested(ApprovalRequestedEvent {
+                run_id,
+                step_id: Uuid::now_v7(),
+                message: "ok?".to_string(),
+                at: now,
+            }),
+            Event::ApprovalGranted(ApprovalGrantedEvent {
+                run_id,
+                approved_by: "alice".to_string(),
+                at: now,
+            }),
+            Event::ApprovalRejected(ApprovalRejectedEvent {
+                run_id,
+                rejected_by: "bob".to_string(),
+                at: now,
+            }),
+            Event::LogLine(LogLineEvent {
+                run_id,
+                step_id: Uuid::now_v7(),
+                step_name: "s".to_string(),
+                stream: LogStream::Stdout,
+                line: "l".to_string(),
+                at: now,
+            }),
+        ];
+
+        for event in &events {
+            assert_eq!(
+                event.run_id(),
+                Some(run_id),
+                "{} should carry a run_id",
+                event.event_type()
+            );
+        }
+    }
+
+    #[test]
+    fn run_id_returns_none_for_auth_events() {
+        let user_id = Uuid::now_v7();
+        let now = Utc::now();
+
+        let events = vec![
+            Event::UserSignedIn(UserSignedInEvent {
+                user_id,
+                username: "alice".to_string(),
+                at: now,
+            }),
+            Event::UserSignedUp(UserSignedUpEvent {
+                user_id,
+                username: "alice".to_string(),
+                at: now,
+            }),
+            Event::UserSignedOut(UserSignedOutEvent { user_id, at: now }),
+        ];
+
+        for event in &events {
+            assert_eq!(event.run_id(), None, "{} has no run", event.event_type());
+        }
+    }
+
+    #[test]
+    fn step_id_returns_some_only_for_step_events() {
+        let step_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
+        let now = Utc::now();
+
+        let with_step = vec![
+            Event::StepCompleted(StepCompletedEvent {
+                run_id,
+                step_id,
+                step_name: "s".to_string(),
+                kind: StepKind::Shell,
+                duration_ms: 0,
+                cost_usd: Decimal::ZERO,
+                at: now,
+            }),
+            Event::StepFailed(StepFailedEvent {
+                run_id,
+                step_id,
+                step_name: "s".to_string(),
+                kind: StepKind::Shell,
+                error: "e".to_string(),
+                at: now,
+            }),
+            Event::ApprovalRequested(ApprovalRequestedEvent {
+                run_id,
+                step_id,
+                message: "ok?".to_string(),
+                at: now,
+            }),
+        ];
+
+        for event in &with_step {
+            assert_eq!(
+                event.step_id(),
+                Some(step_id),
+                "{} should carry a step_id",
+                event.event_type()
+            );
+        }
+
+        let without_step = vec![
+            Event::RunCreated(RunCreatedEvent {
+                run_id,
+                workflow_name: "w".to_string(),
+                at: now,
+            }),
+            Event::ApprovalGranted(ApprovalGrantedEvent {
+                run_id,
+                approved_by: "alice".to_string(),
+                at: now,
+            }),
+            // LogLine carries a step_id field but is reported as a run-level
+            // stream event, matching the pre-refactor behaviour.
+            Event::LogLine(LogLineEvent {
+                run_id,
+                step_id,
+                step_name: "s".to_string(),
+                stream: LogStream::Stdout,
+                line: "l".to_string(),
+                at: now,
+            }),
+            Event::UserSignedOut(UserSignedOutEvent {
+                user_id: Uuid::now_v7(),
+                at: now,
+            }),
+        ];
+
+        for event in &without_step {
+            assert_eq!(
+                event.step_id(),
+                None,
+                "{} should not carry a step_id",
+                event.event_type()
+            );
+        }
+    }
+
+    #[test]
+    fn user_id_returns_some_only_for_auth_events() {
+        let user_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
+        let now = Utc::now();
+
+        let auth = vec![
+            Event::UserSignedIn(UserSignedInEvent {
+                user_id,
+                username: "alice".to_string(),
+                at: now,
+            }),
+            Event::UserSignedUp(UserSignedUpEvent {
+                user_id,
+                username: "alice".to_string(),
+                at: now,
+            }),
+            Event::UserSignedOut(UserSignedOutEvent { user_id, at: now }),
+        ];
+
+        for event in &auth {
+            assert_eq!(
+                event.user_id(),
+                Some(user_id),
+                "{} should carry a user_id",
+                event.event_type()
+            );
+        }
+
+        let non_auth = vec![
+            Event::RunCreated(RunCreatedEvent {
+                run_id,
+                workflow_name: "w".to_string(),
+                at: now,
+            }),
+            Event::StepFailed(StepFailedEvent {
+                run_id,
+                step_id: Uuid::now_v7(),
+                step_name: "s".to_string(),
+                kind: StepKind::Shell,
+                error: "e".to_string(),
+                at: now,
+            }),
+        ];
+
+        for event in &non_auth {
+            assert_eq!(
+                event.user_id(),
+                None,
+                "{} should not carry a user_id",
+                event.event_type()
+            );
+        }
+    }
+
     #[test]
     fn event_type_all_variants() {
         let id = Uuid::now_v7();
@@ -499,15 +1319,15 @@ mod tests {
 
         let cases: Vec<(Event, &str)> = vec![
             (
-                Event::RunCreated {
+                Event::RunCreated(RunCreatedEvent {
                     run_id: id,
                     workflow_name: "w".to_string(),
                     at: now,
-                },
+                }),
                 "run_created",
             ),
             (
-                Event::RunStatusChanged {
+                Event::RunStatusChanged(RunStatusChangedEvent {
                     run_id: id,
                     workflow_name: "w".to_string(),
                     from: RunStatus::Pending,
@@ -517,11 +1337,11 @@ mod tests {
                     duration_ms: 0,
                     labels: HashMap::new(),
                     at: now,
-                },
+                }),
                 "run_status_changed",
             ),
             (
-                Event::RunFailed {
+                Event::RunFailed(RunFailedEvent {
                     run_id: id,
                     workflow_name: "w".to_string(),
                     error: Some("boom".to_string()),
@@ -529,11 +1349,32 @@ mod tests {
                     duration_ms: 0,
                     labels: HashMap::new(),
                     at: now,
-                },
+                }),
                 "run_failed",
             ),
             (
-                Event::StepCompleted {
+                Event::RunBudgetExceeded(RunBudgetExceededEvent {
+                    run_id: id,
+                    workflow_name: "w".to_string(),
+                    limit_usd: Decimal::new(200, 2),
+                    spent_usd: Decimal::new(180, 2),
+                    step_budget_usd: Decimal::new(50, 2),
+                    at: now,
+                }),
+                "run_budget_exceeded",
+            ),
+            (
+                Event::RetryForced(RetryForcedEvent {
+                    run_id: id,
+                    workflow_name: "w".to_string(),
+                    original_version: "1".to_string(),
+                    current_version: "2".to_string(),
+                    at: now,
+                }),
+                "retry_forced",
+            ),
+            (
+                Event::StepCompleted(StepCompletedEvent {
                     run_id: id,
                     step_id: id,
                     step_name: "s".to_string(),
@@ -541,80 +1382,86 @@ mod tests {
                     duration_ms: 0,
                     cost_usd: Decimal::ZERO,
                     at: now,
-                },
+                }),
                 "step_completed",
             ),
             (
-                Event::StepFailed {
+                Event::StepFailed(StepFailedEvent {
                     run_id: id,
                     step_id: id,
                     step_name: "s".to_string(),
                     kind: StepKind::Shell,
                     error: "err".to_string(),
                     at: now,
-                },
+                }),
                 "step_failed",
             ),
             (
-                Event::ApprovalRequested {
+                Event::ApprovalRequested(ApprovalRequestedEvent {
                     run_id: id,
                     step_id: id,
                     message: "ok?".to_string(),
                     at: now,
-                },
+                }),
                 "approval_requested",
             ),
             (
-                Event::ApprovalGranted {
+                Event::ApprovalGranted(ApprovalGrantedEvent {
                     run_id: id,
                     approved_by: "alice".to_string(),
                     at: now,
-                },
+                }),
                 "approval_granted",
             ),
             (
-                Event::ApprovalRejected {
+                Event::ApprovalRejected(ApprovalRejectedEvent {
                     run_id: id,
                     rejected_by: "bob".to_string(),
                     at: now,
-                },
+                }),
                 "approval_rejected",
             ),
             (
-                Event::LogLine {
+                Event::LogLine(LogLineEvent {
                     run_id: id,
                     step_id: id,
                     step_name: "build".to_string(),
                     stream: LogStream::Stdout,
                     line: "Compiling ironflow v0.1.0".to_string(),
                     at: now,
-                },
+                }),
                 "log_line",
             ),
             (
-                Event::UserSignedIn {
+                Event::UserSignedIn(UserSignedInEvent {
                     user_id: id,
                     username: "u".to_string(),
                     at: now,
-                },
+                }),
                 "user_signed_in",
             ),
             (
-                Event::UserSignedUp {
+                Event::UserSignedUp(UserSignedUpEvent {
                     user_id: id,
                     username: "u".to_string(),
                     at: now,
-                },
+                }),
                 "user_signed_up",
             ),
             (
-                Event::UserSignedOut {
+                Event::UserSignedOut(UserSignedOutEvent {
                     user_id: id,
                     at: now,
-                },
+                }),
                 "user_signed_out",
             ),
         ];
+
+        assert_eq!(
+            cases.len(),
+            Event::ALL.len(),
+            "every variant must be covered"
+        );
 
         for (event, expected_type) in cases {
             assert_eq!(event.event_type(), expected_type);

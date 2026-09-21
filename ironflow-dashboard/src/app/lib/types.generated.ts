@@ -951,6 +951,108 @@ export interface components {
 			| "stats_read"
 			| "admin";
 		/**
+		 * @description Payload of the `Event::ApprovalGranted` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::ApprovalGrantedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = ApprovalGrantedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         approved_by: "alice".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.approved_by, "alice");
+		 *     ```
+		 */
+		ApprovalGrantedEvent: {
+			/** @description User who approved (ID or username). */
+			approved_by: string;
+			/**
+			 * Format: date-time
+			 * @description When the approval was granted.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+		};
+		/**
+		 * @description Payload of the `Event::ApprovalRejected` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::ApprovalRejectedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = ApprovalRejectedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         rejected_by: "bob".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.rejected_by, "bob");
+		 *     ```
+		 */
+		ApprovalRejectedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the rejection occurred.
+			 */
+			at: string;
+			/** @description User who rejected (ID or username). */
+			rejected_by: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+		};
+		/**
+		 * @description Payload of the `Event::ApprovalRequested` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::ApprovalRequestedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = ApprovalRequestedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         message: "Deploy to prod?".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.message, "Deploy to prod?");
+		 *     ```
+		 */
+		ApprovalRequestedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the approval was requested.
+			 */
+			at: string;
+			/** @description Message displayed to reviewers. */
+			message: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description Approval step identifier.
+			 */
+			step_id: string;
+		};
+		/**
 		 * @description An artifact as exposed by the REST API.
 		 *
 		 *     The storage key is deliberately absent: it is internal plumbing, and callers
@@ -1248,15 +1350,19 @@ export interface components {
 		 *     Subscribers receive these via [`EventPublisher`](super::EventPublisher)
 		 *     and pattern-match on the variants they care about.
 		 *
+		 *     Each variant wraps a dedicated payload struct. The serialized form stays
+		 *     flat: the `type` discriminant sits next to the payload fields, so
+		 *     `{"type":"run_created","run_id":...}` round-trips unchanged.
+		 *
 		 *     # Examples
 		 *
 		 *     ```
 		 *     use std::collections::HashMap;
-		 *     use ironflow_engine::notify::Event;
+		 *     use ironflow_engine::notify::{Event, RunStatusChangedEvent};
 		 *     use ironflow_store::models::RunStatus;
 		 *     use uuid::Uuid;
 		 *
-		 *     let event = Event::RunStatusChanged {
+		 *     let event = Event::RunStatusChanged(RunStatusChangedEvent {
 		 *         run_id: Uuid::now_v7(),
 		 *         workflow_name: "deploy".to_string(),
 		 *         from: RunStatus::Running,
@@ -1266,327 +1372,67 @@ export interface components {
 		 *         duration_ms: 5000,
 		 *         labels: HashMap::new(),
 		 *         at: chrono::Utc::now(),
-		 *     };
+		 *     });
+		 *     assert_eq!(event.event_type(), "run_status_changed");
 		 *     ```
 		 */
 		Event:
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the run was created.
-					 */
-					at: string;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
+			| (components["schemas"]["RunCreatedEvent"] & {
 					/** @enum {string} */
 					type: "run_created";
-					/** @description Workflow name. */
-					workflow_name: string;
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the transition occurred.
-					 */
-					at: string;
-					/**
-					 * Format: double
-					 * @description Aggregated cost in USD at the time of transition.
-					 */
-					cost_usd: number;
-					/**
-					 * Format: int64
-					 * @description Aggregated duration in milliseconds at the time of transition.
-					 */
-					duration_ms: number;
-					/** @description Error message (when transitioning to Failed). */
-					error?: string | null;
-					/** @description Previous status. */
-					from: components["schemas"]["RunStatus"];
-					/** @description Labels of the run at the time of the transition. */
-					labels?: {
-						[key: string]: string;
-					};
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
-					/** @description New status. */
-					to: components["schemas"]["RunStatus"];
+			  })
+			| (components["schemas"]["RunStatusChangedEvent"] & {
 					/** @enum {string} */
 					type: "run_status_changed";
-					/** @description Workflow name. */
-					workflow_name: string;
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the failure occurred.
-					 */
-					at: string;
-					/**
-					 * Format: double
-					 * @description Aggregated cost in USD at the time of failure.
-					 */
-					cost_usd: number;
-					/**
-					 * Format: int64
-					 * @description Aggregated duration in milliseconds at the time of failure.
-					 */
-					duration_ms: number;
-					/** @description Error message. */
-					error?: string | null;
-					/** @description Labels of the run at the time of the failure. */
-					labels?: {
-						[key: string]: string;
-					};
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
+			  })
+			| (components["schemas"]["RunFailedEvent"] & {
 					/** @enum {string} */
 					type: "run_failed";
-					/** @description Workflow name. */
-					workflow_name: string;
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the refusal occurred.
-					 */
-					at: string;
-					/**
-					 * Format: double
-					 * @description The configured cost cap in USD.
-					 */
-					limit_usd: number;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
-					/**
-					 * Format: double
-					 * @description Cost already consumed when the cap was reached, in USD.
-					 */
-					spent_usd: number;
-					/**
-					 * Format: double
-					 * @description Declared budget of the refused step, in USD.
-					 */
-					step_budget_usd: number;
+			  })
+			| (components["schemas"]["RunBudgetExceededEvent"] & {
 					/** @enum {string} */
 					type: "run_budget_exceeded";
-					/** @description Workflow name. */
-					workflow_name: string;
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the forced retry occurred.
-					 */
-					at: string;
-					/** @description Current version of the handler. */
-					current_version: string;
-					/** @description Version stored on the original run. */
-					original_version: string;
-					/**
-					 * Format: uuid
-					 * @description The new run created by the forced retry.
-					 */
-					run_id: string;
+			  })
+			| (components["schemas"]["RetryForcedEvent"] & {
 					/** @enum {string} */
 					type: "retry_forced";
-					/** @description Workflow name. */
-					workflow_name: string;
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the step completed.
-					 */
-					at: string;
-					/**
-					 * Format: double
-					 * @description Step cost in USD.
-					 */
-					cost_usd: number;
-					/**
-					 * Format: int64
-					 * @description Step duration in milliseconds.
-					 */
-					duration_ms: number;
-					/** @description Step operation kind. */
-					kind: string;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
-					/**
-					 * Format: uuid
-					 * @description Step identifier.
-					 */
-					step_id: string;
-					/** @description Human-readable step name. */
-					step_name: string;
+			  })
+			| (components["schemas"]["StepCompletedEvent"] & {
 					/** @enum {string} */
 					type: "step_completed";
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the step failed.
-					 */
-					at: string;
-					/** @description Error message. */
-					error: string;
-					/** @description Step operation kind. */
-					kind: string;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
-					/**
-					 * Format: uuid
-					 * @description Step identifier.
-					 */
-					step_id: string;
-					/** @description Human-readable step name. */
-					step_name: string;
+			  })
+			| (components["schemas"]["StepFailedEvent"] & {
 					/** @enum {string} */
 					type: "step_failed";
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the approval was requested.
-					 */
-					at: string;
-					/** @description Message displayed to reviewers. */
-					message: string;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
-					/**
-					 * Format: uuid
-					 * @description Approval step identifier.
-					 */
-					step_id: string;
+			  })
+			| (components["schemas"]["ApprovalRequestedEvent"] & {
 					/** @enum {string} */
 					type: "approval_requested";
-			  }
-			| {
-					/** @description User who approved (ID or username). */
-					approved_by: string;
-					/**
-					 * Format: date-time
-					 * @description When the approval was granted.
-					 */
-					at: string;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
+			  })
+			| (components["schemas"]["ApprovalGrantedEvent"] & {
 					/** @enum {string} */
 					type: "approval_granted";
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the rejection occurred.
-					 */
-					at: string;
-					/** @description User who rejected (ID or username). */
-					rejected_by: string;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
+			  })
+			| (components["schemas"]["ApprovalRejectedEvent"] & {
 					/** @enum {string} */
 					type: "approval_rejected";
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the line was emitted.
-					 */
-					at: string;
-					/** @description The log line content. */
-					line: string;
-					/**
-					 * Format: uuid
-					 * @description Run identifier.
-					 */
-					run_id: string;
-					/**
-					 * Format: uuid
-					 * @description Step identifier.
-					 */
-					step_id: string;
-					/** @description Human-readable step name. */
-					step_name: string;
-					/** @description Output stream. */
-					stream: components["schemas"]["LogStream"];
+			  })
+			| (components["schemas"]["LogLineEvent"] & {
 					/** @enum {string} */
 					type: "log_line";
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the sign-in occurred.
-					 */
-					at: string;
+			  })
+			| (components["schemas"]["UserSignedInEvent"] & {
 					/** @enum {string} */
 					type: "user_signed_in";
-					/**
-					 * Format: uuid
-					 * @description User identifier.
-					 */
-					user_id: string;
-					/** @description Username. */
-					username: string;
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the sign-up occurred.
-					 */
-					at: string;
+			  })
+			| (components["schemas"]["UserSignedUpEvent"] & {
 					/** @enum {string} */
 					type: "user_signed_up";
-					/**
-					 * Format: uuid
-					 * @description User identifier.
-					 */
-					user_id: string;
-					/** @description Username. */
-					username: string;
-			  }
-			| {
-					/**
-					 * Format: date-time
-					 * @description When the sign-out occurred.
-					 */
-					at: string;
+			  })
+			| (components["schemas"]["UserSignedOutEvent"] & {
 					/** @enum {string} */
 					type: "user_signed_out";
-					/**
-					 * Format: uuid
-					 * @description User identifier.
-					 */
-					user_id: string;
-			  };
+			  });
 		/**
 		 * @description Strongly-typed event kind matching domain event variants.
 		 *
@@ -1841,6 +1687,50 @@ export interface components {
 			stream: components["schemas"]["LogStream"];
 		};
 		/**
+		 * @description Payload of the `Event::LogLine` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::{LogLineEvent, LogStream};
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = LogLineEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         step_name: "build".to_string(),
+		 *         stream: LogStream::Stdout,
+		 *         line: "Compiling ironflow v0.1.0".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.line, "Compiling ironflow v0.1.0");
+		 *     ```
+		 */
+		LogLineEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the line was emitted.
+			 */
+			at: string;
+			/** @description The log line content. */
+			line: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description Step identifier.
+			 */
+			step_id: string;
+			/** @description Human-readable step name. */
+			step_name: string;
+			/** @description Output stream. */
+			stream: components["schemas"]["LogStream"];
+		};
+		/**
 		 * @description Output stream for a log line.
 		 *
 		 *     # Examples
@@ -1872,6 +1762,44 @@ export interface components {
 			user_id: string;
 			/** @description Display username. */
 			username: string;
+		};
+		/**
+		 * @description Payload of the `Event::RetryForced` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::RetryForcedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = RetryForcedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         workflow_name: "deploy".to_string(),
+		 *         original_version: "1".to_string(),
+		 *         current_version: "2".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.current_version, "2");
+		 *     ```
+		 */
+		RetryForcedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the forced retry occurred.
+			 */
+			at: string;
+			/** @description Current version of the handler. */
+			current_version: string;
+			/** @description Version stored on the original run. */
+			original_version: string;
+			/**
+			 * Format: uuid
+			 * @description The new run created by the forced retry.
+			 */
+			run_id: string;
+			/** @description Workflow name. */
+			workflow_name: string;
 		};
 		/**
 		 * @description Request body for rotating a batch of secrets to another key version.
@@ -1925,6 +1853,89 @@ export interface components {
 			 */
 			to_version: number;
 		};
+		/**
+		 * @description Payload of the `Event::RunBudgetExceeded` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::RunBudgetExceededEvent;
+		 *     use rust_decimal::Decimal;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = RunBudgetExceededEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         workflow_name: "deploy".to_string(),
+		 *         limit_usd: Decimal::new(200, 2),
+		 *         spent_usd: Decimal::new(180, 2),
+		 *         step_budget_usd: Decimal::new(50, 2),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.limit_usd, Decimal::new(200, 2));
+		 *     ```
+		 */
+		RunBudgetExceededEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the refusal occurred.
+			 */
+			at: string;
+			/**
+			 * Format: double
+			 * @description The configured cost cap in USD.
+			 */
+			limit_usd: number;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/**
+			 * Format: double
+			 * @description Cost already consumed when the cap was reached, in USD.
+			 */
+			spent_usd: number;
+			/**
+			 * Format: double
+			 * @description Declared budget of the refused step, in USD.
+			 */
+			step_budget_usd: number;
+			/** @description Workflow name. */
+			workflow_name: string;
+		};
+		/**
+		 * @description Payload of the `Event::RunCreated` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::RunCreatedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = RunCreatedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         workflow_name: "deploy".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.workflow_name, "deploy");
+		 *     ```
+		 */
+		RunCreatedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the run was created.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/** @description Workflow name. */
+			workflow_name: string;
+		};
 		/** @description Run detail response — includes steps and payload. */
 		RunDetailResponse: {
 			/** @description Input payload that triggered this run. */
@@ -1933,6 +1944,61 @@ export interface components {
 			run: components["schemas"]["RunResponse"];
 			/** @description Associated steps, ordered by position. */
 			steps: components["schemas"]["StepResponse"][];
+		};
+		/**
+		 * @description Payload of the `Event::RunFailed` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use std::collections::HashMap;
+		 *
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::RunFailedEvent;
+		 *     use rust_decimal::Decimal;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = RunFailedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         workflow_name: "deploy".to_string(),
+		 *         error: Some("step crashed".to_string()),
+		 *         cost_usd: Decimal::ZERO,
+		 *         duration_ms: 3000,
+		 *         labels: HashMap::new(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.error.as_deref(), Some("step crashed"));
+		 *     ```
+		 */
+		RunFailedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the failure occurred.
+			 */
+			at: string;
+			/**
+			 * Format: double
+			 * @description Aggregated cost in USD at the time of failure.
+			 */
+			cost_usd: number;
+			/**
+			 * Format: int64
+			 * @description Aggregated duration in milliseconds at the time of failure.
+			 */
+			duration_ms: number;
+			/** @description Error message. */
+			error?: string | null;
+			/** @description Labels of the run at the time of the failure. */
+			labels?: {
+				[key: string]: string;
+			};
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/** @description Workflow name. */
+			workflow_name: string;
 		};
 		/**
 		 * @description Run response DTO — public API representation of a run.
@@ -2068,6 +2134,68 @@ export interface components {
 			| "awaiting_approval"
 			| "warning"
 			| "sleeping";
+		/**
+		 * @description Payload of the `Event::RunStatusChanged` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use std::collections::HashMap;
+		 *
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::RunStatusChangedEvent;
+		 *     use ironflow_store::models::RunStatus;
+		 *     use rust_decimal::Decimal;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = RunStatusChangedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         workflow_name: "deploy".to_string(),
+		 *         from: RunStatus::Running,
+		 *         to: RunStatus::Completed,
+		 *         error: None,
+		 *         cost_usd: Decimal::ZERO,
+		 *         duration_ms: 5000,
+		 *         labels: HashMap::new(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.to, RunStatus::Completed);
+		 *     ```
+		 */
+		RunStatusChangedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the transition occurred.
+			 */
+			at: string;
+			/**
+			 * Format: double
+			 * @description Aggregated cost in USD at the time of transition.
+			 */
+			cost_usd: number;
+			/**
+			 * Format: int64
+			 * @description Aggregated duration in milliseconds at the time of transition.
+			 */
+			duration_ms: number;
+			/** @description Error message (when transitioning to Failed). */
+			error?: string | null;
+			/** @description Previous status. */
+			from: components["schemas"]["RunStatus"];
+			/** @description Labels of the run at the time of the transition. */
+			labels?: {
+				[key: string]: string;
+			};
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/** @description New status. */
+			to: components["schemas"]["RunStatus"];
+			/** @description Workflow name. */
+			workflow_name: string;
+		};
 		/** @description Schedule list/detail response. */
 		ScheduleResponse: {
 			/**
@@ -2304,6 +2432,106 @@ export interface components {
 			 * @description Total number of runs.
 			 */
 			total_runs: number;
+		};
+		/**
+		 * @description Payload of the `Event::StepCompleted` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::StepCompletedEvent;
+		 *     use ironflow_store::models::StepKind;
+		 *     use rust_decimal::Decimal;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = StepCompletedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         step_name: "build".to_string(),
+		 *         kind: StepKind::Shell,
+		 *         duration_ms: 1200,
+		 *         cost_usd: Decimal::ZERO,
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.step_name, "build");
+		 *     ```
+		 */
+		StepCompletedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the step completed.
+			 */
+			at: string;
+			/**
+			 * Format: double
+			 * @description Step cost in USD.
+			 */
+			cost_usd: number;
+			/**
+			 * Format: int64
+			 * @description Step duration in milliseconds.
+			 */
+			duration_ms: number;
+			/** @description Step operation kind. */
+			kind: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description Step identifier.
+			 */
+			step_id: string;
+			/** @description Human-readable step name. */
+			step_name: string;
+		};
+		/**
+		 * @description Payload of the `Event::StepFailed` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::StepFailedEvent;
+		 *     use ironflow_store::models::StepKind;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = StepFailedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         step_name: "build".to_string(),
+		 *         kind: StepKind::Shell,
+		 *         error: "exit code 1".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.error, "exit code 1");
+		 *     ```
+		 */
+		StepFailedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the step failed.
+			 */
+			at: string;
+			/** @description Error message. */
+			error: string;
+			/** @description Step operation kind. */
+			kind: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description Step identifier.
+			 */
+			step_id: string;
+			/** @description Human-readable step name. */
+			step_name: string;
 		};
 		/**
 		 * @description Step response DTO — public API representation of a step.
@@ -2557,6 +2785,162 @@ export interface components {
 			/** @description Display username. */
 			username: string;
 		};
+		/**
+		 * @description Payload of the `Event::UserSignedIn` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::UserSignedInEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = UserSignedInEvent {
+		 *         user_id: Uuid::now_v7(),
+		 *         username: "alice".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.username, "alice");
+		 *     ```
+		 */
+		UserSignedInEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the sign-in occurred.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description User identifier.
+			 */
+			user_id: string;
+			/** @description Username. */
+			username: string;
+		};
+		/**
+		 * @description Payload of the `Event::UserSignedOut` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::UserSignedOutEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let user_id = Uuid::now_v7();
+		 *     let payload = UserSignedOutEvent {
+		 *         user_id,
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.user_id, user_id);
+		 *     ```
+		 */
+		UserSignedOutEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the sign-out occurred.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description User identifier.
+			 */
+			user_id: string;
+		};
+		/**
+		 * @description Payload of the `Event::UserSignedUp` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::UserSignedUpEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = UserSignedUpEvent {
+		 *         user_id: Uuid::now_v7(),
+		 *         username: "alice".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.username, "alice");
+		 *     ```
+		 */
+		UserSignedUpEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the sign-up occurred.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description User identifier.
+			 */
+			user_id: string;
+			/** @description Username. */
+			username: string;
+		};
+		/**
+		 * @description Payload of the `WorkflowEvent::AgentStepTokensUsed` workflow event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::WorkflowAgentStepTokensUsedEvent;
+		 *     use rust_decimal::Decimal;
+		 *
+		 *     let payload = WorkflowAgentStepTokensUsedEvent {
+		 *         step_name: "review".to_string(),
+		 *         tokens: 15_000,
+		 *         cost_usd: Decimal::new(42, 4),
+		 *     };
+		 *     assert_eq!(payload.tokens, 15_000);
+		 *     ```
+		 */
+		WorkflowAgentStepTokensUsedEvent: {
+			/**
+			 * Format: double
+			 * @description Estimated cost in USD.
+			 */
+			cost_usd: number;
+			/** @description Human-readable step name. */
+			step_name: string;
+			/**
+			 * Format: int64
+			 * @description Total tokens consumed.
+			 */
+			tokens: number;
+		};
+		/**
+		 * @description Payload of the `WorkflowEvent::ApprovalRequired` workflow event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::WorkflowApprovalRequiredEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = WorkflowApprovalRequiredEvent {
+		 *         step_name: "prod-gate".to_string(),
+		 *         step_index: 3,
+		 *         approval_id: Uuid::now_v7(),
+		 *     };
+		 *     assert_eq!(payload.step_name, "prod-gate");
+		 *     ```
+		 */
+		WorkflowApprovalRequiredEvent: {
+			/**
+			 * Format: uuid
+			 * @description Identifier of the approval gate.
+			 */
+			approval_id: string;
+			/**
+			 * Format: int32
+			 * @description Zero-based position in the workflow.
+			 */
+			step_index: number;
+			/** @description Human-readable step name. */
+			step_name: string;
+		};
 		/** @description Workflow detail response. */
 		WorkflowDetailResponse: {
 			/** @description Optional `/`-separated category path used to group workflows. */
@@ -2598,108 +2982,145 @@ export interface components {
 		 *     within a single run. Serialized with a `type` discriminant for UI
 		 *     consumption.
 		 *
+		 *     Each variant wraps a dedicated payload struct; the serialized form stays
+		 *     flat, with `type` sitting next to the payload fields.
+		 *
 		 *     # Examples
 		 *
 		 *     ```
-		 *     use ironflow_engine::notify::WorkflowEvent;
+		 *     use ironflow_engine::notify::{WorkflowEvent, WorkflowStepStartedEvent};
 		 *     use chrono::Utc;
 		 *
-		 *     let event = WorkflowEvent::StepStarted {
+		 *     let event = WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
 		 *         step_name: "deploy".to_string(),
 		 *         step_index: 0,
 		 *         timestamp: Utc::now(),
-		 *     };
+		 *     });
 		 *     assert_eq!(event.event_type(), "step_started");
 		 *
-		 *     let json = serde_json::to_string(&event).unwrap();
+		 *     let json = serde_json::to_string(&event)?;
 		 *     assert!(json.contains("\"type\":\"step_started\""));
+		 *     # Ok::<(), serde_json::Error>(())
 		 *     ```
 		 */
 		WorkflowEvent:
-			| {
-					/**
-					 * Format: int32
-					 * @description Zero-based position in the workflow.
-					 */
-					step_index: number;
-					/** @description Human-readable step name. */
-					step_name: string;
-					/**
-					 * Format: date-time
-					 * @description When the step started.
-					 */
-					timestamp: string;
+			| (components["schemas"]["WorkflowStepStartedEvent"] & {
 					/** @enum {string} */
 					type: "step_started";
-			  }
-			| {
-					/**
-					 * Format: int64
-					 * @description Step duration in milliseconds.
-					 */
-					duration_ms: number;
-					/** @description Optional summary of the step output. */
-					output_summary?: string | null;
-					/**
-					 * Format: int32
-					 * @description Zero-based position in the workflow.
-					 */
-					step_index: number;
-					/** @description Human-readable step name. */
-					step_name: string;
+			  })
+			| (components["schemas"]["WorkflowStepCompletedEvent"] & {
 					/** @enum {string} */
 					type: "step_completed";
-			  }
-			| {
-					/**
-					 * Format: int64
-					 * @description Step duration in milliseconds.
-					 */
-					duration_ms: number;
-					/** @description Error description. */
-					error: string;
-					/**
-					 * Format: int32
-					 * @description Zero-based position in the workflow.
-					 */
-					step_index: number;
-					/** @description Human-readable step name. */
-					step_name: string;
+			  })
+			| (components["schemas"]["WorkflowStepFailedEvent"] & {
 					/** @enum {string} */
 					type: "step_failed";
-			  }
-			| {
-					/**
-					 * Format: uuid
-					 * @description Identifier of the approval gate.
-					 */
-					approval_id: string;
-					/**
-					 * Format: int32
-					 * @description Zero-based position in the workflow.
-					 */
-					step_index: number;
-					/** @description Human-readable step name. */
-					step_name: string;
+			  })
+			| (components["schemas"]["WorkflowApprovalRequiredEvent"] & {
 					/** @enum {string} */
 					type: "approval_required";
-			  }
-			| {
-					/**
-					 * Format: double
-					 * @description Estimated cost in USD.
-					 */
-					cost_usd: number;
-					/** @description Human-readable step name. */
-					step_name: string;
-					/**
-					 * Format: int64
-					 * @description Total tokens consumed.
-					 */
-					tokens: number;
+			  })
+			| (components["schemas"]["WorkflowAgentStepTokensUsedEvent"] & {
 					/** @enum {string} */
 					type: "agent_step_tokens_used";
-			  };
+			  });
+		/**
+		 * @description Payload of the `WorkflowEvent::StepCompleted` workflow event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::WorkflowStepCompletedEvent;
+		 *
+		 *     let payload = WorkflowStepCompletedEvent {
+		 *         step_name: "deploy".to_string(),
+		 *         step_index: 1,
+		 *         duration_ms: 5000,
+		 *         output_summary: Some("deployed v1.2.3".to_string()),
+		 *     };
+		 *     assert_eq!(payload.duration_ms, 5000);
+		 *     ```
+		 */
+		WorkflowStepCompletedEvent: {
+			/**
+			 * Format: int64
+			 * @description Step duration in milliseconds.
+			 */
+			duration_ms: number;
+			/** @description Optional summary of the step output. */
+			output_summary?: string | null;
+			/**
+			 * Format: int32
+			 * @description Zero-based position in the workflow.
+			 */
+			step_index: number;
+			/** @description Human-readable step name. */
+			step_name: string;
+		};
+		/**
+		 * @description Payload of the `WorkflowEvent::StepFailed` workflow event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::WorkflowStepFailedEvent;
+		 *
+		 *     let payload = WorkflowStepFailedEvent {
+		 *         step_name: "test".to_string(),
+		 *         step_index: 2,
+		 *         error: "exit code 1".to_string(),
+		 *         duration_ms: 3000,
+		 *     };
+		 *     assert_eq!(payload.error, "exit code 1");
+		 *     ```
+		 */
+		WorkflowStepFailedEvent: {
+			/**
+			 * Format: int64
+			 * @description Step duration in milliseconds.
+			 */
+			duration_ms: number;
+			/** @description Error description. */
+			error: string;
+			/**
+			 * Format: int32
+			 * @description Zero-based position in the workflow.
+			 */
+			step_index: number;
+			/** @description Human-readable step name. */
+			step_name: string;
+		};
+		/**
+		 * @description Payload of the `WorkflowEvent::StepStarted` workflow event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::WorkflowStepStartedEvent;
+		 *
+		 *     let payload = WorkflowStepStartedEvent {
+		 *         step_name: "build".to_string(),
+		 *         step_index: 0,
+		 *         timestamp: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.step_index, 0);
+		 *     ```
+		 */
+		WorkflowStepStartedEvent: {
+			/**
+			 * Format: int32
+			 * @description Zero-based position in the workflow.
+			 */
+			step_index: number;
+			/** @description Human-readable step name. */
+			step_name: string;
+			/**
+			 * Format: date-time
+			 * @description When the step started.
+			 */
+			timestamp: string;
+		};
 		/** @description Summary entry returned by `GET /api/v1/workflows`. */
 		WorkflowSummary: {
 			/** @description Optional `/`-separated category path. */

@@ -10,7 +10,10 @@ use ironflow_engine::config::{AgentStepConfig, ApprovalConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
-use ironflow_engine::notify::{WorkflowEvent, WorkflowEventBus};
+use ironflow_engine::notify::{
+    WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
+    WorkflowEventBus,
+};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, TriggerKind};
 use ironflow_store::store::RunStore;
@@ -93,26 +96,18 @@ async fn execute_step_emits_workflow_events() {
 
     assert_eq!(events[0].event_type(), "step_started");
     match &events[0] {
-        WorkflowEvent::StepStarted {
-            step_name,
-            step_index,
-            ..
-        } => {
-            assert_eq!(step_name, "greet");
-            assert_eq!(*step_index, 0);
+        WorkflowEvent::StepStarted(e) => {
+            assert_eq!(e.step_name, "greet");
+            assert_eq!(e.step_index, 0);
         }
         _ => panic!("expected StepStarted"),
     }
 
     assert_eq!(events[1].event_type(), "step_completed");
     match &events[1] {
-        WorkflowEvent::StepCompleted {
-            step_name,
-            step_index,
-            ..
-        } => {
-            assert_eq!(step_name, "greet");
-            assert_eq!(*step_index, 0);
+        WorkflowEvent::StepCompleted(e) => {
+            assert_eq!(e.step_name, "greet");
+            assert_eq!(e.step_index, 0);
         }
         _ => panic!("expected StepCompleted"),
     }
@@ -155,11 +150,9 @@ async fn execute_step_emits_failed_event() {
     assert_eq!(events[1].event_type(), "step_failed");
 
     match &events[1] {
-        WorkflowEvent::StepFailed {
-            step_name, error, ..
-        } => {
-            assert_eq!(step_name, "will-fail");
-            assert!(!error.is_empty());
+        WorkflowEvent::StepFailed(e) => {
+            assert_eq!(e.step_name, "will-fail");
+            assert!(!e.error.is_empty());
         }
         _ => panic!("expected StepFailed"),
     }
@@ -229,11 +222,11 @@ async fn approval_emits_approval_required_event() {
     );
 
     match &approval_events[0] {
-        WorkflowEvent::ApprovalRequired {
+        WorkflowEvent::ApprovalRequired(WorkflowApprovalRequiredEvent {
             step_name,
             step_index,
             approval_id,
-        } => {
+        }) => {
             assert_eq!(step_name, "deploy-gate");
             assert_eq!(*step_index, 0);
             assert!(!approval_id.is_nil());
@@ -331,11 +324,11 @@ async fn agent_step_emits_tokens_used_event() {
     );
 
     match &token_events[0] {
-        WorkflowEvent::AgentStepTokensUsed {
+        WorkflowEvent::AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent {
             step_name,
             tokens,
             cost_usd,
-        } => {
+        }) => {
             assert_eq!(step_name, "review");
             assert_eq!(*tokens, 1500);
             assert_eq!(*cost_usd, Decimal::new(42, 4));

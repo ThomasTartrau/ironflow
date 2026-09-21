@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use serde_json::json;
 
-use ironflow_engine::notify::{Event, LogStream};
+use ironflow_engine::notify::{Event, LogLineEvent, LogStream};
 use ironflow_store::entities::NewLogEntries;
 
 use crate::error::ApiError;
@@ -57,14 +57,14 @@ pub async fn push_logs(
     let now = Utc::now();
 
     for line in &req.lines {
-        let event = Event::LogLine {
+        let event = Event::LogLine(LogLineEvent {
             run_id,
             step_id: req.step_id,
             step_name: req.step_name.clone(),
             stream: req.stream,
             line: line.clone(),
             at: now,
-        };
+        });
         let _ = state.event_sender.send(event);
     }
 

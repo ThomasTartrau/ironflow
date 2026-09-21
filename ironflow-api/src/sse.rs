@@ -105,12 +105,13 @@ mod tests {
 
     use super::*;
     use chrono::Utc;
+    use ironflow_engine::notify::RunStatusChangedEvent;
     use ironflow_store::models::RunStatus;
     use rust_decimal::Decimal;
     use uuid::Uuid;
 
     fn sample_event() -> Event {
-        Event::RunStatusChanged {
+        Event::RunStatusChanged(RunStatusChangedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             from: RunStatus::Running,
@@ -120,7 +121,7 @@ mod tests {
             duration_ms: 1000,
             labels: HashMap::new(),
             at: Utc::now(),
-        }
+        })
     }
 
     #[test]

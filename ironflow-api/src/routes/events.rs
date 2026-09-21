@@ -63,26 +63,6 @@ pub struct EventsQuery {
     pub types: Option<Vec<EventKind>>,
 }
 
-/// Extract the `run_id` from an event, if the variant carries one.
-fn event_run_id(event: &Event) -> Option<Uuid> {
-    match event {
-        Event::RunCreated { run_id, .. }
-        | Event::RunStatusChanged { run_id, .. }
-        | Event::RunFailed { run_id, .. }
-        | Event::RunBudgetExceeded { run_id, .. }
-        | Event::StepCompleted { run_id, .. }
-        | Event::StepFailed { run_id, .. }
-        | Event::ApprovalRequested { run_id, .. }
-        | Event::ApprovalGranted { run_id, .. }
-        | Event::ApprovalRejected { run_id, .. }
-        | Event::LogLine { run_id, .. }
-        | Event::RetryForced { run_id, .. } => Some(*run_id),
-        Event::UserSignedIn { .. } | Event::UserSignedUp { .. } | Event::UserSignedOut { .. } => {
-            None
-        }
-    }
-}
-
 /// `GET /api/v1/events` -- Server-Sent Events stream.
 ///
 /// Streams domain events in real time. Supports optional filtering:
@@ -113,7 +93,7 @@ pub async fn events(
             let event = result.ok()?;
 
             if let Some(ref rid) = run_id_filter
-                && event_run_id(&event) != Some(*rid)
+                && event.run_id() != Some(*rid)
             {
                 return None;
             }
@@ -147,7 +127,7 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
-    use ironflow_engine::notify::Event;
+    use ironflow_engine::notify::{Event, RunStatusChangedEvent, UserSignedInEvent};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::RunStatus;
     use rust_decimal::Decimal;
@@ -183,7 +163,7 @@ mod tests {
     }
 
     fn sample_run_event(run_id: Uuid) -> Event {
-        Event::RunStatusChanged {
+        Event::RunStatusChanged(RunStatusChangedEvent {
             run_id,
             workflow_name: "deploy".to_string(),
             from: RunStatus::Running,
@@ -193,15 +173,15 @@ mod tests {
             duration_ms: 1000,
             labels: HashMap::new(),
             at: Utc::now(),
-        }
+        })
     }
 
     fn sample_user_event() -> Event {
-        Event::UserSignedIn {
+        Event::UserSignedIn(UserSignedInEvent {
             user_id: Uuid::now_v7(),
             username: "alice".to_string(),
             at: Utc::now(),
-        }
+        })
     }
 
     fn make_auth_token(state: &AppState) -> String {

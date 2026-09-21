@@ -8,7 +8,7 @@ use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::engine::EnqueueOptions;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, RunCreatedEvent};
 use ironflow_store::models::{Run, RunCreation, TriggerKind};
 use serde_json::{Value, json};
 use tracing::{info, warn};
@@ -178,11 +178,14 @@ pub async fn create_run(
                 record_outcome(IDEMPOTENCY_CREATED);
             }
 
-            state.engine.event_publisher().publish(Event::RunCreated {
-                run_id: run.id,
-                workflow_name: run.workflow_name.clone(),
-                at: Utc::now(),
-            });
+            state
+                .engine
+                .event_publisher()
+                .publish(Event::RunCreated(RunCreatedEvent {
+                    run_id: run.id,
+                    workflow_name: run.workflow_name.clone(),
+                    at: Utc::now(),
+                }));
 
             Ok((StatusCode::CREATED, ok(RunResponse::from(run))))
         }

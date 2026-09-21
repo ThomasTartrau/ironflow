@@ -159,7 +159,10 @@ mod tests {
     use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
-    use ironflow_engine::notify::{Event, WorkflowEvent, WorkflowEventBus};
+    use ironflow_engine::notify::{
+        Event, WorkflowEvent, WorkflowEventBus, WorkflowStepCompletedEvent,
+        WorkflowStepStartedEvent,
+    };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
     use serde_json::json;
@@ -293,11 +296,11 @@ mod tests {
 
         bus.publish(
             run_id,
-            WorkflowEvent::StepStarted {
+            WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
                 step_name: "build".to_string(),
                 step_index: 0,
                 timestamp: Utc::now(),
-            },
+            }),
         );
 
         let text = read_until_contains(&mut reader, "build", Duration::from_secs(5)).await;
@@ -359,20 +362,20 @@ mod tests {
 
         bus.publish(
             run_id,
-            WorkflowEvent::StepStarted {
+            WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
                 step_name: "build".to_string(),
                 step_index: 0,
                 timestamp: Utc::now(),
-            },
+            }),
         );
         bus.publish(
             run_id,
-            WorkflowEvent::StepCompleted {
+            WorkflowEvent::StepCompleted(WorkflowStepCompletedEvent {
                 step_name: "build".to_string(),
                 step_index: 0,
                 duration_ms: 1234,
                 output_summary: None,
-            },
+            }),
         );
 
         let text = read_until_contains(&mut reader, "step_completed", Duration::from_secs(5)).await;
@@ -393,19 +396,19 @@ mod tests {
 
         bus.publish(
             run_b,
-            WorkflowEvent::StepStarted {
+            WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
                 step_name: "only-for-b".to_string(),
                 step_index: 0,
                 timestamp: Utc::now(),
-            },
+            }),
         );
         bus.publish(
             run_a,
-            WorkflowEvent::StepStarted {
+            WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
                 step_name: "only-for-a".to_string(),
                 step_index: 0,
                 timestamp: Utc::now(),
-            },
+            }),
         );
 
         let text = read_until_contains(&mut reader_a, "only-for-a", Duration::from_secs(5)).await;
