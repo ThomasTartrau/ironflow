@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, RunStatusChangedEvent};
 use ironflow_store::models::RunStatus;
 use uuid::Uuid;
 
@@ -62,7 +62,7 @@ pub async fn cancel_run(
     state
         .engine
         .event_publisher()
-        .publish(Event::RunStatusChanged {
+        .publish(Event::RunStatusChanged(RunStatusChangedEvent {
             run_id: id,
             workflow_name: cancelled.workflow_name.clone(),
             from: run.status.state,
@@ -72,7 +72,7 @@ pub async fn cancel_run(
             duration_ms: cancelled.duration_ms,
             labels: cancelled.labels.clone(),
             at: Utc::now(),
-        });
+        }));
 
     Ok(ok(RunResponse::from(cancelled)))
 }

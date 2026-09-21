@@ -147,59 +147,45 @@ impl BetterStackSubscriber {
     }
 
     /// Build a log payload from an error event. Returns `None` for non-error events.
+    #[deny(unreachable_patterns)]
     fn build_payload(event: &Event) -> Option<LogPayload> {
         match event {
-            Event::StepFailed {
-                run_id,
-                step_id,
-                step_name,
-                kind,
-                error,
-                at,
-            } => {
+            Event::StepFailed(e) => {
                 let message = format!(
                     "Step '{}' ({}) failed on run {}: {}",
-                    step_name, kind, run_id, error
+                    e.step_name, e.kind, e.run_id, e.error
                 );
                 let event_json = serde_json::json!({
                     "type": "step_failed",
-                    "run_id": run_id.to_string(),
-                    "step_id": step_id.to_string(),
-                    "step_name": step_name,
-                    "kind": kind.to_string(),
-                    "error": error,
+                    "run_id": e.run_id.to_string(),
+                    "step_id": e.step_id.to_string(),
+                    "step_name": e.step_name,
+                    "kind": e.kind.to_string(),
+                    "error": e.error,
                 });
                 Some(LogPayload {
-                    dt: at.to_rfc3339(),
+                    dt: e.at.to_rfc3339(),
                     level: "error",
                     message,
                     event: event_json,
                 })
             }
-            Event::RunFailed {
-                run_id,
-                workflow_name,
-                error,
-                cost_usd,
-                duration_ms,
-                at,
-                ..
-            } => {
-                let error_detail = error.as_deref().unwrap_or("unknown error");
+            Event::RunFailed(e) => {
+                let error_detail = e.error.as_deref().unwrap_or("unknown error");
                 let message = format!(
                     "Run {} (workflow '{}') failed: {}",
-                    run_id, workflow_name, error_detail
+                    e.run_id, e.workflow_name, error_detail
                 );
                 let event_json = serde_json::json!({
                     "type": "run_failed",
-                    "run_id": run_id.to_string(),
-                    "workflow_name": workflow_name,
+                    "run_id": e.run_id.to_string(),
+                    "workflow_name": e.workflow_name,
                     "error": error_detail,
-                    "cost_usd": cost_usd.to_string(),
-                    "duration_ms": duration_ms,
+                    "cost_usd": e.cost_usd.to_string(),
+                    "duration_ms": e.duration_ms,
                 });
                 Some(LogPayload {
-                    dt: at.to_rfc3339(),
+                    dt: e.at.to_rfc3339(),
                     level: "error",
                     message,
                     event: event_json,
@@ -241,6 +227,10 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::notify::{
+        ApprovalRequestedEvent, RunCreatedEvent, RunFailedEvent, RunStatusChangedEvent,
+        StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
+    };
     use chrono::Utc;
     use ironflow_store::models::{RunStatus, StepKind};
     use rust_decimal::Decimal;
@@ -268,14 +258,14 @@ mod tests {
 
     #[test]
     fn build_payload_step_failed() {
-        let event = Event::StepFailed {
+        let event = Event::StepFailed(StepFailedEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             step_name: "build".to_string(),
             kind: StepKind::Shell,
             error: "exit code 1".to_string(),
             at: Utc::now(),
-        };
+        });
 
         let payload = BetterStackSubscriber::build_payload(&event);
         assert!(payload.is_some());
@@ -289,7 +279,7 @@ mod tests {
 
     #[test]
     fn build_payload_run_failed() {
-        let event = Event::RunFailed {
+        let event = Event::RunFailed(RunFailedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             error: Some("step 'build' failed".to_string()),
@@ -297,7 +287,7 @@ mod tests {
             duration_ms: 5000,
             labels: HashMap::new(),
             at: Utc::now(),
-        };
+        });
 
         let payload = BetterStackSubscriber::build_payload(&event);
         assert!(payload.is_some());
@@ -311,7 +301,7 @@ mod tests {
 
     #[test]
     fn build_payload_run_failed_without_error_message() {
-        let event = Event::RunFailed {
+        let event = Event::RunFailed(RunFailedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             error: None,
@@ -319,7 +309,7 @@ mod tests {
             duration_ms: 1000,
             labels: HashMap::new(),
             at: Utc::now(),
-        };
+        });
 
         let payload = BetterStackSubscriber::build_payload(&event).unwrap();
         assert!(payload.message.contains("unknown error"));
@@ -328,7 +318,7 @@ mod tests {
 
     #[test]
     fn build_payload_run_completed_returns_none() {
-        let event = Event::RunStatusChanged {
+        let event = Event::RunStatusChanged(RunStatusChangedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             from: RunStatus::Running,
@@ -338,25 +328,25 @@ mod tests {
             duration_ms: 1000,
             labels: HashMap::new(),
             at: Utc::now(),
-        };
+        });
 
         assert!(BetterStackSubscriber::build_payload(&event).is_none());
     }
 
     #[test]
     fn build_payload_run_created_returns_none() {
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             at: Utc::now(),
-        };
+        });
 
         assert!(BetterStackSubscriber::build_payload(&event).is_none());
     }
 
     #[test]
     fn build_payload_step_completed_returns_none() {
-        let event = Event::StepCompleted {
+        let event = Event::StepCompleted(StepCompletedEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             step_name: "build".to_string(),
@@ -364,30 +354,30 @@ mod tests {
             duration_ms: 500,
             cost_usd: Decimal::ZERO,
             at: Utc::now(),
-        };
+        });
 
         assert!(BetterStackSubscriber::build_payload(&event).is_none());
     }
 
     #[test]
     fn build_payload_approval_requested_returns_none() {
-        let event = Event::ApprovalRequested {
+        let event = Event::ApprovalRequested(ApprovalRequestedEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             message: "Deploy to prod?".to_string(),
             at: Utc::now(),
-        };
+        });
 
         assert!(BetterStackSubscriber::build_payload(&event).is_none());
     }
 
     #[test]
     fn build_payload_user_signed_in_returns_none() {
-        let event = Event::UserSignedIn {
+        let event = Event::UserSignedIn(UserSignedInEvent {
             user_id: Uuid::now_v7(),
             username: "alice".to_string(),
             at: Utc::now(),
-        };
+        });
 
         assert!(BetterStackSubscriber::build_payload(&event).is_none());
     }
@@ -395,11 +385,11 @@ mod tests {
     #[tokio::test]
     async fn handle_ignores_non_error_events() {
         let sub = BetterStackSubscriber::with_url("token", "http://127.0.0.1:1");
-        let event = Event::RunCreated {
+        let event = Event::RunCreated(RunCreatedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             at: Utc::now(),
-        };
+        });
         // Should return immediately without attempting HTTP
         sub.handle(&event).await;
     }
@@ -421,14 +411,14 @@ mod tests {
         });
 
         let sub = BetterStackSubscriber::with_url("test-token", &format!("http://{}", addr));
-        let event = Event::StepFailed {
+        let event = Event::StepFailed(StepFailedEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             step_name: "build".to_string(),
             kind: StepKind::Shell,
             error: "exit code 1".to_string(),
             at: Utc::now(),
-        };
+        });
 
         sub.handle(&event).await;
     }

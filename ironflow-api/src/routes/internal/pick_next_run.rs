@@ -6,7 +6,7 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, RunStatusChangedEvent};
 use ironflow_store::models::RunStatus;
 
 use crate::entities::lease::validate_lease_ttl;
@@ -50,7 +50,7 @@ pub async fn pick_next_run(
         state
             .engine
             .event_publisher()
-            .publish(Event::RunStatusChanged {
+            .publish(Event::RunStatusChanged(RunStatusChangedEvent {
                 run_id: picked.id,
                 workflow_name: picked.workflow_name.clone(),
                 from: RunStatus::Pending,
@@ -60,7 +60,7 @@ pub async fn pick_next_run(
                 duration_ms: 0,
                 labels: picked.labels.clone(),
                 at: Utc::now(),
-            });
+            }));
     }
 
     Ok(ok(run))

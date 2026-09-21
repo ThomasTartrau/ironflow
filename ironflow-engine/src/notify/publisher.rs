@@ -131,7 +131,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::notify::{SubscriberFuture, WebhookSubscriber};
+    use crate::notify::{
+        RunStatusChangedEvent, SubscriberFuture, UserSignedInEvent, WebhookSubscriber,
+    };
     use rust_decimal::Decimal;
     use tokio::time::sleep;
 
@@ -140,7 +142,7 @@ mod tests {
     use uuid::Uuid;
 
     fn sample_run_status_changed() -> Event {
-        Event::RunStatusChanged {
+        Event::RunStatusChanged(RunStatusChangedEvent {
             run_id: Uuid::now_v7(),
             workflow_name: "deploy".to_string(),
             from: RunStatus::Running,
@@ -150,15 +152,15 @@ mod tests {
             duration_ms: 5000,
             labels: HashMap::new(),
             at: Utc::now(),
-        }
+        })
     }
 
     fn sample_user_signed_in() -> Event {
-        Event::UserSignedIn {
+        Event::UserSignedIn(UserSignedInEvent {
             user_id: Uuid::now_v7(),
             username: "alice".to_string(),
             at: Utc::now(),
-        }
+        })
     }
 
     #[test]

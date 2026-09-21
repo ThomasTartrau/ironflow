@@ -17,7 +17,10 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 use crate::config::DecisionConfig;
 use crate::error::EngineError;
 use crate::executor::{StepOutput, StepResult, execute_decision};
-use crate::notify::WorkflowEvent;
+use crate::notify::{
+    WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowStepCompletedEvent,
+    WorkflowStepStartedEvent,
+};
 
 use super::WorkflowContext;
 
@@ -128,11 +131,11 @@ impl WorkflowContext {
         if let Some(ref bus) = self.event_bus {
             bus.publish(
                 self.run_id,
-                WorkflowEvent::StepStarted {
+                WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
                     step_name: name.to_string(),
                     step_index: position,
                     timestamp: Utc::now(),
-                },
+                }),
             );
         }
 
@@ -205,12 +208,12 @@ impl WorkflowContext {
         if let Some(ref bus) = self.event_bus {
             bus.publish(
                 self.run_id,
-                WorkflowEvent::StepCompleted {
+                WorkflowEvent::StepCompleted(WorkflowStepCompletedEvent {
                     step_name: name.to_string(),
                     step_index: position,
                     duration_ms: execution.duration_ms,
                     output_summary: None,
-                },
+                }),
             );
         }
 
@@ -259,11 +262,11 @@ impl WorkflowContext {
         if let Some(ref bus) = self.event_bus {
             bus.publish(
                 self.run_id,
-                WorkflowEvent::ApprovalRequired {
+                WorkflowEvent::ApprovalRequired(WorkflowApprovalRequiredEvent {
                     step_name: name.to_string(),
                     step_index: position,
                     approval_id: step_id,
-                },
+                }),
             );
         }
 

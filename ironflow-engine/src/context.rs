@@ -65,6 +65,11 @@ use crate::executor::{ParallelStepResult, StepOutput, StepResult, execute_step_c
 use crate::guard::{SharedGuardState, WorkflowGuardConfig, WorkflowRejection};
 use crate::handler::WorkflowHandler;
 use crate::log_sender::{LogSender, StepLogSender};
+use crate::notify::{
+    WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
+    WorkflowEventBus, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
+    WorkflowStepStartedEvent,
+};
 #[cfg(not(feature = "secret-store"))]
 use crate::operation::NoopSecretResolver;
 use crate::operation::{Operation, OperationContext, SecretResolver};
@@ -144,7 +149,7 @@ pub struct WorkflowContext {
     /// Accumulated step results for post-execution inspection.
     step_results: Vec<StepResult>,
     /// Optional event bus for per-run real-time monitoring.
-    event_bus: Option<crate::notify::WorkflowEventBus>,
+    event_bus: Option<WorkflowEventBus>,
     /// W3C trace context for distributed tracing propagation.
     trace_context: WorkflowTraceContext,
     /// Shared operation context for custom operations.
@@ -304,12 +309,11 @@ impl WorkflowContext {
         self.guard_config.as_ref()
     }
 
-    /// Attach a [`WorkflowEventBus`](crate::notify::WorkflowEventBus) for
-    /// per-run real-time monitoring.
+    /// Attach a [`WorkflowEventBus`] for per-run real-time monitoring.
     ///
-    /// When set, step transitions automatically publish
-    /// [`WorkflowEvent`](crate::notify::WorkflowEvent)s to the bus.
-    pub fn set_event_bus(&mut self, bus: crate::notify::WorkflowEventBus) {
+    /// When set, step transitions automatically publish [`WorkflowEvent`]s
+    /// to the bus.
+    pub fn set_event_bus(&mut self, bus: WorkflowEventBus) {
         self.event_bus = Some(bus);
     }
 
@@ -1020,11 +1024,11 @@ impl WorkflowContext {
                             .saturating_add(output.output_tokens.unwrap_or(0));
                         bus.publish(
                             self.run_id,
-                            crate::notify::WorkflowEvent::AgentStepTokensUsed {
+                            WorkflowEvent::AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent {
                                 step_name: step_name.clone(),
                                 tokens,
                                 cost_usd: output.cost_usd,
-                            },
+                            }),
                         );
                     }
 
@@ -1379,11 +1383,11 @@ impl WorkflowContext {
         if let Some(ref bus) = self.event_bus {
             bus.publish(
                 self.run_id,
-                crate::notify::WorkflowEvent::ApprovalRequired {
+                WorkflowEvent::ApprovalRequired(WorkflowApprovalRequiredEvent {
                     step_name: name.to_string(),
                     step_index: position,
                     approval_id: step.id,
-                },
+                }),
             );
         }
 
@@ -2110,11 +2114,11 @@ impl WorkflowContext {
         if let Some(ref bus) = self.event_bus {
             bus.publish(
                 self.run_id,
-                crate::notify::WorkflowEvent::StepStarted {
+                WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
                     step_name: name.to_string(),
                     step_index: position,
                     timestamp: Utc::now(),
-                },
+                }),
             );
         }
 
@@ -2228,12 +2232,12 @@ impl WorkflowContext {
                 if let Some(ref bus) = self.event_bus {
                     bus.publish(
                         self.run_id,
-                        crate::notify::WorkflowEvent::StepCompleted {
+                        WorkflowEvent::StepCompleted(WorkflowStepCompletedEvent {
                             step_name: name.to_string(),
                             step_index: position,
                             duration_ms: output.duration_ms,
                             output_summary: None,
-                        },
+                        }),
                     );
 
                     if matches!(config, StepConfig::Agent(_)) {
@@ -2243,11 +2247,11 @@ impl WorkflowContext {
                             .saturating_add(output.output_tokens.unwrap_or(0));
                         bus.publish(
                             self.run_id,
-                            crate::notify::WorkflowEvent::AgentStepTokensUsed {
+                            WorkflowEvent::AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent {
                                 step_name: name.to_string(),
                                 tokens,
                                 cost_usd: output.cost_usd,
-                            },
+                            }),
                         );
                     }
                 }
@@ -2310,12 +2314,12 @@ impl WorkflowContext {
                 if let Some(ref bus) = self.event_bus {
                     bus.publish(
                         self.run_id,
-                        crate::notify::WorkflowEvent::StepFailed {
+                        WorkflowEvent::StepFailed(WorkflowStepFailedEvent {
                             step_name: name.to_string(),
                             step_index: position,
                             error: err.to_string(),
                             duration_ms: err_duration,
-                        },
+                        }),
                     );
                 }
 

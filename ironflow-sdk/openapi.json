@@ -75,6 +75,87 @@
         ],
         "type": "string"
       },
+      "ApprovalGrantedEvent": {
+        "description": "Payload of the `Event::ApprovalGranted` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalGrantedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalGrantedEvent {\n    run_id: Uuid::now_v7(),\n    approved_by: \"alice\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.approved_by, \"alice\");\n```",
+        "properties": {
+          "approved_by": {
+            "description": "User who approved (ID or username).",
+            "type": "string"
+          },
+          "at": {
+            "description": "When the approval was granted.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "approved_by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ApprovalRejectedEvent": {
+        "description": "Payload of the `Event::ApprovalRejected` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRejectedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRejectedEvent {\n    run_id: Uuid::now_v7(),\n    rejected_by: \"bob\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.rejected_by, \"bob\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the rejection occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "rejected_by": {
+            "description": "User who rejected (ID or username).",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "rejected_by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ApprovalRequestedEvent": {
+        "description": "Payload of the `Event::ApprovalRequested` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRequestedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRequestedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    message: \"Deploy to prod?\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.message, \"Deploy to prod?\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the approval was requested.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "message": {
+            "description": "Message displayed to reviewers.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Approval step identifier.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id",
+          "message",
+          "at"
+        ],
+        "type": "object"
+      },
       "ArtifactResponse": {
         "description": "An artifact as exposed by the REST API.\n\nThe storage key is deliberately absent: it is internal plumbing, and callers\naddress an artifact by `(run, step, name)` through the download route.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_api::entities::ArtifactResponse;\nuse uuid::Uuid;\n\nlet response = ArtifactResponse {\n    id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    name: \"report.html\".to_string(),\n    content_type: \"text/html\".to_string(),\n    size_bytes: 142,\n    sha256: \"0\".repeat(64),\n    created_at: Utc::now(),\n};\nassert_eq!(response.name, \"report.html\");\n```",
         "properties": {
@@ -413,606 +494,329 @@
         "type": "string"
       },
       "Event": {
-        "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\n# Examples\n\n```\nuse std::collections::HashMap;\nuse ironflow_engine::notify::Event;\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    labels: HashMap::new(),\n    at: chrono::Utc::now(),\n};\n```",
+        "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\nEach variant wraps a dedicated payload struct. The serialized form stays\nflat: the `type` discriminant sits next to the payload fields, so\n`{\"type\":\"run_created\",\"run_id\":...}` round-trips unchanged.\n\n# Examples\n\n```\nuse std::collections::HashMap;\nuse ironflow_engine::notify::{Event, RunStatusChangedEvent};\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged(RunStatusChangedEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    labels: HashMap::new(),\n    at: chrono::Utc::now(),\n});\nassert_eq!(event.event_type(), \"run_status_changed\");\n```",
         "oneOf": [
           {
-            "description": "A new run was created (status: Pending).",
-            "properties": {
-              "at": {
-                "description": "When the run was created.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RunCreatedEvent",
+                "description": "A new run was created (status: Pending)."
               },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "run_created"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "run_created"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
-              },
-              "workflow_name": {
-                "description": "Workflow name.",
-                "type": "string"
-              }
-            },
-            "required": [
-              "run_id",
-              "workflow_name",
-              "at",
-              "type"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "A run changed status.",
-            "properties": {
-              "at": {
-                "description": "When the transition occurred.",
-                "format": "date-time",
-                "type": "string"
-              },
-              "cost_usd": {
-                "description": "Aggregated cost in USD at the time of transition.",
-                "format": "double",
-                "type": "number"
-              },
-              "duration_ms": {
-                "description": "Aggregated duration in milliseconds at the time of transition.",
-                "format": "int64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "error": {
-                "description": "Error message (when transitioning to Failed).",
-                "nullable": true,
-                "type": "string"
-              },
-              "from": {
-                "$ref": "#/components/schemas/RunStatus",
-                "description": "Previous status."
-              },
-              "labels": {
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "description": "Labels of the run at the time of the transition.",
-                "propertyNames": {
-                  "type": "string"
-                },
                 "type": "object"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "to": {
-                "$ref": "#/components/schemas/RunStatus",
-                "description": "New status."
-              },
-              "type": {
-                "enum": [
-                  "run_status_changed"
-                ],
-                "type": "string"
-              },
-              "workflow_name": {
-                "description": "Workflow name.",
-                "type": "string"
               }
-            },
-            "required": [
-              "run_id",
-              "workflow_name",
-              "from",
-              "to",
-              "cost_usd",
-              "duration_ms",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A new run was created (status: Pending)."
           },
           {
-            "description": "A run transitioned to [`Failed`](ironflow_store::models::RunStatus::Failed).\n\nThis is a convenience event emitted alongside [`RunStatusChanged`](Event::RunStatusChanged)\nwhen the target status is `Failed`. Subscribe to this instead of\n`RUN_STATUS_CHANGED` when you only care about failures.",
-            "properties": {
-              "at": {
-                "description": "When the failure occurred.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RunStatusChangedEvent",
+                "description": "A run changed status."
               },
-              "cost_usd": {
-                "description": "Aggregated cost in USD at the time of failure.",
-                "format": "double",
-                "type": "number"
-              },
-              "duration_ms": {
-                "description": "Aggregated duration in milliseconds at the time of failure.",
-                "format": "int64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "error": {
-                "description": "Error message.",
-                "nullable": true,
-                "type": "string"
-              },
-              "labels": {
-                "additionalProperties": {
-                  "type": "string"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "run_status_changed"
+                    ],
+                    "type": "string"
+                  }
                 },
-                "description": "Labels of the run at the time of the failure.",
-                "propertyNames": {
-                  "type": "string"
-                },
+                "required": [
+                  "type"
+                ],
                 "type": "object"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "run_failed"
-                ],
-                "type": "string"
-              },
-              "workflow_name": {
-                "description": "Workflow name.",
-                "type": "string"
               }
-            },
-            "required": [
-              "run_id",
-              "workflow_name",
-              "cost_usd",
-              "duration_ms",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A run changed status."
           },
           {
-            "description": "A run was stopped because it reached its cumulative cost cap.\n\nEmitted when the engine refuses an agent step that would cross the run's\n`max_cost_usd`. The run transitions to\n[`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step\nis never launched, so the reported spend is what the run had already\nconsumed.",
-            "properties": {
-              "at": {
-                "description": "When the refusal occurred.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RunFailedEvent",
+                "description": "A run transitioned to [`Failed`](ironflow_store::models::RunStatus::Failed).\n\nThis is a convenience event emitted alongside [`RunStatusChanged`](Event::RunStatusChanged)\nwhen the target status is `Failed`. Subscribe to this instead of\n`RUN_STATUS_CHANGED` when you only care about failures."
               },
-              "limit_usd": {
-                "description": "The configured cost cap in USD.",
-                "format": "double",
-                "type": "number"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "spent_usd": {
-                "description": "Cost already consumed when the cap was reached, in USD.",
-                "format": "double",
-                "type": "number"
-              },
-              "step_budget_usd": {
-                "description": "Declared budget of the refused step, in USD.",
-                "format": "double",
-                "type": "number"
-              },
-              "type": {
-                "enum": [
-                  "run_budget_exceeded"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "run_failed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
-              },
-              "workflow_name": {
-                "description": "Workflow name.",
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "workflow_name",
-              "limit_usd",
-              "spent_usd",
-              "step_budget_usd",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A run transitioned to [`Failed`](ironflow_store::models::RunStatus::Failed).\n\nThis is a convenience event emitted alongside [`RunStatusChanged`](Event::RunStatusChanged)\nwhen the target status is `Failed`. Subscribe to this instead of\n`RUN_STATUS_CHANGED` when you only care about failures."
           },
           {
-            "description": "A manual retry was forced despite a handler version mismatch.\n\nEmitted when a caller passes `force=true` on a retry where the\nhandler version differs from the run's recorded version. This is\nan audit event: it means the new code will execute on the old\npayload without the handler explicitly declaring compatibility.",
-            "properties": {
-              "at": {
-                "description": "When the forced retry occurred.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RunBudgetExceededEvent",
+                "description": "A run was stopped because it reached its cumulative cost cap.\n\nEmitted when the engine refuses an agent step that would cross the run's\n`max_cost_usd`. The run transitions to\n[`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step\nis never launched, so the reported spend is what the run had already\nconsumed."
               },
-              "current_version": {
-                "description": "Current version of the handler.",
-                "type": "string"
-              },
-              "original_version": {
-                "description": "Version stored on the original run.",
-                "type": "string"
-              },
-              "run_id": {
-                "description": "The new run created by the forced retry.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "retry_forced"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "run_budget_exceeded"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
-              },
-              "workflow_name": {
-                "description": "Workflow name.",
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "workflow_name",
-              "original_version",
-              "current_version",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A run was stopped because it reached its cumulative cost cap.\n\nEmitted when the engine refuses an agent step that would cross the run's\n`max_cost_usd`. The run transitions to\n[`Cancelled`](ironflow_store::models::RunStatus::Cancelled) and the step\nis never launched, so the reported spend is what the run had already\nconsumed."
           },
           {
-            "description": "A step completed successfully.",
-            "properties": {
-              "at": {
-                "description": "When the step completed.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RetryForcedEvent",
+                "description": "A manual retry was forced despite a handler version mismatch.\n\nEmitted when a caller passes `force=true` on a retry where the\nhandler version differs from the run's recorded version. This is\nan audit event: it means the new code will execute on the old\npayload without the handler explicitly declaring compatibility."
               },
-              "cost_usd": {
-                "description": "Step cost in USD.",
-                "format": "double",
-                "type": "number"
-              },
-              "duration_ms": {
-                "description": "Step duration in milliseconds.",
-                "format": "int64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "kind": {
-                "description": "Step operation kind.",
-                "type": "string"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "step_id": {
-                "description": "Step identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "step_completed"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "retry_forced"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "step_id",
-              "step_name",
-              "kind",
-              "duration_ms",
-              "cost_usd",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A manual retry was forced despite a handler version mismatch.\n\nEmitted when a caller passes `force=true` on a retry where the\nhandler version differs from the run's recorded version. This is\nan audit event: it means the new code will execute on the old\npayload without the handler explicitly declaring compatibility."
           },
           {
-            "description": "A step failed.",
-            "properties": {
-              "at": {
-                "description": "When the step failed.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StepCompletedEvent",
+                "description": "A step completed successfully."
               },
-              "error": {
-                "description": "Error message.",
-                "type": "string"
-              },
-              "kind": {
-                "description": "Step operation kind.",
-                "type": "string"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "step_id": {
-                "description": "Step identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "step_failed"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "step_completed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "step_id",
-              "step_name",
-              "kind",
-              "error",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A step completed successfully."
           },
           {
-            "description": "A run is waiting for human approval.",
-            "properties": {
-              "at": {
-                "description": "When the approval was requested.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StepFailedEvent",
+                "description": "A step failed."
               },
-              "message": {
-                "description": "Message displayed to reviewers.",
-                "type": "string"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "step_id": {
-                "description": "Approval step identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "approval_requested"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "step_failed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "step_id",
-              "message",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A step failed."
           },
           {
-            "description": "A run was approved by a human.",
-            "properties": {
-              "approved_by": {
-                "description": "User who approved (ID or username).",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalRequestedEvent",
+                "description": "A run is waiting for human approval."
               },
-              "at": {
-                "description": "When the approval was granted.",
-                "format": "date-time",
-                "type": "string"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "approval_granted"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "approval_requested"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "approved_by",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A run is waiting for human approval."
           },
           {
-            "description": "A run was rejected by a human.",
-            "properties": {
-              "at": {
-                "description": "When the rejection occurred.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalGrantedEvent",
+                "description": "A run was approved by a human."
               },
-              "rejected_by": {
-                "description": "User who rejected (ID or username).",
-                "type": "string"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "approval_rejected"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "approval_granted"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "rejected_by",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A run was approved by a human."
           },
           {
-            "description": "A log line emitted during step execution.\n\nPushed by the worker in real time so that SSE clients can stream\nstep output as it happens, without waiting for step completion.",
-            "properties": {
-              "at": {
-                "description": "When the line was emitted.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalRejectedEvent",
+                "description": "A run was rejected by a human."
               },
-              "line": {
-                "description": "The log line content.",
-                "type": "string"
-              },
-              "run_id": {
-                "description": "Run identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "step_id": {
-                "description": "Step identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "stream": {
-                "$ref": "#/components/schemas/LogStream",
-                "description": "Output stream."
-              },
-              "type": {
-                "enum": [
-                  "log_line"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "approval_rejected"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "run_id",
-              "step_id",
-              "step_name",
-              "stream",
-              "line",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A run was rejected by a human."
           },
           {
-            "description": "A user signed in.",
-            "properties": {
-              "at": {
-                "description": "When the sign-in occurred.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LogLineEvent",
+                "description": "A log line emitted during step execution.\n\nPushed by the worker in real time so that SSE clients can stream\nstep output as it happens, without waiting for step completion."
               },
-              "type": {
-                "enum": [
-                  "user_signed_in"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "log_line"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
-              },
-              "user_id": {
-                "description": "User identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "username": {
-                "description": "Username.",
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "user_id",
-              "username",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A log line emitted during step execution.\n\nPushed by the worker in real time so that SSE clients can stream\nstep output as it happens, without waiting for step completion."
           },
           {
-            "description": "A new user signed up.",
-            "properties": {
-              "at": {
-                "description": "When the sign-up occurred.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserSignedInEvent",
+                "description": "A user signed in."
               },
-              "type": {
-                "enum": [
-                  "user_signed_up"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "user_signed_in"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
-              },
-              "user_id": {
-                "description": "User identifier.",
-                "format": "uuid",
-                "type": "string"
-              },
-              "username": {
-                "description": "Username.",
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "user_id",
-              "username",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A user signed in."
           },
           {
-            "description": "A user signed out.",
-            "properties": {
-              "at": {
-                "description": "When the sign-out occurred.",
-                "format": "date-time",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserSignedUpEvent",
+                "description": "A new user signed up."
               },
-              "type": {
-                "enum": [
-                  "user_signed_out"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "user_signed_up"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
-              },
-              "user_id": {
-                "description": "User identifier.",
-                "format": "uuid",
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "user_id",
-              "at",
-              "type"
             ],
-            "type": "object"
+            "description": "A new user signed up."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserSignedOutEvent",
+                "description": "A user signed out."
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "user_signed_out"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A user signed out."
           }
         ]
       },
@@ -1327,6 +1131,47 @@
         ],
         "type": "object"
       },
+      "LogLineEvent": {
+        "description": "Payload of the `Event::LogLine` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::{LogLineEvent, LogStream};\nuse uuid::Uuid;\n\nlet payload = LogLineEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"build\".to_string(),\n    stream: LogStream::Stdout,\n    line: \"Compiling ironflow v0.1.0\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.line, \"Compiling ironflow v0.1.0\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the line was emitted.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "line": {
+            "description": "The log line content.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Step identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          },
+          "stream": {
+            "$ref": "#/components/schemas/LogStream",
+            "description": "Output stream."
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id",
+          "step_name",
+          "stream",
+          "line",
+          "at"
+        ],
+        "type": "object"
+      },
       "LogStream": {
         "description": "Output stream for a log line.\n\n# Examples\n\n```\nuse ironflow_store::entities::LogStream;\n\nlet stream: LogStream = \"stdout\".parse().unwrap();\nassert_eq!(stream.as_str(), \"stdout\");\n```",
         "enum": [
@@ -1368,6 +1213,41 @@
           "username",
           "is_admin",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "RetryForcedEvent": {
+        "description": "Payload of the `Event::RetryForced` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::RetryForcedEvent;\nuse uuid::Uuid;\n\nlet payload = RetryForcedEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    original_version: \"1\".to_string(),\n    current_version: \"2\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.current_version, \"2\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the forced retry occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "current_version": {
+            "description": "Current version of the handler.",
+            "type": "string"
+          },
+          "original_version": {
+            "description": "Version stored on the original run.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "The new run created by the forced retry.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "workflow_name": {
+            "description": "Workflow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "workflow_name",
+          "original_version",
+          "current_version",
+          "at"
         ],
         "type": "object"
       },
@@ -1437,6 +1317,74 @@
         ],
         "type": "object"
       },
+      "RunBudgetExceededEvent": {
+        "description": "Payload of the `Event::RunBudgetExceeded` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::RunBudgetExceededEvent;\nuse rust_decimal::Decimal;\nuse uuid::Uuid;\n\nlet payload = RunBudgetExceededEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    limit_usd: Decimal::new(200, 2),\n    spent_usd: Decimal::new(180, 2),\n    step_budget_usd: Decimal::new(50, 2),\n    at: Utc::now(),\n};\nassert_eq!(payload.limit_usd, Decimal::new(200, 2));\n```",
+        "properties": {
+          "at": {
+            "description": "When the refusal occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "limit_usd": {
+            "description": "The configured cost cap in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "spent_usd": {
+            "description": "Cost already consumed when the cap was reached, in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "step_budget_usd": {
+            "description": "Declared budget of the refused step, in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "workflow_name": {
+            "description": "Workflow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "workflow_name",
+          "limit_usd",
+          "spent_usd",
+          "step_budget_usd",
+          "at"
+        ],
+        "type": "object"
+      },
+      "RunCreatedEvent": {
+        "description": "Payload of the `Event::RunCreated` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::RunCreatedEvent;\nuse uuid::Uuid;\n\nlet payload = RunCreatedEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.workflow_name, \"deploy\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the run was created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "workflow_name": {
+            "description": "Workflow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "workflow_name",
+          "at"
+        ],
+        "type": "object"
+      },
       "RunDetailResponse": {
         "description": "Run detail response — includes steps and payload.",
         "properties": {
@@ -1459,6 +1407,59 @@
           "run",
           "steps",
           "payload"
+        ],
+        "type": "object"
+      },
+      "RunFailedEvent": {
+        "description": "Payload of the `Event::RunFailed` event.\n\n# Examples\n\n```\nuse std::collections::HashMap;\n\nuse chrono::Utc;\nuse ironflow_engine::notify::RunFailedEvent;\nuse rust_decimal::Decimal;\nuse uuid::Uuid;\n\nlet payload = RunFailedEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    error: Some(\"step crashed\".to_string()),\n    cost_usd: Decimal::ZERO,\n    duration_ms: 3000,\n    labels: HashMap::new(),\n    at: Utc::now(),\n};\nassert_eq!(payload.error.as_deref(), Some(\"step crashed\"));\n```",
+        "properties": {
+          "at": {
+            "description": "When the failure occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "cost_usd": {
+            "description": "Aggregated cost in USD at the time of failure.",
+            "format": "double",
+            "type": "number"
+          },
+          "duration_ms": {
+            "description": "Aggregated duration in milliseconds at the time of failure.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "description": "Error message.",
+            "nullable": true,
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels of the run at the time of the failure.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "workflow_name": {
+            "description": "Workflow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "workflow_name",
+          "cost_usd",
+          "duration_ms",
+          "at"
         ],
         "type": "object"
       },
@@ -1598,6 +1599,69 @@
           "sleeping"
         ],
         "type": "string"
+      },
+      "RunStatusChangedEvent": {
+        "description": "Payload of the `Event::RunStatusChanged` event.\n\n# Examples\n\n```\nuse std::collections::HashMap;\n\nuse chrono::Utc;\nuse ironflow_engine::notify::RunStatusChangedEvent;\nuse ironflow_store::models::RunStatus;\nuse rust_decimal::Decimal;\nuse uuid::Uuid;\n\nlet payload = RunStatusChangedEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: Decimal::ZERO,\n    duration_ms: 5000,\n    labels: HashMap::new(),\n    at: Utc::now(),\n};\nassert_eq!(payload.to, RunStatus::Completed);\n```",
+        "properties": {
+          "at": {
+            "description": "When the transition occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "cost_usd": {
+            "description": "Aggregated cost in USD at the time of transition.",
+            "format": "double",
+            "type": "number"
+          },
+          "duration_ms": {
+            "description": "Aggregated duration in milliseconds at the time of transition.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "description": "Error message (when transitioning to Failed).",
+            "nullable": true,
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/RunStatus",
+            "description": "Previous status."
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Labels of the run at the time of the transition.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "to": {
+            "$ref": "#/components/schemas/RunStatus",
+            "description": "New status."
+          },
+          "workflow_name": {
+            "description": "Workflow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "workflow_name",
+          "from",
+          "to",
+          "cost_usd",
+          "duration_ms",
+          "at"
+        ],
+        "type": "object"
       },
       "ScheduleResponse": {
         "description": "Schedule list/detail response.",
@@ -1934,6 +1998,96 @@
           "success_rate_percent",
           "total_cost_usd",
           "total_duration_ms"
+        ],
+        "type": "object"
+      },
+      "StepCompletedEvent": {
+        "description": "Payload of the `Event::StepCompleted` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::StepCompletedEvent;\nuse ironflow_store::models::StepKind;\nuse rust_decimal::Decimal;\nuse uuid::Uuid;\n\nlet payload = StepCompletedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"build\".to_string(),\n    kind: StepKind::Shell,\n    duration_ms: 1200,\n    cost_usd: Decimal::ZERO,\n    at: Utc::now(),\n};\nassert_eq!(payload.step_name, \"build\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the step completed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "cost_usd": {
+            "description": "Step cost in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "duration_ms": {
+            "description": "Step duration in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "Step operation kind.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Step identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id",
+          "step_name",
+          "kind",
+          "duration_ms",
+          "cost_usd",
+          "at"
+        ],
+        "type": "object"
+      },
+      "StepFailedEvent": {
+        "description": "Payload of the `Event::StepFailed` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::StepFailedEvent;\nuse ironflow_store::models::StepKind;\nuse uuid::Uuid;\n\nlet payload = StepFailedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"build\".to_string(),\n    kind: StepKind::Shell,\n    error: \"exit code 1\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.error, \"exit code 1\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the step failed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "description": "Error message.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Step operation kind.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Step identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id",
+          "step_name",
+          "kind",
+          "error",
+          "at"
         ],
         "type": "object"
       },
@@ -2379,6 +2533,128 @@
         ],
         "type": "object"
       },
+      "UserSignedInEvent": {
+        "description": "Payload of the `Event::UserSignedIn` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::UserSignedInEvent;\nuse uuid::Uuid;\n\nlet payload = UserSignedInEvent {\n    user_id: Uuid::now_v7(),\n    username: \"alice\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.username, \"alice\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the sign-in occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "User identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "description": "Username.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "at"
+        ],
+        "type": "object"
+      },
+      "UserSignedOutEvent": {
+        "description": "Payload of the `Event::UserSignedOut` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::UserSignedOutEvent;\nuse uuid::Uuid;\n\nlet user_id = Uuid::now_v7();\nlet payload = UserSignedOutEvent {\n    user_id,\n    at: Utc::now(),\n};\nassert_eq!(payload.user_id, user_id);\n```",
+        "properties": {
+          "at": {
+            "description": "When the sign-out occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "User identifier.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "at"
+        ],
+        "type": "object"
+      },
+      "UserSignedUpEvent": {
+        "description": "Payload of the `Event::UserSignedUp` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::UserSignedUpEvent;\nuse uuid::Uuid;\n\nlet payload = UserSignedUpEvent {\n    user_id: Uuid::now_v7(),\n    username: \"alice\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.username, \"alice\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the sign-up occurred.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "User identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "description": "Username.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "at"
+        ],
+        "type": "object"
+      },
+      "WorkflowAgentStepTokensUsedEvent": {
+        "description": "Payload of the `WorkflowEvent::AgentStepTokensUsed` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowAgentStepTokensUsedEvent;\nuse rust_decimal::Decimal;\n\nlet payload = WorkflowAgentStepTokensUsedEvent {\n    step_name: \"review\".to_string(),\n    tokens: 15_000,\n    cost_usd: Decimal::new(42, 4),\n};\nassert_eq!(payload.tokens, 15_000);\n```",
+        "properties": {
+          "cost_usd": {
+            "description": "Estimated cost in USD.",
+            "format": "double",
+            "type": "number"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "Total tokens consumed.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step_name",
+          "tokens",
+          "cost_usd"
+        ],
+        "type": "object"
+      },
+      "WorkflowApprovalRequiredEvent": {
+        "description": "Payload of the `WorkflowEvent::ApprovalRequired` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowApprovalRequiredEvent;\nuse uuid::Uuid;\n\nlet payload = WorkflowApprovalRequiredEvent {\n    step_name: \"prod-gate\".to_string(),\n    step_index: 3,\n    approval_id: Uuid::now_v7(),\n};\nassert_eq!(payload.step_name, \"prod-gate\");\n```",
+        "properties": {
+          "approval_id": {
+            "description": "Identifier of the approval gate.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_index": {
+            "description": "Zero-based position in the workflow.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_name",
+          "step_index",
+          "approval_id"
+        ],
+        "type": "object"
+      },
       "WorkflowDetailResponse": {
         "description": "Workflow detail response.",
         "properties": {
@@ -2452,186 +2728,214 @@
         "type": "object"
       },
       "WorkflowEvent": {
-        "description": "A granular step-level event for real-time workflow monitoring.\n\nUnlike [`Event`](super::Event) which covers the full system lifecycle\n(runs, auth, audit), `WorkflowEvent` tracks individual step transitions\nwithin a single run. Serialized with a `type` discriminant for UI\nconsumption.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowEvent;\nuse chrono::Utc;\n\nlet event = WorkflowEvent::StepStarted {\n    step_name: \"deploy\".to_string(),\n    step_index: 0,\n    timestamp: Utc::now(),\n};\nassert_eq!(event.event_type(), \"step_started\");\n\nlet json = serde_json::to_string(&event).unwrap();\nassert!(json.contains(\"\\\"type\\\":\\\"step_started\\\"\"));\n```",
+        "description": "A granular step-level event for real-time workflow monitoring.\n\nUnlike [`Event`](super::Event) which covers the full system lifecycle\n(runs, auth, audit), `WorkflowEvent` tracks individual step transitions\nwithin a single run. Serialized with a `type` discriminant for UI\nconsumption.\n\nEach variant wraps a dedicated payload struct; the serialized form stays\nflat, with `type` sitting next to the payload fields.\n\n# Examples\n\n```\nuse ironflow_engine::notify::{WorkflowEvent, WorkflowStepStartedEvent};\nuse chrono::Utc;\n\nlet event = WorkflowEvent::StepStarted(WorkflowStepStartedEvent {\n    step_name: \"deploy\".to_string(),\n    step_index: 0,\n    timestamp: Utc::now(),\n});\nassert_eq!(event.event_type(), \"step_started\");\n\nlet json = serde_json::to_string(&event)?;\nassert!(json.contains(\"\\\"type\\\":\\\"step_started\\\"\"));\n# Ok::<(), serde_json::Error>(())\n```",
         "oneOf": [
           {
-            "description": "A step began execution.",
-            "properties": {
-              "step_index": {
-                "description": "Zero-based position in the workflow.",
-                "format": "int32",
-                "minimum": 0,
-                "type": "integer"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowStepStartedEvent",
+                "description": "A step began execution."
               },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "timestamp": {
-                "description": "When the step started.",
-                "format": "date-time",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "step_started"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "step_started"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "step_name",
-              "step_index",
-              "timestamp",
-              "type"
             ],
-            "type": "object"
+            "description": "A step began execution."
           },
           {
-            "description": "A step completed successfully.",
-            "properties": {
-              "duration_ms": {
-                "description": "Step duration in milliseconds.",
-                "format": "int64",
-                "minimum": 0,
-                "type": "integer"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowStepCompletedEvent",
+                "description": "A step completed successfully."
               },
-              "output_summary": {
-                "description": "Optional summary of the step output.",
-                "nullable": true,
-                "type": "string"
-              },
-              "step_index": {
-                "description": "Zero-based position in the workflow.",
-                "format": "int32",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "step_completed"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "step_completed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "step_name",
-              "step_index",
-              "duration_ms",
-              "type"
             ],
-            "type": "object"
+            "description": "A step completed successfully."
           },
           {
-            "description": "A step failed.",
-            "properties": {
-              "duration_ms": {
-                "description": "Step duration in milliseconds.",
-                "format": "int64",
-                "minimum": 0,
-                "type": "integer"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowStepFailedEvent",
+                "description": "A step failed."
               },
-              "error": {
-                "description": "Error description.",
-                "type": "string"
-              },
-              "step_index": {
-                "description": "Zero-based position in the workflow.",
-                "format": "int32",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "step_failed"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "step_failed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "step_name",
-              "step_index",
-              "error",
-              "duration_ms",
-              "type"
             ],
-            "type": "object"
+            "description": "A step failed."
           },
           {
-            "description": "A step requires human approval before the run can continue.",
-            "properties": {
-              "approval_id": {
-                "description": "Identifier of the approval gate.",
-                "format": "uuid",
-                "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowApprovalRequiredEvent",
+                "description": "A step requires human approval before the run can continue."
               },
-              "step_index": {
-                "description": "Zero-based position in the workflow.",
-                "format": "int32",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "approval_required"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "approval_required"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "step_name",
-              "step_index",
-              "approval_id",
-              "type"
             ],
-            "type": "object"
+            "description": "A step requires human approval before the run can continue."
           },
           {
-            "description": "Token usage report for an agent step.",
-            "properties": {
-              "cost_usd": {
-                "description": "Estimated cost in USD.",
-                "format": "double",
-                "type": "number"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowAgentStepTokensUsedEvent",
+                "description": "Token usage report for an agent step."
               },
-              "step_name": {
-                "description": "Human-readable step name.",
-                "type": "string"
-              },
-              "tokens": {
-                "description": "Total tokens consumed.",
-                "format": "int64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "type": {
-                "enum": [
-                  "agent_step_tokens_used"
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "agent_step_tokens_used"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
                 ],
-                "type": "string"
+                "type": "object"
               }
-            },
-            "required": [
-              "step_name",
-              "tokens",
-              "cost_usd",
-              "type"
             ],
-            "type": "object"
+            "description": "Token usage report for an agent step."
           }
         ]
+      },
+      "WorkflowStepCompletedEvent": {
+        "description": "Payload of the `WorkflowEvent::StepCompleted` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowStepCompletedEvent;\n\nlet payload = WorkflowStepCompletedEvent {\n    step_name: \"deploy\".to_string(),\n    step_index: 1,\n    duration_ms: 5000,\n    output_summary: Some(\"deployed v1.2.3\".to_string()),\n};\nassert_eq!(payload.duration_ms, 5000);\n```",
+        "properties": {
+          "duration_ms": {
+            "description": "Step duration in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_summary": {
+            "description": "Optional summary of the step output.",
+            "nullable": true,
+            "type": "string"
+          },
+          "step_index": {
+            "description": "Zero-based position in the workflow.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_name",
+          "step_index",
+          "duration_ms"
+        ],
+        "type": "object"
+      },
+      "WorkflowStepFailedEvent": {
+        "description": "Payload of the `WorkflowEvent::StepFailed` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowStepFailedEvent;\n\nlet payload = WorkflowStepFailedEvent {\n    step_name: \"test\".to_string(),\n    step_index: 2,\n    error: \"exit code 1\".to_string(),\n    duration_ms: 3000,\n};\nassert_eq!(payload.error, \"exit code 1\");\n```",
+        "properties": {
+          "duration_ms": {
+            "description": "Step duration in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "description": "Error description.",
+            "type": "string"
+          },
+          "step_index": {
+            "description": "Zero-based position in the workflow.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_name",
+          "step_index",
+          "error",
+          "duration_ms"
+        ],
+        "type": "object"
+      },
+      "WorkflowStepStartedEvent": {
+        "description": "Payload of the `WorkflowEvent::StepStarted` workflow event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::WorkflowStepStartedEvent;\n\nlet payload = WorkflowStepStartedEvent {\n    step_name: \"build\".to_string(),\n    step_index: 0,\n    timestamp: Utc::now(),\n};\nassert_eq!(payload.step_index, 0);\n```",
+        "properties": {
+          "step_index": {
+            "description": "Zero-based position in the workflow.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "When the step started.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_name",
+          "step_index",
+          "timestamp"
+        ],
+        "type": "object"
       },
       "WorkflowSummary": {
         "description": "Summary entry returned by `GET /api/v1/workflows`.",

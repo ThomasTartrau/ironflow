@@ -12,7 +12,7 @@ use ironflow_auth::jwt::{AccessToken, JwtConfig};
 use ironflow_auth::password;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::notify::{Event, WorkflowEvent, WorkflowEventBus};
+use ironflow_engine::notify::{Event, WorkflowEvent, WorkflowEventBus, WorkflowStepStartedEvent};
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ClientConfig;
 use ironflow_store::entities::NewUser;
@@ -123,11 +123,11 @@ async fn subscribe_run_events_receives_step_started() {
 
     bus.publish(
         run_id,
-        WorkflowEvent::StepStarted {
+        WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
             step_name: "deploy".to_string(),
             step_index: 0,
             timestamp: Utc::now(),
-        },
+        }),
     );
 
     let event = tokio::time::timeout(Duration::from_secs(5), stream.next())

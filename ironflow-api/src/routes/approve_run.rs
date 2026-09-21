@@ -6,7 +6,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::{AuthMethod, Authenticated};
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{ApprovalGrantedEvent, ApprovalRejectedEvent, Event};
 use ironflow_store::models::{RunStatus, StepStatus, StepUpdate};
 use tokio::spawn;
 use uuid::Uuid;
@@ -124,17 +124,17 @@ async fn resolve_approval(
         AuthMethod::ApiKey { key_name, .. } => key_name.clone(),
     };
     if target_status == RunStatus::Running {
-        publisher.publish(Event::ApprovalGranted {
+        publisher.publish(Event::ApprovalGranted(ApprovalGrantedEvent {
             run_id: id,
             approved_by: actor,
             at: now,
-        });
+        }));
     } else {
-        publisher.publish(Event::ApprovalRejected {
+        publisher.publish(Event::ApprovalRejected(ApprovalRejectedEvent {
             run_id: id,
             rejected_by: actor,
             at: now,
-        });
+        }));
     }
 
     // On approval, resume the run in the background.

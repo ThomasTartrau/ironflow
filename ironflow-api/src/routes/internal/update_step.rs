@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use serde_json::json;
 
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, StepCompletedEvent, StepFailedEvent};
 use ironflow_store::entities::{StepStatus, StepUpdate};
 
 use crate::error::ApiError;
@@ -39,7 +39,7 @@ pub async fn update_step(
     {
         let now = Utc::now();
         let event = match terminal_status {
-            Some(StepStatus::Completed) => Event::StepCompleted {
+            Some(StepStatus::Completed) => Event::StepCompleted(StepCompletedEvent {
                 run_id: step.run_id,
                 step_id: step.id,
                 step_name: step.name.clone(),
@@ -47,15 +47,15 @@ pub async fn update_step(
                 duration_ms,
                 cost_usd,
                 at: now,
-            },
-            Some(StepStatus::Failed) => Event::StepFailed {
+            }),
+            Some(StepStatus::Failed) => Event::StepFailed(StepFailedEvent {
                 run_id: step.run_id,
                 step_id: step.id,
                 step_name: step.name.clone(),
                 kind: step.kind.clone(),
                 error: error_msg.unwrap_or_default(),
                 at: now,
-            },
+            }),
             _ => unreachable!(),
         };
         state.engine.event_publisher().publish(event);

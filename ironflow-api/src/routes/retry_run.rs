@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::error::HANDLER_VERSION_MISMATCH_CODE;
-use ironflow_engine::notify::Event;
+use ironflow_engine::notify::{Event, RetryForcedEvent, RunCreatedEvent};
 use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -131,20 +131,26 @@ pub async fn retry_run(
     // Only emit RetryForced when both the handler is registered (so
     // current_version is meaningful) and the versions actually differ.
     if force && handler.is_some() && original.handler_version != current_version {
-        state.engine.event_publisher().publish(Event::RetryForced {
-            run_id: new_run.id,
-            workflow_name: original.workflow_name.clone(),
-            original_version: original.handler_version.unwrap_or_default(),
-            current_version: current_version.unwrap_or_default(),
-            at: Utc::now(),
-        });
+        state
+            .engine
+            .event_publisher()
+            .publish(Event::RetryForced(RetryForcedEvent {
+                run_id: new_run.id,
+                workflow_name: original.workflow_name.clone(),
+                original_version: original.handler_version.unwrap_or_default(),
+                current_version: current_version.unwrap_or_default(),
+                at: Utc::now(),
+            }));
     }
 
-    state.engine.event_publisher().publish(Event::RunCreated {
-        run_id: new_run.id,
-        workflow_name: new_run.workflow_name.clone(),
-        at: Utc::now(),
-    });
+    state
+        .engine
+        .event_publisher()
+        .publish(Event::RunCreated(RunCreatedEvent {
+            run_id: new_run.id,
+            workflow_name: new_run.workflow_name.clone(),
+            at: Utc::now(),
+        }));
 
     Ok((StatusCode::CREATED, ok(RunResponse::from(new_run))))
 }
