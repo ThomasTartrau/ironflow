@@ -215,6 +215,28 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/schedules/{id}/trigger",
         Coverage::Command(&["schedule", "trigger", UUID]),
     ),
+    // ── Approval delegations ──
+    (
+        "GET",
+        "/api/v1/approval-delegations",
+        Coverage::Command(&["delegation", "list"]),
+    ),
+    (
+        "POST",
+        "/api/v1/approval-delegations",
+        Coverage::Command(&[
+            "delegation",
+            "create",
+            UUID,
+            "--until",
+            "2026-12-31T23:59:59Z",
+        ]),
+    ),
+    (
+        "DELETE",
+        "/api/v1/approval-delegations/{id}",
+        Coverage::Command(&["delegation", "delete", UUID, "--yes"]),
+    ),
     // ── Deliberately out of the CLI's reach ──
     (
         "GET",

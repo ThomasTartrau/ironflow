@@ -18,6 +18,7 @@
 //! ```
 
 mod api_key_store;
+mod approval_delegation_store;
 mod artifact_store;
 mod audit_log_store;
 mod helpers;

@@ -16,7 +16,10 @@ use thiserror::Error;
 ///
 /// The distinction is advisory: it drives notification routing and audit, not
 /// authorization. Whether an approver is allowed to resolve a gate is decided by
-/// the API layer, not by this type.
+/// the API layer, not by this type. The API does read it in one case: a gate
+/// assigned to a [`Assignee::User`] can be answered by whoever holds an active
+/// [`ApprovalDelegation`](crate::entities::ApprovalDelegation) from that user,
+/// while a [`Assignee::Group`] gate stays admin-only.
 ///
 /// # Examples
 ///

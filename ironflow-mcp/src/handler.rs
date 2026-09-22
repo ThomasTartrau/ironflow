@@ -80,6 +80,9 @@ impl ServerHandler for IronflowHandler {
             IronflowTools::PauseScheduleTool(t) => t.run(&self.client).await,
             IronflowTools::ResumeScheduleTool(t) => t.run(&self.client).await,
             IronflowTools::TriggerScheduleTool(t) => t.run(&self.client).await,
+            IronflowTools::ListApprovalDelegationsTool(t) => t.run(&self.client).await,
+            IronflowTools::CreateApprovalDelegationTool(t) => t.run(&self.client).await,
+            IronflowTools::DeleteApprovalDelegationTool(t) => t.run(&self.client).await,
         }
     }
 }
