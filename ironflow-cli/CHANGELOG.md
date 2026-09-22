@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.33](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.32...ironflow-cli-v0.1.33) - 2026-09-22
+
+### Added
+
+- #92 add pagination to approval delegations list
+
+- #92 add approval delegation for absent approvers
+
 ## [0.1.31](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.30...ironflow-cli-v0.1.31) - 2026-09-21
 
 ### Added
