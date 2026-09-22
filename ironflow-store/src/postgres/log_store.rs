@@ -39,8 +39,15 @@ impl LogStore for PostgresStore {
             let now = Utc::now();
             let stream_str = entries.stream.as_str();
 
-            let n = entries.lines.len();
-            let ids: Vec<_> = (0..n).map(|_| Uuid::now_v7()).collect();
+            // Pair each pre-generated id with its line; a mismatched length
+            // truncates to the shorter side rather than persisting a line under
+            // a fabricated id.
+            let (ids, lines): (Vec<Uuid>, Vec<String>) =
+                entries.ids.into_iter().zip(entries.lines).unzip();
+            let n = lines.len();
+            if n == 0 {
+                return Ok(());
+            }
             let run_ids = vec![entries.run_id; n];
             let step_ids = vec![entries.step_id; n];
             let step_names = vec![entries.step_name.clone(); n];
@@ -57,7 +64,7 @@ impl LogStore for PostgresStore {
                 &step_ids,
                 &step_names,
                 &streams,
-                &entries.lines,
+                &lines,
                 &timestamps,
             )
             .execute(&self.pool)

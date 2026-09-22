@@ -15,9 +15,9 @@ impl LogStore for InMemoryStore {
             let now = Utc::now();
             let mut state = self.state.write().await;
 
-            for line in entries.lines {
+            for (id, line) in entries.ids.into_iter().zip(entries.lines) {
                 state.log_entries.push(LogEntry {
-                    id: Uuid::now_v7(),
+                    id,
                     run_id: entries.run_id,
                     step_id: entries.step_id,
                     step_name: entries.step_name.clone(),
@@ -84,6 +84,7 @@ mod tests {
 
     fn new_entries(run_id: Uuid, step_id: Uuid, stream: LogStream) -> NewLogEntries {
         NewLogEntries {
+            ids: vec![Uuid::now_v7(), Uuid::now_v7()],
             run_id,
             step_id,
             step_name: "build".to_string(),
@@ -138,6 +139,7 @@ mod tests {
 
         store
             .append_logs(NewLogEntries {
+                ids: (0..5).map(|_| Uuid::now_v7()).collect(),
                 run_id,
                 step_id,
                 step_name: "build".to_string(),

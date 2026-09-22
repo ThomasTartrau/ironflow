@@ -1214,11 +1214,16 @@
         "type": "object"
       },
       "LogLineEvent": {
-        "description": "Payload of the `Event::LogLine` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::{LogLineEvent, LogStream};\nuse uuid::Uuid;\n\nlet payload = LogLineEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"build\".to_string(),\n    stream: LogStream::Stdout,\n    line: \"Compiling ironflow v0.1.0\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.line, \"Compiling ironflow v0.1.0\");\n```",
+        "description": "Payload of the `Event::LogLine` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::{LogLineEvent, LogStream};\nuse uuid::Uuid;\n\nlet payload = LogLineEvent {\n    id: Uuid::now_v7(),\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"build\".to_string(),\n    stream: LogStream::Stdout,\n    line: \"Compiling ironflow v0.1.0\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.line, \"Compiling ironflow v0.1.0\");\n```",
         "properties": {
           "at": {
             "description": "When the line was emitted.",
             "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "Persisted entry identifier (UUID v7, time-ordered).\n\nMatches the `id` of the log entry later stored for this line, so clients\ncan de-duplicate the live SSE stream against the persisted history\nfetched from `GET /runs/:id/logs`.\n\nDefaults to the nil UUID when absent, so a payload emitted by an older\nproducer still deserializes instead of dropping the whole event.",
+            "format": "uuid",
             "type": "string"
           },
           "line": {

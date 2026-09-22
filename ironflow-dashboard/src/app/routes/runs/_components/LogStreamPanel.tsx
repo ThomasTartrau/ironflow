@@ -7,7 +7,8 @@ import { ArrowDown, Trash2, Pause, Play } from "lucide-react";
 
 interface LogStreamPanelProps {
 	runId: string;
-	enabled: boolean;
+	/** Whether the run is still active (drives the live indicator and SSE). */
+	isActive: boolean;
 }
 
 const STREAM_STYLES: Record<string, { text: string; badge: string }> = {
@@ -28,6 +29,20 @@ const STREAM_STYLES: Record<string, { text: string; badge: string }> = {
 };
 
 const DEFAULT_STREAM_STYLE = STREAM_STYLES.stdout;
+
+function emptyStateMessage({
+	loading,
+	error,
+	isActive,
+}: {
+	loading: boolean;
+	error: boolean;
+	isActive: boolean;
+}): string {
+	if (loading) return "Loading logs…";
+	if (error) return "Failed to load logs";
+	return isActive ? "Waiting for log output..." : "No logs recorded for this run";
+}
 
 function LogLine({ entry }: { entry: LogEntry }) {
 	const style = STREAM_STYLES[entry.stream] ?? DEFAULT_STREAM_STYLE;
@@ -51,12 +66,12 @@ function LogLine({ entry }: { entry: LogEntry }) {
 	);
 }
 
-export function LogStreamPanel({ runId, enabled }: LogStreamPanelProps) {
+export function LogStreamPanel({ runId, isActive }: LogStreamPanelProps) {
 	const [paused, setPaused] = useState(false);
 	const [autoScroll, setAutoScroll] = useState(true);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const frozenLinesRef = useRef<LogEntry[]>([]);
-	const { lines, clear } = useLogStream({ runId, enabled });
+	const { lines, clear, loading, error } = useLogStream({ runId, isActive });
 
 	const scrollToBottom = useCallback(() => {
 		const el = containerRef.current;
@@ -94,10 +109,10 @@ export function LogStreamPanel({ runId, enabled }: LogStreamPanelProps) {
 			<div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-muted/30">
 				<div className="flex items-center gap-2">
 					<div
-						className={`w-2 h-2 rounded-full ${enabled && !paused ? "bg-[var(--status-running-fg)] animate-pulse" : "bg-muted-foreground/40"}`}
+						className={`w-2 h-2 rounded-full ${isActive && !paused ? "bg-[var(--status-running-fg)] animate-pulse" : "bg-muted-foreground/40"}`}
 					/>
 					<span className="text-xs font-medium text-muted-foreground">
-						Live Logs
+						{isActive ? "Live Logs" : "Logs"}
 					</span>
 					<Badge
 						variant="outline"
@@ -152,7 +167,7 @@ export function LogStreamPanel({ runId, enabled }: LogStreamPanelProps) {
 			>
 				{visibleLines.length === 0 ? (
 					<div className="flex items-center justify-center h-full text-xs text-muted-foreground/60">
-						{enabled ? "Waiting for log output..." : "Run is not active"}
+						{emptyStateMessage({ loading, error, isActive })}
 					</div>
 				) : (
 					visibleLines.map((entry, i) => (
