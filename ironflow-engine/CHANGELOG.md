@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.38.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.38.0...ironflow-engine-v2.38.1) - 2026-09-22
+
+### Changed
+
+- #94 split WorkflowContext into per-step-kind modules and complete the StepExecutor trait
+
 ## [2.38.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.37.0...ironflow-engine-v2.38.0) - 2026-09-22
 
 ### Added
