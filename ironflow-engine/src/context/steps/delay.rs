@@ -4,7 +4,7 @@
 //! timed pauses that survive server restarts.
 
 use chrono::{Duration, Utc};
-use serde_json::json;
+use serde_json::{json, to_value};
 use tracing::info;
 
 use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_trace_id};
@@ -66,7 +66,7 @@ impl WorkflowContext {
                 name: name.to_string(),
                 kind: StepKind::Custom("delay".to_string()),
                 position,
-                input: Some(serde_json::to_value(&config)?),
+                input: Some(to_value(&config)?),
                 is_error_handler: false,
             })
             .await?;
