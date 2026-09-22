@@ -425,6 +425,7 @@ pub struct ApprovalEscalatedEvent {
 /// use uuid::Uuid;
 ///
 /// let payload = LogLineEvent {
+///     id: Uuid::now_v7(),
 ///     run_id: Uuid::now_v7(),
 ///     step_id: Uuid::now_v7(),
 ///     step_name: "build".to_string(),
@@ -437,6 +438,16 @@ pub struct ApprovalEscalatedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct LogLineEvent {
+    /// Persisted entry identifier (UUID v7, time-ordered).
+    ///
+    /// Matches the `id` of the log entry later stored for this line, so clients
+    /// can de-duplicate the live SSE stream against the persisted history
+    /// fetched from `GET /runs/:id/logs`.
+    ///
+    /// Defaults to the nil UUID when absent, so a payload emitted by an older
+    /// producer still deserializes instead of dropping the whole event.
+    #[serde(default)]
+    pub id: Uuid,
     /// Run identifier.
     pub run_id: Uuid,
     /// Step identifier.
@@ -989,6 +1000,7 @@ mod tests {
     #[test]
     fn log_line_serde_roundtrip() {
         let event = Event::LogLine(LogLineEvent {
+            id: Uuid::now_v7(),
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             step_name: "build".to_string(),
@@ -1075,6 +1087,9 @@ mod tests {
             Event::LogLine(e) => {
                 assert_eq!(e.stream, LogStream::Stdout);
                 assert_eq!(e.line, "hello");
+                // A payload predating the `id` field degrades to the nil UUID
+                // rather than failing to deserialize.
+                assert_eq!(e.id, Uuid::nil());
             }
             other => panic!("expected LogLine, got {other:?}"),
         }
@@ -1198,6 +1213,7 @@ mod tests {
                 at: now,
             }),
             Event::LogLine(LogLineEvent {
+                id: Uuid::now_v7(),
                 run_id,
                 step_id: Uuid::now_v7(),
                 step_name: "s".to_string(),
@@ -1296,6 +1312,7 @@ mod tests {
             // LogLine carries a step_id field but is reported as a run-level
             // stream event, matching the pre-refactor behaviour.
             Event::LogLine(LogLineEvent {
+                id: Uuid::now_v7(),
                 run_id,
                 step_id,
                 step_name: "s".to_string(),
@@ -1499,6 +1516,7 @@ mod tests {
             ),
             (
                 Event::LogLine(LogLineEvent {
+                    id,
                     run_id: id,
                     step_id: id,
                     step_name: "build".to_string(),

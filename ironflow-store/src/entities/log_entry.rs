@@ -59,6 +59,7 @@ pub struct LogEntry {
 /// use uuid::Uuid;
 ///
 /// let entries = NewLogEntries {
+///     ids: vec![Uuid::now_v7(), Uuid::now_v7()],
 ///     run_id: Uuid::now_v7(),
 ///     step_id: Uuid::now_v7(),
 ///     step_name: "build".to_string(),
@@ -69,6 +70,13 @@ pub struct LogEntry {
 /// ```
 #[derive(Debug, Clone)]
 pub struct NewLogEntries {
+    /// Pre-generated entry identifiers (UUID v7), one per line in `lines`.
+    ///
+    /// The caller generates these so the same id can be broadcast over SSE
+    /// (see `LogLineEvent`) and persisted here, letting clients de-duplicate
+    /// the live stream against the fetched history. Must have the same length
+    /// as `lines`; surplus ids or lines are ignored.
+    pub ids: Vec<Uuid>,
     /// Run that produced these log lines.
     pub run_id: Uuid,
     /// Step that produced these log lines.
@@ -139,6 +147,7 @@ mod tests {
     #[test]
     fn new_log_entries_creation() {
         let entries = NewLogEntries {
+            ids: vec![Uuid::now_v7()],
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             step_name: "deploy".to_string(),
@@ -148,5 +157,6 @@ mod tests {
 
         assert_eq!(entries.stream, LogStream::Stderr);
         assert_eq!(entries.lines.len(), 1);
+        assert_eq!(entries.ids.len(), 1);
     }
 }

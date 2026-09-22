@@ -258,15 +258,13 @@ export function Component() {
 							runId={run.id}
 						/>
 					</CollapsibleSection>
-					{active && (
-						<CollapsibleSection
-							storageKey="live-logs"
-							title="Live Logs"
-							defaultOpen
-						>
-							<LogStreamPanel runId={run.id} enabled />
-						</CollapsibleSection>
-					)}
+					<CollapsibleSection
+						storageKey="live-logs"
+						title="Logs"
+						defaultOpen={active}
+					>
+						<LogStreamPanel runId={run.id} isActive={active} />
+					</CollapsibleSection>
 					<StepList steps={shownSteps} />
 				</div>
 			</div>

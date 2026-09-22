@@ -195,6 +195,7 @@ mod tests {
         state
             .store
             .append_logs(NewLogEntries {
+                ids: (0..n).map(|_| Uuid::now_v7()).collect(),
                 run_id,
                 step_id,
                 step_name: "build".to_string(),

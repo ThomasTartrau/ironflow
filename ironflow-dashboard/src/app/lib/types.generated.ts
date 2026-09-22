@@ -1763,6 +1763,7 @@ export interface components {
 		 *     use uuid::Uuid;
 		 *
 		 *     let payload = LogLineEvent {
+		 *         id: Uuid::now_v7(),
 		 *         run_id: Uuid::now_v7(),
 		 *         step_id: Uuid::now_v7(),
 		 *         step_name: "build".to_string(),
@@ -1779,6 +1780,18 @@ export interface components {
 			 * @description When the line was emitted.
 			 */
 			at: string;
+			/**
+			 * Format: uuid
+			 * @description Persisted entry identifier (UUID v7, time-ordered).
+			 *
+			 *     Matches the `id` of the log entry later stored for this line, so clients
+			 *     can de-duplicate the live SSE stream against the persisted history
+			 *     fetched from `GET /runs/:id/logs`.
+			 *
+			 *     Defaults to the nil UUID when absent, so a payload emitted by an older
+			 *     producer still deserializes instead of dropping the whole event.
+			 */
+			id?: string;
 			/** @description The log line content. */
 			line: string;
 			/**

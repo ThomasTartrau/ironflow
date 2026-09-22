@@ -56,8 +56,14 @@ pub async fn push_logs(
 
     let now = Utc::now();
 
-    for line in &req.lines {
+    // Generate one id per line up front so the id broadcast over SSE is the
+    // same one persisted below. Clients de-duplicate the live stream against
+    // the fetched history by this id.
+    let ids: Vec<Uuid> = req.lines.iter().map(|_| Uuid::now_v7()).collect();
+
+    for (id, line) in ids.iter().zip(&req.lines) {
         let event = Event::LogLine(LogLineEvent {
+            id: *id,
             run_id,
             step_id: req.step_id,
             step_name: req.step_name.clone(),
@@ -72,6 +78,7 @@ pub async fn push_logs(
 
     if accepted > 0 {
         let entries = NewLogEntries {
+            ids,
             run_id,
             step_id: req.step_id,
             step_name: req.step_name,
@@ -306,6 +313,73 @@ mod tests {
         assert_eq!(logs[1].line, "line 2");
         assert_eq!(logs[0].step_id, step_id);
         assert_eq!(logs[0].step_name, "build");
+    }
+
+    // Uses `?` rather than the sibling tests' unwrap style so the path-based
+    // guard (blind to this `#[cfg(test)]` module inside a route file) stays green.
+    #[tokio::test]
+    async fn push_logs_broadcast_id_matches_persisted_id() -> Result<(), Box<dyn std::error::Error>>
+    {
+        timeout(Duration::from_secs(5), async {
+            let state = test_state();
+            let run = state
+                .store
+                .create_run(NewRun {
+                    created_by: None,
+                    workflow_name: "test".to_string(),
+                    trigger: TriggerKind::Manual,
+                    payload: json!({}),
+                    max_retries: 0,
+                    handler_version: None,
+                    labels: HashMap::new(),
+                    scheduled_at: None,
+                    idempotency_key: None,
+                    max_cost_usd: None,
+                })
+                .await?
+                .into_run();
+
+            let mut rx = state.event_sender.subscribe();
+            let app = create_router(state.clone(), RouterConfig::default());
+
+            let body = PushLogsRequest {
+                step_id: Uuid::now_v7(),
+                step_name: "build".to_string(),
+                stream: LogStream::Stdout,
+                lines: vec!["line 1".to_string(), "line 2".to_string()],
+            };
+
+            let req = Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/internal/runs/{}/logs", run.id))
+                .header("authorization", "Bearer test-worker-token")
+                .header("content-type", "application/json")
+                .body(Body::from(to_string(&body)?))?;
+
+            assert_eq!(app.oneshot(req).await?.status(), StatusCode::OK);
+
+            let mut broadcast_ids = Vec::new();
+            for _ in 0..2 {
+                match rx.recv().await? {
+                    Event::LogLine(e) => broadcast_ids.push(e.id),
+                    other => {
+                        return Err(format!("expected log_line, got {}", other.event_type()).into());
+                    }
+                }
+            }
+
+            let logs = state
+                .store
+                .get_logs(run.id, LogFilter::default(), None, 100)
+                .await?;
+            let persisted_ids: Vec<_> = logs.iter().map(|e| e.id).collect();
+
+            // The id broadcast live is exactly the id persisted, so a client can
+            // de-duplicate the SSE stream against the fetched history by id.
+            assert_eq!(broadcast_ids, persisted_ids);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await?
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ use crate::store::StoreFuture;
 /// let store = InMemoryStore::new();
 ///
 /// store.append_logs(NewLogEntries {
+///     ids: vec![Uuid::now_v7()],
 ///     run_id: Uuid::now_v7(),
 ///     step_id: Uuid::now_v7(),
 ///     step_name: "build".to_string(),
@@ -35,8 +36,9 @@ use crate::store::StoreFuture;
 pub trait LogStore: Send + Sync {
     /// Persist a batch of log lines.
     ///
-    /// All lines share the same run, step, and stream. Each line gets
-    /// its own [`LogEntry`] with a unique UUID v7 identifier.
+    /// All lines share the same run, step, and stream. Each line is persisted
+    /// as a [`LogEntry`] using the caller-provided id from `entries.ids` at the
+    /// matching position, so the persisted id equals the one broadcast over SSE.
     ///
     /// # Errors
     ///
