@@ -9,6 +9,7 @@ use tracing::{info, warn};
 use ironflow_core::operations::agent::Agent;
 use ironflow_core::pricing::{CostBreakdown, StaticPricing, spawn_log};
 use ironflow_core::provider::{AgentConfig, AgentProvider, LogSink};
+use ironflow_store::entities::StepKind;
 
 use crate::error::EngineError;
 use crate::log_sender::StepLogSender;
@@ -43,6 +44,10 @@ impl<'a> AgentExecutor<'a> {
 }
 
 impl StepExecutor for AgentExecutor<'_> {
+    fn kind(&self) -> StepKind {
+        StepKind::Agent
+    }
+
     async fn execute(&self, provider: &Arc<dyn AgentProvider>) -> Result<StepOutput, EngineError> {
         let start = Instant::now();
 

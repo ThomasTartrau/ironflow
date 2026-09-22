@@ -1,37 +1,61 @@
-//! Implementation of the decision step for [`WorkflowContext`].
+//! Typed machine-decision step for [`WorkflowContext`].
 //!
-//! Split out of `context.rs` to keep that file manageable. As a descendant
-//! module of `context`, it can access `WorkflowContext`'s private fields.
+//! Holds the public [`decision`](WorkflowContext::decision) entry point and the
+//! replay, execute and escalate paths it dispatches to. As a descendant module
+//! of `context`, it can access `WorkflowContext`'s private fields.
 //!
 //! The decision step is a hybrid of an agent step (it calls a provider, costs
 //! money, and stores typed output) and an approval gate (a low-confidence answer
 //! suspends the run and replays its stored answers on resume).
 
 use chrono::Utc;
-use serde_json::to_value;
+use serde_json::{Value, from_value, to_value};
 use tracing::info;
+use uuid::Uuid;
 
 use ironflow_core::decision::DecisionOutput;
 use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_trace_id};
 
 use crate::config::DecisionConfig;
+use crate::context::WorkflowContext;
 use crate::error::EngineError;
-use crate::executor::{StepOutput, StepResult, execute_decision};
+use crate::executor::{DecisionExecution, StepOutput, StepResult, execute_decision};
 use crate::notify::{
     WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowStepCompletedEvent,
     WorkflowStepStartedEvent,
 };
 
-use super::WorkflowContext;
-
 impl WorkflowContext {
+    /// Execute a typed machine-decision step (System One / Jev).
+    ///
+    /// See [`DecisionConfig`]. Returns a
+    /// [`DecisionOutput`] whose answers are accessed by name. When
+    /// `escalate_below` is set and any answer falls below it, the run suspends
+    /// with [`EngineError::ApprovalRequired`] and replays the stored answers on
+    /// resume without re-calling the provider.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NoDecisionProvider`], [`EngineError::ApprovalRequired`], or
+    /// [`EngineError::Operation`].
+    pub async fn decision(
+        &mut self,
+        name: &str,
+        config: DecisionConfig,
+    ) -> Result<DecisionOutput, EngineError> {
+        if let Some(output) = self.decision_replay(name, &config).await? {
+            return Ok(output);
+        }
+        self.decision_execute(name, config).await
+    }
+
     /// Replay a decision step recorded in this attempt, if any.
     ///
     /// Returns `Ok(Some(output))` when the step at the current position was
     /// already decided (its answers are returned as-is, without re-calling the
     /// provider), advancing the position. Returns `Ok(None)` when there is
     /// nothing to replay, leaving the position untouched for a fresh execution.
-    pub(super) async fn decision_replay(
+    async fn decision_replay(
         &mut self,
         name: &str,
         _config: &DecisionConfig,
@@ -55,7 +79,7 @@ impl WorkflowContext {
                     "decision step '{name}' has no stored output to replay"
                 ))
             })
-            .and_then(|v| serde_json::from_value(v).map_err(EngineError::from))?;
+            .and_then(|v| from_value(v).map_err(EngineError::from))?;
 
         // An escalated decision suspended in `AwaitingApproval`; the handler only
         // re-runs on an approved resume, so mark it completed and continue.
@@ -96,7 +120,7 @@ impl WorkflowContext {
 
     /// Execute a fresh decision step: call the provider, persist the answers, and
     /// either complete or escalate to a human approval gate.
-    pub(super) async fn decision_execute(
+    async fn decision_execute(
         &mut self,
         name: &str,
         config: DecisionConfig,
@@ -226,10 +250,10 @@ impl WorkflowContext {
         &mut self,
         name: &str,
         position: u32,
-        step_id: uuid::Uuid,
+        step_id: Uuid,
         config: &DecisionConfig,
-        execution: &crate::executor::DecisionExecution,
-        output_value: serde_json::Value,
+        execution: &DecisionExecution,
+        output_value: Value,
     ) -> Result<DecisionOutput, EngineError> {
         let threshold = config.escalate_below.unwrap_or_default();
         let min = execution.output.min_confidence().unwrap_or_default();

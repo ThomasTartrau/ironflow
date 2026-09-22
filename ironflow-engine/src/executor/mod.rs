@@ -3,22 +3,29 @@
 //! Each step type (shell, HTTP, agent) has its own executor implementing
 //! the [`StepExecutor`] trait. The [`execute_step_config`] function dispatches
 //! to the appropriate executor based on the [`StepConfig`] variant.
+//!
+//! Every executor declares the [`StepKind`] it handles via
+//! [`StepExecutor::kind`], and [`execute_step_config`] derives the span and
+//! metric label from that kind. A new step type therefore only has to declare
+//! its kind instead of extending a match here.
 
 mod agent;
 mod decision;
 mod http;
 mod shell;
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, from_value};
+use tracing::Span;
 use uuid::Uuid;
 
 use ironflow_core::provider::{AgentProvider, DebugMessage};
-use ironflow_store::entities::StepStatus;
+use ironflow_store::entities::{StepKind, StepStatus};
 
 use crate::config::StepConfig;
 use crate::error::EngineError;
@@ -393,6 +400,13 @@ fn summarize_output(value: &Value) -> Option<String> {
 /// Each step type implements this trait to execute its specific operation
 /// and return a [`StepOutput`].
 pub trait StepExecutor: Send + Sync {
+    /// The [`StepKind`] this executor handles.
+    ///
+    /// The dispatcher uses it to label spans and metrics, so a new step type
+    /// only has to declare its kind here instead of extending a match in
+    /// [`execute_step_config`].
+    fn kind(&self) -> StepKind;
+
     /// Execute the step and return structured output.
     ///
     /// # Errors
@@ -402,6 +416,19 @@ pub trait StepExecutor: Send + Sync {
         &self,
         provider: &Arc<dyn AgentProvider>,
     ) -> impl Future<Output = Result<StepOutput, EngineError>> + Send;
+}
+
+/// Span and metric label for a step kind.
+pub(crate) fn step_kind_label(kind: &StepKind) -> Cow<'static, str> {
+    match kind {
+        StepKind::Shell => Cow::Borrowed("shell"),
+        StepKind::Http => Cow::Borrowed("http"),
+        StepKind::Agent => Cow::Borrowed("agent"),
+        StepKind::Workflow => Cow::Borrowed("workflow"),
+        StepKind::Approval => Cow::Borrowed("approval"),
+        StepKind::Decision => Cow::Borrowed("decision"),
+        StepKind::Custom(name) => Cow::Owned(name.clone()),
+    }
 }
 
 /// Execute a [`StepConfig`] and return structured output.
@@ -435,16 +462,9 @@ pub async fn execute_step_config(
     provider: &Arc<dyn AgentProvider>,
     log_sender: Option<StepLogSender>,
 ) -> Result<StepOutput, EngineError> {
-    let kind = match config {
-        StepConfig::Shell(_) => "shell",
-        StepConfig::Http(_) => "http",
-        StepConfig::Agent(_) => "agent",
-        StepConfig::Workflow(_) => "workflow",
-        StepConfig::Approval(_) => "approval",
-        StepConfig::Decision(_) => "decision",
-        StepConfig::Delay(_) => "delay",
-    };
-    tracing::Span::current().record("step.kind", kind);
+    let kind = config.kind();
+    let label = step_kind_label(&kind);
+    Span::current().record("step.kind", label.as_ref());
 
     let result = match config {
         StepConfig::Shell(cfg) => {
@@ -487,9 +507,10 @@ pub async fn execute_step_config(
         } else {
             STATUS_ERROR
         };
-        counter!(STEPS_TOTAL, "kind" => kind, "status" => status).increment(1);
+        let kind_label = label.into_owned();
+        counter!(STEPS_TOTAL, "kind" => kind_label.clone(), "status" => status).increment(1);
         if let Ok(ref output) = result {
-            histogram!(STEP_DURATION_SECONDS, "kind" => kind)
+            histogram!(STEP_DURATION_SECONDS, "kind" => kind_label)
                 .record(output.duration_ms as f64 / 1000.0);
         }
     }
@@ -502,6 +523,11 @@ mod tests {
     use super::*;
     use ironflow_core::provider::DebugMessage;
     use serde_json::json;
+
+    use crate::config::{
+        AgentStepConfig, ApprovalConfig, DecisionConfig, DelayConfig, HttpConfig, ShellConfig,
+        WorkflowStepConfig,
+    };
 
     #[test]
     fn step_output_with_no_debug_messages_returns_none() {
@@ -731,6 +757,58 @@ mod tests {
         let result = StepResult::from_success(Uuid::nil(), "test", &output);
         let summary = result.output_summary.unwrap();
         assert_eq!(summary.len(), 500);
+    }
+
+    #[test]
+    fn step_executor_kind_matches_step_config_kind() {
+        let shell = ShellConfig::new("echo hi");
+        let http = HttpConfig::get("https://example.com");
+        let agent = AgentStepConfig::new("hi");
+
+        let shell_kind = ShellExecutor::new(&shell).kind();
+        let http_kind = HttpExecutor::new(&http).kind();
+        let agent_kind = AgentExecutor::new(&agent).kind();
+
+        assert_eq!(shell_kind, StepConfig::Shell(shell).kind());
+        assert_eq!(http_kind, StepConfig::Http(http).kind());
+        assert_eq!(agent_kind, StepConfig::Agent(agent).kind());
+    }
+
+    #[test]
+    fn step_kind_label_matches_dispatcher_labels() {
+        let cases: Vec<(StepConfig, &str)> = vec![
+            (StepConfig::Shell(ShellConfig::new("echo hi")), "shell"),
+            (
+                StepConfig::Http(HttpConfig::get("https://example.com")),
+                "http",
+            ),
+            (StepConfig::Agent(AgentStepConfig::new("hi")), "agent"),
+            (
+                StepConfig::Workflow(WorkflowStepConfig::new("child", json!({}))),
+                "workflow",
+            ),
+            (
+                StepConfig::Approval(ApprovalConfig::new("approve?")),
+                "approval",
+            ),
+            (
+                StepConfig::Decision(DecisionConfig::new(json!({}))),
+                "decision",
+            ),
+            (StepConfig::Delay(DelayConfig::from_secs(1)), "delay"),
+        ];
+
+        for (config, expected) in cases {
+            assert_eq!(step_kind_label(&config.kind()), expected);
+        }
+    }
+
+    #[test]
+    fn step_kind_label_uses_the_custom_kind_name() {
+        assert_eq!(
+            step_kind_label(&StepKind::Custom("gitlab".to_string())),
+            "gitlab"
+        );
     }
 }
 

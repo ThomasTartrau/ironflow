@@ -15,6 +15,7 @@ use ironflow_core::error::OperationError;
 use ironflow_core::operations::shell::Shell;
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::utils::truncate_output;
+use ironflow_store::entities::StepKind;
 
 use crate::config::ShellConfig;
 use crate::error::EngineError;
@@ -71,6 +72,10 @@ impl<'a> ShellExecutor<'a> {
 }
 
 impl StepExecutor for ShellExecutor<'_> {
+    fn kind(&self) -> StepKind {
+        StepKind::Shell
+    }
+
     async fn execute(&self, _provider: &Arc<dyn AgentProvider>) -> Result<StepOutput, EngineError> {
         match self.log_sender {
             Some(ref sender) => self.execute_streaming(sender.clone()).await,

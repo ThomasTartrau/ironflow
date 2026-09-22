@@ -9,6 +9,7 @@ use tracing::info;
 
 use ironflow_core::operations::http::Http;
 use ironflow_core::provider::AgentProvider;
+use ironflow_store::entities::StepKind;
 
 use crate::config::HttpConfig;
 use crate::error::EngineError;
@@ -30,6 +31,10 @@ impl<'a> HttpExecutor<'a> {
 }
 
 impl StepExecutor for HttpExecutor<'_> {
+    fn kind(&self) -> StepKind {
+        StepKind::Http
+    }
+
     async fn execute(&self, _provider: &Arc<dyn AgentProvider>) -> Result<StepOutput, EngineError> {
         let start = Instant::now();
 
