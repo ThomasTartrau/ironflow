@@ -1,6 +1,7 @@
 //! Router assembly — one module per route.
 
 pub mod api_keys;
+pub mod approval_delegations;
 pub mod approve_run;
 pub mod audit_logs;
 pub mod auth;
@@ -266,6 +267,15 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route(
             "/secrets/{*key}",
             put(secrets::update::update_secret).delete(secrets::delete::delete_secret),
+        )
+        .route(
+            "/approval-delegations",
+            get(approval_delegations::list::list_approval_delegations)
+                .post(approval_delegations::create::create_approval_delegation),
+        )
+        .route(
+            "/approval-delegations/{id}",
+            delete(approval_delegations::delete::delete_approval_delegation),
         )
         .route(
             "/schedules",

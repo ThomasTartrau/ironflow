@@ -24,6 +24,9 @@ pub trait UserStore: Send + Sync {
     /// Find a user by email. Returns `None` if not found.
     fn find_user_by_email(&self, email: &str) -> StoreFuture<'_, Option<User>>;
 
+    /// Find a user by username. Returns `None` if not found.
+    fn find_user_by_username(&self, username: &str) -> StoreFuture<'_, Option<User>>;
+
     /// Find a user by ID. Returns `None` if not found.
     fn find_user_by_id(&self, id: Uuid) -> StoreFuture<'_, Option<User>>;
 

@@ -40,6 +40,7 @@
 //! ```
 
 pub mod api_key_store;
+pub mod approval_delegation_store;
 pub mod artifact_store;
 pub mod audit_log_store;
 pub mod entities;
@@ -68,6 +69,7 @@ pub mod postgres;
 /// Convenience re-exports for common usage.
 pub mod prelude {
     pub use crate::api_key_store::ApiKeyStore;
+    pub use crate::approval_delegation_store::ApprovalDelegationStore;
     pub use crate::artifact_store::ArtifactStore;
     pub use crate::audit_log_store::AuditLogStore;
     pub use crate::entities::*;

@@ -3,6 +3,7 @@
 //! These types form the public API contract. They map from internal store
 //! models and are never exposed directly.
 
+mod approval_delegation;
 mod artifact;
 mod auth;
 mod create_run;
@@ -15,6 +16,9 @@ mod stats;
 mod step;
 mod user;
 
+pub use approval_delegation::{
+    ApprovalDelegationResponse, CreateApprovalDelegationRequest, ListApprovalDelegationsQuery,
+};
 pub use artifact::ArtifactResponse;
 pub use auth::{ChangePasswordRequest, MeResponse, SignInRequest, SignUpRequest};
 pub use create_run::{CreateRunRequest, IdempotencyKeyError, validate_idempotency_key};

@@ -69,6 +69,75 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/approval-delegations": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List the active approval delegations visible to the caller, paginated.
+		 * @description An admin sees every active delegation and may narrow the result with the
+		 *     query parameters. A non-admin always sees exactly the delegations they
+		 *     granted plus the ones they received, and the user filters are ignored --
+		 *     they must not become a way to enumerate other people's delegations.
+		 *
+		 *     Expired and not-yet-started delegations are never returned: the store filters
+		 *     them out at read time.
+		 *
+		 *     # Errors
+		 *
+		 *     - 401 if not authenticated
+		 */
+		get: operations["list_approval_delegations"];
+		put?: never;
+		/**
+		 * Create an approval delegation.
+		 * @description The delegator is always the caller: a user hands over their own approval
+		 *     power, never someone else's. Any authenticated user may do so.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if the target is the caller, the window is inverted, the workflow
+		 *       filter is not a valid glob, or the target user does not exist
+		 *     - 401 if not authenticated
+		 */
+		post: operations["create_approval_delegation"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/approval-delegations/{id}": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		/**
+		 * Revoke an approval delegation.
+		 * @description Only the delegator who granted it, or an admin, may revoke a delegation.
+		 *     Expired rows are still revocable: they are readable by ID even though they
+		 *     no longer appear in the list.
+		 *
+		 *     # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 403 if the caller is neither the delegator nor an admin
+		 *     - 404 if the delegation does not exist
+		 */
+		delete: operations["delete_approval_delegation"];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/audit-logs": {
 		parameters: {
 			query?: never;
@@ -950,6 +1019,41 @@ export interface components {
 			| "runs_manage"
 			| "stats_read"
 			| "admin";
+		/** @description Approval delegation response. */
+		ApprovalDelegationResponse: {
+			/**
+			 * Format: date-time
+			 * @description When the delegation was created.
+			 */
+			created_at: string;
+			/**
+			 * Format: uuid
+			 * @description User handing over their approval power.
+			 */
+			from_user_id: string;
+			/**
+			 * Format: uuid
+			 * @description Delegation ID.
+			 */
+			id: string;
+			/**
+			 * Format: uuid
+			 * @description User receiving the approval power.
+			 */
+			to_user_id: string;
+			/**
+			 * Format: date-time
+			 * @description Start of the validity window (inclusive).
+			 */
+			valid_from: string;
+			/**
+			 * Format: date-time
+			 * @description End of the validity window (exclusive).
+			 */
+			valid_until: string;
+			/** @description Glob on the workflow name. `None` means every workflow. */
+			workflow_filter?: string | null;
+		};
 		/**
 		 * @description Payload of the `Event::ApprovalEscalated` event.
 		 *
@@ -1284,6 +1388,31 @@ export interface components {
 			scopes: components["schemas"]["ApiKeyScope"][];
 		};
 		/**
+		 * @description Create delegation request body.
+		 *
+		 *     The delegator is always the authenticated caller: a delegation can only be
+		 *     granted by the person handing over their own approval power.
+		 */
+		CreateApprovalDelegationRequest: {
+			/**
+			 * Format: uuid
+			 * @description User receiving the delegated approval power.
+			 */
+			to_user_id: string;
+			/**
+			 * Format: date-time
+			 * @description Start of the window. Defaults to now when omitted.
+			 */
+			valid_from?: string | null;
+			/**
+			 * Format: date-time
+			 * @description End of the window (exclusive).
+			 */
+			valid_until: string;
+			/** @description Optional glob on the workflow name, e.g. `"deploy-*"`. `None` = all workflows. */
+			workflow_filter?: string | null;
+		};
+		/**
 		 * @description Request to trigger a workflow.
 		 *
 		 *     # Examples
@@ -1601,6 +1730,35 @@ export interface components {
 			missing: number[];
 			/** @description Versions that can be removed from the key ring safely. */
 			retirable: number[];
+		};
+		/**
+		 * @description Query parameters for listing delegations.
+		 *
+		 *     Both user filters are honoured for an admin only; a non-admin always sees
+		 *     exactly the delegations they granted or received. Pagination applies to
+		 *     everyone.
+		 */
+		ListApprovalDelegationsQuery: {
+			/**
+			 * Format: uuid
+			 * @description Only delegations granted by this user.
+			 */
+			from_user_id?: string | null;
+			/**
+			 * Format: int32
+			 * @description Page number (1-based, defaults to 1).
+			 */
+			page?: number | null;
+			/**
+			 * Format: int32
+			 * @description Items per page (defaults to 20, max 100).
+			 */
+			per_page?: number | null;
+			/**
+			 * Format: uuid
+			 * @description Only delegations received by this user.
+			 */
+			to_user_id?: string | null;
 		};
 		/** @description Query parameters for listing audit log entries. */
 		ListAuditLogsQuery: {
@@ -3364,6 +3522,123 @@ export interface operations {
 				content?: never;
 			};
 			/** @description API key not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_approval_delegations: {
+		parameters: {
+			query?: {
+				/** @description Only delegations granted by this user. */
+				from_user_id?: string | null;
+				/** @description Only delegations received by this user. */
+				to_user_id?: string | null;
+				/** @description Page number (1-based, defaults to 1). */
+				page?: number | null;
+				/** @description Items per page (defaults to 20, max 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Paginated list of active delegations */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ApprovalDelegationResponse"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	create_approval_delegation: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Delegation definition */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["CreateApprovalDelegationRequest"];
+			};
+		};
+		responses: {
+			/** @description Delegation created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ApprovalDelegationResponse"];
+				};
+			};
+			/** @description Invalid input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	delete_approval_delegation: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Delegation ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Delegation revoked */
+			204: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Delegation not found */
 			404: {
 				headers: {
 					[name: string]: unknown;

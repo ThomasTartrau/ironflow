@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::api_key_store::ApiKeyStore;
+use crate::approval_delegation_store::ApprovalDelegationStore;
 use crate::artifact_store::ArtifactStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
@@ -358,6 +359,7 @@ pub trait Store:
     + ArtifactStore
     + LogStore
     + ScheduleStore
+    + ApprovalDelegationStore
 {
 }
 
@@ -369,7 +371,8 @@ impl<
         + AuditLogStore
         + ArtifactStore
         + LogStore
-        + ScheduleStore,
+        + ScheduleStore
+        + ApprovalDelegationStore,
 > Store for T
 {
 }

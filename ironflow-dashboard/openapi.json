@@ -161,6 +161,178 @@
         ]
       }
     },
+    "/api/v1/approval-delegations": {
+      "get": {
+        "tags": [
+          "approval-delegations"
+        ],
+        "summary": "List the active approval delegations visible to the caller, paginated.",
+        "description": "An admin sees every active delegation and may narrow the result with the\nquery parameters. A non-admin always sees exactly the delegations they\ngranted plus the ones they received, and the user filters are ignored --\nthey must not become a way to enumerate other people's delegations.\n\nExpired and not-yet-started delegations are never returned: the store filters\nthem out at read time.\n\n# Errors\n\n- 401 if not authenticated",
+        "operationId": "list_approval_delegations",
+        "parameters": [
+          {
+            "name": "from_user_id",
+            "in": "query",
+            "description": "Only delegations granted by this user.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "to_user_id",
+            "in": "query",
+            "description": "Only delegations received by this user.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-based, defaults to 1).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page (defaults to 20, max 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of active delegations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalDelegationResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "approval-delegations"
+        ],
+        "summary": "Create an approval delegation.",
+        "description": "The delegator is always the caller: a user hands over their own approval\npower, never someone else's. Any authenticated user may do so.\n\n# Errors\n\n- 400 if the target is the caller, the window is inverted, the workflow\n  filter is not a valid glob, or the target user does not exist\n- 401 if not authenticated",
+        "operationId": "create_approval_delegation",
+        "requestBody": {
+          "description": "Delegation definition",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApprovalDelegationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Delegation created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDelegationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/approval-delegations/{id}": {
+      "delete": {
+        "tags": [
+          "approval-delegations"
+        ],
+        "summary": "Revoke an approval delegation.",
+        "description": "Only the delegator who granted it, or an admin, may revoke a delegation.\nExpired rows are still revocable: they are readable by ID even though they\nno longer appear in the list.\n\n# Errors\n\n- 401 if not authenticated\n- 403 if the caller is neither the delegator nor an admin\n- 404 if the delegation does not exist",
+        "operationId": "delete_approval_delegation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Delegation ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Delegation revoked"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Delegation not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/audit-logs": {
       "get": {
         "tags": [
@@ -2372,6 +2544,57 @@
           "admin"
         ]
       },
+      "ApprovalDelegationResponse": {
+        "type": "object",
+        "description": "Approval delegation response.",
+        "required": [
+          "id",
+          "from_user_id",
+          "to_user_id",
+          "valid_from",
+          "valid_until",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the delegation was created."
+          },
+          "from_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User handing over their approval power."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Delegation ID."
+          },
+          "to_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User receiving the approval power."
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the validity window (inclusive)."
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the validity window (exclusive)."
+          },
+          "workflow_filter": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob on the workflow name. `None` means every workflow."
+          }
+        }
+      },
       "ApprovalEscalatedEvent": {
         "type": "object",
         "description": "Payload of the `Event::ApprovalEscalated` event.\n\nEmitted every time an approval gate misses its SLA deadline, including the\nrepeated firings of a bare `Notify`/`Escalate` policy and the final\n\"chain exhausted\" notice. The audit log persists it verbatim, so the whole\nescalation history of a gate is reconstructable from it.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalEscalatedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalEscalatedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"prod-gate\".to_string(),\n    stage: 0,\n    policy: \"auto_reject\".to_string(),\n    action: \"rejected\".to_string(),\n    reason: \"approval deadline of 3600s expired\".to_string(),\n    assignee: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.policy, \"auto_reject\");\n```",
@@ -2727,6 +2950,41 @@
               "$ref": "#/components/schemas/ApiKeyScope"
             },
             "description": "Granted scopes."
+          }
+        }
+      },
+      "CreateApprovalDelegationRequest": {
+        "type": "object",
+        "description": "Create delegation request body.\n\nThe delegator is always the authenticated caller: a delegation can only be\ngranted by the person handing over their own approval power.",
+        "required": [
+          "to_user_id",
+          "valid_until"
+        ],
+        "properties": {
+          "to_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User receiving the delegated approval power."
+          },
+          "valid_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Start of the window. Defaults to now when omitted."
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window (exclusive)."
+          },
+          "workflow_filter": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional glob on the workflow name, e.g. `\"deploy-*\"`. `None` = all workflows."
           }
         }
       },
@@ -3356,6 +3614,46 @@
               "format": "int32"
             },
             "description": "Versions that can be removed from the key ring safely."
+          }
+        }
+      },
+      "ListApprovalDelegationsQuery": {
+        "type": "object",
+        "description": "Query parameters for listing delegations.\n\nBoth user filters are honoured for an admin only; a non-admin always sees\nexactly the delegations they granted or received. Pagination applies to\neveryone.",
+        "properties": {
+          "from_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Only delegations granted by this user."
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Page number (1-based, defaults to 1).",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Items per page (defaults to 20, max 100).",
+            "minimum": 0
+          },
+          "to_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Only delegations received by this user."
           }
         }
       },
@@ -5581,6 +5879,10 @@
     {
       "name": "schedules",
       "description": "Schedule management"
+    },
+    {
+      "name": "approval-delegations",
+      "description": "Approval delegation for absent approvers"
     }
   ]
 }

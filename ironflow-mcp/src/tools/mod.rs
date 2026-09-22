@@ -7,6 +7,7 @@
 //! - `secrets/` - list, create, update, delete, rotate secrets
 //! - `api_keys/` - list, create, delete API keys
 //! - `users/` - list, create, update role, delete users
+//! - `delegations/` - list, create, revoke approval delegations
 //! - `audit_logs.rs` - list audit log entries
 //! - `artifacts.rs` - download step artifacts
 //! - `stats.rs` - aggregated statistics
@@ -15,6 +16,7 @@ pub mod actions;
 pub mod api_keys;
 pub mod artifacts;
 pub mod audit_logs;
+pub mod delegations;
 pub mod runs;
 pub mod schedules;
 pub mod secrets;
@@ -26,6 +28,9 @@ pub use actions::{ApproveRunTool, CancelRunTool, RejectRunTool, RetryRunTool};
 pub use api_keys::{CreateApiKeyTool, DeleteApiKeyTool, ListApiKeysTool};
 pub use artifacts::DownloadArtifactTool;
 pub use audit_logs::ListAuditLogsTool;
+pub use delegations::{
+    CreateApprovalDelegationTool, DeleteApprovalDelegationTool, ListApprovalDelegationsTool,
+};
 pub use runs::{CreateRunTool, GetRunLogsTool, GetRunTool, ListRunsTool, SearchRunsTool};
 pub use schedules::{
     CreateScheduleTool, DeleteScheduleTool, ListSchedulesTool, PauseScheduleTool,
@@ -73,7 +78,10 @@ rust_mcp_sdk::tool_box!(
         DeleteScheduleTool,
         PauseScheduleTool,
         ResumeScheduleTool,
-        TriggerScheduleTool
+        TriggerScheduleTool,
+        ListApprovalDelegationsTool,
+        CreateApprovalDelegationTool,
+        DeleteApprovalDelegationTool
     ]
 );
 

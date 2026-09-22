@@ -50,6 +50,7 @@ mod artifact_methods;
 mod auth_methods;
 pub mod builder;
 pub mod client;
+mod delegation_methods;
 pub mod error;
 pub mod rate_limit;
 pub mod retry;

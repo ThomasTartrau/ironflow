@@ -1,10 +1,11 @@
 //! OpenAPI/Swagger documentation for ironflow-api.
 
 use crate::entities::{
-    ArtifactResponse, ChangePasswordRequest, CreateRunRequest, CreateScheduleRequest,
-    CreateUserRequest, CreatedBy, CreatedByKind, KeyVersionsResponse, ListRunsQuery, MeResponse,
-    RotateSecretsRequest, RotateSecretsResponse, RunDetailResponse, RunResponse, ScheduleResponse,
-    SecretResponse, SetSecretRequest, SignInRequest, StatsHistoryBucketResponse,
+    ApprovalDelegationResponse, ArtifactResponse, ChangePasswordRequest,
+    CreateApprovalDelegationRequest, CreateRunRequest, CreateScheduleRequest, CreateUserRequest,
+    CreatedBy, CreatedByKind, KeyVersionsResponse, ListApprovalDelegationsQuery, ListRunsQuery,
+    MeResponse, RotateSecretsRequest, RotateSecretsResponse, RunDetailResponse, RunResponse,
+    ScheduleResponse, SecretResponse, SetSecretRequest, SignInRequest, StatsHistoryBucketResponse,
     StatsHistoryResponse, StatsResponse, StepResponse, UpdateRoleRequest, UpdateScheduleRequest,
     UserResponse,
 };
@@ -19,9 +20,9 @@ use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
 use crate::routes::secrets::update::UpdateSecretRequest;
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
-    api_keys, approve_run, audit_logs, auth, cancel_run, create_run, download_artifact, get_run,
-    get_run_logs, get_stats, get_stats_history, get_workflow, health_check, list_runs,
-    list_workflows, retry_run, run_events, schedules, secrets, users,
+    api_keys, approval_delegations, approve_run, audit_logs, auth, cancel_run, create_run,
+    download_artifact, get_run, get_run_logs, get_stats, get_stats_history, get_workflow,
+    health_check, list_runs, list_workflows, retry_run, run_events, schedules, secrets, users,
 };
 use ironflow_engine::notify::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
@@ -111,6 +112,9 @@ mod with_signup {
             schedules::pause_resume::pause_schedule,
             schedules::pause_resume::resume_schedule,
             schedules::trigger::trigger_schedule,
+            approval_delegations::create::create_approval_delegation,
+            approval_delegations::list::list_approval_delegations,
+            approval_delegations::delete::delete_approval_delegation,
         ),
         components(
             schemas(
@@ -179,6 +183,9 @@ mod with_signup {
                 ScheduleResponse,
                 CreateScheduleRequest,
                 UpdateScheduleRequest,
+                ApprovalDelegationResponse,
+                CreateApprovalDelegationRequest,
+                ListApprovalDelegationsQuery,
             )
         ),
         tags(
@@ -193,6 +200,7 @@ mod with_signup {
             (name = "audit", description = "Audit log (admin only)"),
             (name = "logs", description = "Run/step log persistence and retrieval"),
             (name = "schedules", description = "Schedule management"),
+            (name = "approval-delegations", description = "Approval delegation for absent approvers"),
         )
     )]
     pub struct ApiDoc;
@@ -254,6 +262,9 @@ mod without_signup {
             schedules::pause_resume::pause_schedule,
             schedules::pause_resume::resume_schedule,
             schedules::trigger::trigger_schedule,
+            approval_delegations::create::create_approval_delegation,
+            approval_delegations::list::list_approval_delegations,
+            approval_delegations::delete::delete_approval_delegation,
         ),
         components(
             schemas(
@@ -320,6 +331,9 @@ mod without_signup {
                 ScheduleResponse,
                 CreateScheduleRequest,
                 UpdateScheduleRequest,
+                ApprovalDelegationResponse,
+                CreateApprovalDelegationRequest,
+                ListApprovalDelegationsQuery,
             )
         ),
         tags(
@@ -334,6 +348,7 @@ mod without_signup {
             (name = "audit", description = "Audit log (admin only)"),
             (name = "logs", description = "Run/step log persistence and retrieval"),
             (name = "schedules", description = "Schedule management"),
+            (name = "approval-delegations", description = "Approval delegation for absent approvers"),
         )
     )]
     pub struct ApiDoc;

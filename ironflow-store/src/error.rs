@@ -75,6 +75,10 @@ pub enum StoreError {
     #[error("schedule not found: {0}")]
     ScheduleNotFound(Uuid),
 
+    /// The requested approval delegation does not exist.
+    #[error("approval delegation not found: {0}")]
+    DelegationNotFound(Uuid),
+
     /// A database or I/O error from the backing store.
     #[error("database error: {0}")]
     Database(String),
@@ -114,6 +118,16 @@ mod tests {
         };
         assert!(err.to_string().contains("Pending"));
         assert!(err.to_string().contains("Completed"));
+    }
+
+    #[test]
+    fn delegation_not_found_display() {
+        let id = Uuid::nil();
+        let err = StoreError::DelegationNotFound(id);
+        assert_eq!(
+            err.to_string(),
+            format!("approval delegation not found: {id}")
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::commands;
 use crate::commands::api_key::ApiKeyArgs;
 use crate::commands::audit_log::AuditLogArgs;
 use crate::commands::dashboard::DashboardArgs;
+use crate::commands::delegation::DelegationArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::logs::LogsArgs;
 use crate::commands::run::RunArgs;
@@ -89,6 +90,8 @@ pub enum Commands {
     AuditLog(AuditLogArgs),
     /// Manage workflow schedules.
     Schedule(ScheduleArgs),
+    /// Manage approval delegations.
+    Delegation(DelegationArgs),
     /// Manage workflow templates (add, list, info, create).
     Template(TemplateArgs),
     /// Scaffold a new Ironflow project.
@@ -166,6 +169,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::User(args) => commands::user::execute(client, args, cli.json).await,
         Commands::AuditLog(args) => commands::audit_log::execute(client, args, cli.json).await,
         Commands::Schedule(args) => commands::schedule::execute(client, args, cli.json).await,
+        Commands::Delegation(args) => commands::delegation::execute(client, args, cli.json).await,
         Commands::Template(args) => commands::template::execute(args),
         Commands::Init(args) => commands::init::execute(args),
         Commands::Dashboard(args) => commands::dashboard::execute(client, args),
@@ -180,6 +184,7 @@ mod tests {
 
     use crate::commands::api_key::ApiKeyCommands;
     use crate::commands::audit_log::AuditLogCommands;
+    use crate::commands::delegation::DelegationCommands;
     use crate::commands::secret::SecretCommands;
     use crate::commands::user::UserCommands;
 
@@ -703,6 +708,108 @@ mod tests {
     fn parse_audit_log_list_rejects_a_malformed_date() {
         let result = Cli::try_parse_from(["ironflow-cli", "audit-log", "list", "--from", "hier"]);
         assert!(result.is_err());
+    }
+
+    // ── Approval delegations ───────────────────────────────────────
+
+    #[test]
+    fn parse_delegation_list() {
+        let cli = parse(&["ironflow-cli", "delegation", "list"]);
+        assert!(matches!(cli.command, Commands::Delegation(_)));
+    }
+
+    #[test]
+    fn parse_delegation_list_with_every_flag() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "delegation",
+            "list",
+            "--from-user",
+            UUID,
+            "--to-user",
+            UUID,
+            "--page",
+            "2",
+            "--per-page",
+            "10",
+        ]);
+        let Commands::Delegation(args) = &cli.command else {
+            panic!("expected Delegation command");
+        };
+        let DelegationCommands::List {
+            from_user,
+            to_user,
+            page,
+            per_page,
+        } = &args.command
+        else {
+            panic!("expected List subcommand");
+        };
+        assert!(from_user.is_some());
+        assert!(to_user.is_some());
+        assert_eq!(*page, Some(2));
+        assert_eq!(*per_page, Some(10));
+    }
+
+    #[test]
+    fn parse_delegation_create_with_every_flag() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "delegation",
+            "create",
+            UUID,
+            "--until",
+            "2026-12-31T23:59:59Z",
+            "--from",
+            "2026-12-01T00:00:00Z",
+            "--workflow",
+            "deploy-*",
+        ]);
+        let Commands::Delegation(args) = &cli.command else {
+            panic!("expected Delegation command");
+        };
+        let DelegationCommands::Create {
+            until,
+            from,
+            workflow,
+            ..
+        } = &args.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(until, "2026-12-31T23:59:59Z");
+        assert_eq!(from.as_deref(), Some("2026-12-01T00:00:00Z"));
+        assert_eq!(workflow.as_deref(), Some("deploy-*"));
+    }
+
+    #[test]
+    fn parse_delegation_create_requires_an_until() {
+        assert!(Cli::try_parse_from(["ironflow-cli", "delegation", "create", UUID]).is_err());
+    }
+
+    #[test]
+    fn parse_delegation_create_rejects_a_non_uuid_target() {
+        let result = Cli::try_parse_from([
+            "ironflow-cli",
+            "delegation",
+            "create",
+            "alice",
+            "--until",
+            "2026-12-31T23:59:59Z",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_delegation_delete_defaults_to_confirming() {
+        let cli = parse(&["ironflow-cli", "delegation", "delete", UUID]);
+        let Commands::Delegation(args) = &cli.command else {
+            panic!("expected Delegation command");
+        };
+        let DelegationCommands::Delete { yes, .. } = &args.command else {
+            panic!("expected Delete subcommand");
+        };
+        assert!(!yes);
     }
 
     // ── Completions & man ───────────────────────────────────────

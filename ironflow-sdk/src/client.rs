@@ -148,6 +148,38 @@ pub struct ListAuditLogsFilter<'a> {
     pub per_page: Option<u32>,
 }
 
+/// Filtering options for [`IronflowClient::list_approval_delegations_filtered`].
+///
+/// The user filters are honoured for an admin only; a non-admin always gets the
+/// delegations they granted or received.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_sdk::client::ListApprovalDelegationsFilter;
+///
+/// let filter = ListApprovalDelegationsFilter {
+///     page: Some(2),
+///     per_page: Some(50),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ListApprovalDelegationsFilter {
+    /// Only delegations granted by this user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_user_id: Option<Uuid>,
+    /// Only delegations received by this user.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_user_id: Option<Uuid>,
+    /// Page number (1-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    /// Items per page (max 100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<u32>,
+}
+
 /// Type-safe client for the Ironflow REST API.
 ///
 /// Handles Bearer authentication, the `{ data, meta }` response envelope,

@@ -33,8 +33,16 @@ ApprovalConfig::new("Deploy to production?")
 ```
 
 `assigned_to` takes an `Assignee` -- `Assignee::user("alice")` or
-`Assignee::group("release-managers")`. It is advisory (it drives notification
-routing and audit); it is not an authorization check on who may resolve the gate.
+`Assignee::group("release-managers")`. It drives notification routing and audit,
+and it decides who may resolve the gate:
+
+- an admin resolves any gate;
+- a gate assigned to a user is resolved by that user, admin or not, and by
+  whoever holds an active [delegation](#delegation-and-absence) from them;
+- a gate assigned to a group, or to nobody, is admin-only.
+
+The assignee is matched to the caller by user ID, so an API key resolves its
+owner's gates whatever the key is named.
 
 Everything past the message is optional. Without a deadline, the run waits
 indefinitely.
@@ -108,6 +116,86 @@ The countdown surfaces in three places:
 
 Every escalation is also recorded in the audit log as an `approval_escalated`
 event carrying the stage, the policy, what it did, and why it fired.
+
+## Delegation and absence
+
+An approval gate assigned to one person stops every run behind it the moment
+that person is away. A *delegation* hands their approval power to a colleague
+for a bounded window, without making anyone an admin and without reassigning
+the gates one by one.
+
+A delegation records who grants it, who receives it, the window it is valid for,
+and an optional glob on the workflow name:
+
+```bash
+# Alice hands her deploy approvals to Bob for a week.
+ironflow-cli delegation create <bob-user-id> \
+    --until 2026-10-01T00:00:00Z \
+    --workflow 'deploy-*'
+
+# Everything Alice granted, plus everything she received (20 per page).
+ironflow-cli delegation list --page 1 --per-page 20
+
+# Back early.
+ironflow-cli delegation delete <delegation-id>
+```
+
+The same three endpoints back the CLI:
+
+| Endpoint | What it does |
+|----------|--------------|
+| `POST /api/v1/approval-delegations` | Grant a delegation. The delegator is always the caller. |
+| `GET /api/v1/approval-delegations` | List the active delegations you granted or received, paginated with `page` and `per_page` (default 20, max 100). An admin sees them all and may filter with `from_user_id` and `to_user_id`. |
+| `DELETE /api/v1/approval-delegations/{id}` | Revoke one. Only the delegator or an admin may. |
+
+### What a delegation covers
+
+Only a gate assigned to an individual can be delegated:
+
+```rust,ignore
+ApprovalConfig::new("Deploy to production?")
+    .assigned_to(Assignee::user("alice")) // Bob can answer this through a delegation.
+
+ApprovalConfig::new("Deploy to production?")
+    .assigned_to(Assignee::group("release-managers")) // Admin-only; no single delegator.
+```
+
+A gate assigned to a group, or with no assignee at all, stays admin-only: there
+is no single person whose power could have been handed over.
+
+The `workflow_filter` glob narrows a delegation to part of the catalogue.
+`"deploy-*"` covers `deploy-prod` but not `cleanup`; omitting it covers every
+workflow. A pattern that does not parse matches nothing, so a corrupted row can
+never widen someone's reach.
+
+Several delegations can be active at once -- one per colleague, one per
+workflow family, or from several delegators to the same person. The newest one
+that matches both the gate's assignee and the run's workflow wins.
+
+### Expiry
+
+The window is half-open: a delegation is live at `valid_from` and already over
+at `valid_until`. There is no cleanup job. Expired and not-yet-started rows are
+filtered out every time delegations are read, so they can neither be listed nor
+used to approve -- they are still reachable by ID, which is what makes an
+expired delegation revocable.
+
+### Audit
+
+A delegated decision names both people. The `approval_granted` (or
+`approval_rejected`) audit entry reads:
+
+```json
+{
+  "type": "approval_granted",
+  "run_id": "01932f...",
+  "approved_by": "bob (delegated from alice)",
+  "at": "2026-09-22T10:15:00Z"
+}
+```
+
+An admin, or the assignee resolving their own gate, is recorded under their own
+name alone.
 
 ## Step replay
 

@@ -40,6 +40,7 @@ use uuid::Uuid;
 use crate::entities::User;
 
 mod api_key_store;
+mod approval_delegation_store;
 mod artifact_store;
 mod audit_log_store;
 mod log_store;
@@ -62,6 +63,7 @@ pub(super) struct State {
     pub(super) api_keys: HashMap<Uuid, crate::entities::ApiKey>,
     pub(super) secrets: HashMap<String, EncryptedSecret>,
     pub(super) schedules: HashMap<Uuid, crate::entities::Schedule>,
+    pub(super) approval_delegations: HashMap<Uuid, crate::entities::ApprovalDelegation>,
     pub(super) audit_logs: Vec<crate::entities::AuditLogEntry>,
     pub(super) log_entries: Vec<crate::entities::LogEntry>,
 }

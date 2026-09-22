@@ -116,6 +116,10 @@ pub enum ApiError {
     #[error("schedule not found")]
     ScheduleNotFound(Uuid),
 
+    /// Approval delegation not found (404).
+    #[error("approval delegation not found")]
+    DelegationNotFound(Uuid),
+
     /// Store operation failed (500).
     #[error("database error")]
     Store(StoreError),
@@ -133,6 +137,7 @@ impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
         match e {
             StoreError::ScheduleNotFound(id) => ApiError::ScheduleNotFound(id),
+            StoreError::DelegationNotFound(id) => ApiError::DelegationNotFound(id),
             other => ApiError::Store(other),
         }
     }
@@ -162,6 +167,7 @@ impl ApiError {
             ApiError::ArtifactStorageUnavailable => "ARTIFACT_STORAGE_UNAVAILABLE",
             ApiError::ArtifactTooLarge => "ARTIFACT_TOO_LARGE",
             ApiError::ScheduleNotFound(_) => "SCHEDULE_NOT_FOUND",
+            ApiError::DelegationNotFound(_) => "DELEGATION_NOT_FOUND",
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => "DUPLICATE_ARTIFACT",
             ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
@@ -194,6 +200,7 @@ impl ApiError {
             ApiError::ArtifactStorageUnavailable => StatusCode::NOT_IMPLEMENTED,
             ApiError::ArtifactTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ApiError::ScheduleNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::DelegationNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => StatusCode::CONFLICT,
             ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,
@@ -359,6 +366,13 @@ mod tests {
         let err = ApiError::SecretNotFound("demo/api-key".to_string());
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         assert_eq!(err.code(), "SECRET_NOT_FOUND");
+    }
+
+    #[test]
+    fn delegation_not_found_status_and_code() {
+        let err = ApiError::DelegationNotFound(Uuid::nil());
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(err.code(), "DELEGATION_NOT_FOUND");
     }
 
     #[test]

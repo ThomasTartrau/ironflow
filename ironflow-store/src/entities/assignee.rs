@@ -14,9 +14,11 @@ use thiserror::Error;
 /// `group:{name}` for [`Assignee::Group`] — which keeps the database column a
 /// plain `TEXT` and the OpenAPI type a plain `string`.
 ///
-/// The distinction is advisory: it drives notification routing and audit, not
-/// authorization. Whether an approver is allowed to resolve a gate is decided by
-/// the API layer, not by this type.
+/// Whether an approver is allowed to resolve a gate is decided by the API
+/// layer, which reads this type: a gate assigned to a [`Assignee::User`] can be
+/// answered by that user and by whoever holds an active
+/// [`ApprovalDelegation`](crate::entities::ApprovalDelegation) from them, while a
+/// [`Assignee::Group`] gate stays admin-only.
 ///
 /// # Examples
 ///

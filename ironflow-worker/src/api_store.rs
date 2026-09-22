@@ -10,15 +10,17 @@ use reqwest::{Client, StatusCode};
 use uuid::Uuid;
 
 use ironflow_store::api_key_store::ApiKeyStore;
+use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
 use ironflow_store::artifact_store::ArtifactStore;
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
-    ApiKey, ApiKeyUpdate, Artifact, ArtifactLookup, AuditLogEntry, AuditLogFilter,
-    KeyVersionStatus, LeaseRequest, LogEntry, LogFilter, NewApiKey, NewArtifact, NewAuditLogEntry,
-    NewLogEntries, NewRun, NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy,
-    PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
-    RunStatus, RunUpdate, Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket,
-    StatsHistoryFilter, Step, StepDependency, StepUpdate, User,
+    ApiKey, ApiKeyUpdate, ApprovalDelegation, Artifact, ArtifactLookup, AuditLogEntry,
+    AuditLogFilter, DelegationFilter, KeyVersionStatus, LeaseRequest, LogEntry, LogFilter,
+    NewApiKey, NewApprovalDelegation, NewArtifact, NewAuditLogEntry, NewLogEntries, NewRun,
+    NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy, PurgeableRun, ReapedRun,
+    RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
+    Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step,
+    StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::log_store::LogStore;
@@ -416,6 +418,10 @@ impl UserStore for ApiRunStore {
         Box::pin(async move { Ok(None) })
     }
 
+    fn find_user_by_username(&self, _username: &str) -> StoreFuture<'_, Option<User>> {
+        Box::pin(async move { Ok(None) })
+    }
+
     fn find_user_by_id(&self, _id: Uuid) -> StoreFuture<'_, Option<User>> {
         Box::pin(async move { Ok(None) })
     }
@@ -756,6 +762,53 @@ impl ScheduleStore for ApiRunStore {
         Box::pin(async move {
             Err(StoreError::Database(
                 "ScheduleStore not available in worker".to_string(),
+            ))
+        })
+    }
+}
+
+impl ApprovalDelegationStore for ApiRunStore {
+    fn create_delegation(
+        &self,
+        _req: NewApprovalDelegation,
+    ) -> StoreFuture<'_, ApprovalDelegation> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApprovalDelegationStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn find_delegation_by_id(&self, _id: Uuid) -> StoreFuture<'_, Option<ApprovalDelegation>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn list_active_delegations(
+        &self,
+        _filter: DelegationFilter,
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<ApprovalDelegation>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApprovalDelegationStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn find_active_delegation(
+        &self,
+        _from_user_id: Uuid,
+        _to_user_id: Uuid,
+        _workflow_name: &str,
+    ) -> StoreFuture<'_, Option<ApprovalDelegation>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn delete_delegation(&self, _id: Uuid) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ApprovalDelegationStore not available in worker".to_string(),
             ))
         })
     }
