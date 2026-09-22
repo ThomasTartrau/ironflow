@@ -41,7 +41,9 @@ function emptyStateMessage({
 }): string {
 	if (loading) return "Loading logs…";
 	if (error) return "Failed to load logs";
-	return isActive ? "Waiting for log output..." : "No logs recorded for this run";
+	return isActive
+		? "Waiting for log output..."
+		: "No logs recorded for this run";
 }
 
 function LogLine({ entry }: { entry: LogEntry }) {
