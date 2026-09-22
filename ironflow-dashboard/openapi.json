@@ -5833,6 +5833,10 @@
     {
       "name": "schedules",
       "description": "Schedule management"
+    },
+    {
+      "name": "approval-delegations",
+      "description": "Approval delegation for absent approvers"
     }
   ]
 }

@@ -5520,6 +5520,10 @@
     {
       "description": "Schedule management",
       "name": "schedules"
+    },
+    {
+      "description": "Approval delegation for absent approvers",
+      "name": "approval-delegations"
     }
   ]
 }
