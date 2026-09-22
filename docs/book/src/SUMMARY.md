@@ -24,6 +24,7 @@
 - [Using Pre-built Ops Crates](guides/using-ops-crates.md)
 - [Parallel Execution](guides/parallel-execution.md)
 - [Transports](guides/transports.md)
+- [Testing Workflows](guides/testing-workflows.md)
 
 # Architecture
 

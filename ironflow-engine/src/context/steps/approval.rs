@@ -9,6 +9,7 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 use crate::config::ApprovalConfig;
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+use crate::executor::ApprovalOutcome;
 use crate::notify::{WorkflowApprovalRequiredEvent, WorkflowEvent};
 
 impl WorkflowContext {
@@ -30,11 +31,18 @@ impl WorkflowContext {
     /// [`EscalationPolicy`](crate::config::EscalationPolicy) when it fires. The
     /// timer is cleared as soon as the gate resolves.
     ///
+    /// A [`StepInterceptor`](crate::executor::StepInterceptor) wired into the
+    /// context resolves the gate inline instead of suspending: the step is
+    /// recorded, then completed or rejected without waiting for a human. This
+    /// is what [`crate::testing::TestEngine`] uses to run gated handlers end to
+    /// end.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::ApprovalRequired`] to pause the run on
-    /// first execution. Returns other [`EngineError`] variants on store
-    /// failures.
+    /// first execution. Returns [`EngineError::ApprovalRejected`] when an
+    /// interceptor refuses the gate. Returns other [`EngineError`] variants on
+    /// store failures.
     ///
     /// # Examples
     ///
@@ -129,6 +137,88 @@ impl WorkflowContext {
                 "approval carried over from a previous attempt"
             );
             return Ok(());
+        }
+
+        // An interceptor resolves the gate inline: the run neither suspends nor
+        // waits for a human.
+        if let Some(interceptor) = self.interceptor.clone()
+            && let Some(outcome) = interceptor.intercept_approval(name, &config)
+        {
+            let trace_id = step_trace_id(self.run_id, name, position);
+            let step = self
+                .store
+                .create_step(NewStep {
+                    run_id: self.run_id,
+                    trace_id,
+                    name: name.to_string(),
+                    kind: StepKind::Approval,
+                    position,
+                    input: Some(to_value(&config)?),
+                    is_error_handler: false,
+                })
+                .await?;
+
+            let now = Utc::now();
+            self.start_step(step.id, now).await?;
+            self.last_step_ids = vec![step.id];
+
+            return match outcome {
+                ApprovalOutcome::Approved => {
+                    self.store
+                        .update_step(
+                            step.id,
+                            StepUpdate {
+                                status: Some(StepStatus::Completed),
+                                output: Some(json!({"approved_by": "step-interceptor"})),
+                                completed_at: Some(now),
+                                ..StepUpdate::default()
+                            },
+                        )
+                        .await?;
+                    info!(
+                        run_id = %self.run_id,
+                        step = %name,
+                        position,
+                        "approval granted by the step interceptor"
+                    );
+                    Ok(())
+                }
+                ApprovalOutcome::Rejected { reason } => {
+                    // The step FSM only reaches Rejected from AwaitingApproval.
+                    self.store
+                        .update_step(
+                            step.id,
+                            StepUpdate {
+                                status: Some(StepStatus::AwaitingApproval),
+                                ..StepUpdate::default()
+                            },
+                        )
+                        .await?;
+                    self.store
+                        .update_step(
+                            step.id,
+                            StepUpdate {
+                                status: Some(StepStatus::Rejected),
+                                error: Some(reason.clone()),
+                                completed_at: Some(Utc::now()),
+                                ..StepUpdate::default()
+                            },
+                        )
+                        .await?;
+                    info!(
+                        run_id = %self.run_id,
+                        step = %name,
+                        position,
+                        %reason,
+                        "approval rejected by the step interceptor"
+                    );
+                    Err(EngineError::ApprovalRejected {
+                        run_id: self.run_id,
+                        step_id: step.id,
+                        reason,
+                    })
+                }
+            };
         }
 
         // First execution: create the approval step and suspend.

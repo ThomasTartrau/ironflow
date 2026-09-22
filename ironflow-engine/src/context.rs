@@ -50,7 +50,7 @@ use ironflow_store::store::Store;
 
 use crate::artifact::ArtifactSink;
 use crate::config::StepConfig;
-use crate::executor::StepResult;
+use crate::executor::{StepInterceptor, StepResult};
 use crate::guard::{SharedGuardState, WorkflowGuardConfig};
 use crate::handler::WorkflowHandler;
 use crate::log_sender::LogSender;
@@ -131,6 +131,9 @@ pub struct WorkflowContext {
     step_results: Vec<StepResult>,
     /// Optional event bus for per-run real-time monitoring.
     event_bus: Option<WorkflowEventBus>,
+    /// Optional hook that resolves steps without executing them. `None` in
+    /// production; set by [`crate::testing::TestEngine`].
+    interceptor: Option<Arc<dyn StepInterceptor>>,
     /// W3C trace context for distributed tracing propagation.
     trace_context: WorkflowTraceContext,
     /// Shared operation context for custom operations.

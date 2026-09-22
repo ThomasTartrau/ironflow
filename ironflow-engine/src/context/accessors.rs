@@ -23,7 +23,7 @@ use ironflow_store::workflow_secrets::ScopedSecretStore;
 
 use crate::artifact::ArtifactSink;
 use crate::error::EngineError;
-use crate::executor::StepResult;
+use crate::executor::{StepInterceptor, StepResult};
 use crate::guard::{SharedGuardState, WorkflowGuardConfig};
 use crate::log_sender::LogSender;
 use crate::notify::WorkflowEventBus;
@@ -70,6 +70,7 @@ impl WorkflowContext {
             guard_config: None,
             step_results: Vec::new(),
             event_bus: None,
+            interceptor: None,
             trace_context,
             operation_ctx: None,
         }
@@ -112,6 +113,7 @@ impl WorkflowContext {
             guard_config: None,
             step_results: Vec::new(),
             event_bus: None,
+            interceptor: None,
             trace_context,
             operation_ctx: None,
         }
@@ -186,6 +188,33 @@ impl WorkflowContext {
     /// [`WorkflowEvent`](crate::notify::WorkflowEvent)s to the bus.
     pub fn set_event_bus(&mut self, bus: WorkflowEventBus) {
         self.event_bus = Some(bus);
+    }
+
+    /// Attach a [`StepInterceptor`] that resolves steps without executing them.
+    ///
+    /// Wired by the [`Engine`](crate::engine::Engine) from
+    /// [`Engine::with_step_interceptor`](crate::engine::Engine::with_step_interceptor).
+    /// Intended for tests: see [`crate::testing::TestEngine`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::executor::StepInterceptor;
+    ///
+    /// # fn example(ctx: &mut WorkflowContext, interceptor: Arc<dyn StepInterceptor>) {
+    /// ctx.set_step_interceptor(interceptor);
+    /// # }
+    /// ```
+    pub fn set_step_interceptor(&mut self, interceptor: Arc<dyn StepInterceptor>) {
+        self.interceptor = Some(interceptor);
+    }
+
+    /// The step interceptor attached to this context, if any.
+    pub(crate) fn step_interceptor(&self) -> Option<&Arc<dyn StepInterceptor>> {
+        self.interceptor.as_ref()
     }
 
     /// Attach a [`DecisionProvider`] backend for `ctx.decision(...)` steps.

@@ -18,8 +18,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
-use crate::config::ApprovalConfig;
+use crate::config::{ApprovalConfig, ShellConfig};
 use crate::error::EngineError;
+use crate::testing::{MockInterceptor, MockShellOutput};
 
 /// Helper to create a test provider with fixtures
 fn create_test_provider() -> Arc<dyn ironflow_core::provider::AgentProvider> {
@@ -706,4 +707,25 @@ async fn approval_replay_clears_deadline() {
     let steps = store.list_steps(ctx.run_id()).await.expect("list steps");
     assert_eq!(steps[0].status.state, StepStatus::Completed);
     assert!(steps[0].approval_deadline_at.is_none());
+}
+
+// -- step interceptor --
+
+#[tokio::test]
+async fn set_step_interceptor_short_circuits_a_shell_step() {
+    let (store, mut ctx) = context_with_run().await;
+    // `exit 1` would fail the step if a process were really spawned.
+    let mocks = MockInterceptor::new().shell(|_cfg| Ok(MockShellOutput::ok("mocked")));
+    ctx.set_step_interceptor(Arc::new(mocks));
+
+    let output = ctx
+        .shell("build", ShellConfig::new("exit 1"))
+        .await
+        .expect("the interceptor resolved the step");
+
+    assert_eq!(output.stdout(), "mocked");
+
+    let steps = store.list_steps(ctx.run_id()).await.expect("list steps");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].status.state, StepStatus::Completed);
 }

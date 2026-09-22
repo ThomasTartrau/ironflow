@@ -20,7 +20,9 @@ use crate::context::failure::{
     extract_raw_response_from_error,
 };
 use crate::error::EngineError;
-use crate::executor::{ParallelStepResult, StepOutput, StepResult, execute_step_config};
+use crate::executor::{
+    ParallelStepResult, StepOutput, StepResult, execute_step_config_intercepted,
+};
 use crate::guard::WorkflowRejection;
 use crate::log_sender::StepLogSender;
 use crate::notify::{WorkflowAgentStepTokensUsedEvent, WorkflowEvent};
@@ -147,6 +149,9 @@ impl WorkflowContext {
         let parallel_timeout = self.guard_remaining_timeout();
         for (idx, (step_id, _trace_id, step_name, config)) in step_records.iter().enumerate() {
             let provider = self.provider.clone();
+            // Each task owns its own handle: `intercept` is synchronous, so no
+            // borrow of the context is held across an await point.
+            let interceptor = self.interceptor.clone();
             let config = config.clone();
             let step_log_sender = self
                 .log_sender
@@ -157,7 +162,12 @@ impl WorkflowContext {
                     Some(dur) => {
                         match timeout(
                             dur,
-                            execute_step_config(&config, &provider, step_log_sender),
+                            execute_step_config_intercepted(
+                                &config,
+                                &provider,
+                                step_log_sender,
+                                interceptor.as_ref(),
+                            ),
                         )
                         .await
                         {
@@ -170,7 +180,15 @@ impl WorkflowContext {
                             }
                         }
                     }
-                    None => execute_step_config(&config, &provider, step_log_sender).await,
+                    None => {
+                        execute_step_config_intercepted(
+                            &config,
+                            &provider,
+                            step_log_sender,
+                            interceptor.as_ref(),
+                        )
+                        .await
+                    }
                 };
                 (idx, result)
             });

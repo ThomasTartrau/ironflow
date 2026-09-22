@@ -35,7 +35,7 @@ use crate::artifact::ArtifactSink;
 use crate::budget::{BudgetConfig, month_start};
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
-use crate::executor::StepResult;
+use crate::executor::{StepInterceptor, StepResult};
 use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
@@ -166,6 +166,7 @@ pub struct Engine {
     guard_config: Option<WorkflowGuardConfig>,
     event_bus: Option<WorkflowEventBus>,
     decision_provider: Option<Arc<dyn DecisionProvider>>,
+    step_interceptor: Option<Arc<dyn StepInterceptor>>,
 }
 
 /// Validate a workflow category path.
@@ -232,6 +233,7 @@ impl Engine {
             guard_config: None,
             event_bus: None,
             decision_provider: None,
+            step_interceptor: None,
         }
     }
 
@@ -258,6 +260,39 @@ impl Engine {
     pub fn with_decision_provider(mut self, provider: Arc<dyn DecisionProvider>) -> Self {
         self.decision_provider = Some(provider);
         self
+    }
+
+    /// Wire a [`StepInterceptor`] that resolves steps without executing them.
+    ///
+    /// Used by [`crate::testing::TestEngine`] to mock shell, HTTP and approval
+    /// steps. `None` (the default) executes every step for real.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::executor::StepInterceptor;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// # fn example(interceptor: Arc<dyn StepInterceptor>) {
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// )
+    /// .with_step_interceptor(interceptor);
+    /// # }
+    /// ```
+    pub fn with_step_interceptor(mut self, interceptor: Arc<dyn StepInterceptor>) -> Self {
+        self.step_interceptor = Some(interceptor);
+        self
+    }
+
+    /// The step interceptor wired into this engine, if any.
+    pub fn step_interceptor(&self) -> Option<&Arc<dyn StepInterceptor>> {
+        self.step_interceptor.as_ref()
     }
 
     /// Apply cost guardrails to this engine.
@@ -423,6 +458,9 @@ impl Engine {
         }
         if let Some(ref provider) = self.decision_provider {
             ctx.set_decision_provider(provider.clone());
+        }
+        if let Some(ref interceptor) = self.step_interceptor {
+            ctx.set_step_interceptor(interceptor.clone());
         }
         ctx
     }

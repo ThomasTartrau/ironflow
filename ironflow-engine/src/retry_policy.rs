@@ -66,6 +66,7 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::RunBudgetExceeded`] | the cost cap is cumulative; a replay only spends more |
 /// | [`EngineError::MonthlyBudgetExceeded`] | the monthly quota is exhausted for every run |
 /// | [`EngineError::ApprovalRequired`] | not a failure; the run is suspended, not failed |
+/// | [`EngineError::ApprovalRejected`] | a human decision, replaying cannot change it |
 ///
 /// [`EngineError::Operation`] delegates to
 /// [`ironflow_core::retry::is_retryable`], so a 5xx or an agent timeout is
@@ -93,6 +94,7 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::RunBudgetExceeded { .. }
         | EngineError::MonthlyBudgetExceeded { .. }
         | EngineError::ApprovalRequired { .. }
+        | EngineError::ApprovalRejected { .. }
         // A missing output, an unresolvable input or an unconfigured backend
         // are deterministic: replaying the run reproduces them exactly.
         | EngineError::MissingArtifact { .. }
@@ -201,6 +203,16 @@ mod tests {
             run_id: Uuid::nil(),
             step_id: Uuid::nil(),
             message: "approve?".to_string(),
+        };
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn approval_rejected_is_not_retryable() {
+        let err = EngineError::ApprovalRejected {
+            run_id: Uuid::nil(),
+            step_id: Uuid::nil(),
+            reason: "not on a Friday".to_string(),
         };
         assert!(!is_run_retryable(&err));
     }

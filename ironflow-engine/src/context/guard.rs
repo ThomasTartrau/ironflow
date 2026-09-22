@@ -11,7 +11,7 @@ use tracing::error;
 
 use crate::config::StepConfig;
 use crate::error::EngineError;
-use crate::executor::{StepOutput, execute_step_config};
+use crate::executor::{StepOutput, execute_step_config_intercepted};
 use crate::guard::WorkflowRejection;
 use crate::log_sender::StepLogSender;
 
@@ -49,7 +49,12 @@ impl WorkflowContext {
             Some(dur) => {
                 match timeout(
                     dur,
-                    execute_step_config(config, &self.provider, step_log_sender),
+                    execute_step_config_intercepted(
+                        config,
+                        &self.provider,
+                        step_log_sender,
+                        self.step_interceptor(),
+                    ),
                 )
                 .await
                 {
@@ -67,7 +72,15 @@ impl WorkflowContext {
                     }
                 }
             }
-            None => execute_step_config(config, &self.provider, step_log_sender).await,
+            None => {
+                execute_step_config_intercepted(
+                    config,
+                    &self.provider,
+                    step_log_sender,
+                    self.step_interceptor(),
+                )
+                .await
+            }
         }
     }
 

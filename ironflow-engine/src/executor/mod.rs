@@ -12,6 +12,7 @@
 mod agent;
 mod decision;
 mod http;
+mod interceptor;
 mod shell;
 
 use std::borrow::Cow;
@@ -34,6 +35,7 @@ use crate::log_sender::StepLogSender;
 pub use agent::AgentExecutor;
 pub use decision::{DecisionExecution, execute_decision};
 pub use http::HttpExecutor;
+pub use interceptor::{ApprovalOutcome, StepInterceptor};
 pub use shell::ShellExecutor;
 
 /// Result of executing a single step.
@@ -431,6 +433,103 @@ pub(crate) fn step_kind_label(kind: &StepKind) -> Cow<'static, str> {
     }
 }
 
+/// Execute a [`StepConfig`], letting a [`StepInterceptor`] resolve it first.
+///
+/// When `interceptor` returns `Some(result)` for this config, that result is
+/// used as-is and no executor runs. Otherwise the config is dispatched to the
+/// executor matching its [`StepKind`], exactly like [`execute_step_config`].
+///
+/// When a [`StepLogSender`] is provided, executors that support streaming
+/// will emit log lines in real time (e.g. shell stdout/stderr).
+///
+/// # Errors
+///
+/// Returns [`EngineError::Operation`] if the operation fails, or whichever
+/// error the interceptor returned for an intercepted step.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_engine::config::{StepConfig, ShellConfig};
+/// use ironflow_engine::executor::execute_step_config_intercepted;
+/// use ironflow_core::provider::AgentProvider;
+/// use ironflow_core::providers::claude::ClaudeCodeProvider;
+/// use std::sync::Arc;
+///
+/// # async fn example() -> Result<(), ironflow_engine::error::EngineError> {
+/// let provider: Arc<dyn AgentProvider> = Arc::new(ClaudeCodeProvider::new());
+/// let config = StepConfig::Shell(ShellConfig::new("echo hello"));
+/// let output = execute_step_config_intercepted(&config, &provider, None, None).await?;
+/// # Ok(())
+/// # }
+/// ```
+#[tracing::instrument(name = "executor.execute_step", skip_all, fields(step.kind))]
+pub async fn execute_step_config_intercepted(
+    config: &StepConfig,
+    provider: &Arc<dyn AgentProvider>,
+    log_sender: Option<StepLogSender>,
+    interceptor: Option<&Arc<dyn StepInterceptor>>,
+) -> Result<StepOutput, EngineError> {
+    let kind = config.kind();
+    let label = step_kind_label(&kind);
+    Span::current().record("step.kind", label.as_ref());
+
+    let intercepted = interceptor.and_then(|i| i.intercept(config));
+    let result = match intercepted {
+        Some(result) => result,
+        None => match config {
+            StepConfig::Shell(cfg) => {
+                let mut executor = ShellExecutor::new(cfg);
+                if let Some(sender) = log_sender {
+                    executor = executor.with_log_sender(sender);
+                }
+                executor.execute(provider).await
+            }
+            StepConfig::Http(cfg) => HttpExecutor::new(cfg).execute(provider).await,
+            StepConfig::Agent(cfg) => {
+                let mut executor = AgentExecutor::new(cfg);
+                if let Some(sender) = log_sender {
+                    executor = executor.with_log_sender(sender);
+                }
+                executor.execute(provider).await
+            }
+            StepConfig::Workflow(_) => Err(EngineError::StepConfig(
+                "workflow steps are executed by WorkflowContext, not the executor".to_string(),
+            )),
+            StepConfig::Approval(_) => Err(EngineError::StepConfig(
+                "approval steps are executed by WorkflowContext, not the executor".to_string(),
+            )),
+            StepConfig::Decision(_) => Err(EngineError::StepConfig(
+                "decision steps are executed by WorkflowContext, not the executor".to_string(),
+            )),
+            StepConfig::Delay(_) => Err(EngineError::StepConfig(
+                "delay steps are executed by WorkflowContext, not the executor".to_string(),
+            )),
+        },
+    };
+
+    #[cfg(feature = "prometheus")]
+    {
+        use ironflow_core::metric_names::{
+            STATUS_ERROR, STATUS_SUCCESS, STEP_DURATION_SECONDS, STEPS_TOTAL,
+        };
+        use metrics::{counter, histogram};
+        let status = if result.is_ok() {
+            STATUS_SUCCESS
+        } else {
+            STATUS_ERROR
+        };
+        let kind_label = label.into_owned();
+        counter!(STEPS_TOTAL, "kind" => kind_label.clone(), "status" => status).increment(1);
+        if let Ok(ref output) = result {
+            histogram!(STEP_DURATION_SECONDS, "kind" => kind_label)
+                .record(output.duration_ms as f64 / 1000.0);
+        }
+    }
+
+    result
+}
+
 /// Execute a [`StepConfig`] and return structured output.
 ///
 /// When a [`StepLogSender`] is provided, executors that support streaming
@@ -456,72 +555,20 @@ pub(crate) fn step_kind_label(kind: &StepKind) -> Cow<'static, str> {
 /// # Ok(())
 /// # }
 /// ```
-#[tracing::instrument(name = "executor.execute_step", skip_all, fields(step.kind))]
 pub async fn execute_step_config(
     config: &StepConfig,
     provider: &Arc<dyn AgentProvider>,
     log_sender: Option<StepLogSender>,
 ) -> Result<StepOutput, EngineError> {
-    let kind = config.kind();
-    let label = step_kind_label(&kind);
-    Span::current().record("step.kind", label.as_ref());
-
-    let result = match config {
-        StepConfig::Shell(cfg) => {
-            let mut executor = ShellExecutor::new(cfg);
-            if let Some(sender) = log_sender {
-                executor = executor.with_log_sender(sender);
-            }
-            executor.execute(provider).await
-        }
-        StepConfig::Http(cfg) => HttpExecutor::new(cfg).execute(provider).await,
-        StepConfig::Agent(cfg) => {
-            let mut executor = AgentExecutor::new(cfg);
-            if let Some(sender) = log_sender {
-                executor = executor.with_log_sender(sender);
-            }
-            executor.execute(provider).await
-        }
-        StepConfig::Workflow(_) => Err(EngineError::StepConfig(
-            "workflow steps are executed by WorkflowContext, not the executor".to_string(),
-        )),
-        StepConfig::Approval(_) => Err(EngineError::StepConfig(
-            "approval steps are executed by WorkflowContext, not the executor".to_string(),
-        )),
-        StepConfig::Decision(_) => Err(EngineError::StepConfig(
-            "decision steps are executed by WorkflowContext, not the executor".to_string(),
-        )),
-        StepConfig::Delay(_) => Err(EngineError::StepConfig(
-            "delay steps are executed by WorkflowContext, not the executor".to_string(),
-        )),
-    };
-
-    #[cfg(feature = "prometheus")]
-    {
-        use ironflow_core::metric_names::{
-            STATUS_ERROR, STATUS_SUCCESS, STEP_DURATION_SECONDS, STEPS_TOTAL,
-        };
-        use metrics::{counter, histogram};
-        let status = if result.is_ok() {
-            STATUS_SUCCESS
-        } else {
-            STATUS_ERROR
-        };
-        let kind_label = label.into_owned();
-        counter!(STEPS_TOTAL, "kind" => kind_label.clone(), "status" => status).increment(1);
-        if let Ok(ref output) = result {
-            histogram!(STEP_DURATION_SECONDS, "kind" => kind_label)
-                .record(output.duration_ms as f64 / 1000.0);
-        }
-    }
-
-    result
+    execute_step_config_intercepted(config, provider, log_sender, None).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ironflow_core::provider::DebugMessage;
+    use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_core::providers::record_replay::RecordReplayProvider;
     use serde_json::json;
 
     use crate::config::{
@@ -809,6 +856,77 @@ mod tests {
             step_kind_label(&StepKind::Custom("gitlab".to_string())),
             "gitlab"
         );
+    }
+
+    /// An interceptor that resolves every shell step with a canned output.
+    struct CannedShell;
+
+    impl StepInterceptor for CannedShell {
+        fn intercept(&self, config: &StepConfig) -> Option<Result<StepOutput, EngineError>> {
+            match config {
+                StepConfig::Shell(_) => Some(Ok(StepOutput {
+                    output: json!({"stdout": "canned", "stderr": "", "exit_code": 0}),
+                    duration_ms: 0,
+                    cost_usd: Decimal::ZERO,
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    debug_messages: None,
+                })),
+                _ => None,
+            }
+        }
+    }
+
+    fn test_provider() -> Arc<dyn AgentProvider> {
+        let inner = ClaudeCodeProvider::new();
+        Arc::new(RecordReplayProvider::replay(
+            inner,
+            "/tmp/ironflow-fixtures",
+        ))
+    }
+
+    #[tokio::test]
+    async fn intercepted_step_never_reaches_the_shell_executor() {
+        let interceptor: Arc<dyn StepInterceptor> = Arc::new(CannedShell);
+        // A real run of `exit 1` would fail; the canned output proves the
+        // process was never spawned.
+        let config = StepConfig::Shell(ShellConfig::new("exit 1"));
+
+        let output =
+            execute_step_config_intercepted(&config, &test_provider(), None, Some(&interceptor))
+                .await
+                .expect("the interceptor resolved the step");
+
+        assert_eq!(output.stdout(), "canned");
+        assert_eq!(output.exit_code(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn a_step_the_interceptor_declines_reaches_the_dispatcher() {
+        let interceptor: Arc<dyn StepInterceptor> = Arc::new(CannedShell);
+        // `CannedShell` only answers shell steps, so this one falls through to
+        // the dispatcher, which refuses workflow configs.
+        let config = StepConfig::Workflow(WorkflowStepConfig::new("child", json!({})));
+
+        let err =
+            execute_step_config_intercepted(&config, &test_provider(), None, Some(&interceptor))
+                .await
+                .expect_err("the dispatcher rejects workflow steps");
+
+        assert!(matches!(err, EngineError::StepConfig(_)));
+    }
+
+    #[tokio::test]
+    async fn without_an_interceptor_the_step_runs_for_real() {
+        let config = StepConfig::Shell(ShellConfig::new("echo hi"));
+
+        let output = execute_step_config_intercepted(&config, &test_provider(), None, None)
+            .await
+            .expect("echo succeeds");
+
+        assert!(output.stdout().contains("hi"));
+        assert_eq!(output.exit_code(), Some(0));
     }
 }
 

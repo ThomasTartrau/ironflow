@@ -131,6 +131,22 @@ pub enum EngineError {
         message: String,
     },
 
+    /// An approval gate was rejected instead of granted.
+    ///
+    /// Raised when a [`StepInterceptor`](crate::executor::StepInterceptor) resolves
+    /// the gate with [`ApprovalOutcome::Rejected`](crate::executor::ApprovalOutcome::Rejected).
+    /// The engine fails the run; the rejection is deterministic, so the run is
+    /// never replayed.
+    #[error("approval rejected for run {run_id}, step {step_id}: {reason}")]
+    ApprovalRejected {
+        /// The run that was stopped.
+        run_id: uuid::Uuid,
+        /// The approval step that was rejected.
+        step_id: uuid::Uuid,
+        /// Why the gate was refused.
+        reason: String,
+    },
+
     /// A delay step suspended the run until the given time.
     ///
     /// The engine transitions the run to
