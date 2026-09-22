@@ -49,6 +49,7 @@ impl ServerHandler for IronflowHandler {
         match tool {
             IronflowTools::ListWorkflowsTool(t) => t.run(&self.client).await,
             IronflowTools::GetWorkflowTool(t) => t.run(&self.client).await,
+            IronflowTools::PlanWorkflowTool(t) => t.run(&self.client).await,
             IronflowTools::CreateRunTool(t) => t.run(&self.client).await,
             IronflowTools::ListRunsTool(t) => t.run(&self.client).await,
             IronflowTools::SearchRunsTool(t) => t.run(&self.client).await,

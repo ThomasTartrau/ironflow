@@ -12,6 +12,7 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 use crate::config::delay::DelayConfig;
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+use crate::plan::lock_plan;
 
 impl WorkflowContext {
     /// Execute a delay (timed pause) step.
@@ -41,6 +42,24 @@ impl WorkflowContext {
     /// # }
     /// ```
     pub async fn delay(&mut self, name: &str, config: DelayConfig) -> Result<(), EngineError> {
+        // Plan mode: record the pause without sleeping. The configured delay is
+        // the estimate when history has none -- a delay always lasts exactly
+        // as long as it was configured for.
+        if let Some(plan) = self.plan().cloned() {
+            self.position += 1;
+            let mut recorder = lock_plan(&plan);
+            recorder.seed_estimate(name, config.duration());
+            if recorder.record(
+                name,
+                StepKind::Custom("delay".to_string()),
+                &self.workflow_name,
+                None,
+            ) {
+                recorder.set_last(vec![name.to_string()]);
+            }
+            return Ok(());
+        }
+
         let position = self.next_position();
 
         if let Some(existing) = self.replay_steps().get(&position)

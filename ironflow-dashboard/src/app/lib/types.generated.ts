@@ -965,6 +965,29 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/workflows/{name}/plan": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Build a workflow execution plan without running it.
+		 * @description # Errors
+		 *
+		 *     - 400 if `max_depth` is out of range or the payload is not a JSON object
+		 *     - 404 if the workflow is not registered
+		 */
+		post: operations["plan_workflow"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1334,6 +1357,17 @@ export interface components {
 			/** @description Current password. */
 			old_password: string;
 		};
+		/** @description Outcome of a branch condition as recorded by the planner. */
+		ConditionResponse: {
+			/** @description Expression the handler declared, when the planner knows one. */
+			expression?: string | null;
+			/** @description Why the step is skipped, or why the condition cannot be evaluated. */
+			reason?: string | null;
+			/** @description Condition state: `evaluated`, `skipped` or `unevaluable`. */
+			state: string;
+			/** @description What the expression evaluated to, for an `evaluated` condition. */
+			value?: boolean | null;
+		};
 		/** @description Request body for creating an API key. */
 		CreateApiKeyRequest: {
 			/**
@@ -1660,6 +1694,27 @@ export interface components {
 			| "user_signed_out"
 			| "secrets_rotated"
 			| "retry_forced";
+		/** @description The execution plan of one workflow for one input payload. */
+		ExecutionPlanResponse: {
+			/**
+			 * Format: int64
+			 * @description Sum of the step estimates, counting each parallel wave once.
+			 */
+			estimated_duration_ms?: number | null;
+			/** @description Why the plan stopped early, when it did. */
+			incomplete_reason?: string | null;
+			/**
+			 * Format: int32
+			 * @description Sub-workflow expansion depth used for this plan.
+			 */
+			max_depth: number;
+			/** @description Steps the run is expected to create, in execution order. */
+			steps: components["schemas"]["PlannedStepResponse"][];
+			/** @description `true` when the step cap or the depth limit cut the plan short. */
+			truncated: boolean;
+			/** @description Workflow the plan was built for. */
+			workflow: string;
+		};
 		/** @description Query parameters for listing run logs. */
 		GetRunLogsQuery: {
 			/**
@@ -1999,6 +2054,44 @@ export interface components {
 			user_id: string;
 			/** @description Display username. */
 			username: string;
+		};
+		/** @description Request body for building a workflow execution plan. */
+		PlanWorkflowRequest: {
+			/** @description Estimate step durations from run history. Defaults to `true`. */
+			estimate_durations?: boolean | null;
+			/**
+			 * Format: int32
+			 * @description How deep sub-workflows are expanded. Defaults to 3, capped at 10.
+			 */
+			max_depth?: number | null;
+			/** @description Input payload the plan is computed for. Defaults to `{}`. */
+			payload?: {
+				[key: string]: unknown;
+			} | null;
+		};
+		/** @description One step the planner expects the run to create. */
+		PlannedStepResponse: {
+			condition?: null | components["schemas"]["ConditionResponse"];
+			/** @description Names of the steps this one runs after. */
+			depends_on: string[];
+			/**
+			 * Format: int32
+			 * @description Sub-workflow nesting depth; `0` for the top-level workflow.
+			 */
+			depth: number;
+			/**
+			 * Format: int64
+			 * @description Average duration of this step in past completed runs, in milliseconds.
+			 */
+			estimated_duration_ms?: number | null;
+			/** @description Step kind, or the name of a custom operation. */
+			kind: string;
+			/** @description Step name as the handler declares it. */
+			name: string;
+			/** @description Parallel wave this step belongs to, when it runs concurrently. */
+			parallel_group?: string | null;
+			/** @description Workflow that owns this step. */
+			workflow: string;
 		};
 		/**
 		 * @description Payload of the `Event::RetryForced` event.
@@ -5272,6 +5365,55 @@ export interface operations {
 				content: {
 					"application/json": components["schemas"]["WorkflowDetailResponse"];
 				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Workflow not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	plan_workflow: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Workflow name */
+				name: string;
+			};
+			cookie?: never;
+		};
+		/** @description Input payload and planning options */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["PlanWorkflowRequest"];
+			};
+		};
+		responses: {
+			/** @description Execution plan */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ExecutionPlanResponse"];
+				};
+			};
+			/** @description Invalid payload or max_depth */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
 			};
 			/** @description Unauthorized */
 			401: {

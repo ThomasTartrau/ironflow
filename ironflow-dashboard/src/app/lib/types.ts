@@ -62,6 +62,14 @@ export type WorkflowDetailResponse =
 	components["schemas"]["WorkflowDetailResponse"];
 export type SubWorkflowDetail = components["schemas"]["SubWorkflowDetail"];
 
+// -- Execution plans --
+export type ExecutionPlanResponse =
+	components["schemas"]["ExecutionPlanResponse"];
+export type PlannedStepResponse =
+	components["schemas"]["PlannedStepResponse"];
+export type ConditionResponse = components["schemas"]["ConditionResponse"];
+export type PlanWorkflowRequest = components["schemas"]["PlanWorkflowRequest"];
+
 // -- Audit Logs --
 export type AuditLogEntry = components["schemas"]["AuditLogEntry"];
 export type ListAuditLogsQuery = components["schemas"]["ListAuditLogsQuery"];

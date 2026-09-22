@@ -86,6 +86,38 @@ let team = &out.choice("team")?.choice;
 Below the `escalate_below` confidence threshold, the run suspends for human approval;
 on resume the stored answers are replayed as-is. See [Decisions](decision.md).
 
+## Conditions
+
+A handler branches with plain Rust `if`/`else`. That is invisible to the
+[execution planner](../guides/execution-plan.md), which is why two helpers
+exist to declare a branch explicitly.
+
+`ctx.when(expression, predicate)` evaluates a predicate against the run input.
+It returns the predicate's value, and the planner records it as `evaluated`
+together with the expression you named:
+
+```rust,ignore
+if ctx.when("input.env == 'prod'", |p| p["env"] == "prod").await? {
+    ctx.shell("deploy-prod", ShellConfig::new("./deploy prod")).await?;
+} else {
+    ctx.skip("deploy-prod", "not a production run").await?;
+}
+```
+
+`ctx.when_dynamic(expression, value)` declares a branch whose value comes from
+a previous step's output. It returns `value` unchanged; the planner records the
+condition as `unevaluable`, because step outputs are synthetic while planning:
+
+```rust,ignore
+let build = ctx.shell("build", ShellConfig::new("cargo build")).await?;
+if ctx.when_dynamic("build succeeded", build.is_success()) {
+    ctx.shell("deploy", ShellConfig::new("./deploy")).await?;
+}
+```
+
+Both helpers are optional: a plain `if` still runs exactly the same way. They
+only make the branch legible to whoever reads the plan.
+
 ## Step status lifecycle
 
 Steps follow this state machine:

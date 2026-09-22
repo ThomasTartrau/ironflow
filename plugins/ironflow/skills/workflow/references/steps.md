@@ -300,6 +300,33 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 }
 ```
 
+## Conditions
+
+Branching is plain Rust `if`/`else`. `ctx.when` and `ctx.when_dynamic` make a
+branch visible to `ironflow run plan` without changing what the handler does.
+
+```rust,no_run
+use ironflow_engine::config::ShellConfig;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    // Resolved against the run input: the plan reports it as `evaluated`.
+    if ctx.when("input.env == 'prod'", |p| p["env"] == "prod").await? {
+        ctx.shell("deploy-prod", ShellConfig::new("./deploy prod")).await?;
+    } else {
+        ctx.skip("deploy-prod", "not a production run").await?;
+    }
+
+    // Depends on a step output: the plan reports it as `unevaluable`.
+    let build = ctx.shell("build", ShellConfig::new("cargo build")).await?;
+    if ctx.when_dynamic("build succeeded", build.is_success()) {
+        ctx.shell("notify", ShellConfig::new("./notify ok")).await?;
+    }
+    Ok(())
+}
+```
+
 ## Secrets
 
 Encrypted at rest, namespaced per workflow, created in the dashboard under Secrets.

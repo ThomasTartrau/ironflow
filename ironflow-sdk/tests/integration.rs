@@ -8,12 +8,14 @@ use ironflow_api::state::AppState;
 use ironflow_auth::jwt::{AccessToken, JwtConfig};
 use ironflow_auth::password;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
+use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ClientConfig;
+use ironflow_sdk::types::PlanWorkflowRequest;
 use ironflow_store::entities::NewUser;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
@@ -43,6 +45,23 @@ impl WorkflowHandler for BuildWorkflow {
     }
 }
 
+struct PlannedWorkflow;
+
+impl WorkflowHandler for PlannedWorkflow {
+    fn name(&self) -> &str {
+        "planned"
+    }
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("compile", ShellConfig::new("echo compile"))
+                .await?;
+            ctx.shell("package", ShellConfig::new("echo package"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
 fn jwt_config() -> Arc<JwtConfig> {
     Arc::new(JwtConfig {
         secret: "integration-test-secret".to_string(),
@@ -62,6 +81,7 @@ async fn spawn_server() -> (String, String) {
     let mut engine = Engine::new(store.clone(), provider);
     engine.register(DeployWorkflow).unwrap();
     engine.register(BuildWorkflow).unwrap();
+    engine.register(PlannedWorkflow).unwrap();
 
     let jwt_cfg = jwt_config();
     let (event_sender, _) = broadcast::channel::<Event>(16);
@@ -163,6 +183,27 @@ async fn get_workflow_found() {
 
     let response = client.get_workflow("deploy").await.unwrap();
     assert_eq!(response.data.name, "deploy");
+}
+
+#[tokio::test]
+async fn plan_workflow_returns_steps() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let request: PlanWorkflowRequest = PlanWorkflowRequest::builder()
+        .try_into()
+        .expect("plan request builds");
+    let response = client.plan_workflow("planned", &request).await.unwrap();
+
+    assert_eq!(response.data.workflow, "planned");
+    let names: Vec<&str> = response
+        .data
+        .steps
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["compile", "package"]);
+    assert!(!response.data.truncated);
 }
 
 #[tokio::test]

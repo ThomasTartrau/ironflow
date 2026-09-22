@@ -144,6 +144,7 @@ Then offer, in one sentence, the workflow reviewer (`/ironflow review`) and the 
 
 ## Rules that are not obvious
 
+- **Branches are invisible to the planner unless you declare them.** A plain `if` works, but `ctx.when("input.env == 'prod'", |p| p["env"] == "prod").await?` and `ctx.when_dynamic("build succeeded", build.is_success())` make it show up in `ironflow run plan <name>`, which lists the steps a run would create without executing anything. See `references/steps.md`.
 - **Step names are cache keys.** Stable, unique within the run, no timestamps or random ids. In a loop, suffix with the loop index.
 - **Approval replays the handler.** Anything that is not a `ctx.*` step runs again after approval. Keep side effects inside steps. Details and a safe pattern: `references/approval-replay.md`.
 - **Agent steps: tools or structured output, not both.** `AgentStepConfig::new(prompt).allow_tool("Read")` and `.output::<T>()` are mutually exclusive by type.

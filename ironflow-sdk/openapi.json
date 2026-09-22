@@ -376,6 +376,34 @@
         ],
         "type": "object"
       },
+      "ConditionResponse": {
+        "description": "Outcome of a branch condition as recorded by the planner.",
+        "properties": {
+          "expression": {
+            "description": "Expression the handler declared, when the planner knows one.",
+            "nullable": true,
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the step is skipped, or why the condition cannot be evaluated.",
+            "nullable": true,
+            "type": "string"
+          },
+          "state": {
+            "description": "Condition state: `evaluated`, `skipped` or `unevaluable`.",
+            "type": "string"
+          },
+          "value": {
+            "description": "What the expression evaluated to, for an `evaluated` condition.",
+            "nullable": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
       "CreateApiKeyRequest": {
         "description": "Request body for creating an API key.",
         "properties": {
@@ -1003,6 +1031,51 @@
         ],
         "type": "string"
       },
+      "ExecutionPlanResponse": {
+        "description": "The execution plan of one workflow for one input payload.",
+        "properties": {
+          "estimated_duration_ms": {
+            "description": "Sum of the step estimates, counting each parallel wave once.",
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "incomplete_reason": {
+            "description": "Why the plan stopped early, when it did.",
+            "nullable": true,
+            "type": "string"
+          },
+          "max_depth": {
+            "description": "Sub-workflow expansion depth used for this plan.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "steps": {
+            "description": "Steps the run is expected to create, in execution order.",
+            "items": {
+              "$ref": "#/components/schemas/PlannedStepResponse"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "`true` when the step cap or the depth limit cut the plan short.",
+            "type": "boolean"
+          },
+          "workflow": {
+            "description": "Workflow the plan was built for.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow",
+          "steps",
+          "max_depth",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "GetRunLogsQuery": {
         "description": "Query parameters for listing run logs.",
         "properties": {
@@ -1412,6 +1485,88 @@
           "username",
           "is_admin",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "PlanWorkflowRequest": {
+        "description": "Request body for building a workflow execution plan.",
+        "properties": {
+          "estimate_durations": {
+            "description": "Estimate step durations from run history. Defaults to `true`.",
+            "nullable": true,
+            "type": "boolean"
+          },
+          "max_depth": {
+            "description": "How deep sub-workflows are expanded. Defaults to 3, capped at 10.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "payload": {
+            "additionalProperties": {},
+            "description": "Input payload the plan is computed for. Defaults to `{}`.",
+            "nullable": true,
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "PlannedStepResponse": {
+        "description": "One step the planner expects the run to create.",
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/ConditionResponse",
+            "description": "Branch condition recorded for this step, when the handler declared one.",
+            "nullable": true
+          },
+          "depends_on": {
+            "description": "Names of the steps this one runs after.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "depth": {
+            "description": "Sub-workflow nesting depth; `0` for the top-level workflow.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "estimated_duration_ms": {
+            "description": "Average duration of this step in past completed runs, in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "Step kind, or the name of a custom operation.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Step name as the handler declares it.",
+            "type": "string"
+          },
+          "parallel_group": {
+            "description": "Parallel wave this step belongs to, when it runs concurrently.",
+            "nullable": true,
+            "type": "string"
+          },
+          "workflow": {
+            "description": "Workflow that owns this step.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "workflow",
+          "depth",
+          "depends_on"
         ],
         "type": "object"
       },
@@ -5506,6 +5661,64 @@
           }
         ],
         "summary": "Get details about a registered workflow.",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{name}/plan": {
+      "post": {
+        "description": "# Errors\n\n- 400 if `max_depth` is out of range or the payload is not a JSON object\n- 404 if the workflow is not registered",
+        "operationId": "plan_workflow",
+        "parameters": [
+          {
+            "description": "Workflow name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanWorkflowRequest"
+              }
+            }
+          },
+          "description": "Input payload and planning options",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPlanResponse"
+                }
+              }
+            },
+            "description": "Execution plan"
+          },
+          "400": {
+            "description": "Invalid payload or max_depth"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Workflow not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Build a workflow execution plan without running it.",
         "tags": [
           "workflows"
         ]

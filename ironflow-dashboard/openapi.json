@@ -2460,6 +2460,64 @@
           }
         ]
       }
+    },
+    "/api/v1/workflows/{name}/plan": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Build a workflow execution plan without running it.",
+        "description": "# Errors\n\n- 400 if `max_depth` is out of range or the payload is not a JSON object\n- 404 if the workflow is not registered",
+        "operationId": "plan_workflow",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Workflow name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Input payload and planning options",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanWorkflowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Execution plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPlanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or max_depth"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Workflow not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2852,6 +2910,40 @@
           "old_password": {
             "type": "string",
             "description": "Current password."
+          }
+        }
+      },
+      "ConditionResponse": {
+        "type": "object",
+        "description": "Outcome of a branch condition as recorded by the planner.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expression the handler declared, when the planner knows one."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the step is skipped, or why the condition cannot be evaluated."
+          },
+          "state": {
+            "type": "string",
+            "description": "Condition state: `evaluated`, `skipped` or `unevaluable`."
+          },
+          "value": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "What the expression evaluated to, for an `evaluated` condition."
           }
         }
       },
@@ -3506,6 +3598,55 @@
           "retry_forced"
         ]
       },
+      "ExecutionPlanResponse": {
+        "type": "object",
+        "description": "The execution plan of one workflow for one input payload.",
+        "required": [
+          "workflow",
+          "steps",
+          "max_depth",
+          "truncated"
+        ],
+        "properties": {
+          "estimated_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of the step estimates, counting each parallel wave once.",
+            "minimum": 0
+          },
+          "incomplete_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the plan stopped early, when it did."
+          },
+          "max_depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sub-workflow expansion depth used for this plan.",
+            "minimum": 0
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedStepResponse"
+            },
+            "description": "Steps the run is expected to create, in execution order."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "`true` when the step cap or the depth limit cut the plan short."
+          },
+          "workflow": {
+            "type": "string",
+            "description": "Workflow the plan was built for."
+          }
+        }
+      },
       "GetRunLogsQuery": {
         "type": "object",
         "description": "Query parameters for listing run logs.",
@@ -3979,6 +4120,104 @@
           "username": {
             "type": "string",
             "description": "Display username."
+          }
+        }
+      },
+      "PlanWorkflowRequest": {
+        "type": "object",
+        "description": "Request body for building a workflow execution plan.",
+        "properties": {
+          "estimate_durations": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Estimate step durations from run history. Defaults to `true`."
+          },
+          "max_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How deep sub-workflows are expanded. Defaults to 3, capped at 10.",
+            "minimum": 0
+          },
+          "payload": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Input payload the plan is computed for. Defaults to `{}`.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PlannedStepResponse": {
+        "type": "object",
+        "description": "One step the planner expects the run to create.",
+        "required": [
+          "name",
+          "kind",
+          "workflow",
+          "depth",
+          "depends_on"
+        ],
+        "properties": {
+          "condition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ConditionResponse",
+                "description": "Branch condition recorded for this step, when the handler declared one."
+              }
+            ]
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of the steps this one runs after."
+          },
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sub-workflow nesting depth; `0` for the top-level workflow.",
+            "minimum": 0
+          },
+          "estimated_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Average duration of this step in past completed runs, in milliseconds.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "Step kind, or the name of a custom operation."
+          },
+          "name": {
+            "type": "string",
+            "description": "Step name as the handler declares it."
+          },
+          "parallel_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parallel wave this step belongs to, when it runs concurrently."
+          },
+          "workflow": {
+            "type": "string",
+            "description": "Workflow that owns this step."
           }
         }
       },

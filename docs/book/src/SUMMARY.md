@@ -23,6 +23,7 @@
 - [Writing an Operation](guides/writing-an-operation.md)
 - [Using Pre-built Ops Crates](guides/using-ops-crates.md)
 - [Parallel Execution](guides/parallel-execution.md)
+- [Execution Plans](guides/execution-plan.md)
 - [Transports](guides/transports.md)
 
 # Architecture

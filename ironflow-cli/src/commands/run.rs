@@ -12,7 +12,7 @@ use futures_util::StreamExt;
 use humantime::format_duration;
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ListRunsFilter;
-use ironflow_sdk::types::{CreateRunRequest, RunStatus};
+use ironflow_sdk::types::{CreateRunRequest, PlanWorkflowRequest, RunStatus};
 use serde_json::{Map, Value, from_str, json, to_string};
 use tokio::time::timeout as tokio_timeout;
 use uuid::Uuid;
@@ -115,6 +115,23 @@ pub enum RunCommands {
         /// Stop watching after this duration (e.g. "30s", "5m", "1h").
         #[arg(long, value_parser = parse_humantime)]
         timeout: Option<Duration>,
+    },
+    /// Show the execution plan for a workflow without running it.
+    Plan {
+        /// Workflow name.
+        workflow: String,
+        /// JSON input (inline string).
+        #[arg(long, group = "plan_input_source")]
+        input: Option<String>,
+        /// Path to a JSON file containing the input.
+        #[arg(long, group = "plan_input_source")]
+        input_file: Option<PathBuf>,
+        /// How deep sub-workflows are expanded (default 3).
+        #[arg(long)]
+        max_depth: Option<u32>,
+        /// Skip duration estimation from run history.
+        #[arg(long)]
+        no_estimates: bool,
     },
     /// Compare two runs of the same workflow side by side.
     Diff {
@@ -271,6 +288,29 @@ pub async fn execute(
             timeout,
         } => {
             execute_watch(client, *id, *no_logs, *timeout, json_mode).await?;
+        }
+        RunCommands::Plan {
+            workflow,
+            input,
+            input_file,
+            max_depth,
+            no_estimates,
+        } => {
+            let payload = resolve_payload(input.as_deref(), input_file.as_ref())?;
+            let payload_map = payload
+                .as_object()
+                .context("input must be a JSON object")?
+                .clone();
+            let request: PlanWorkflowRequest = PlanWorkflowRequest::builder()
+                .payload(Some(payload_map))
+                // The generated SDK models the depth as i32; the API rejects
+                // anything outside 1..=10.
+                .max_depth(max_depth.map(|d| d as i32))
+                .estimate_durations(Some(!*no_estimates))
+                .try_into()
+                .context("failed to build PlanWorkflowRequest")?;
+            let response = client.plan_workflow(workflow, &request).await?;
+            output::render_execution_plan(&mut stdout().lock(), json_mode, &response)?;
         }
         RunCommands::Diff { run_a, run_b } => {
             execute_diff(client, *run_a, *run_b, json_mode).await?;
