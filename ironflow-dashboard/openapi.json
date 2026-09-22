@@ -166,8 +166,8 @@
         "tags": [
           "approval-delegations"
         ],
-        "summary": "List the active approval delegations visible to the caller.",
-        "description": "An admin sees every active delegation and may narrow the result with the\nquery parameters. A non-admin always sees exactly the delegations they\ngranted plus the ones they received, and the query parameters are ignored --\nthey must not become a way to enumerate other people's delegations.\n\nExpired and not-yet-started delegations are never returned: the store filters\nthem out at read time.\n\n# Errors\n\n- 401 if not authenticated",
+        "summary": "List the active approval delegations visible to the caller, paginated.",
+        "description": "An admin sees every active delegation and may narrow the result with the\nquery parameters. A non-admin always sees exactly the delegations they\ngranted plus the ones they received, and the user filters are ignored --\nthey must not become a way to enumerate other people's delegations.\n\nExpired and not-yet-started delegations are never returned: the store filters\nthem out at read time.\n\n# Errors\n\n- 401 if not authenticated",
         "operationId": "list_approval_delegations",
         "parameters": [
           {
@@ -195,11 +195,39 @@
               ],
               "format": "uuid"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-based, defaults to 1).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page (defaults to 20, max 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Active delegations",
+            "description": "Paginated list of active delegations",
             "content": {
               "application/json": {
                 "schema": {
@@ -3591,7 +3619,7 @@
       },
       "ListApprovalDelegationsQuery": {
         "type": "object",
-        "description": "Query parameters for listing delegations.\n\nBoth filters are honoured for an admin only; a non-admin always sees exactly\nthe delegations they granted or received.",
+        "description": "Query parameters for listing delegations.\n\nBoth user filters are honoured for an admin only; a non-admin always sees\nexactly the delegations they granted or received. Pagination applies to\neveryone.",
         "properties": {
           "from_user_id": {
             "type": [
@@ -3600,6 +3628,24 @@
             ],
             "format": "uuid",
             "description": "Only delegations granted by this user."
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Page number (1-based, defaults to 1).",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Items per page (defaults to 20, max 100).",
+            "minimum": 0
           },
           "to_user_id": {
             "type": [

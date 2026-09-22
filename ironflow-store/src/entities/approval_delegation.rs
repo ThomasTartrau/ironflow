@@ -183,7 +183,8 @@ pub struct NewApprovalDelegation {
 
 /// Filter criteria for listing delegations.
 ///
-/// Both fields are optional; a `None` field applies no constraint on that side.
+/// Every field is optional; a `None` field applies no constraint. Set fields
+/// are combined with AND.
 ///
 /// # Examples
 ///
@@ -203,6 +204,8 @@ pub struct DelegationFilter {
     pub from_user_id: Option<Uuid>,
     /// Only delegations received by this user.
     pub to_user_id: Option<Uuid>,
+    /// Only delegations this user granted or received.
+    pub involving_user_id: Option<Uuid>,
 }
 
 /// Why a workflow filter was refused.
@@ -408,5 +411,6 @@ mod tests {
         let filter = DelegationFilter::default();
         assert!(filter.from_user_id.is_none());
         assert!(filter.to_user_id.is_none());
+        assert!(filter.involving_user_id.is_none());
     }
 }

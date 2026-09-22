@@ -418,6 +418,10 @@ impl UserStore for ApiRunStore {
         Box::pin(async move { Ok(None) })
     }
 
+    fn find_user_by_username(&self, _username: &str) -> StoreFuture<'_, Option<User>> {
+        Box::pin(async move { Ok(None) })
+    }
+
     fn find_user_by_id(&self, _id: Uuid) -> StoreFuture<'_, Option<User>> {
         Box::pin(async move { Ok(None) })
     }
@@ -782,12 +786,23 @@ impl ApprovalDelegationStore for ApiRunStore {
     fn list_active_delegations(
         &self,
         _filter: DelegationFilter,
-    ) -> StoreFuture<'_, Vec<ApprovalDelegation>> {
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<ApprovalDelegation>> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "ApprovalDelegationStore not available in worker".to_string(),
             ))
         })
+    }
+
+    fn find_active_delegation(
+        &self,
+        _from_user_id: Uuid,
+        _to_user_id: Uuid,
+        _workflow_name: &str,
+    ) -> StoreFuture<'_, Option<ApprovalDelegation>> {
+        Box::pin(async move { Ok(None) })
     }
 
     fn delete_delegation(&self, _id: Uuid) -> StoreFuture<'_, ()> {

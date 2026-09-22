@@ -117,10 +117,10 @@ mod tests {
         );
 
         let remaining = store
-            .list_active_delegations(DelegationFilter::default())
+            .list_active_delegations(DelegationFilter::default(), 1, 100)
             .await
             .expect("list");
-        assert!(remaining.is_empty());
+        assert_eq!(remaining.total, 0);
     }
 
     #[tokio::test]

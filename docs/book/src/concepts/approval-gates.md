@@ -33,11 +33,16 @@ ApprovalConfig::new("Deploy to production?")
 ```
 
 `assigned_to` takes an `Assignee` -- `Assignee::user("alice")` or
-`Assignee::group("release-managers")`. It drives notification routing and audit.
-It is not a permission on its own: an admin resolves any gate, and an assignee
-who is not an admin cannot resolve their own gate. The one place it decides
-authorization is [delegation](#delegation-and-absence), where it names the
-person whose power may be handed over.
+`Assignee::group("release-managers")`. It drives notification routing and audit,
+and it decides who may resolve the gate:
+
+- an admin resolves any gate;
+- a gate assigned to a user is resolved by that user, admin or not, and by
+  whoever holds an active [delegation](#delegation-and-absence) from them;
+- a gate assigned to a group, or to nobody, is admin-only.
+
+The assignee is matched to the caller by user ID, so an API key resolves its
+owner's gates whatever the key is named.
 
 Everything past the message is optional. Without a deadline, the run waits
 indefinitely.
@@ -128,8 +133,8 @@ ironflow-cli delegation create <bob-user-id> \
     --until 2026-10-01T00:00:00Z \
     --workflow 'deploy-*'
 
-# Everything Alice granted, plus everything she received.
-ironflow-cli delegation list
+# Everything Alice granted, plus everything she received (20 per page).
+ironflow-cli delegation list --page 1 --per-page 20
 
 # Back early.
 ironflow-cli delegation delete <delegation-id>
@@ -140,7 +145,7 @@ The same three endpoints back the CLI:
 | Endpoint | What it does |
 |----------|--------------|
 | `POST /api/v1/approval-delegations` | Grant a delegation. The delegator is always the caller. |
-| `GET /api/v1/approval-delegations` | List the active delegations you granted or received. An admin sees them all. |
+| `GET /api/v1/approval-delegations` | List the active delegations you granted or received, paginated with `page` and `per_page` (default 20, max 100). An admin sees them all and may filter with `from_user_id` and `to_user_id`. |
 | `DELETE /api/v1/approval-delegations/{id}` | Revoke one. Only the delegator or an admin may. |
 
 ### What a delegation covers
@@ -189,7 +194,8 @@ A delegated decision names both people. The `approval_granted` (or
 }
 ```
 
-An admin resolving a gate is still recorded under their own name alone.
+An admin, or the assignee resolving their own gate, is recorded under their own
+name alone.
 
 ## Step replay
 

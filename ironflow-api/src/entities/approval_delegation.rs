@@ -60,8 +60,9 @@ pub struct CreateApprovalDelegationRequest {
 
 /// Query parameters for listing delegations.
 ///
-/// Both filters are honoured for an admin only; a non-admin always sees exactly
-/// the delegations they granted or received.
+/// Both user filters are honoured for an admin only; a non-admin always sees
+/// exactly the delegations they granted or received. Pagination applies to
+/// everyone.
 #[cfg_attr(feature = "openapi", derive(utoipa::IntoParams, utoipa::ToSchema))]
 #[derive(Debug, Deserialize)]
 pub struct ListApprovalDelegationsQuery {
@@ -69,4 +70,8 @@ pub struct ListApprovalDelegationsQuery {
     pub from_user_id: Option<Uuid>,
     /// Only delegations received by this user.
     pub to_user_id: Option<Uuid>,
+    /// Page number (1-based, defaults to 1).
+    pub page: Option<u32>,
+    /// Items per page (defaults to 20, max 100).
+    pub per_page: Option<u32>,
 }

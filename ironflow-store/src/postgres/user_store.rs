@@ -121,6 +121,22 @@ impl UserStore for PostgresStore {
         })
     }
 
+    fn find_user_by_username(&self, username: &str) -> StoreFuture<'_, Option<User>> {
+        let username = username.to_string();
+        Box::pin(async move {
+            let row = sqlx::query_as!(
+                UserRow,
+                "SELECT id, email, username, password_hash, is_admin, created_at, updated_at FROM iam.users WHERE username = $1",
+                &username,
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(row.map(User::from))
+        })
+    }
+
     fn find_user_by_id(&self, id: Uuid) -> StoreFuture<'_, Option<User>> {
         Box::pin(async move {
             let row = sqlx::query_as!(

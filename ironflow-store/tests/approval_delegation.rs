@@ -41,12 +41,17 @@ async fn one_delegator_can_cover_two_delegates_on_different_workflows() {
         .expect("delegate cleanups to carol");
 
     let granted = store
-        .list_active_delegations(DelegationFilter {
-            from_user_id: Some(alice),
-            ..DelegationFilter::default()
-        })
+        .list_active_delegations(
+            DelegationFilter {
+                from_user_id: Some(alice),
+                ..DelegationFilter::default()
+            },
+            1,
+            100,
+        )
         .await
-        .expect("list");
+        .expect("list")
+        .items;
     assert_eq!(granted.len(), 2);
 
     let now = Utc::now();
@@ -83,12 +88,17 @@ async fn one_delegate_can_hold_delegations_from_two_delegators() {
         .expect("carol -> bob");
 
     let received = store
-        .list_active_delegations(DelegationFilter {
-            to_user_id: Some(bob),
-            ..DelegationFilter::default()
-        })
+        .list_active_delegations(
+            DelegationFilter {
+                to_user_id: Some(bob),
+                ..DelegationFilter::default()
+            },
+            1,
+            100,
+        )
         .await
-        .expect("list");
+        .expect("list")
+        .items;
 
     let delegators: Vec<_> = received.iter().map(|d| d.from_user_id).collect();
     assert_eq!(received.len(), 2);
@@ -116,12 +126,17 @@ async fn an_expired_delegation_is_ignored_next_to_a_fresh_one() {
         .expect("fresh delegation");
 
     let received = store
-        .list_active_delegations(DelegationFilter {
-            to_user_id: Some(bob),
-            ..DelegationFilter::default()
-        })
+        .list_active_delegations(
+            DelegationFilter {
+                to_user_id: Some(bob),
+                ..DelegationFilter::default()
+            },
+            1,
+            100,
+        )
         .await
-        .expect("list");
+        .expect("list")
+        .items;
 
     assert_eq!(received.len(), 1);
     assert_eq!(received[0].id, fresh.id);
@@ -171,12 +186,17 @@ async fn revoking_one_delegation_leaves_the_others_intact() {
     store.delete_delegation(to_bob.id).await.expect("revoke");
 
     let remaining = store
-        .list_active_delegations(DelegationFilter {
-            from_user_id: Some(alice),
-            ..DelegationFilter::default()
-        })
+        .list_active_delegations(
+            DelegationFilter {
+                from_user_id: Some(alice),
+                ..DelegationFilter::default()
+            },
+            1,
+            100,
+        )
         .await
-        .expect("list");
+        .expect("list")
+        .items;
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, to_carol.id);
 

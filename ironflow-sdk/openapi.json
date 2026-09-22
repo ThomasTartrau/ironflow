@@ -1103,13 +1103,27 @@
         "type": "object"
       },
       "ListApprovalDelegationsQuery": {
-        "description": "Query parameters for listing delegations.\n\nBoth filters are honoured for an admin only; a non-admin always sees exactly\nthe delegations they granted or received.",
+        "description": "Query parameters for listing delegations.\n\nBoth user filters are honoured for an admin only; a non-admin always sees\nexactly the delegations they granted or received. Pagination applies to\neveryone.",
         "properties": {
           "from_user_id": {
             "description": "Only delegations granted by this user.",
             "format": "uuid",
             "nullable": true,
             "type": "string"
+          },
+          "page": {
+            "description": "Page number (1-based, defaults to 1).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "per_page": {
+            "description": "Items per page (defaults to 20, max 100).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
           },
           "to_user_id": {
             "description": "Only delegations received by this user.",
@@ -3340,7 +3354,7 @@
     },
     "/api/v1/approval-delegations": {
       "get": {
-        "description": "An admin sees every active delegation and may narrow the result with the\nquery parameters. A non-admin always sees exactly the delegations they\ngranted plus the ones they received, and the query parameters are ignored --\nthey must not become a way to enumerate other people's delegations.\n\nExpired and not-yet-started delegations are never returned: the store filters\nthem out at read time.\n\n# Errors\n\n- 401 if not authenticated",
+        "description": "An admin sees every active delegation and may narrow the result with the\nquery parameters. A non-admin always sees exactly the delegations they\ngranted plus the ones they received, and the user filters are ignored --\nthey must not become a way to enumerate other people's delegations.\n\nExpired and not-yet-started delegations are never returned: the store filters\nthem out at read time.\n\n# Errors\n\n- 401 if not authenticated",
         "operationId": "list_approval_delegations",
         "parameters": [
           {
@@ -3362,6 +3376,28 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "description": "Page number (1-based, defaults to 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (defaults to 20, max 100).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -3376,7 +3412,7 @@
                 }
               }
             },
-            "description": "Active delegations"
+            "description": "Paginated list of active delegations"
           },
           "401": {
             "description": "Unauthorized"
@@ -3387,7 +3423,7 @@
             "Bearer": []
           }
         ],
-        "summary": "List the active approval delegations visible to the caller.",
+        "summary": "List the active approval delegations visible to the caller, paginated.",
         "tags": [
           "approval-delegations"
         ]

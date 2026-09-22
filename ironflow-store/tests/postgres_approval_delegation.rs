@@ -143,12 +143,17 @@ async fn only_the_currently_valid_row_is_listed() {
         .expect("current");
 
     let listed = store
-        .list_active_delegations(DelegationFilter {
-            to_user_id: Some(bob),
-            ..DelegationFilter::default()
-        })
+        .list_active_delegations(
+            DelegationFilter {
+                to_user_id: Some(bob),
+                ..DelegationFilter::default()
+            },
+            1,
+            100,
+        )
         .await
-        .expect("list");
+        .expect("list")
+        .items;
 
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, current.id);
@@ -181,23 +186,34 @@ async fn the_optional_filters_narrow_the_result() {
         .expect("carol -> bob");
 
     let by_delegate = store
-        .list_active_delegations(DelegationFilter {
-            to_user_id: Some(bob),
-            ..DelegationFilter::default()
-        })
+        .list_active_delegations(
+            DelegationFilter {
+                to_user_id: Some(bob),
+                ..DelegationFilter::default()
+            },
+            1,
+            100,
+        )
         .await
-        .expect("list by delegate");
+        .expect("list by delegate")
+        .items;
     let ids: Vec<_> = by_delegate.iter().map(|d| d.id).collect();
     assert!(ids.contains(&alice_to_bob.id));
     assert!(ids.contains(&carol_to_bob.id));
 
     let by_delegator = store
-        .list_active_delegations(DelegationFilter {
-            from_user_id: Some(alice),
-            to_user_id: Some(bob),
-        })
+        .list_active_delegations(
+            DelegationFilter {
+                from_user_id: Some(alice),
+                to_user_id: Some(bob),
+                ..DelegationFilter::default()
+            },
+            1,
+            100,
+        )
         .await
-        .expect("list by both");
+        .expect("list by both")
+        .items;
     assert_eq!(by_delegator.len(), 1);
     assert_eq!(by_delegator[0].id, alice_to_bob.id);
 }
@@ -225,4 +241,103 @@ async fn deleting_twice_reports_not_found() {
 
     let err = store.delete_delegation(created.id).await.unwrap_err();
     assert!(matches!(err, StoreError::DelegationNotFound(_)));
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn involving_filter_and_pagination_work_in_sql() {
+    let store = get_store().await;
+    let alice = create_user(&store, "alice").await;
+    let bob = create_user(&store, "bob").await;
+    let carol = create_user(&store, "carol").await;
+    let now = Utc::now();
+
+    let window = |from: Uuid, to: Uuid| NewApprovalDelegation {
+        from_user_id: from,
+        to_user_id: to,
+        valid_from: now - TimeDelta::hours(1),
+        valid_until: now + TimeDelta::hours(1),
+        workflow_filter: None,
+    };
+
+    let granted = store
+        .create_delegation(window(alice, bob))
+        .await
+        .expect("alice -> bob");
+    let received = store
+        .create_delegation(window(carol, alice))
+        .await
+        .expect("carol -> alice");
+    store
+        .create_delegation(window(bob, carol))
+        .await
+        .expect("bob -> carol");
+
+    let involving = DelegationFilter {
+        involving_user_id: Some(alice),
+        ..DelegationFilter::default()
+    };
+
+    let first = store
+        .list_active_delegations(involving.clone(), 1, 1)
+        .await
+        .expect("page 1");
+    assert_eq!(first.total, 2);
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.items[0].id, received.id, "newest first");
+
+    let second = store
+        .list_active_delegations(involving, 2, 1)
+        .await
+        .expect("page 2");
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].id, granted.id);
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn find_active_delegation_applies_pair_window_and_glob() {
+    let store = get_store().await;
+    let alice = create_user(&store, "alice").await;
+    let bob = create_user(&store, "bob").await;
+    let now = Utc::now();
+
+    store
+        .create_delegation(NewApprovalDelegation {
+            from_user_id: alice,
+            to_user_id: bob,
+            valid_from: now - TimeDelta::days(2),
+            valid_until: now - TimeDelta::days(1),
+            workflow_filter: None,
+        })
+        .await
+        .expect("expired");
+    let deploy = store
+        .create_delegation(NewApprovalDelegation {
+            from_user_id: alice,
+            to_user_id: bob,
+            valid_from: now - TimeDelta::hours(1),
+            valid_until: now + TimeDelta::hours(1),
+            workflow_filter: Some("deploy-*".to_string()),
+        })
+        .await
+        .expect("deploy");
+
+    let found = store
+        .find_active_delegation(alice, bob, "deploy-api")
+        .await
+        .expect("find");
+    assert_eq!(found.map(|d| d.id), Some(deploy.id));
+
+    let unmatched = store
+        .find_active_delegation(alice, bob, "billing")
+        .await
+        .expect("find");
+    assert!(unmatched.is_none());
+
+    let reversed = store
+        .find_active_delegation(bob, alice, "deploy-api")
+        .await
+        .expect("find");
+    assert!(reversed.is_none());
 }

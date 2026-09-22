@@ -77,10 +77,10 @@ export interface paths {
 			cookie?: never;
 		};
 		/**
-		 * List the active approval delegations visible to the caller.
+		 * List the active approval delegations visible to the caller, paginated.
 		 * @description An admin sees every active delegation and may narrow the result with the
 		 *     query parameters. A non-admin always sees exactly the delegations they
-		 *     granted plus the ones they received, and the query parameters are ignored --
+		 *     granted plus the ones they received, and the user filters are ignored --
 		 *     they must not become a way to enumerate other people's delegations.
 		 *
 		 *     Expired and not-yet-started delegations are never returned: the store filters
@@ -1734,8 +1734,9 @@ export interface components {
 		/**
 		 * @description Query parameters for listing delegations.
 		 *
-		 *     Both filters are honoured for an admin only; a non-admin always sees exactly
-		 *     the delegations they granted or received.
+		 *     Both user filters are honoured for an admin only; a non-admin always sees
+		 *     exactly the delegations they granted or received. Pagination applies to
+		 *     everyone.
 		 */
 		ListApprovalDelegationsQuery: {
 			/**
@@ -1743,6 +1744,16 @@ export interface components {
 			 * @description Only delegations granted by this user.
 			 */
 			from_user_id?: string | null;
+			/**
+			 * Format: int32
+			 * @description Page number (1-based, defaults to 1).
+			 */
+			page?: number | null;
+			/**
+			 * Format: int32
+			 * @description Items per page (defaults to 20, max 100).
+			 */
+			per_page?: number | null;
 			/**
 			 * Format: uuid
 			 * @description Only delegations received by this user.
@@ -3526,6 +3537,10 @@ export interface operations {
 				from_user_id?: string | null;
 				/** @description Only delegations received by this user. */
 				to_user_id?: string | null;
+				/** @description Page number (1-based, defaults to 1). */
+				page?: number | null;
+				/** @description Items per page (defaults to 20, max 100). */
+				per_page?: number | null;
 			};
 			header?: never;
 			path?: never;
@@ -3533,7 +3548,7 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description Active delegations */
+			/** @description Paginated list of active delegations */
 			200: {
 				headers: {
 					[name: string]: unknown;

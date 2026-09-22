@@ -7,7 +7,6 @@ use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::{AuthMethod, Authenticated};
 use ironflow_engine::notify::{ApprovalGrantedEvent, ApprovalRejectedEvent, Event};
-use ironflow_store::entities::DelegationFilter;
 use ironflow_store::models::{Assignee, Run, RunStatus, Step, StepStatus, StepUpdate};
 use tokio::spawn;
 use uuid::Uuid;
@@ -78,10 +77,18 @@ pub async fn reject_run(
 /// Decide whether the caller may resolve this gate, and under which name the
 /// decision is recorded.
 ///
-/// An admin resolves any gate under their own name. A non-admin only gets
-/// through when the gate is assigned to an individual user and the caller holds
-/// an active delegation from that user covering this workflow; the decision is
-/// then recorded as `"<caller> (delegated from <delegator>)"`.
+/// - An admin resolves any gate under their own name.
+/// - The user a gate is assigned to resolves it under their own name.
+/// - Anyone else gets through only when the gate is assigned to an individual
+///   user and the caller holds an active delegation from that user covering
+///   this workflow; the decision is then recorded as
+///   `"<caller> (delegated from <delegator>)"`.
+///
+/// Group and unassigned gates stay admin-only: there is no single person to
+/// resolve them or to inherit from.
+///
+/// Identity is compared by user ID, never by name: an API key is named freely
+/// by its owner, so its name must not stand in for a username.
 ///
 /// The check lives here rather than in `ironflow-engine` because gate
 /// authorization has always been an API-layer concern: the engine never knows
@@ -106,35 +113,32 @@ async fn authorize_approver(
         .find(|s| s.status.state == StepStatus::AwaitingApproval)
         .ok_or(ApiError::Forbidden)?;
 
-    // Only an individual assignee can delegate. A group gate or an unassigned
-    // gate has no single person to inherit from, so it stays admin-only.
-    let delegator_name = match gate.approval_assignee.as_ref() {
+    let assignee_name = match gate.approval_assignee.as_ref() {
         Some(Assignee::User(name)) => name,
         _ => return Err(ApiError::Forbidden),
     };
 
-    // The store already dropped expired and not-yet-started rows.
-    let delegations = state
+    // An assignee naming no known user can be resolved by an admin only.
+    let assignee = state
         .store
-        .list_active_delegations(DelegationFilter {
-            from_user_id: None,
-            to_user_id: Some(auth.user_id),
-        })
-        .await?;
+        .find_user_by_username(assignee_name)
+        .await?
+        .ok_or(ApiError::Forbidden)?;
 
-    for delegation in delegations {
-        if !delegation.matches_workflow(&run.workflow_name) {
-            continue;
-        }
-        let Some(delegator) = state.store.find_user_by_id(delegation.from_user_id).await? else {
-            continue;
-        };
-        if delegator.username == *delegator_name {
-            return Ok(format!("{caller} (delegated from {})", delegator.username));
-        }
+    if assignee.id == auth.user_id {
+        return Ok(caller);
     }
 
-    Err(ApiError::Forbidden)
+    // The store drops expired and not-yet-started rows and applies the glob.
+    let delegation = state
+        .store
+        .find_active_delegation(assignee.id, auth.user_id, &run.workflow_name)
+        .await?;
+
+    match delegation {
+        Some(_) => Ok(format!("{caller} (delegated from {})", assignee.username)),
+        None => Err(ApiError::Forbidden),
+    }
 }
 
 async fn resolve_approval(
@@ -1012,6 +1016,99 @@ mod tests {
         let bob = member(&store, "bob").await;
         let run_id = run_with_gate_assigned_to(&store, "deploy", None).await;
         delegate(&store, &alice, &bob, None).await;
+
+        let state = test_state(store.clone());
+        let auth = member_header(&bob, &state);
+
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn assignee_approves_own_gate_without_delegation() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = member(&store, "alice").await;
+        let run_id =
+            run_with_gate_assigned_to(&store, "deploy", Some(Assignee::user("alice"))).await;
+
+        let state = test_state_with_audit_log(store.clone());
+        let auth = member_header(&alice, &state);
+
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let payload = await_audit_payload(&store, run_id, EventKind::ApprovalGranted).await;
+        assert_eq!(payload["approved_by"], "alice");
+    }
+
+    #[tokio::test]
+    async fn assignee_rejects_own_gate_without_delegation() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = member(&store, "alice").await;
+        let run_id =
+            run_with_gate_assigned_to(&store, "deploy", Some(Assignee::user("alice"))).await;
+
+        let state = test_state(store.clone());
+        let auth = member_header(&alice, &state);
+
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "reject").await,
+            HttpStatusCode::OK
+        );
+
+        let steps = store.list_steps(run_id).await.unwrap();
+        assert_eq!(steps[0].status.state, StepStatus::Rejected);
+    }
+
+    #[tokio::test]
+    async fn assignee_is_matched_by_user_id_not_by_caller_name() {
+        let store = Arc::new(InMemoryStore::new());
+        let _alice = member(&store, "alice").await;
+        let carol = member(&store, "carol").await;
+        let run_id =
+            run_with_gate_assigned_to(&store, "deploy", Some(Assignee::user("alice"))).await;
+
+        let state = test_state(store.clone());
+        // Carol's identity carrying alice's name, as an API key named "alice" would.
+        let token =
+            AccessToken::for_user(carol.id, "alice", false, &state.jwt_config).expect("token");
+        let auth = format!("Bearer {}", token.0);
+
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn gate_assigned_to_an_unknown_user_is_admin_only() {
+        let store = Arc::new(InMemoryStore::new());
+        let bob = member(&store, "bob").await;
+        let run_id =
+            run_with_gate_assigned_to(&store, "deploy", Some(Assignee::user("ghost"))).await;
+
+        let state = test_state(store.clone());
+        let auth = member_header(&bob, &state);
+
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn delegation_from_someone_else_does_not_cover_the_gate() {
+        let store = Arc::new(InMemoryStore::new());
+        let _alice = member(&store, "alice").await;
+        let bob = member(&store, "bob").await;
+        let carol = member(&store, "carol").await;
+        let run_id =
+            run_with_gate_assigned_to(&store, "deploy", Some(Assignee::user("alice"))).await;
+        delegate(&store, &carol, &bob, None).await;
 
         let state = test_state(store.clone());
         let auth = member_header(&bob, &state);

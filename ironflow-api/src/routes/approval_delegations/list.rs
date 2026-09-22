@@ -1,7 +1,5 @@
 //! `GET /api/v1/approval-delegations` -- List active approval delegations.
 
-use std::cmp::Reverse;
-
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 
@@ -10,14 +8,14 @@ use ironflow_store::entities::DelegationFilter;
 
 use crate::entities::{ApprovalDelegationResponse, ListApprovalDelegationsQuery};
 use crate::error::ApiError;
-use crate::response::ok;
+use crate::response::ok_paged;
 use crate::state::AppState;
 
-/// List the active approval delegations visible to the caller.
+/// List the active approval delegations visible to the caller, paginated.
 ///
 /// An admin sees every active delegation and may narrow the result with the
 /// query parameters. A non-admin always sees exactly the delegations they
-/// granted plus the ones they received, and the query parameters are ignored --
+/// granted plus the ones they received, and the user filters are ignored --
 /// they must not become a way to enumerate other people's delegations.
 ///
 /// Expired and not-yet-started delegations are never returned: the store filters
@@ -34,7 +32,7 @@ use crate::state::AppState;
         tags = ["approval-delegations"],
         params(ListApprovalDelegationsQuery),
         responses(
-            (status = 200, description = "Active delegations", body = Vec<ApprovalDelegationResponse>),
+            (status = 200, description = "Paginated list of active delegations", body = Vec<ApprovalDelegationResponse>),
             (status = 401, description = "Unauthorized")
         ),
         security(("Bearer" = []))
@@ -45,42 +43,34 @@ pub async fn list_approval_delegations(
     State(state): State<AppState>,
     Query(query): Query<ListApprovalDelegationsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let delegations = if auth.is_admin() {
-        state
-            .store
-            .list_active_delegations(DelegationFilter {
-                from_user_id: query.from_user_id,
-                to_user_id: query.to_user_id,
-            })
-            .await?
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
+
+    let filter = if auth.is_admin() {
+        DelegationFilter {
+            from_user_id: query.from_user_id,
+            to_user_id: query.to_user_id,
+            ..DelegationFilter::default()
+        }
     } else {
-        let mut granted = state
-            .store
-            .list_active_delegations(DelegationFilter {
-                from_user_id: Some(auth.user_id),
-                ..DelegationFilter::default()
-            })
-            .await?;
-        let received = state
-            .store
-            .list_active_delegations(DelegationFilter {
-                to_user_id: Some(auth.user_id),
-                ..DelegationFilter::default()
-            })
-            .await?;
-        // The two sets are disjoint: self-delegation is refused at creation, so
-        // no row can have the caller on both sides. No dedup needed.
-        granted.extend(received);
-        granted.sort_by_key(|d| Reverse(d.created_at));
-        granted
+        DelegationFilter {
+            involving_user_id: Some(auth.user_id),
+            ..DelegationFilter::default()
+        }
     };
 
-    let items: Vec<ApprovalDelegationResponse> = delegations
+    let result = state
+        .store
+        .list_active_delegations(filter, page, per_page)
+        .await?;
+
+    let items: Vec<ApprovalDelegationResponse> = result
+        .items
         .into_iter()
         .map(ApprovalDelegationResponse::from)
         .collect();
 
-    Ok(ok(items))
+    Ok(ok_paged(items, page, per_page, result.total))
 }
 
 #[cfg(test)]
@@ -230,5 +220,58 @@ mod tests {
 
         assert_eq!(ids, vec![granted]);
         assert!(!ids.contains(&third_party));
+    }
+
+    #[tokio::test]
+    async fn a_member_pages_through_their_own_delegations() {
+        let (state, users) = test_state().await;
+        let (granted, received, _, _) = seed(&state, &users).await;
+        let auth = member_header(&users.alice, &state);
+
+        let app = Router::new()
+            .route("/", get(list_approval_delegations))
+            .with_state(state);
+        let req = Request::builder()
+            .uri("/?page=2&per_page=1")
+            .header("authorization", &auth)
+            .body(Body::empty())
+            .expect("build");
+        let resp = app.oneshot(req).await.expect("request");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+        let value: Value = from_slice(&bytes).expect("json");
+        assert_eq!(value["meta"]["page"], 2);
+        assert_eq!(value["meta"]["per_page"], 1);
+        assert_eq!(value["meta"]["total"], 2);
+
+        let data = value["data"].as_array().expect("data array");
+        assert_eq!(data.len(), 1);
+        // Newest first: page 2 of size 1 holds the older of alice's two rows.
+        assert_eq!(data[0]["id"].as_str(), Some(granted.as_str()));
+        assert_ne!(data[0]["id"].as_str(), Some(received.as_str()));
+    }
+
+    #[tokio::test]
+    async fn per_page_is_capped_at_one_hundred() {
+        let (state, users) = test_state().await;
+        seed(&state, &users).await;
+        let auth = admin_header(&users.alice, &state);
+
+        let app = Router::new()
+            .route("/", get(list_approval_delegations))
+            .with_state(state);
+        let req = Request::builder()
+            .uri("/?per_page=500&page=0")
+            .header("authorization", &auth)
+            .body(Body::empty())
+            .expect("build");
+        let resp = app.oneshot(req).await.expect("request");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+        let value: Value = from_slice(&bytes).expect("json");
+        assert_eq!(value["meta"]["per_page"], 100);
+        assert_eq!(value["meta"]["page"], 1);
     }
 }

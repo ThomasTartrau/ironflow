@@ -4,12 +4,13 @@ use uuid::Uuid;
 
 use ironflow_types::ApiResponse;
 
-use crate::client::IronflowClient;
+use crate::client::{IronflowClient, ListApprovalDelegationsFilter};
 use crate::error::Error;
 use crate::types;
 
 impl IronflowClient {
-    /// List the active approval delegations visible to the caller.
+    /// List the first page of the active approval delegations visible to the
+    /// caller.
     ///
     /// # Errors
     ///
@@ -29,7 +30,38 @@ impl IronflowClient {
     pub async fn list_approval_delegations(
         &self,
     ) -> Result<ApiResponse<Vec<types::ApprovalDelegationResponse>>, Error> {
-        self.send_envelope(self.get("/api/v1/approval-delegations"))
+        self.list_approval_delegations_filtered(&ListApprovalDelegationsFilter::default())
+            .await
+    }
+
+    /// List the active approval delegations visible to the caller, with
+    /// filters and pagination.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be deserialized.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::IronflowClient;
+    /// use ironflow_sdk::client::ListApprovalDelegationsFilter;
+    ///
+    /// # async fn example() -> Result<(), ironflow_sdk::Error> {
+    /// let client = IronflowClient::new("https://ironflow.example.com", "key");
+    /// let filter = ListApprovalDelegationsFilter {
+    ///     page: Some(2),
+    ///     ..Default::default()
+    /// };
+    /// let delegations = client.list_approval_delegations_filtered(&filter).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn list_approval_delegations_filtered(
+        &self,
+        filter: &ListApprovalDelegationsFilter,
+    ) -> Result<ApiResponse<Vec<types::ApprovalDelegationResponse>>, Error> {
+        self.send_envelope(self.get("/api/v1/approval-delegations").query(filter))
             .await
     }
 

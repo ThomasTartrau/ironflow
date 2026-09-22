@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use comfy_table::{ContentArrangement, Table};
 use ironflow_sdk::IronflowClient;
+use ironflow_sdk::client::ListApprovalDelegationsFilter;
 use ironflow_sdk::types::{ApprovalDelegationResponse, CreateApprovalDelegationRequest};
 use uuid::Uuid;
 
@@ -23,7 +24,20 @@ pub struct DelegationArgs {
 #[derive(Debug, Subcommand)]
 pub enum DelegationCommands {
     /// List the active approval delegations visible to you.
-    List,
+    List {
+        /// Only delegations granted by this user (admin only).
+        #[arg(long)]
+        from_user: Option<Uuid>,
+        /// Only delegations received by this user (admin only).
+        #[arg(long)]
+        to_user: Option<Uuid>,
+        /// Page number (1-based).
+        #[arg(long)]
+        page: Option<u32>,
+        /// Items per page (max 100).
+        #[arg(long)]
+        per_page: Option<u32>,
+    },
     /// Delegate your approval power to another user.
     Create {
         /// User receiving the delegated approval power.
@@ -92,8 +106,19 @@ pub async fn execute(
     json_mode: bool,
 ) -> Result<()> {
     match &args.command {
-        DelegationCommands::List => {
-            let response = client.list_approval_delegations().await?;
+        DelegationCommands::List {
+            from_user,
+            to_user,
+            page,
+            per_page,
+        } => {
+            let filter = ListApprovalDelegationsFilter {
+                from_user_id: *from_user,
+                to_user_id: *to_user,
+                page: *page,
+                per_page: *per_page,
+            };
+            let response = client.list_approval_delegations_filtered(&filter).await?;
             output::print_output(json_mode, &response, || delegations_table(&response.data))
         }
         DelegationCommands::Create {

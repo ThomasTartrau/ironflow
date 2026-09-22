@@ -51,6 +51,18 @@ impl UserStore for InMemoryStore {
         })
     }
 
+    fn find_user_by_username(&self, username: &str) -> StoreFuture<'_, Option<User>> {
+        let username = username.to_string();
+        Box::pin(async move {
+            let state = self.state.read().await;
+            Ok(state
+                .users
+                .values()
+                .find(|u| u.username == username)
+                .cloned())
+        })
+    }
+
     fn find_user_by_id(&self, id: Uuid) -> StoreFuture<'_, Option<User>> {
         Box::pin(async move {
             let state = self.state.read().await;
@@ -260,6 +272,36 @@ mod tests {
             .find_user_by_email("nobody@example.com")
             .await
             .unwrap();
+
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_user_by_username_existing() {
+        let store = InMemoryStore::new();
+        let created = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+
+        let found = store
+            .find_user_by_username("alice")
+            .await
+            .unwrap()
+            .expect("user should exist");
+
+        assert_eq!(found.id, created.id);
+    }
+
+    #[tokio::test]
+    async fn find_user_by_username_missing_returns_none() {
+        let store = InMemoryStore::new();
+        store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+
+        let found = store.find_user_by_username("Alice").await.unwrap();
 
         assert!(found.is_none());
     }

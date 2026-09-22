@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT id, from_user_id, to_user_id, valid_from, valid_until,\n                    workflow_filter, created_at\n                FROM ironflow.approval_delegations\n                WHERE valid_from <= $1 AND valid_until > $1\n                  AND ($2::uuid IS NULL OR from_user_id = $2)\n                  AND ($3::uuid IS NULL OR to_user_id = $3)\n                ORDER BY created_at DESC\n                ",
+  "query": "\n                SELECT id, from_user_id, to_user_id, valid_from, valid_until,\n                    workflow_filter, created_at\n                FROM ironflow.approval_delegations\n                WHERE from_user_id = $1 AND to_user_id = $2\n                  AND valid_from <= $3 AND valid_until > $3\n                ORDER BY created_at DESC\n                ",
   "describe": {
     "columns": [
       {
@@ -41,9 +41,9 @@
     ],
     "parameters": {
       "Left": [
-        "Timestamptz",
         "Uuid",
-        "Uuid"
+        "Uuid",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -56,5 +56,5 @@
       false
     ]
   },
-  "hash": "beefddc82d4ece6bbef125360eb80f42d2df14d9ddad7629572c96303aef3753"
+  "hash": "5433224179c24b10c502b675a943bd8cecc9a206227fc70f950a6a12518fc5a7"
 }

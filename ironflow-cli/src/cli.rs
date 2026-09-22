@@ -719,6 +719,39 @@ mod tests {
     }
 
     #[test]
+    fn parse_delegation_list_with_every_flag() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "delegation",
+            "list",
+            "--from-user",
+            UUID,
+            "--to-user",
+            UUID,
+            "--page",
+            "2",
+            "--per-page",
+            "10",
+        ]);
+        let Commands::Delegation(args) = &cli.command else {
+            panic!("expected Delegation command");
+        };
+        let DelegationCommands::List {
+            from_user,
+            to_user,
+            page,
+            per_page,
+        } = &args.command
+        else {
+            panic!("expected List subcommand");
+        };
+        assert!(from_user.is_some());
+        assert!(to_user.is_some());
+        assert_eq!(*page, Some(2));
+        assert_eq!(*per_page, Some(10));
+    }
+
+    #[test]
     fn parse_delegation_create_with_every_flag() {
         let cli = parse(&[
             "ironflow-cli",
