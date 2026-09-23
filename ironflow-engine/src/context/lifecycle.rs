@@ -18,7 +18,7 @@ use ironflow_store::models::{
 use crate::budget::step_budget_usd;
 use crate::config::StepConfig;
 use crate::error::EngineError;
-use crate::executor::{StepOutput, StepResult, execute_step_config};
+use crate::executor::{StepOutput, StepResult, execute_step_config_intercepted};
 use crate::log_sender::StepLogSender;
 use crate::notify::{
     WorkflowAgentStepTokensUsedEvent, WorkflowEvent, WorkflowStepCompletedEvent,
@@ -487,7 +487,14 @@ impl WorkflowContext {
 
             record_retry_metric(kind_str, "retry");
 
-            match execute_step_config(config, &self.provider, step_log_sender.clone()).await {
+            match execute_step_config_intercepted(
+                config,
+                &self.provider,
+                step_log_sender.clone(),
+                self.step_interceptor(),
+            )
+            .await
+            {
                 Ok(output) => return Ok(output),
                 Err(err) if !is_step_retryable(&err) => return Err(err),
                 err => last_result = err,

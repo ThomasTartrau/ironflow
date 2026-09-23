@@ -25,6 +25,7 @@
 - [Parallel Execution](guides/parallel-execution.md)
 - [Execution Plans](guides/execution-plan.md)
 - [Transports](guides/transports.md)
+- [Testing Workflows](guides/testing-workflows.md)
 
 # Architecture
 

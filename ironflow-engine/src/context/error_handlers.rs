@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use ironflow_store::models::{NewStep, StepStatus, StepUpdate, step_trace_id};
 
 use crate::config::StepConfig;
-use crate::executor::execute_step_config;
+use crate::executor::execute_step_config_intercepted;
 use crate::log_sender::StepLogSender;
 
 use super::{OnErrorHandler, WorkflowContext};
@@ -144,7 +144,13 @@ impl WorkflowContext {
                 .map(|s| StepLogSender::new(s.clone(), self.run_id, step.id, handler.name.clone()));
 
             let start = Instant::now();
-            let result = execute_step_config(&config, &self.provider, step_log_sender).await;
+            let result = execute_step_config_intercepted(
+                &config,
+                &self.provider,
+                step_log_sender,
+                self.step_interceptor(),
+            )
+            .await;
             let handler_duration = start.elapsed().as_millis() as u64;
             let completed_at = Utc::now();
 

@@ -6,7 +6,60 @@ user-invocable: false
 
 # Ironflow workflow test
 
-Black box: register the real handler in a real engine backed by the in-memory store, run it, assert on what was persisted. No mocks. Agent steps replay recorded fixtures so the suite never spends tokens.
+Black box: run the real handler against the in-memory store and assert on what was persisted. Two levels: `TestEngine` mocks the outside world (shell, HTTP, agent, approval) to exercise the handler's logic; the real `Engine` spawns real processes and replays recorded agent fixtures so the suite never spends tokens.
+
+## Unit test with TestEngine
+
+When every step of the handler is a shell, HTTP, agent or approval step, skip the engine boilerplate: `TestEngine` runs the real handler against an in-memory store with those steps mocked. No server, no worker, no Postgres, no process spawned.
+
+```rust,no_run
+use ironflow_engine::config::ShellConfig;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::testing::{MockShellOutput, TestEngine};
+use ironflow_store::models::{RunStatus, StepStatus};
+use serde_json::json;
+
+// In a real project: `use workflows::handlers::Deploy;`
+struct Deploy;
+
+impl WorkflowHandler for Deploy {
+    fn name(&self) -> &str {
+        "deploy"
+    }
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("build", ShellConfig::new("cargo build")).await?;
+            ctx.shell("ship", ShellConfig::new("./ship.sh")).await?;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn deploy_builds_then_ships() {
+    let result = TestEngine::new()
+        .with_handler(Deploy)
+        .with_mock_shell(|cfg| match cfg.command.as_str() {
+            "cargo build" => Ok(MockShellOutput::ok("compiled")),
+            _ => Ok(MockShellOutput::ok("shipped")),
+        })
+        .run(json!({"environment": "staging"}))
+        .await
+        .expect("the harness ran the handler");
+
+    assert_eq!(result.status(), RunStatus::Completed);
+    assert_eq!(result.step_names(), vec!["build", "ship"]);
+    assert_eq!(result.step("build").output()["stdout"], "compiled");
+    assert_eq!(result.step("ship").status(), StepStatus::Completed);
+}
+```
+
+Builders: `with_handler`, `with_mock_shell`, `with_mock_http`, `with_mock_agent`, `with_recorded_agent(dir)`, `with_mock_approval`, `with_agent_provider`, `with_decision_provider`. Then `run(payload)`, `run_workflow(name, payload)` or `resume(run_id)`.
+
+A handler that fails is not an `Err`: `result.status()` is `RunStatus::Failed` and `result.error()` carries the message. A non-zero `MockShellOutput::failed(1, "boom")` fails the step like a real non-zero exit; a non-2xx `MockHttpResponse` is a normal output, like a real 500. Without `with_mock_approval`, a gate suspends the run (`RunStatus::AwaitingApproval`) and `resume(run_id)` continues it.
+
+Not covered: `ctx.operation(...)` (pass a test-double `Operation` to the handler), `ctx.delay(...)` (still sleeps the run) and `ctx.decision(...)` (needs a real `DecisionProvider`).
 
 ## 1. Locate
 
@@ -117,3 +170,5 @@ Report the assertion list and whether a fixture was recorded.
 ## Shell steps in tests
 
 They spawn real processes. Keep commands portable (`echo`, `true`, `sh -c`) or gate the test on the tool with a runtime check, never by mocking the step.
+
+Use the real `Engine` when the test must exercise real commands; use `TestEngine` when it must exercise the handler's logic.

@@ -17,6 +17,12 @@
 //! Call [`WorkflowContext::operation()`](context::WorkflowContext::operation)
 //! inside a handler to execute them with full step tracking.
 //!
+//! ## Testing handlers
+//!
+//! [`TestEngine`](testing::TestEngine) runs a handler against an in-memory
+//! store with mocked shell, HTTP, agent and approval steps, so a handler's
+//! logic can be asserted without a server, a worker or a real process.
+//!
 //! # Example
 //!
 //! ```no_run
@@ -61,6 +67,7 @@ pub mod plan;
 pub mod retry_policy;
 pub mod run_creator;
 pub mod schedule;
+pub mod testing;
 
 /// Convenience re-exports.
 pub mod prelude {

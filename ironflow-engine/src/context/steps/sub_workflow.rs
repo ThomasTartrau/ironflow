@@ -298,6 +298,8 @@ impl WorkflowContext {
             guard_config: self.guard_config.clone(),
             step_results: Vec::new(),
             event_bus: self.event_bus.clone(),
+            // A child run is mocked exactly like its parent.
+            interceptor: self.interceptor.clone(),
             trace_context: self.trace_context.child(),
             operation_ctx: None,
             plan: None,
