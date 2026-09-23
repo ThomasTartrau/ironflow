@@ -45,6 +45,12 @@ pub struct TestApiState {
     pub refuse_lease: AtomicBool,
     /// Runs indexed by id, populated when handed out via pick_next.
     runs_by_id: Mutex<HashMap<Uuid, Value>>,
+    /// Steps already recorded for a run, returned by GET /runs/:id (replay).
+    seeded_steps: Mutex<Vec<Value>>,
+    /// Bodies received via POST /steps.
+    pub created_steps: Mutex<Vec<Value>>,
+    /// Bodies received via PUT /steps/:id.
+    pub step_updates: Mutex<Vec<Value>>,
 }
 
 impl TestApiState {
@@ -57,7 +63,17 @@ impl TestApiState {
             status_writes: Mutex::new(Vec::new()),
             refuse_lease: AtomicBool::new(false),
             runs_by_id: Mutex::new(HashMap::new()),
+            seeded_steps: Mutex::new(Vec::new()),
+            created_steps: Mutex::new(Vec::new()),
+            step_updates: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Steps the stub reports as already recorded for every run it serves.
+    #[allow(dead_code)]
+    pub fn with_steps(self, steps: Vec<Value>) -> Self {
+        *self.seeded_steps.lock().unwrap() = steps;
+        self
     }
 
     #[allow(dead_code)]
@@ -135,7 +151,8 @@ async fn get_run(State(state): State<Arc<TestApiState>>, Path(id): Path<Uuid>) -
         .get(&id)
         .cloned()
         .expect("get_run called for an id that was never handed out");
-    Json(json!({ "data": { "run": run, "steps": [] } }))
+    let steps = state.seeded_steps.lock().unwrap().clone();
+    Json(json!({ "data": { "run": run, "steps": steps } }))
 }
 
 async fn update_run(
@@ -185,7 +202,11 @@ async fn renew_lease(
     }
 }
 
-async fn create_step(Json(body): Json<Value>) -> Json<Value> {
+async fn create_step(
+    State(state): State<Arc<TestApiState>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    state.created_steps.lock().unwrap().push(body.clone());
     let step_id = Uuid::now_v7();
     let run_id = body["run_id"]
         .as_str()
@@ -196,6 +217,7 @@ async fn create_step(Json(body): Json<Value>) -> Json<Value> {
     Json(json!({
         "data": {
             "id": step_id,
+            "trace_id": Uuid::now_v7(),
             "run_id": run_id,
             "name": name,
             "kind": body.get("kind").cloned().unwrap_or(json!("shell")),
@@ -219,7 +241,12 @@ async fn create_step(Json(body): Json<Value>) -> Json<Value> {
     }))
 }
 
-async fn update_step(Path(_id): Path<Uuid>, Json(_body): Json<Value>) -> Json<Value> {
+async fn update_step(
+    State(state): State<Arc<TestApiState>>,
+    Path(_id): Path<Uuid>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    state.step_updates.lock().unwrap().push(body);
     Json(json!({ "data": null }))
 }
 

@@ -206,7 +206,8 @@ stage, the policy, what it did and why.
 
 A typed machine decision (System One / Jev): classify, route, score, or yes/no, with a
 calibrated confidence instead of free text. Cheaper and faster than an agent for a
-structured verdict. Wire a `DecisionProvider` into the engine
+structured verdict. Wire a `DecisionProvider` into the worker that runs the workflow
+(`WorkerBuilder::decision_provider(...)`), or into the engine
 (`Engine::with_decision_provider(...)`); without one, a decision step fails with
 `NoDecisionProvider`.
 

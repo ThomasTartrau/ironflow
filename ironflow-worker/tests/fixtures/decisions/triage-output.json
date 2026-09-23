@@ -1,0 +1,38 @@
+{
+  "model": "typesafe/jev-1.13-20260917",
+  "answers": {
+    "department": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {
+        "billing": 0.82,
+        "sales": 0.0,
+        "technical": 0.18
+      },
+      "confidence": 0.73
+    },
+    "frustration": {
+      "type": "score",
+      "score": 1.03,
+      "legend": {
+        "0": "Calm",
+        "1": "Frustrated",
+        "2": "Very angry"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.96,
+        "2": 0.04
+      },
+      "confidence": 0.94
+    },
+    "is_urgent": {
+      "type": "noul",
+      "noul": 0.95
+    }
+  },
+  "usage": {
+    "input_tokens": 353,
+    "output_tokens": 73
+  }
+}
