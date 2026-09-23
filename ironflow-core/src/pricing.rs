@@ -73,7 +73,7 @@ fn round6(v: f64) -> f64 {
 }
 
 /// Conservative fallback price per million tokens (input, output).
-/// Uses the Claude Sonnet rate ($3/$15), shared across Sonnet 4.5/4.6/5.
+/// Uses the Claude Sonnet rate ($3/$15), shared across Sonnet 4.5/4.6.
 const SONNET_FALLBACK: (f64, f64) = (3.0, 15.0);
 
 impl CostBreakdown {
@@ -149,8 +149,10 @@ impl StaticPricing {
             ("claude-fable-5", 10.0, 50.0),
             ("claude-fable-5-1", 10.0, 50.0),
             ("claude-mythos-5", 10.0, 50.0),
+            ("claude-mythos-5-1", 10.0, 50.0),
+            ("claude-opus-5-5", 4.0, 20.0),
             ("claude-opus-5", 5.0, 25.0),
-            ("claude-sonnet-5", 3.0, 15.0),
+            ("claude-sonnet-5", 2.0, 10.0),
             ("claude-opus-4-8", 5.0, 25.0),
             ("claude-opus-4-7", 5.0, 25.0),
             ("claude-sonnet-4-6", 3.0, 15.0),
@@ -250,6 +252,17 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_and_opus_5_5_have_current_pricing() {
+        let pricing = StaticPricing::new();
+        assert_eq!(pricing.price_per_1m("claude-sonnet-5"), Some((2.0, 10.0)));
+        assert_eq!(pricing.price_per_1m("claude-opus-5-5"), Some((4.0, 20.0)));
+        assert_eq!(
+            pricing.price_per_1m("claude-mythos-5-1"),
+            Some((10.0, 50.0))
+        );
+    }
+
+    #[test]
     fn substring_resolution_most_specific_wins() {
         let pricing = StaticPricing::new();
         // "claude-sonnet-4-6[1m]" contains "claude-sonnet-4-6" (17 chars)
@@ -328,7 +341,10 @@ mod tests {
         let pricing = StaticPricing::new();
         let models = [
             "claude-fable-5",
+            "claude-fable-5-1",
             "claude-mythos-5",
+            "claude-mythos-5-1",
+            "claude-opus-5-5",
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-opus-4-8",
