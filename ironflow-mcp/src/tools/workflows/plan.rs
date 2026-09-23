@@ -16,8 +16,8 @@ use crate::client::ApiClient;
 pub struct PlanWorkflowTool {
     /// The workflow name to plan.
     pub name: String,
-    /// Optional JSON input payload used to evaluate conditions.
-    pub payload: Option<Value>,
+    /// Optional JSON input payload, as a JSON string, used to evaluate conditions.
+    pub payload: Option<String>,
     /// Optional sub-workflow expansion depth (default 3, at most 10).
     pub max_depth: Option<u32>,
 }
@@ -30,8 +30,12 @@ impl PlanWorkflowTool {
     /// Returns [`CallToolError`] when the workflow is unknown, the depth is out
     /// of range, or the API is unreachable.
     pub async fn run(&self, client: &ApiClient) -> Result<CallToolResult, CallToolError> {
+        let parsed_payload: Value = match &self.payload {
+            Some(s) => serde_json::from_str(s).unwrap_or(Value::Object(Default::default())),
+            None => json!({}),
+        };
         let mut body = json!({
-            "payload": self.payload.clone().unwrap_or_else(|| json!({})),
+            "payload": parsed_payload,
         });
         if let Some(max_depth) = self.max_depth {
             body["max_depth"] = json!(max_depth);

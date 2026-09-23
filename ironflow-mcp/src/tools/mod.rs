@@ -494,7 +494,7 @@ mod tests {
         let client = client_for(addr);
         let tool = PlanWorkflowTool {
             name: "deploy".to_string(),
-            payload: Some(json!({"env": "prod"})),
+            payload: Some(json!({"env": "prod"}).to_string()),
             max_depth: Some(5),
         };
 

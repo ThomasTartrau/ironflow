@@ -87,7 +87,9 @@ describe("ExecutionPlanGraph", () => {
 
 		expect(screen.getByText("when env == prod = true")).toBeInTheDocument();
 		expect(screen.getByText("skipped: not prod")).toBeInTheDocument();
-		expect(screen.getByText("unevaluable: build succeeded")).toBeInTheDocument();
+		expect(
+			screen.getByText("unevaluable: build succeeded"),
+		).toBeInTheDocument();
 	});
 
 	it("shows the estimated duration when the plan has one", () => {
