@@ -540,6 +540,26 @@ impl IronflowClient {
             .await
     }
 
+    /// `POST /api/v1/workflows/:name/plan` -- Build the execution plan for a workflow.
+    ///
+    /// Planning has no side effect: no step runs, and no run is created.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 400 (invalid payload or `max_depth`), 401, or
+    /// 404 (workflow not registered).
+    pub async fn plan_workflow(
+        &self,
+        name: &str,
+        request: &types::PlanWorkflowRequest,
+    ) -> Result<ApiResponse<types::ExecutionPlanResponse>, Error> {
+        self.send_envelope(
+            self.post(&format!("/api/v1/workflows/{name}/plan"))
+                .json(request),
+        )
+        .await
+    }
+
     // ── Stats ──────────────────────────────────────────────────────
 
     /// `GET /api/v1/stats` -- Aggregate statistics.

@@ -8,12 +8,14 @@
 //! money, and stores typed output) and an approval gate (a low-confidence answer
 //! suspends the run and replays its stored answers on resume).
 
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 use serde_json::{Value, from_value, to_value};
 use tracing::info;
 use uuid::Uuid;
 
-use ironflow_core::decision::DecisionOutput;
+use ironflow_core::decision::{DecisionOutput, DecisionUsage};
 use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_trace_id};
 
 use crate::config::DecisionConfig;
@@ -24,6 +26,7 @@ use crate::notify::{
     WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowStepCompletedEvent,
     WorkflowStepStartedEvent,
 };
+use crate::plan::lock_plan;
 
 impl WorkflowContext {
     /// Execute a typed machine-decision step (System One / Jev).
@@ -43,6 +46,21 @@ impl WorkflowContext {
         name: &str,
         config: DecisionConfig,
     ) -> Result<DecisionOutput, EngineError> {
+        // Plan mode: record the step and return an empty answer set. No
+        // provider is called, so the step costs nothing while planning.
+        if let Some(plan) = self.plan().cloned() {
+            self.position += 1;
+            let mut recorder = lock_plan(&plan);
+            if recorder.record(name, StepKind::Decision, &self.workflow_name, None) {
+                recorder.set_last(vec![name.to_string()]);
+            }
+            return Ok(DecisionOutput {
+                model: None,
+                answers: BTreeMap::new(),
+                usage: DecisionUsage::default(),
+            });
+        }
+
         if let Some(output) = self.decision_replay(name, &config).await? {
             return Ok(output);
         }

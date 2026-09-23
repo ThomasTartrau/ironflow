@@ -24,6 +24,7 @@ use crate::executor::{ParallelStepResult, StepOutput, StepResult, execute_step_c
 use crate::guard::WorkflowRejection;
 use crate::log_sender::StepLogSender;
 use crate::notify::{WorkflowAgentStepTokensUsedEvent, WorkflowEvent};
+use crate::plan::{lock_plan, planned_output};
 
 impl WorkflowContext {
     /// Execute multiple steps concurrently (wait-all model).
@@ -69,6 +70,33 @@ impl WorkflowContext {
     ) -> Result<Vec<ParallelStepResult>, EngineError> {
         if steps.is_empty() {
             return Ok(Vec::new());
+        }
+
+        // Plan mode: record the whole wave under one parallel group and return
+        // synthetic outputs. No step record is created and nothing runs.
+        if let Some(plan) = self.plan().cloned() {
+            self.position += 1;
+            let mut results = Vec::with_capacity(steps.len());
+            let mut names = Vec::with_capacity(steps.len());
+            {
+                let mut recorder = lock_plan(&plan);
+                let group = recorder.next_group();
+                for (name, config) in &steps {
+                    let wave = Some(group.clone());
+                    if !recorder.record(name, config.kind(), &self.workflow_name, wave) {
+                        break;
+                    }
+                    names.push((*name).to_string());
+                    let estimate = recorder.estimate_for(name);
+                    results.push(ParallelStepResult {
+                        name: (*name).to_string(),
+                        output: planned_output(config, estimate),
+                        step_id: Uuid::now_v7(),
+                    });
+                }
+                recorder.set_last(names);
+            }
+            return Ok(results);
         }
 
         // Guard timeout: checked before launching the wave.

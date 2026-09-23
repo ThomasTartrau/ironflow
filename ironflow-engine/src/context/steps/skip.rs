@@ -10,6 +10,7 @@ use ironflow_store::models::{
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
+use crate::plan::{ConditionResult, lock_plan};
 
 impl WorkflowContext {
     /// Record a step as explicitly skipped.
@@ -41,6 +42,24 @@ impl WorkflowContext {
     /// # }
     /// ```
     pub async fn skip(&mut self, name: &str, reason: &str) -> Result<(), EngineError> {
+        // Plan mode: the skip and its reason become the step's condition.
+        if let Some(plan) = self.plan().cloned() {
+            self.position += 1;
+            let mut recorder = lock_plan(&plan);
+            recorder.set_condition(ConditionResult::Skipped {
+                reason: reason.to_string(),
+            });
+            if recorder.record(
+                name,
+                StepKind::Custom("skip".to_string()),
+                &self.workflow_name,
+                None,
+            ) {
+                recorder.set_last(vec![name.to_string()]);
+            }
+            return Ok(());
+        }
+
         let position = self.position;
         self.position += 1;
 

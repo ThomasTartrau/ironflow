@@ -41,13 +41,14 @@ pub use secrets::{
 };
 pub use stats::{GetStatsHistoryTool, GetStatsTool};
 pub use users::{CreateUserTool, DeleteUserTool, ListUsersTool, UpdateUserRoleTool};
-pub use workflows::{GetWorkflowTool, ListWorkflowsTool};
+pub use workflows::{GetWorkflowTool, ListWorkflowsTool, PlanWorkflowTool};
 
 rust_mcp_sdk::tool_box!(
     IronflowTools,
     [
         ListWorkflowsTool,
         GetWorkflowTool,
+        PlanWorkflowTool,
         CreateRunTool,
         ListRunsTool,
         SearchRunsTool,
@@ -148,6 +149,29 @@ mod tests {
                             .into_response();
                     }
                     Json(json!({ "data": { "name": name, "steps": 3 } })).into_response()
+                }),
+            )
+            .route(
+                "/api/v1/workflows/{name}/plan",
+                post(|Path(name): Path<String>, Json(body): Json<Value>| async move {
+                    if name == "unknown" {
+                        return (
+                            StatusCode::NOT_FOUND,
+                            Json(json!({ "error": { "code": "NOT_FOUND", "message": "workflow introuvable" } })),
+                        )
+                            .into_response();
+                    }
+                    Json(json!({
+                        "data": {
+                            "workflow": name,
+                            "max_depth": body.get("max_depth").cloned().unwrap_or(json!(3)),
+                            "truncated": false,
+                            "steps": [
+                                { "name": "build", "kind": "shell", "workflow": name, "depth": 0, "depends_on": [] }
+                            ]
+                        }
+                    }))
+                    .into_response()
                 }),
             )
             .route(
@@ -453,6 +477,43 @@ mod tests {
         let client = client_for(addr);
         let tool = GetWorkflowTool {
             name: "unknown".to_string(),
+        };
+
+        let err = tool.run(&client).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("introuvable"), "got: {msg}");
+    }
+
+    // ---------------------------------------------------------------
+    // PlanWorkflowTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn plan_workflow_returns_the_plan() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = PlanWorkflowTool {
+            name: "deploy".to_string(),
+            payload: Some(json!({"env": "prod"}).to_string()),
+            max_depth: Some(5),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["workflow"], "deploy");
+        assert_eq!(parsed["max_depth"], 5);
+        assert_eq!(parsed["steps"][0]["name"], "build");
+    }
+
+    #[tokio::test]
+    async fn plan_workflow_propagates_404() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = PlanWorkflowTool {
+            name: "unknown".to_string(),
+            payload: None,
+            max_depth: None,
         };
 
         let err = tool.run(&client).await.unwrap_err();

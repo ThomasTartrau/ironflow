@@ -6,6 +6,7 @@
 
 mod agent;
 mod approval;
+mod conditions;
 mod decision;
 mod delay;
 mod http;
