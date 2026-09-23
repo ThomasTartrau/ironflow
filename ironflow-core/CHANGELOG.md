@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [3.20.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.19.0...ironflow-core-v3.20.0) - 2026-09-23
+
+### Added
+
+- add Claude Mythos 5.1 and Opus 5.5 models with pricing
+
 ## [3.19.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.18.0...ironflow-core-v3.19.0) - 2026-09-21
 
 ### Added
