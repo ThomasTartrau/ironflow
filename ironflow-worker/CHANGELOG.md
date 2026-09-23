@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.21.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.20.3...ironflow-worker-v2.21.0) - 2026-09-23
+
+### Added
+
+- #101 expose a decision provider on WorkerBuilder
+
 ## [2.20.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.19.2...ironflow-worker-v2.20.0) - 2026-09-22
 
 ### Added

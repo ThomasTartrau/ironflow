@@ -3946,7 +3946,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.20.3"
+version = "2.21.0"
 dependencies = [
  "axum",
  "bytes",
