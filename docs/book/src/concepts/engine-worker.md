@@ -32,6 +32,10 @@ let worker = WorkerBuilder::new(&api_url, &worker_token)
 worker.run().await?;
 ```
 
+Workflows that use `ctx.decision(...)` need a decision provider on the worker too:
+`.decision_provider(Arc::new(TypeSafeProvider::new(api_key)))`. See
+[Decisions](decision.md).
+
 ## Lease & Reaper
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.

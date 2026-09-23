@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::decision::DecisionProvider;
 #[cfg(feature = "prometheus")]
 use ironflow_core::metric_names::{
     WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKER_POLLS_TOTAL, WORKER_QUEUE_DEPTH,
@@ -75,6 +76,7 @@ pub struct WorkerBuilder {
     worker_token: String,
     worker_id: String,
     provider: Option<Arc<dyn AgentProvider>>,
+    decision_provider: Option<Arc<dyn DecisionProvider>>,
     handlers: Vec<Box<dyn WorkflowHandler>>,
     concurrency: usize,
     poll_interval: Duration,
@@ -97,6 +99,7 @@ impl WorkerBuilder {
             worker_token: worker_token.to_string(),
             worker_id: format!("worker-{}", Uuid::now_v7()),
             provider: None,
+            decision_provider: None,
             handlers: Vec::new(),
             concurrency: DEFAULT_CONCURRENCY,
             poll_interval: DEFAULT_POLL_INTERVAL,
@@ -115,6 +118,36 @@ impl WorkerBuilder {
     /// Set the agent provider for AI operations.
     pub fn provider(mut self, provider: Arc<dyn AgentProvider>) -> Self {
         self.provider = Some(provider);
+        self
+    }
+
+    /// Set the [`DecisionProvider`] backend for `ctx.decision(...)` steps.
+    ///
+    /// Every run executed by this worker gets it, like
+    /// [`Engine::with_decision_provider`]. Optional: without it, a workflow that
+    /// reaches a decision step fails with
+    /// [`EngineError::NoDecisionProvider`](ironflow_engine::error::EngineError::NoDecisionProvider).
+    /// A decision step already completed in the store is replayed without
+    /// calling the provider again.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_core::providers::record_replay_decision::RecordReplayDecisionProvider;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() -> Result<(), ironflow_worker::WorkerError> {
+    /// let worker = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .provider(Arc::new(ClaudeCodeProvider::new()))
+    ///     .decision_provider(Arc::new(RecordReplayDecisionProvider::replay("tests/fixtures")))
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn decision_provider(mut self, provider: Arc<dyn DecisionProvider>) -> Self {
+        self.decision_provider = Some(provider);
         self
     }
 
@@ -325,6 +358,9 @@ impl WorkerBuilder {
         let store: Arc<dyn Store> = Arc::new(ApiRunStore::new(&self.api_url, &self.worker_token));
 
         let mut engine = Engine::new(store, provider);
+        if let Some(decision_provider) = self.decision_provider {
+            engine = engine.with_decision_provider(decision_provider);
+        }
         for handler in self.handlers {
             engine
                 .register_boxed(handler)
@@ -848,6 +884,7 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_core::providers::record_replay_decision::RecordReplayDecisionProvider;
 
     #[test]
     fn builder_new_creates_default_config() {
@@ -877,6 +914,20 @@ mod tests {
         let builder =
             WorkerBuilder::new("http://localhost:3000", "token").provider(provider.clone());
         assert!(builder.provider.is_some());
+    }
+
+    #[test]
+    fn builder_decision_provider_defaults_to_none() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token");
+        assert!(builder.decision_provider.is_none());
+    }
+
+    #[test]
+    fn builder_decision_provider_sets_provider() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token").decision_provider(
+            Arc::new(RecordReplayDecisionProvider::replay("tests/fixtures")),
+        );
+        assert!(builder.decision_provider.is_some());
     }
 
     #[test]

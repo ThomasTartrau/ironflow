@@ -19,6 +19,16 @@ let engine = Engine::new(store, agent_provider)
     .with_decision_provider(Arc::new(TypeSafeProvider::new(api_key)));
 ```
 
+When the workflow runs in a [worker](engine-worker.md), wire the provider on the
+`WorkerBuilder` instead; every run the worker executes gets it:
+
+```rust,ignore
+let worker = WorkerBuilder::new(&api_url, &worker_token)
+    .provider(agent_provider)
+    .decision_provider(Arc::new(TypeSafeProvider::new(api_key)))
+    .build()?;
+```
+
 Without a provider, a decision step fails with `NoDecisionProvider`. In tests, use
 `RecordReplayDecisionProvider::replay(dir)` to serve captured JSON fixtures with no
 network.
