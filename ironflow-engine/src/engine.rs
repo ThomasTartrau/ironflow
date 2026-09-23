@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -42,6 +42,9 @@ use crate::log_sender::LogSender;
 use crate::notify::{
     Event, EventPublisher, EventSubscriber, RunBudgetExceededEvent, RunFailedEvent,
     RunStatusChangedEvent, WorkflowEventBus,
+};
+use crate::plan::{
+    ExecutionPlan, PlanOptions, PlanRecorder, SharedPlanRecorder, estimate_durations, lock_plan,
 };
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
@@ -778,6 +781,118 @@ impl Engine {
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(run_id, handler_name, result, &ctx, run_start, run.labels)
             .await
+    }
+
+    /// Build the execution plan for a registered handler without running it.
+    ///
+    /// Executes the handler with every step method in recording mode: no
+    /// command is spawned, no HTTP request is sent, no agent is called,
+    /// nothing is persisted. Conditions declared with
+    /// [`WorkflowContext::when`](crate::context::WorkflowContext::when) are
+    /// evaluated against `payload`; those declared with
+    /// [`WorkflowContext::when_dynamic`](crate::context::WorkflowContext::when_dynamic)
+    /// are reported as unevaluable.
+    ///
+    /// Step outputs are synthetic and success-shaped, so the plan follows the
+    /// nominal branch. A handler that unwraps a decision answer, or that
+    /// deserializes `ctx.input::<T>()` against a payload it does not match,
+    /// aborts the plan: the partial plan is returned with
+    /// [`ExecutionPlan::incomplete_reason`] set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidWorkflow`] when no handler is registered
+    /// under `handler_name` or when `options.max_depth` is zero. Returns
+    /// [`EngineError::Store`] when the duration-history query fails. A handler
+    /// that errors mid-plan does **not** fail this call.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_engine::plan::PlanOptions;
+    /// use serde_json::json;
+    ///
+    /// # async fn example(engine: &Engine) -> Result<(), EngineError> {
+    /// let plan = engine
+    ///     .plan_handler("deploy", json!({"env": "prod"}), PlanOptions::default())
+    ///     .await?;
+    /// for step in &plan.steps {
+    ///     println!("{} ({:?})", step.name, step.kind);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[tracing::instrument(name = "engine.plan_handler", skip_all, fields(workflow = %handler_name))]
+    pub async fn plan_handler(
+        &self,
+        handler_name: &str,
+        payload: Value,
+        options: PlanOptions,
+    ) -> Result<ExecutionPlan, EngineError> {
+        if options.max_depth == 0 {
+            return Err(EngineError::InvalidWorkflow(
+                "max_depth must be at least 1".to_string(),
+            ));
+        }
+
+        let handler = self
+            .handlers
+            .get(handler_name)
+            .ok_or_else(|| {
+                EngineError::InvalidWorkflow(format!("no handler registered: {handler_name}"))
+            })?
+            .clone();
+
+        let estimates = if options.estimate_durations {
+            estimate_durations(&self.store, handler_name, options.sample_runs).await?
+        } else {
+            HashMap::new()
+        };
+
+        let shared: SharedPlanRecorder = Arc::new(Mutex::new(PlanRecorder::new(
+            handler_name.to_string(),
+            payload,
+            options.max_depth,
+            estimates,
+        )));
+
+        // Deliberately bare: no guard, no event bus, no log sender, no artifact
+        // sink and no budget. Planning produces no side effect to report.
+        let handlers = self.handlers.clone();
+        let resolver: crate::context::HandlerResolver =
+            Arc::new(move |name: &str| handlers.get(name).cloned());
+        let mut ctx = WorkflowContext::with_handler_resolver(
+            Uuid::now_v7(),
+            handler_name.to_string(),
+            self.store.clone(),
+            self.provider.clone(),
+            resolver,
+        );
+        ctx.set_plan(shared.clone());
+
+        if let Err(err) = handler.execute(&mut ctx).await {
+            lock_plan(&shared).fail(err.to_string());
+        }
+        drop(ctx);
+
+        let plan = match Arc::try_unwrap(shared) {
+            Ok(mutex) => mutex
+                .into_inner()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .into_plan(),
+            Err(shared) => lock_plan(&shared).snapshot(),
+        };
+
+        info!(
+            workflow = %handler_name,
+            steps = plan.steps.len(),
+            truncated = plan.truncated,
+            "execution plan built"
+        );
+
+        Ok(plan)
     }
 
     /// Enqueue a handler-based workflow for worker execution.

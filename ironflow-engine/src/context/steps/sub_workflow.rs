@@ -11,18 +11,20 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use serde_json::{Value, json, to_value};
 use tracing::{error, info};
+use uuid::Uuid;
 
 use ironflow_store::models::{
     NewRun, NewStep, RunStatus, RunUpdate, StepKind, StepStatus, StepUpdate, TriggerKind,
     step_trace_id,
 };
 
-use crate::config::WorkflowStepConfig;
+use crate::config::{StepConfig, WorkflowStepConfig};
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
 use crate::executor::StepOutput;
 use crate::guard::WorkflowRejection;
 use crate::handler::WorkflowHandler;
+use crate::plan::{SharedPlanRecorder, lock_plan, planned_output};
 
 impl WorkflowContext {
     /// Execute a sub-workflow step.
@@ -56,6 +58,13 @@ impl WorkflowContext {
         handler: &dyn WorkflowHandler,
         payload: Value,
     ) -> Result<StepOutput, EngineError> {
+        // Plan mode: record the invocation, expand the child handler in the
+        // same recorder, and return a synthetic output. No child run is
+        // created and no step of the child is executed.
+        if let Some(plan) = self.plan().cloned() {
+            return self.plan_sub_workflow(&plan, handler, payload).await;
+        }
+
         // Guard check: verify limits before creating the step.
         if let (Some(guard_config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
             let state = guard_state
@@ -151,6 +160,61 @@ impl WorkflowContext {
         }
     }
 
+    /// Record a sub-workflow invocation while planning, expanding the child
+    /// handler into the same plan when the depth limit allows it.
+    ///
+    /// The child plans against its own payload and under its own workflow
+    /// name; the parent's payload is restored on the way out.
+    async fn plan_sub_workflow(
+        &mut self,
+        plan: &SharedPlanRecorder,
+        handler: &dyn WorkflowHandler,
+        payload: Value,
+    ) -> Result<StepOutput, EngineError> {
+        self.position += 1;
+        let sub_name = handler.name().to_string();
+
+        {
+            let mut recorder = lock_plan(plan);
+            if !recorder.record(&sub_name, StepKind::Workflow, &self.workflow_name, None) {
+                return Ok(planned_output(
+                    &StepConfig::Workflow(WorkflowStepConfig::new(&sub_name, payload)),
+                    None,
+                ));
+            }
+            recorder.set_last(vec![sub_name.clone()]);
+        }
+
+        let expand = lock_plan(plan).enter_workflow();
+        if expand {
+            let previous_payload = lock_plan(plan).swap_payload(payload.clone());
+
+            let mut child = WorkflowContext::new(
+                Uuid::now_v7(),
+                sub_name.clone(),
+                self.store.clone(),
+                self.provider.clone(),
+            );
+            child.handler_resolver = self.handler_resolver.clone();
+            child.set_plan(plan.clone());
+
+            if let Err(err) = handler.execute(&mut child).await {
+                lock_plan(plan).fail(format!(
+                    "sub-workflow {sub_name} could not be planned: {err}"
+                ));
+            }
+
+            let mut recorder = lock_plan(plan);
+            recorder.swap_payload(previous_payload);
+            recorder.leave_workflow();
+        }
+
+        Ok(planned_output(
+            &StepConfig::Workflow(WorkflowStepConfig::new(&sub_name, payload)),
+            None,
+        ))
+    }
+
     /// Execute a child workflow and return aggregated output plus whether
     /// at least one `allow_failure` step failed.
     async fn execute_child_workflow(
@@ -238,6 +302,7 @@ impl WorkflowContext {
             interceptor: self.interceptor.clone(),
             trace_context: self.trace_context.child(),
             operation_ctx: None,
+            plan: None,
         };
 
         let result = handler.execute(&mut child_ctx).await;

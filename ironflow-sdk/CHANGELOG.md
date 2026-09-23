@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.26](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.25...ironflow-sdk-v0.1.26) - 2026-09-23
+
+### Added
+
+- #98 add execution plan (dry-run planner) with CLI, API and dashboard views
+
+## [0.1.25](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.24...ironflow-sdk-v0.1.25) - 2026-09-22
+
+### Added
+
+- #92 add pagination to approval delegations list
+
+- #92 add approval delegation for absent approvers
+
+
+### Fixed
+
+- #92 regenerate OpenAPI snapshot and dashboard types
+
 ## [0.1.24](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.23...ironflow-sdk-v0.1.24) - 2026-09-22
 
 ### Added

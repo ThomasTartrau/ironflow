@@ -56,6 +56,63 @@ fn parse_run_diff_requires_two_ids() {
     assert!(Cli::try_parse_from(["ironflow-cli", "run", "diff"]).is_err());
 }
 
+// ── run plan ───────────────────────────────────────────────────
+
+#[test]
+fn parse_run_plan() {
+    let cli = parse(&["ironflow-cli", "run", "plan", "deploy"]);
+    assert!(matches!(cli.command, Commands::Run(_)));
+}
+
+#[test]
+fn parse_run_plan_with_inline_input() {
+    let cli = parse(&[
+        "ironflow-cli",
+        "run",
+        "plan",
+        "deploy",
+        "--input",
+        r#"{"env":"prod"}"#,
+    ]);
+    assert!(matches!(cli.command, Commands::Run(_)));
+}
+
+#[test]
+fn parse_run_plan_with_max_depth_and_no_estimates() {
+    let cli = parse(&[
+        "ironflow-cli",
+        "run",
+        "plan",
+        "deploy",
+        "--max-depth",
+        "5",
+        "--no-estimates",
+    ]);
+    assert!(matches!(cli.command, Commands::Run(_)));
+}
+
+#[test]
+fn parse_run_plan_rejects_both_input_sources() {
+    assert!(
+        Cli::try_parse_from([
+            "ironflow-cli",
+            "run",
+            "plan",
+            "deploy",
+            "--input",
+            "{}",
+            "--input-file",
+            "input.json",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn parse_run_plan_requires_a_workflow_name() {
+    assert!(Cli::try_parse_from(["ironflow-cli", "run", "plan"]).is_err());
+}
+
 // ── init ───────────────────────────────────────────────────────
 
 #[test]

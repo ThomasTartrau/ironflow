@@ -729,3 +729,56 @@ async fn set_step_interceptor_short_circuits_a_shell_step() {
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].status.state, StepStatus::Completed);
 }
+
+#[tokio::test]
+async fn when_applies_the_predicate_to_the_payload() {
+    let store = Arc::new(InMemoryStore::new());
+    let run = store
+        .create_run(NewRun {
+            created_by: None,
+            workflow_name: "test".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({"env": "prod"}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        })
+        .await
+        .expect("failed to create run")
+        .into_run();
+
+    let mut ctx = WorkflowContext::new(
+        run.id,
+        "test".to_string(),
+        store.clone(),
+        create_test_provider(),
+    );
+
+    assert!(
+        ctx.when("env == prod", |p| p["env"] == "prod")
+            .await
+            .expect("condition evaluated")
+    );
+    assert!(
+        !ctx.when("env == dev", |p| p["env"] == "dev")
+            .await
+            .expect("condition evaluated")
+    );
+}
+
+#[test]
+fn when_dynamic_returns_its_argument_unchanged() {
+    let mut ctx = create_test_context();
+    assert!(ctx.when_dynamic("build succeeded", true));
+    assert!(!ctx.when_dynamic("build succeeded", false));
+}
+
+#[test]
+fn a_normal_context_is_not_planning() {
+    let ctx = create_test_context();
+    assert!(!ctx.is_planning());
+    assert!(ctx.plan().is_none());
+}

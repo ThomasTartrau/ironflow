@@ -63,6 +63,7 @@ pub mod handler;
 pub mod log_sender;
 pub mod notify;
 pub mod operation;
+pub mod plan;
 pub mod retry_policy;
 pub mod run_creator;
 pub mod schedule;
@@ -90,6 +91,7 @@ pub mod prelude {
         NoopSecretResolver, Operation, OperationContext, SecretResolver, SecretValue,
         TypedOperation,
     };
+    pub use crate::plan::{ConditionResult, ExecutionPlan, PlanOptions, PlannedStep};
     pub use crate::run_creator::{CreateRunOpts, RunCreator};
     pub use crate::schedule::CronSchedule;
 }

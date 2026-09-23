@@ -12,6 +12,7 @@ use crate::context::WorkflowContext;
 use crate::error::EngineError;
 use crate::executor::StepOutput;
 use crate::operation::Operation;
+use crate::plan::{lock_plan, planned_custom_output};
 
 impl WorkflowContext {
     /// Execute a custom operation step.
@@ -58,6 +59,19 @@ impl WorkflowContext {
         op: &dyn Operation,
     ) -> Result<StepOutput, EngineError> {
         let kind = StepKind::Custom(op.kind().to_string());
+
+        // Plan mode: `op.execute` is never called, so no third-party API is
+        // touched while planning.
+        if let Some(plan) = self.plan().cloned() {
+            self.position += 1;
+            let mut recorder = lock_plan(&plan);
+            let estimate = recorder.estimate_for(name);
+            if recorder.record(name, kind, &self.workflow_name, None) {
+                recorder.set_last(vec![name.to_string()]);
+            }
+            return Ok(planned_custom_output(estimate));
+        }
+
         let position = self.position;
         self.position += 1;
 

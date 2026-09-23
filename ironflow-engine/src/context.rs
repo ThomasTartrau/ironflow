@@ -56,6 +56,7 @@ use crate::handler::WorkflowHandler;
 use crate::log_sender::LogSender;
 use crate::notify::WorkflowEventBus;
 use crate::operation::OperationContext;
+use crate::plan::SharedPlanRecorder;
 
 /// Callback type for resolving workflow handlers by name.
 pub(crate) type HandlerResolver =
@@ -138,6 +139,9 @@ pub struct WorkflowContext {
     trace_context: WorkflowTraceContext,
     /// Shared operation context for custom operations.
     operation_ctx: Option<OperationContext>,
+    /// Set when the context is recording an execution plan instead of running.
+    /// Every step method checks this first and records intent without executing.
+    plan: Option<SharedPlanRecorder>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.
@@ -154,6 +158,7 @@ impl fmt::Debug for WorkflowContext {
             .field("total_cost_usd", &self.total_cost_usd)
             .field("inherited_cost_usd", &self.inherited_cost_usd)
             .field("max_cost_usd", &self.max_cost_usd)
+            .field("planning", &self.plan.is_some())
             .finish_non_exhaustive()
     }
 }

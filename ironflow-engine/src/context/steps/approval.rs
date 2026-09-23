@@ -11,6 +11,7 @@ use crate::context::WorkflowContext;
 use crate::error::EngineError;
 use crate::executor::ApprovalOutcome;
 use crate::notify::{WorkflowApprovalRequiredEvent, WorkflowEvent};
+use crate::plan::lock_plan;
 
 impl WorkflowContext {
     /// Create a human approval gate.
@@ -62,6 +63,17 @@ impl WorkflowContext {
         name: &str,
         config: ApprovalConfig,
     ) -> Result<(), EngineError> {
+        // Plan mode: record the gate and continue. Planning must never suspend,
+        // so this comes before the `ApprovalRequired` path below.
+        if let Some(plan) = self.plan().cloned() {
+            self.position += 1;
+            let mut recorder = lock_plan(&plan);
+            if recorder.record(name, StepKind::Approval, &self.workflow_name, None) {
+                recorder.set_last(vec![name.to_string()]);
+            }
+            return Ok(());
+        }
+
         let position = self.position;
         self.position += 1;
 

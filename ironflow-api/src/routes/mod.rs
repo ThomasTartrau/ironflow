@@ -21,6 +21,7 @@ pub mod list_workflows;
 #[cfg(feature = "prometheus")]
 pub mod metrics;
 pub mod openapi_spec;
+pub mod plan_workflow;
 pub mod retry_run;
 pub mod run_events;
 pub mod schedules;
@@ -234,6 +235,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         )
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
+        .route("/workflows/{name}/plan", post(plan_workflow::plan_workflow))
         .route("/stats", get(get_stats::get_stats))
         .route("/stats/history", get(get_stats_history::get_stats_history))
         .route("/audit-logs", get(audit_logs::list_audit_logs))

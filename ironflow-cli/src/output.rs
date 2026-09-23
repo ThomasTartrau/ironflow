@@ -9,11 +9,12 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
+use ironflow_sdk::client::ApiResponse;
 use ironflow_sdk::types::{
     ApiKeyResponse, ApiKeyScope, ArtifactResponse, AuditLogEntry, CreateApiKeyResponse,
-    KeyVersionsResponse, RunDetailResponse, RunResponse, RunStatus, ScopeEntry, SecretResponse,
-    StatsHistoryResponse, StatsResponse, StepResponse, StepStatus, UserResponse,
-    WorkflowDetailResponse, WorkflowSummary,
+    ExecutionPlanResponse, KeyVersionsResponse, PlannedStepResponse, RunDetailResponse,
+    RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsHistoryResponse, StatsResponse,
+    StepResponse, StepStatus, UserResponse, WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
 use serde_json::to_string_pretty;
@@ -464,6 +465,131 @@ pub fn workflow_detail_table(detail: &WorkflowDetailResponse) -> Table {
     }
 
     table
+}
+
+/// Render an execution plan as an indented tree.
+///
+/// One line per step. Members of a parallel wave sit under a `parallel-N`
+/// header and are indented one extra level; sub-workflow steps are indented by
+/// their depth. A step carrying a condition shows why the planner took that
+/// branch.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_cli::output::execution_plan_tree;
+/// use ironflow_sdk::types::ExecutionPlanResponse;
+///
+/// # fn example(plan: &ExecutionPlanResponse) {
+/// println!("{}", execution_plan_tree(plan));
+/// # }
+/// ```
+pub fn execution_plan_tree(plan: &ExecutionPlanResponse) -> String {
+    let mut lines = Vec::new();
+
+    let mut header = format!("workflow {}", plan.workflow);
+    if let Some(total) = plan.estimated_duration_ms {
+        header.push_str(&format!("  estimated ~{}", format_duration_ms(total)));
+    }
+    lines.push(header);
+
+    let mut current_group: Option<&str> = None;
+    for (index, step) in plan.steps.iter().enumerate() {
+        let group = step.parallel_group.as_deref();
+        if group != current_group {
+            if let Some(name) = group {
+                lines.push(format!("{}├─ {name}", indent(depth_of(step))));
+            }
+            current_group = group;
+        }
+
+        let extra = if group.is_some() { "  " } else { "" };
+        let branch = if is_last_at_depth(plan, index) {
+            "└─ "
+        } else {
+            "├─ "
+        };
+        lines.push(format!(
+            "{}{extra}{branch}{}",
+            indent(depth_of(step)),
+            step_label(step)
+        ));
+    }
+
+    if plan.truncated {
+        let reason = plan
+            .incomplete_reason
+            .as_deref()
+            .unwrap_or("the plan was cut short");
+        lines.push(format!("plan incomplete: {reason}"));
+    }
+
+    lines.join("\n")
+}
+
+/// Two spaces per sub-workflow level.
+fn indent(depth: usize) -> String {
+    "  ".repeat(depth)
+}
+
+/// Sub-workflow depth of a step as an indent level.
+fn depth_of(step: &PlannedStepResponse) -> usize {
+    usize::try_from(step.depth).unwrap_or(0)
+}
+
+/// Whether no later step sits at the same depth, making this the last branch.
+fn is_last_at_depth(plan: &ExecutionPlanResponse, index: usize) -> bool {
+    let depth = plan.steps[index].depth;
+    !plan.steps[index + 1..].iter().any(|s| s.depth == depth)
+}
+
+/// `name [kind] ~duration (condition)` for one planned step.
+fn step_label(step: &PlannedStepResponse) -> String {
+    let mut label = format!("{} [{}]", step.name, step.kind);
+
+    if let Some(ms) = step.estimated_duration_ms {
+        label.push_str(&format!(" ~{}", format_duration_ms(ms)));
+    }
+
+    if let Some(condition) = &step.condition {
+        let suffix = match condition.state.as_str() {
+            "evaluated" => format!(
+                " (when {} = {})",
+                condition.expression.as_deref().unwrap_or("?"),
+                condition.value.unwrap_or(false)
+            ),
+            "skipped" => format!(
+                " (skipped: {})",
+                condition.reason.as_deref().unwrap_or("no reason given")
+            ),
+            _ => format!(
+                " (condition unevaluable: {})",
+                condition.expression.as_deref().unwrap_or("?")
+            ),
+        };
+        label.push_str(&suffix);
+    }
+
+    label
+}
+
+/// Print an execution plan as JSON or as a tree.
+///
+/// # Errors
+///
+/// Returns an error if serialization or writing fails.
+pub fn render_execution_plan<W: Write>(
+    writer: &mut W,
+    json_mode: bool,
+    response: &ApiResponse<ExecutionPlanResponse>,
+) -> Result<()> {
+    if json_mode {
+        let json = to_string_pretty(response)?;
+        writeln!(writer, "{json}")?;
+    } else {
+        writeln!(writer, "{}", execution_plan_tree(&response.data))?;
+    }
+    Ok(())
 }
 
 /// Render stats as a table.
@@ -926,7 +1052,9 @@ mod tests {
     use std::collections::HashMap;
     use std::slice;
 
-    use ironflow_sdk::types::{ApiKeyScope, CreatedBy, CreatedByKind, EventKind, TriggerKind};
+    use ironflow_sdk::types::{
+        ApiKeyScope, ConditionResponse, CreatedBy, CreatedByKind, EventKind, TriggerKind,
+    };
     use serde_json::{Map, Value};
 
     use super::*;
@@ -1363,5 +1491,128 @@ mod tests {
 
         let json = serde_json::to_string(&deleted).unwrap();
         assert!(json.contains(r#""deleted":true"#), "{json}");
+    }
+
+    // ── Execution plans ────────────────────────────────────────
+
+    fn planned_step(name: &str, kind: &str, parallel_group: Option<&str>) -> PlannedStepResponse {
+        PlannedStepResponse {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            workflow: "deploy".to_string(),
+            depth: 0,
+            depends_on: Vec::new(),
+            condition: None,
+            parallel_group: parallel_group.map(str::to_string),
+            estimated_duration_ms: None,
+        }
+    }
+
+    fn plan_fixture(steps: Vec<PlannedStepResponse>) -> ExecutionPlanResponse {
+        ExecutionPlanResponse {
+            workflow: "deploy".to_string(),
+            steps,
+            estimated_duration_ms: None,
+            max_depth: 3,
+            truncated: false,
+            incomplete_reason: None,
+        }
+    }
+
+    #[test]
+    fn execution_plan_tree_lists_step_names_and_kinds() {
+        let plan = plan_fixture(vec![
+            planned_step("build", "shell", None),
+            planned_step("deploy", "shell", None),
+        ]);
+
+        let output = execution_plan_tree(&plan);
+        assert!(output.contains("workflow deploy"), "{output}");
+        assert!(output.contains("build [shell]"), "{output}");
+        assert!(output.contains("deploy [shell]"), "{output}");
+    }
+
+    #[test]
+    fn execution_plan_tree_prints_a_parallel_group_header_once() {
+        let plan = plan_fixture(vec![
+            planned_step("build", "shell", None),
+            planned_step("test", "shell", Some("parallel-1")),
+            planned_step("lint", "shell", Some("parallel-1")),
+        ]);
+
+        let output = execution_plan_tree(&plan);
+        assert_eq!(output.matches("parallel-1").count(), 1, "{output}");
+    }
+
+    #[test]
+    fn execution_plan_tree_shows_the_estimate_when_present() {
+        let mut step = planned_step("build", "shell", None);
+        step.estimated_duration_ms = Some(5000);
+        let mut plan = plan_fixture(vec![step]);
+        plan.estimated_duration_ms = Some(5000);
+
+        let output = execution_plan_tree(&plan);
+        assert!(output.contains("estimated ~5s"), "{output}");
+        assert!(output.contains("build [shell] ~5s"), "{output}");
+    }
+
+    #[test]
+    fn execution_plan_tree_marks_conditions() {
+        let mut evaluated = planned_step("deploy-prod", "shell", None);
+        evaluated.condition = Some(ConditionResponse {
+            state: "evaluated".to_string(),
+            expression: Some("env == prod".to_string()),
+            value: Some(true),
+            reason: None,
+        });
+        let mut skipped = planned_step("deploy-dev", "skip", None);
+        skipped.condition = Some(ConditionResponse {
+            state: "skipped".to_string(),
+            expression: None,
+            value: None,
+            reason: Some("not prod".to_string()),
+        });
+        let mut unevaluable = planned_step("notify", "http", None);
+        unevaluable.condition = Some(ConditionResponse {
+            state: "unevaluable".to_string(),
+            expression: Some("build succeeded".to_string()),
+            value: None,
+            reason: Some("depends on a step output".to_string()),
+        });
+
+        let output = execution_plan_tree(&plan_fixture(vec![evaluated, skipped, unevaluable]));
+        assert!(output.contains("(when env == prod = true)"), "{output}");
+        assert!(output.contains("(skipped: not prod)"), "{output}");
+        assert!(
+            output.contains("(condition unevaluable: build succeeded)"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn execution_plan_tree_reports_an_incomplete_plan() {
+        let mut plan = plan_fixture(vec![planned_step("build", "shell", None)]);
+        plan.truncated = true;
+        plan.incomplete_reason = Some("step cap of 1000 reached".to_string());
+
+        let output = execution_plan_tree(&plan);
+        assert!(
+            output.contains("plan incomplete: step cap of 1000 reached"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn execution_plan_tree_indents_sub_workflow_steps() {
+        let mut nested = planned_step("child-step", "shell", None);
+        nested.depth = 1;
+        let plan = plan_fixture(vec![planned_step("child", "workflow", None), nested]);
+
+        let output = execution_plan_tree(&plan);
+        let nested = output
+            .lines()
+            .find(|l| l.contains("child-step"))
+            .expect("nested line");
+        assert!(nested.starts_with("  "), "{nested}");
     }
 }

@@ -24,6 +24,7 @@ use crate::notify::{
     WorkflowAgentStepTokensUsedEvent, WorkflowEvent, WorkflowStepCompletedEvent,
     WorkflowStepFailedEvent, WorkflowStepStartedEvent,
 };
+use crate::plan::{lock_plan, planned_output};
 
 use super::WorkflowContext;
 use super::failure::{
@@ -148,6 +149,24 @@ impl WorkflowContext {
             StepKind::Custom(_) => "custom",
         };
         Span::current().record("step.kind", kind_str);
+
+        // Plan mode: record the step and return a synthetic output. Nothing is
+        // persisted and nothing is executed, so this must come before every
+        // guard, replay and budget check below.
+        if let Some(plan) = self.plan().cloned() {
+            self.position += 1;
+            let estimate = {
+                let mut recorder = lock_plan(&plan);
+                if !recorder.record(name, kind.clone(), &self.workflow_name, None) {
+                    return Err(EngineError::InvalidWorkflow(
+                        "execution plan exceeded the maximum number of steps".to_string(),
+                    ));
+                }
+                recorder.set_last(vec![name.to_string()]);
+                recorder.estimate_for(name)
+            };
+            return Ok(planned_output(&config, estimate));
+        }
 
         // Guard timeout: checked before every step, not just sub-workflows.
         self.check_guard_timeout()?;

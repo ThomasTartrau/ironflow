@@ -14,12 +14,16 @@ use crate::schema_transform::transform_schema;
 pub struct AnthropicModel;
 
 impl AnthropicModel {
-    /// Claude Fable 5 - most capable widely released model (1M context).
-    pub const FABLE_5: &str = "claude-fable-5";
-    /// Claude Fable 5.1 - latest Fable iteration, improved reasoning (1M context).
+    /// Claude Fable 5.1 - most capable widely released model (1M context).
     pub const FABLE_5_1: &str = "claude-fable-5-1";
+    /// Claude Fable 5 - still served, same tier and price as Fable 5.1 (1M context).
+    pub const FABLE_5: &str = "claude-fable-5";
+    /// Claude Mythos 5.1 - Fable 5.1 capabilities, limited availability (Project Glasswing, 1M context).
+    pub const MYTHOS_5_1: &str = "claude-mythos-5-1";
     /// Claude Mythos 5 - Fable 5 capabilities, limited availability (Project Glasswing, 1M context).
     pub const MYTHOS_5: &str = "claude-mythos-5";
+    /// Claude Opus 5.5 - next Opus, launching; use only when explicitly requested (1M context).
+    pub const OPUS_5_5: &str = "claude-opus-5-5";
     /// Claude Opus 5 - flagship for complex agentic coding and enterprise work (1M context).
     pub const OPUS_5: &str = "claude-opus-5";
     /// Claude Sonnet 5 - best combination of speed and intelligence (1M context).
@@ -479,6 +483,11 @@ mod tests {
         assert_eq!(a.resolve_model("claude-opus-4-6"), "claude-opus-4-6");
         assert_eq!(a.resolve_model("claude-opus-4-8"), "claude-opus-4-8");
         assert_eq!(a.resolve_model("claude-opus-5"), "claude-opus-5");
+        assert_eq!(a.resolve_model("claude-opus-5-5"), AnthropicModel::OPUS_5_5);
+        assert_eq!(
+            a.resolve_model("claude-mythos-5-1"),
+            AnthropicModel::MYTHOS_5_1
+        );
         assert_eq!(a.resolve_model("claude-fable-5"), "claude-fable-5");
     }
 

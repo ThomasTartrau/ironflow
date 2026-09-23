@@ -17,12 +17,16 @@ use crate::routes::events::EventKind;
 use crate::routes::get_run_logs::{GetRunLogsQuery, LogCursorMeta};
 use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
 use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
+use crate::routes::plan_workflow::{
+    ConditionResponse, ExecutionPlanResponse, PlanWorkflowRequest, PlannedStepResponse,
+};
 use crate::routes::secrets::update::UpdateSecretRequest;
 use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approval_delegations, approve_run, audit_logs, auth, cancel_run, create_run,
     download_artifact, get_run, get_run_logs, get_stats, get_stats_history, get_workflow,
-    health_check, list_runs, list_workflows, retry_run, run_events, schedules, secrets, users,
+    health_check, list_runs, list_workflows, plan_workflow, retry_run, run_events, schedules,
+    secrets, users,
 };
 use ironflow_engine::notify::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
@@ -80,6 +84,7 @@ mod with_signup {
             download_artifact::download_artifact,
             list_workflows::list_workflows,
             get_workflow::get_workflow,
+            plan_workflow::plan_workflow,
             get_stats::get_stats,
             get_stats_history::get_stats_history,
             auth::sign_up::sign_up,
@@ -138,6 +143,10 @@ mod with_signup {
                 WorkflowSummary,
                 WorkflowDetailResponse,
                 SubWorkflowDetail,
+                PlanWorkflowRequest,
+                ExecutionPlanResponse,
+                PlannedStepResponse,
+                ConditionResponse,
                 ListRunsQuery,
                 ApiKeyResponse,
                 CreateApiKeyRequest,
@@ -231,6 +240,7 @@ mod without_signup {
             download_artifact::download_artifact,
             list_workflows::list_workflows,
             get_workflow::get_workflow,
+            plan_workflow::plan_workflow,
             get_stats::get_stats,
             get_stats_history::get_stats_history,
             auth::sign_in::sign_in,
@@ -287,6 +297,10 @@ mod without_signup {
                 WorkflowSummary,
                 WorkflowDetailResponse,
                 SubWorkflowDetail,
+                PlanWorkflowRequest,
+                ExecutionPlanResponse,
+                PlannedStepResponse,
+                ConditionResponse,
                 ListRunsQuery,
                 ApiKeyResponse,
                 CreateApiKeyRequest,

@@ -30,6 +30,7 @@ use crate::notify::WorkflowEventBus;
 #[cfg(not(feature = "secret-store"))]
 use crate::operation::NoopSecretResolver;
 use crate::operation::{OperationContext, SecretResolver};
+use crate::plan::{SharedPlanRecorder, lock_plan};
 
 use super::{HandlerResolver, WorkflowContext};
 
@@ -73,6 +74,7 @@ impl WorkflowContext {
             interceptor: None,
             trace_context,
             operation_ctx: None,
+            plan: None,
         }
     }
 
@@ -116,6 +118,7 @@ impl WorkflowContext {
             interceptor: None,
             trace_context,
             operation_ctx: None,
+            plan: None,
         }
     }
 
@@ -223,6 +226,35 @@ impl WorkflowContext {
     /// wires this from [`Engine::with_decision_provider`](crate::engine::Engine::with_decision_provider).
     pub fn set_decision_provider(&mut self, provider: Arc<dyn DecisionProvider>) {
         self.decision_provider = Some(provider);
+    }
+
+    /// Attach a plan recorder, switching this context to plan mode.
+    ///
+    /// Every step method then records its intent instead of executing it.
+    pub(crate) fn set_plan(&mut self, plan: SharedPlanRecorder) {
+        self.plan = Some(plan);
+    }
+
+    /// The shared recorder, when this context is planning.
+    pub(crate) fn plan(&self) -> Option<&SharedPlanRecorder> {
+        self.plan.as_ref()
+    }
+
+    /// Whether this context records a plan instead of executing steps.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    ///
+    /// # fn example(ctx: &WorkflowContext) {
+    /// if ctx.is_planning() {
+    ///     // No command runs, no request is sent: only the plan is recorded.
+    /// }
+    /// # }
+    /// ```
+    pub fn is_planning(&self) -> bool {
+        self.plan.is_some()
     }
 
     /// Seed the context with the run's attempt number and the totals already
@@ -425,6 +457,12 @@ impl WorkflowContext {
     ///
     /// Returns [`EngineError::Store`] if the run is not found.
     pub async fn payload(&self) -> Result<Value, EngineError> {
+        // In plan mode the payload comes from the recorder: planning must not
+        // create, or even read, a run record.
+        if let Some(plan) = &self.plan {
+            return Ok(lock_plan(plan).payload());
+        }
+
         let run = self
             .store
             .get_run(self.run_id)

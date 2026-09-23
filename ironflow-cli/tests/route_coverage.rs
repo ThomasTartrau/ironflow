@@ -89,6 +89,11 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/workflows/{name}",
         Coverage::Command(&["workflow", "get", "deploy"]),
     ),
+    (
+        "POST",
+        "/api/v1/workflows/{name}/plan",
+        Coverage::Command(&["run", "plan", "deploy"]),
+    ),
     // ── Stats ──
     ("GET", "/api/v1/stats", Coverage::Command(&["stats"])),
     (

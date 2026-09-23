@@ -3,6 +3,7 @@ import type {
 	WorkflowDetailResponse,
 	RunResponse,
 	CreateRunRequest,
+	ExecutionPlanResponse,
 } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { withToast } from "@/app/lib/api-toast";
@@ -18,7 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Play, Plus, X, Clock } from "lucide-react";
+import { Play, Plus, X, Clock, ListTree } from "lucide-react";
 import type { JSONSchema7 } from "json-schema";
 import { SchemaField } from "@/app/components/SchemaField";
 import {
@@ -26,6 +27,7 @@ import {
 	extractSchemaProperties,
 	buildDefaultValues,
 } from "@/app/lib/json-schema";
+import { ExecutionPlanGraph } from "./ExecutionPlanGraph";
 
 interface LabelEntry {
 	id: string;
@@ -41,6 +43,8 @@ interface RunDialogProps {
 export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 	const [open, setOpen] = useState(false);
 	const [loading, setLoading] = useState(false);
+	const [planning, setPlanning] = useState(false);
+	const [plan, setPlan] = useState<ExecutionPlanResponse | null>(null);
 
 	const schema = isJsonSchema(workflow.input_schema)
 		? (workflow.input_schema as JSONSchema7)
@@ -92,6 +96,25 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 				return val === undefined || val === null || val === "";
 			})
 		: [];
+
+	const handlePreviewPlan = () => {
+		if (missingRequired.length > 0) return;
+
+		setPlanning(true);
+		withToast(
+			api.post<ExecutionPlanResponse>(`/workflows/${workflow.name}/plan`, {
+				payload: schema ? { ...formValues } : {},
+			}),
+			{
+				loading: "Building plan...",
+				success: "Plan ready",
+				error: "Failed to build the plan",
+			},
+		)
+			.then((res) => setPlan(res.data))
+			.catch(() => {})
+			.finally(() => setPlanning(false));
+	};
 
 	const handleSubmit = () => {
 		if (missingRequired.length > 0) return;
@@ -238,6 +261,12 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 					</div>
 				</div>
 
+				{plan && (
+					<div className="border-t pt-3">
+						<ExecutionPlanGraph plan={plan} />
+					</div>
+				)}
+
 				{missingRequired.length > 0 && (
 					<p className="text-xs text-destructive mt-1">
 						Required fields: {missingRequired.join(", ")}
@@ -251,6 +280,15 @@ export function RunDialog({ workflow, onCreated }: RunDialogProps) {
 						disabled={loading}
 					>
 						Cancel
+					</Button>
+					<Button
+						variant="outline"
+						onClick={handlePreviewPlan}
+						disabled={loading || planning || missingRequired.length > 0}
+						className="gap-1.5"
+					>
+						<ListTree className="size-4" aria-hidden="true" />
+						{planning ? "Planning..." : "Preview plan"}
 					</Button>
 					<Button
 						onClick={handleSubmit}
