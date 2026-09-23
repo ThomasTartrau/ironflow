@@ -119,12 +119,16 @@ impl Model {
 
     // ── Claude 5 - 1M context native ───────────────────────────────
 
-    /// Claude Fable 5 - most capable widely released model, 1M token context native.
-    pub const FABLE_5: &str = "claude-fable-5";
-    /// Claude Fable 5.1 - latest Fable iteration, improved reasoning, 1M token context native.
+    /// Claude Fable 5.1 - most capable widely released model, 1M token context native.
     pub const FABLE_51: &str = "claude-fable-5-1";
+    /// Claude Fable 5 - still served, same tier and price as Fable 5.1.
+    pub const FABLE_5: &str = "claude-fable-5";
+    /// Claude Mythos 5.1 - Fable 5.1 capabilities, limited availability (Project Glasswing).
+    pub const MYTHOS_51: &str = "claude-mythos-5-1";
     /// Claude Mythos 5 - Fable 5 capabilities, limited availability (Project Glasswing).
     pub const MYTHOS_5: &str = "claude-mythos-5";
+    /// Claude Opus 5.5 - next Opus, launching; use only when explicitly requested.
+    pub const OPUS_55: &str = "claude-opus-5-5";
     /// Claude Opus 5 - current flagship for agentic coding, 1M token context native.
     pub const OPUS_5: &str = "claude-opus-5";
     /// Claude Opus 5 with 1M token context window explicit.
@@ -949,6 +953,8 @@ mod tests {
         assert_eq!(Model::FABLE_5, "claude-fable-5");
         assert_eq!(Model::FABLE_51, "claude-fable-5-1");
         assert_eq!(Model::MYTHOS_5, "claude-mythos-5");
+        assert_eq!(Model::MYTHOS_51, "claude-mythos-5-1");
+        assert_eq!(Model::OPUS_55, "claude-opus-5-5");
         assert_eq!(Model::OPUS_5, "claude-opus-5");
         assert_eq!(Model::OPUS_5_1M, "claude-opus-5[1m]");
         assert_eq!(Model::SONNET_5, "claude-sonnet-5");
