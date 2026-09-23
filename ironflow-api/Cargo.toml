@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.38.1"
+version = "2.38.2"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -26,7 +26,7 @@ store-postgres = ["ironflow-store/store-postgres"]
 [dependencies]
 ironflow-store = { version = "2.36.1", path = "../ironflow-store" }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
-ironflow-engine = { version = "2.38.3", path = "../ironflow-engine" }
+ironflow-engine = { version = "2.38.4", path = "../ironflow-engine" }
 ironflow-core = { version = "3.20.0", path = "../ironflow-core" }
 ironflow-auth = { version = "2.4.26", path = "../ironflow-auth" }
 ironflow-templates = { version = "0.1.2", path = "../ironflow-templates" }
