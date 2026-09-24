@@ -95,6 +95,75 @@ function ApprovalSla({ step }: { step: StepResponse }) {
 	);
 }
 
+/**
+ * One-line summary of the approval rule that set a gate's requirement.
+ */
+export function describeApprovalRule(
+	requirement: NonNullable<StepResponse["approval_requirement"]>,
+): string {
+	if (requirement.rule_index === null || requirement.rule_index === undefined) {
+		return "Default rule (no condition matched)";
+	}
+	return `Rule #${requirement.rule_index + 1}: ${requirement.condition ?? ""}`;
+}
+
+/**
+ * Vote counter for an approval gate, e.g. `1/2 approvals`.
+ *
+ * When the gate carries an approval requirement, a tooltip explains which
+ * rule set it, who may vote and who already approved. Renders nothing for
+ * any other step.
+ */
+export function ApprovalProgress({ step }: { step: StepResponse }) {
+	const required = step.approvals_required;
+	if (step.kind !== "approval" || required === null || required === undefined) {
+		return null;
+	}
+
+	const approvals = step.approvals ?? [];
+	const requirement = step.approval_requirement;
+	const badge = (
+		<Badge
+			variant={approvals.length >= required ? "secondary" : "outline"}
+			className="text-[10px] font-medium shrink-0"
+		>
+			{`${approvals.length}/${required} approvals`}
+		</Badge>
+	);
+
+	if (!requirement) {
+		return badge;
+	}
+
+	const groups = requirement.approver_groups ?? [];
+
+	return (
+		<TooltipProvider delay={200}>
+			<Tooltip>
+				<TooltipTrigger render={<span className="shrink-0">{badge}</span>} />
+				<TooltipContent side="bottom">
+					<div className="space-y-1 text-xs">
+						<p className="font-mono">{describeApprovalRule(requirement)}</p>
+						<p>
+							Allowed: {groups.length > 0 ? groups.join(", ") : "any approver"}
+						</p>
+						{approvals.length > 0 && (
+							<ul>
+								{approvals.map((approval) => (
+									<li key={approval.user_id}>
+										{approval.approved_by} at{" "}
+										{new Date(approval.at).toLocaleString()}
+									</li>
+								))}
+							</ul>
+						)}
+					</div>
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
+	);
+}
+
 function getKindColor(kind: string): string {
 	switch (kind) {
 		case "shell":
@@ -247,6 +316,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 				</Badge>
 				<StatusBadge status={step.status} />
 				<ApprovalSla step={step} />
+				<ApprovalProgress step={step} />
 				<span className="text-xs text-muted-foreground ml-auto shrink-0">
 					{formatDuration(step.duration_ms)}
 				</span>
@@ -670,6 +740,7 @@ function StepRow({ step }: { step: StepResponse }) {
 					<div className="flex items-center gap-2">
 						<StatusBadge status={step.status} />
 						<ApprovalSla step={step} />
+						<ApprovalProgress step={step} />
 					</div>
 				</TableCell>
 				<TableCell>{formatDuration(step.duration_ms)}</TableCell>

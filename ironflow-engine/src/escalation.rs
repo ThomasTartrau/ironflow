@@ -399,7 +399,14 @@ impl ApprovalEscalator {
             .event_publisher()
             .publish(Event::ApprovalGranted(ApprovalGrantedEvent {
                 run_id: step.run_id,
+                step_id: Some(step.id),
                 approved_by: SYSTEM_TIMEOUT_ACTOR.to_string(),
+                approvals_received: step.approvals.len() as u32,
+                approvals_required: step
+                    .approval_requirement
+                    .as_ref()
+                    .map_or(1, |r| r.required_approvers),
+                requirement: step.approval_requirement.clone(),
                 at: now,
             }));
 
@@ -450,7 +457,9 @@ impl ApprovalEscalator {
             .event_publisher()
             .publish(Event::ApprovalRejected(ApprovalRejectedEvent {
                 run_id: step.run_id,
+                step_id: Some(step.id),
                 rejected_by: SYSTEM_TIMEOUT_ACTOR.to_string(),
+                requirement: step.approval_requirement.clone(),
                 at: now,
             }));
 

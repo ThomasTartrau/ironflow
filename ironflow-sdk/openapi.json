@@ -183,8 +183,20 @@
         "type": "object"
       },
       "ApprovalGrantedEvent": {
-        "description": "Payload of the `Event::ApprovalGranted` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalGrantedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalGrantedEvent {\n    run_id: Uuid::now_v7(),\n    approved_by: \"alice\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.approved_by, \"alice\");\n```",
+        "description": "Payload of the `Event::ApprovalGranted` event.\n\nPublished for every vote cast on a gate. A vote with\n`approvals_received < approvals_required` is recorded but does not resolve\nthe gate: the run stays `AwaitingApproval` until enough distinct approvers\nvoted.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalGrantedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalGrantedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Some(Uuid::now_v7()),\n    approved_by: \"alice\".to_string(),\n    approvals_received: 1,\n    approvals_required: 2,\n    requirement: None,\n    at: Utc::now(),\n};\nassert!(payload.approvals_received < payload.approvals_required);\n```",
         "properties": {
+          "approvals_received": {
+            "description": "Distinct approvals recorded on the gate, this one included.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "approvals_required": {
+            "description": "Distinct approvals needed to resolve the gate.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "approved_by": {
             "description": "User who approved (ID or username).",
             "type": "string"
@@ -194,9 +206,20 @@
             "format": "date-time",
             "type": "string"
           },
+          "requirement": {
+            "$ref": "#/components/schemas/ApprovalRequirement",
+            "description": "Requirement evaluated from the gate's approval rules, if any.",
+            "nullable": true
+          },
           "run_id": {
             "description": "Run identifier.",
             "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Approval step identifier. `None` in events recorded before it existed.",
+            "format": "uuid",
+            "nullable": true,
             "type": "string"
           }
         },
@@ -208,7 +231,7 @@
         "type": "object"
       },
       "ApprovalRejectedEvent": {
-        "description": "Payload of the `Event::ApprovalRejected` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRejectedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRejectedEvent {\n    run_id: Uuid::now_v7(),\n    rejected_by: \"bob\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.rejected_by, \"bob\");\n```",
+        "description": "Payload of the `Event::ApprovalRejected` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRejectedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRejectedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Some(Uuid::now_v7()),\n    rejected_by: \"bob\".to_string(),\n    requirement: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.rejected_by, \"bob\");\n```",
         "properties": {
           "at": {
             "description": "When the rejection occurred.",
@@ -219,9 +242,20 @@
             "description": "User who rejected (ID or username).",
             "type": "string"
           },
+          "requirement": {
+            "$ref": "#/components/schemas/ApprovalRequirement",
+            "description": "Requirement evaluated from the gate's approval rules, if any.",
+            "nullable": true
+          },
           "run_id": {
             "description": "Run identifier.",
             "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "Approval step identifier. `None` in events recorded before it existed.",
+            "format": "uuid",
+            "nullable": true,
             "type": "string"
           }
         },
@@ -233,7 +267,7 @@
         "type": "object"
       },
       "ApprovalRequestedEvent": {
-        "description": "Payload of the `Event::ApprovalRequested` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRequestedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRequestedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    message: \"Deploy to prod?\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.message, \"Deploy to prod?\");\n```",
+        "description": "Payload of the `Event::ApprovalRequested` event.\n\nPublished when an approval gate opens. Carries the requirement evaluated\nfrom the gate's approval rules, if it has any.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRequestedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRequestedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    message: \"Deploy to prod?\".to_string(),\n    requirement: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.message, \"Deploy to prod?\");\n```",
         "properties": {
           "at": {
             "description": "When the approval was requested.",
@@ -243,6 +277,11 @@
           "message": {
             "description": "Message displayed to reviewers.",
             "type": "string"
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/ApprovalRequirement",
+            "description": "Requirement evaluated from the gate's approval rules. `None` for a\ngate without rules: one approval resolves it.",
+            "nullable": true
           },
           "run_id": {
             "description": "Run identifier.",
@@ -260,6 +299,72 @@
           "step_id",
           "message",
           "at"
+        ],
+        "type": "object"
+      },
+      "ApprovalRequirement": {
+        "description": "The approval requirement evaluated when a gate opened.\n\nA step without approval rules carries no requirement at all; the default\nvalue (one approval from anyone allowed to answer the gate) applies.\n\n# Examples\n\n```\nuse ironflow_store::entities::ApprovalRequirement;\n\nlet requirement = ApprovalRequirement {\n    rule_index: Some(0),\n    condition: Some(\"payload.amount > 10000\".to_string()),\n    required_approvers: 2,\n    approver_groups: vec![\"finance\".to_string()],\n    evaluated: Vec::new(),\n};\nassert!(!requirement.is_satisfied_by(1));\nassert!(requirement.is_satisfied_by(2));\nassert!(!requirement.allows_everyone());\n```",
+        "properties": {
+          "approver_groups": {
+            "description": "Groups whose members may vote. Empty means anyone allowed to answer\nthe gate may vote.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "condition": {
+            "description": "Source of the matched rule condition.",
+            "nullable": true,
+            "type": "string"
+          },
+          "evaluated": {
+            "description": "Rules evaluated in order, up to and including the matched one.",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRuleEvaluation"
+            },
+            "type": "array"
+          },
+          "required_approvers": {
+            "description": "Number of distinct approvals needed to resolve the gate.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rule_index": {
+            "description": "Index of the matched rule. `None` means no rule matched and the default\nrequirement applies.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "required_approvers"
+        ],
+        "type": "object"
+      },
+      "ApprovalRuleEvaluation": {
+        "description": "Outcome of evaluating one approval rule when a gate opens.\n\n# Examples\n\n```\nuse ironflow_store::entities::ApprovalRuleEvaluation;\n\nlet evaluation = ApprovalRuleEvaluation {\n    index: 0,\n    condition: \"payload.amount > 10000\".to_string(),\n    matched: true,\n};\nassert!(evaluation.matched);\n```",
+        "properties": {
+          "condition": {
+            "description": "Source of the rule condition.",
+            "type": "string"
+          },
+          "index": {
+            "description": "Position of the rule in the step configuration (0-based).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "matched": {
+            "description": "Whether the condition evaluated to `true`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "index",
+          "condition",
+          "matched"
         ],
         "type": "object"
       },
@@ -2355,6 +2460,31 @@
         ],
         "type": "object"
       },
+      "StepApproval": {
+        "description": "One vote cast on an approval gate.\n\nVotes are unique per [`user_id`](StepApproval::user_id): an API key votes as\nits owner, and a user voting twice is ignored by the store.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_store::entities::StepApproval;\nuse uuid::Uuid;\n\nlet vote = StepApproval {\n    user_id: Uuid::now_v7(),\n    approved_by: \"alice\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(vote.approved_by, \"alice\");\n```",
+        "properties": {
+          "approved_by": {
+            "description": "Display name of the voter at vote time.",
+            "type": "string"
+          },
+          "at": {
+            "description": "When the vote was cast.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "The user who voted.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "approved_by",
+          "at"
+        ],
+        "type": "object"
+      },
       "StepCompletedEvent": {
         "description": "Payload of the `Event::StepCompleted` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::StepCompletedEvent;\nuse ironflow_store::models::StepKind;\nuse rust_decimal::Decimal;\nuse uuid::Uuid;\n\nlet payload = StepCompletedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"build\".to_string(),\n    kind: StepKind::Shell,\n    duration_ms: 1200,\n    cost_usd: Decimal::ZERO,\n    at: Utc::now(),\n};\nassert_eq!(payload.step_name, \"build\");\n```",
         "properties": {
@@ -2459,9 +2589,28 @@
             "nullable": true,
             "type": "string"
           },
+          "approval_requirement": {
+            "$ref": "#/components/schemas/ApprovalRequirement",
+            "description": "Approval requirement evaluated from the gate's approval rules when it\nopened. `None` for steps without rules.",
+            "nullable": true
+          },
           "approval_seconds_remaining": {
             "description": "Seconds left before the gate escalates. Clamped at 0, `None` when the\nstep has no deadline.",
             "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "approvals": {
+            "description": "Votes cast on the approval gate so far, at most one per user.",
+            "items": {
+              "$ref": "#/components/schemas/StepApproval"
+            },
+            "type": "array"
+          },
+          "approvals_required": {
+            "description": "Distinct approvals the gate needs: the requirement's count, `1` for an\napproval step without rules, `None` for any other step kind.",
+            "format": "int32",
+            "minimum": 0,
             "nullable": true,
             "type": "integer"
           },
@@ -2860,6 +3009,44 @@
         },
         "required": [
           "value"
+        ],
+        "type": "object"
+      },
+      "UpdateUserGroupsRequest": {
+        "description": "Request body for replacing a user's group memberships (admin only).\n\nGroup names are trimmed and deduplicated. Each must be 1 to 64 characters\nfrom `[A-Za-z0-9_.-]`, with at most 50 groups. An empty list removes the\nuser from every group.",
+        "properties": {
+          "groups": {
+            "description": "The complete new set of groups.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "groups"
+        ],
+        "type": "object"
+      },
+      "UserGroupsResponse": {
+        "description": "Response DTO for a user's group memberships.",
+        "properties": {
+          "groups": {
+            "description": "Groups the user belongs to, sorted by name.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "user_id": {
+            "description": "User ID.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "groups"
         ],
         "type": "object"
       },
@@ -4170,7 +4357,7 @@
     },
     "/api/v1/runs/{id}/approve": {
       "post": {
-        "description": "Transitions the run from `AwaitingApproval` back to `Running`.\nReturns 400 if the run is not in `AwaitingApproval` state.",
+        "description": "Records the caller's vote on the open gate. Votes are counted per user: an\nAPI key votes as its owner, and an admin's vote counts as one vote like any\nother. Once the gate holds as many distinct approvals as its\n[`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)\nrequires (one for a gate without approval rules), the run transitions from\n`AwaitingApproval` back to `Running` and resumes. Until then the response\nreturns the run still `AwaitingApproval`, and the gate keeps its SLA timer.\n\nReturns 400 if the run is not in `AwaitingApproval` state, 403 if the\ncaller may not vote on the gate, and 409 if the caller already approved it.",
         "operationId": "approve_run",
         "parameters": [
           {
@@ -4193,7 +4380,7 @@
                 }
               }
             },
-            "description": "Run approved successfully"
+            "description": "Approval recorded. The run is `running` once enough distinct approvals were collected, and still `awaiting_approval` when more approvals are required"
           },
           "400": {
             "description": "Run not awaiting approval"
@@ -4206,6 +4393,9 @@
           },
           "404": {
             "description": "Run not found"
+          },
+          "409": {
+            "description": "Caller already approved this gate"
           }
         },
         "security": [
@@ -4407,7 +4597,7 @@
     },
     "/api/v1/runs/{id}/reject": {
       "post": {
-        "description": "Transitions the run from `AwaitingApproval` to `Failed`.\nReturns 400 if the run is not in `AwaitingApproval` state.",
+        "description": "Transitions the run from `AwaitingApproval` to `Failed`. A single rejection\nfrom anyone allowed to vote on the gate vetoes it, even after partial\napprovals.\nReturns 400 if the run is not in `AwaitingApproval` state.",
         "operationId": "reject_run",
         "parameters": [
           {
@@ -5502,6 +5692,114 @@
           }
         ],
         "summary": "Delete a user account. Admin only.",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{id}/groups": {
+      "get": {
+        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 404 if the user does not exist",
+        "operationId": "get_user_groups",
+        "parameters": [
+          {
+            "description": "User ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroupsResponse"
+                }
+              }
+            },
+            "description": "User groups"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden (not an admin)"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List the groups a user belongs to. Admin only.",
+        "tags": [
+          "users"
+        ]
+      },
+      "put": {
+        "description": "Names are trimmed, deduplicated and returned sorted. An empty list removes\nthe user from every group.\n\n# Errors\n\n- 400 if a group name is empty, longer than 64 characters, uses a\n  character outside `[A-Za-z0-9_.-]`, or if more than 50 groups are given\n- 403 if the caller is not an admin\n- 404 if the user does not exist",
+        "operationId": "update_user_groups",
+        "parameters": [
+          {
+            "description": "User ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserGroupsRequest"
+              }
+            }
+          },
+          "description": "Complete new set of groups",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroupsResponse"
+                }
+              }
+            },
+            "description": "User groups replaced"
+          },
+          "400": {
+            "description": "Invalid group name or too many groups"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden (not an admin)"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Replace the groups a user belongs to. Admin only.",
         "tags": [
           "users"
         ]

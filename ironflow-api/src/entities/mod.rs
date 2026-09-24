@@ -37,4 +37,6 @@ pub use stats::{
     StatsHistoryBucketResponse, StatsHistoryQuery, StatsHistoryResponse, StatsResponse,
 };
 pub use step::StepResponse;
-pub use user::{CreateUserRequest, UpdateRoleRequest, UserResponse};
+pub use user::{
+    CreateUserRequest, UpdateRoleRequest, UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
+};

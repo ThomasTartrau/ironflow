@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::entities::{
     ApiKey, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page,
     PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter,
-    RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepDependency,
-    StepStatus, StepUpdate, User,
+    RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval,
+    StepDependency, StepStatus, StepUpdate, User,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -580,6 +580,8 @@ impl RunStore for InMemoryStore {
                 approval_deadline_at: None,
                 approval_stage: 0,
                 approval_assignee: None,
+                approval_requirement: None,
+                approvals: Vec::new(),
             };
 
             state.steps.insert(step.id, step.clone());
@@ -657,6 +659,9 @@ impl RunStore for InMemoryStore {
             if let Some(assignee) = update.approval_assignee {
                 step.approval_assignee = Some(assignee);
             }
+            if let Some(requirement) = update.approval_requirement {
+                step.approval_requirement = Some(requirement);
+            }
 
             step.updated_at = now;
             Ok(())
@@ -667,6 +672,22 @@ impl RunStore for InMemoryStore {
         Box::pin(async move {
             let state = self.state.read().await;
             Ok(state.steps.get(&id).cloned())
+        })
+    }
+
+    fn record_step_approval(&self, step_id: Uuid, approval: StepApproval) -> StoreFuture<'_, Step> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let step = state
+                .steps
+                .get_mut(&step_id)
+                .ok_or(StoreError::StepNotFound(step_id))?;
+
+            if !step.approvals.iter().any(|a| a.user_id == approval.user_id) {
+                step.approvals.push(approval);
+                step.updated_at = Utc::now();
+            }
+            Ok(step.clone())
         })
     }
 
@@ -817,7 +838,9 @@ mod tests {
 
     use super::*;
     use crate::api_key_store::ApiKeyStore;
-    use crate::entities::{ApiKeyScope, ApiKeyUpdate, NewApiKey, NewUser, TriggerKind};
+    use crate::entities::{
+        ApiKeyScope, ApiKeyUpdate, ApprovalRequirement, NewApiKey, NewUser, TriggerKind,
+    };
     use crate::user_store::UserStore;
 
     use crate::memory::tests::{create_terminal_run, new_run_req};
@@ -3455,5 +3478,116 @@ mod tests {
         let store = InMemoryStore::new();
         let err = store.delete_run(Uuid::now_v7()).await.unwrap_err();
         assert!(matches!(err, StoreError::RunNotFound(_)));
+    }
+
+    // ---- record_step_approval ----
+
+    fn vote(user_id: Uuid, name: &str) -> StepApproval {
+        StepApproval {
+            user_id,
+            approved_by: name.to_string(),
+            at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_step_approval_appends_distinct_voters() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+        let step = store
+            .create_step(new_step_req(run.id, "gate", 0))
+            .await
+            .unwrap();
+        assert!(step.approvals.is_empty());
+        assert!(step.approval_requirement.is_none());
+
+        let alice = Uuid::now_v7();
+        let bob = Uuid::now_v7();
+        let after_first = store
+            .record_step_approval(step.id, vote(alice, "alice"))
+            .await
+            .unwrap();
+        assert_eq!(after_first.approvals.len(), 1);
+
+        let after_second = store
+            .record_step_approval(step.id, vote(bob, "bob"))
+            .await
+            .unwrap();
+        assert_eq!(after_second.approvals.len(), 2);
+        assert_eq!(after_second.approvals[0].user_id, alice);
+        assert_eq!(after_second.approvals[1].user_id, bob);
+    }
+
+    #[tokio::test]
+    async fn record_step_approval_ignores_same_user() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+        let step = store
+            .create_step(new_step_req(run.id, "gate", 0))
+            .await
+            .unwrap();
+
+        let alice = Uuid::now_v7();
+        store
+            .record_step_approval(step.id, vote(alice, "alice"))
+            .await
+            .unwrap();
+        let again = store
+            .record_step_approval(step.id, vote(alice, "alice-key"))
+            .await
+            .unwrap();
+
+        assert_eq!(again.approvals.len(), 1);
+        assert_eq!(again.approvals[0].approved_by, "alice");
+    }
+
+    #[tokio::test]
+    async fn record_step_approval_unknown_step_is_not_found() {
+        let store = InMemoryStore::new();
+        let err = store
+            .record_step_approval(Uuid::now_v7(), vote(Uuid::now_v7(), "alice"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::StepNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn update_step_sets_approval_requirement() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+        let step = store
+            .create_step(new_step_req(run.id, "gate", 0))
+            .await
+            .unwrap();
+        let requirement = ApprovalRequirement {
+            required_approvers: 3,
+            ..ApprovalRequirement::default()
+        };
+
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    approval_requirement: Some(requirement.clone()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let fetched = store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(fetched.approval_requirement, Some(requirement));
     }
 }

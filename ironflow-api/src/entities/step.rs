@@ -1,7 +1,9 @@
 //! Step-related DTOs.
 
 use chrono::{DateTime, Utc};
-use ironflow_store::models::{Assignee, Step, StepKind, StepStatus};
+use ironflow_store::models::{
+    ApprovalRequirement, Assignee, Step, StepApproval, StepKind, StepStatus,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -88,6 +90,17 @@ pub struct StepResponse {
     /// Serialized as a prefixed string: `user:{name}` or `group:{name}`.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub approval_assignee: Option<Assignee>,
+    /// Approval requirement evaluated from the gate's approval rules when it
+    /// opened. `None` for steps without rules.
+    #[serde(default)]
+    pub approval_requirement: Option<ApprovalRequirement>,
+    /// Votes cast on the approval gate so far, at most one per user.
+    #[serde(default)]
+    pub approvals: Vec<StepApproval>,
+    /// Distinct approvals the gate needs: the requirement's count, `1` for an
+    /// approval step without rules, `None` for any other step kind.
+    #[serde(default)]
+    pub approvals_required: Option<u32>,
 }
 
 impl StepResponse {
@@ -109,6 +122,11 @@ impl StepResponse {
         let approval_seconds_remaining = step
             .approval_deadline_at
             .map(|at| (at - Utc::now()).num_seconds().max(0));
+        let approvals_required = match (&step.kind, &step.approval_requirement) {
+            (_, Some(requirement)) => Some(requirement.required_approvers),
+            (StepKind::Approval, None) => Some(1),
+            _ => None,
+        };
 
         StepResponse {
             id: step.id,
@@ -136,6 +154,9 @@ impl StepResponse {
             approval_deadline_at: step.approval_deadline_at,
             approval_seconds_remaining,
             approval_assignee: step.approval_assignee,
+            approval_requirement: step.approval_requirement,
+            approvals: step.approvals,
+            approvals_required,
         }
     }
 }
@@ -290,6 +311,46 @@ mod tests {
         assert!(response.approval_deadline_at.is_none());
         assert!(response.approval_seconds_remaining.is_none());
         assert!(response.approval_assignee.is_none());
+        assert!(response.approval_requirement.is_none());
+        assert!(response.approvals.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_shell_step_requires_no_approvals() {
+        let response = StepResponse::from(step().await);
+        assert_eq!(response.approvals_required, None);
+    }
+
+    #[tokio::test]
+    async fn a_rule_less_approval_step_requires_one_approval() {
+        let response = StepResponse::from(gate_with_deadline(3600).await);
+        assert!(response.approval_requirement.is_none());
+        assert_eq!(response.approvals_required, Some(1));
+    }
+
+    #[tokio::test]
+    async fn an_approval_requirement_sets_the_required_count() {
+        let mut gate = gate_with_deadline(3600).await;
+        let requirement = ApprovalRequirement {
+            rule_index: Some(0),
+            condition: Some("payload.amount > 10000".to_string()),
+            required_approvers: 3,
+            approver_groups: vec!["finance".to_string()],
+            evaluated: Vec::new(),
+        };
+        gate.approval_requirement = Some(requirement.clone());
+        gate.approvals = vec![StepApproval {
+            user_id: Uuid::now_v7(),
+            approved_by: "alice".to_string(),
+            at: Utc::now(),
+        }];
+
+        let response = StepResponse::from(gate);
+
+        assert_eq!(response.approvals_required, Some(3));
+        assert_eq!(response.approval_requirement, Some(requirement));
+        assert_eq!(response.approvals.len(), 1);
+        assert_eq!(response.approvals[0].approved_by, "alice");
     }
 
     #[tokio::test]

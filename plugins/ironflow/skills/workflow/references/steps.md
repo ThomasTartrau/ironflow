@@ -202,6 +202,46 @@ async fn escalating(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 Every firing is recorded in the audit log as an `approval_escalated` event with the
 stage, the policy, what it did and why.
 
+### Dynamic approval rules
+
+`with_rule` makes the number of approvals, and who may give them, depend on the run.
+Rules are evaluated once, when the gate opens, in the order they were added: the first
+matching condition sets `required_approvers` and the optional `approver_groups`. When
+none matches, one approval is enough, as for a gate without rules.
+
+```rust,no_run
+use ironflow_engine::config::{ApprovalConfig, ApprovalRule};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn payment_gate(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    ctx.approval(
+        "release-payment",
+        ApprovalConfig::new("Release the payment?")
+            // Two distinct approvers from the finance group above 10k.
+            .with_rule(
+                ApprovalRule::new("payload.amount > 10000", 2).with_approver_groups(["finance"]),
+            )
+            // Any second approver for production runs.
+            .with_rule(ApprovalRule::new("labels.env == 'production'", 2)),
+    )
+    .await?;
+    Ok(())
+}
+```
+
+Conditions read `output` (previous step), `payload`, `labels`, `metadata`
+(`run_id`, `workflow_name`, `trigger`, `attempt`, `handler_version`) and
+`steps.<name>.output` / `steps["risk-assessment"].output` for completed steps. They
+support `==`, `!=`, `>`, `>=`, `<`, `<=`, `&&`, `||`, `!` and parentheses. A missing
+path is `null`, and label strings are compared as numbers against numbers
+(`labels.priority > 3`). `ApprovalRule::new` panics on an invalid condition or on zero
+approvers, so a broken rule fails at build time.
+
+Each user votes once (an admin's vote counts as one); a single rejection fails the run.
+Group membership is managed by admins with `ironflow user set-groups <id> --group
+finance`.
+
 ## Decision
 
 A typed machine decision (System One / Jev): classify, route, score, or yes/no, with a

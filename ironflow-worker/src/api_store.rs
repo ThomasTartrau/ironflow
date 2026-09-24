@@ -20,7 +20,7 @@ use ironflow_store::entities::{
     NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy, PurgeableRun, ReapedRun,
     RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
     Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step,
-    StepDependency, StepUpdate, User,
+    StepApproval, StepDependency, StepUpdate, User,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::log_store::LogStore;
@@ -328,6 +328,18 @@ impl RunStore for ApiRunStore {
         Box::pin(async move { Ok(None) })
     }
 
+    fn record_step_approval(
+        &self,
+        _step_id: Uuid,
+        _approval: StepApproval,
+    ) -> StoreFuture<'_, Step> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "record_step_approval not available in worker".to_string(),
+            ))
+        })
+    }
+
     fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>> {
         Box::pin(async move {
             let resp = self
@@ -459,6 +471,26 @@ impl UserStore for ApiRunStore {
     }
 
     fn update_user_password(&self, _id: Uuid, _password_hash: String) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn list_user_groups(&self, _user_id: Uuid) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn set_user_groups(
+        &self,
+        _user_id: Uuid,
+        _groups: Vec<String>,
+    ) -> StoreFuture<'_, Vec<String>> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "UserStore not available in worker".to_string(),

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{Assignee, FsmState, StepKind, StepStatus};
+use super::{ApprovalRequirement, Assignee, FsmState, StepApproval, StepKind, StepStatus};
 
 /// Attempt number assigned to steps deserialized from payloads predating the
 /// `attempt` field.
@@ -123,6 +123,14 @@ pub struct Step {
     /// User or group the approval is currently assigned to, after reassignment.
     #[serde(default)]
     pub approval_assignee: Option<Assignee>,
+    /// Approval requirement evaluated from the step's approval rules when the
+    /// gate opened. `None` for steps without rules: one approval resolves the
+    /// gate.
+    #[serde(default)]
+    pub approval_requirement: Option<ApprovalRequirement>,
+    /// Votes cast on the approval gate so far, at most one per user.
+    #[serde(default)]
+    pub approvals: Vec<StepApproval>,
 }
 
 /// Request to create a new step.
@@ -212,6 +220,9 @@ pub struct StepUpdate {
     /// New approval assignee.
     #[serde(default)]
     pub approval_assignee: Option<Assignee>,
+    /// Approval requirement evaluated when the gate opened.
+    #[serde(default)]
+    pub approval_requirement: Option<ApprovalRequirement>,
     /// Clear the approval deadline (sets it to `NULL`). Wins over
     /// `approval_deadline_at` when both are set.
     #[serde(default)]
@@ -277,6 +288,18 @@ mod tests {
             approval_deadline_at: Some(now),
             approval_stage: 2,
             approval_assignee: Some(Assignee::group("sre-oncall")),
+            approval_requirement: Some(ApprovalRequirement {
+                rule_index: Some(0),
+                condition: Some("payload.amount > 10000".to_string()),
+                required_approvers: 2,
+                approver_groups: vec!["finance".to_string()],
+                evaluated: Vec::new(),
+            }),
+            approvals: vec![StepApproval {
+                user_id: Uuid::now_v7(),
+                approved_by: "alice".to_string(),
+                at: now,
+            }],
         };
 
         let json = serde_json::to_string(&step).expect("serialize");
@@ -299,6 +322,8 @@ mod tests {
         assert_eq!(back.approval_deadline_at, step.approval_deadline_at);
         assert_eq!(back.approval_stage, step.approval_stage);
         assert_eq!(back.approval_assignee, step.approval_assignee);
+        assert_eq!(back.approval_requirement, step.approval_requirement);
+        assert_eq!(back.approvals, step.approvals);
     }
 
     #[test]
@@ -331,6 +356,8 @@ mod tests {
         assert_eq!(step.approval_stage, 0);
         assert!(step.approval_deadline_at.is_none());
         assert!(step.approval_assignee.is_none());
+        assert!(step.approval_requirement.is_none());
+        assert!(step.approvals.is_empty());
     }
 
     #[test]
@@ -349,6 +376,7 @@ mod tests {
         assert!(update.approval_deadline_at.is_none());
         assert!(update.approval_stage.is_none());
         assert!(update.approval_assignee.is_none());
+        assert!(update.approval_requirement.is_none());
         assert!(!update.clear_approval_deadline);
     }
 
@@ -368,6 +396,7 @@ mod tests {
             approval_deadline_at: Some(Utc::now()),
             approval_stage: Some(1),
             approval_assignee: Some(Assignee::group("sre-oncall")),
+            approval_requirement: Some(ApprovalRequirement::default()),
             clear_approval_deadline: false,
         };
 
@@ -383,6 +412,7 @@ mod tests {
         assert_eq!(back.approval_deadline_at, update.approval_deadline_at);
         assert_eq!(back.approval_stage, update.approval_stage);
         assert_eq!(back.approval_assignee, update.approval_assignee);
+        assert_eq!(back.approval_requirement, update.approval_requirement);
         assert_eq!(back.clear_approval_deadline, update.clear_approval_deadline);
     }
 

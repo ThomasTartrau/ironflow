@@ -55,6 +55,8 @@ CLI flags (`--url`, `--api-key`) take the highest priority, then env vars, then 
 | `user create <username> --email <e> [--password <p>] [--admin]` | Create a user; reads the password on stdin when omitted |
 | `user delete <id> [--yes]` | Delete a user |
 | `user set-role <id> --admin\|--member` | Promote or demote a user |
+| `user groups <id>` | Show the groups a user belongs to |
+| `user set-groups <id> [--group <name>]...` | Replace a user's groups (restricts who may vote on approval rules listing groups) |
 | `audit-log list [--run <id>] [--type <kind>] [--from <d>] [--to <d>]` | List audit log entries |
 
 Secrets, users and audit logs are admin-only.

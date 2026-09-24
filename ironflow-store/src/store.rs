@@ -18,7 +18,7 @@ use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
     LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeableRun, ReapedRun,
     Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
-    StatsHistoryFilter, Step, StepDependency, StepUpdate,
+    StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::log_store::LogStore;
@@ -181,6 +181,19 @@ pub trait RunStore: Send + Sync {
 
     /// List all steps for a run, ordered by position ascending.
     fn list_steps(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Step>>;
+
+    /// Record a vote on an approval gate and return the updated step.
+    ///
+    /// The vote is appended atomically to [`Step::approvals`] unless the same
+    /// [`StepApproval::user_id`] already voted, in which case the step is
+    /// returned unchanged. Recording a vote never resolves the gate: the
+    /// caller compares the vote count against the step's
+    /// [`approval_requirement`](Step::approval_requirement).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::StepNotFound`] if the step does not exist.
+    fn record_step_approval(&self, step_id: Uuid, approval: StepApproval) -> StoreFuture<'_, Step>;
 
     /// Get aggregated statistics across runs matching the filter.
     ///

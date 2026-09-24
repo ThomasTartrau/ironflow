@@ -64,9 +64,11 @@ ctx.approval(
 | `deadline_secs` | `with_deadline` / `with_deadline_secs` | SLA window, in seconds |
 | `on_timeout` | `on_timeout` | `EscalationPolicy` applied when the deadline fires (defaults to `AutoReject`) |
 | `timeout_seconds` | `with_timeout_seconds` | Legacy spelling of a deadline with an implicit `AutoReject` |
+| `rules` | `with_rule` | `ApprovalRule`s evaluated in order when the gate opens; the first match sets the required approvals and allowed groups |
 
-See [Approval Gates](approval-gates.md) for the full list of escalation policies
-and where the remaining time surfaces.
+See [Approval Gates](approval-gates.md) for the full list of escalation policies,
+where the remaining time surfaces, and the syntax of
+[dynamic approval rules](approval-gates.md#dynamic-approval-rules).
 
 ## Decision steps
 

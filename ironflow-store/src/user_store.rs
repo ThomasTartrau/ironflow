@@ -56,4 +56,25 @@ pub trait UserStore: Send + Sync {
     ///
     /// Returns [`StoreError::UserNotFound`] if the user does not exist.
     fn update_user_password(&self, id: Uuid, password_hash: String) -> StoreFuture<'_, ()>;
+
+    /// List the groups a user belongs to, sorted by name.
+    ///
+    /// Returns an empty list for an unknown user.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Database`](crate::error::StoreError::Database) on
+    /// a storage failure.
+    fn list_user_groups(&self, user_id: Uuid) -> StoreFuture<'_, Vec<String>>;
+
+    /// Replace the groups a user belongs to.
+    ///
+    /// Returns the new membership, sorted and deduplicated. An empty list
+    /// removes the user from every group.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::UserNotFound`](crate::error::StoreError::UserNotFound)
+    /// if the user does not exist.
+    fn set_user_groups(&self, user_id: Uuid, groups: Vec<String>) -> StoreFuture<'_, Vec<String>>;
 }

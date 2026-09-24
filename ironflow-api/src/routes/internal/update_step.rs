@@ -6,9 +6,9 @@ use axum::response::IntoResponse;
 use chrono::Utc;
 use uuid::Uuid;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
-use ironflow_engine::notify::{Event, StepCompletedEvent, StepFailedEvent};
+use ironflow_engine::notify::{ApprovalRequestedEvent, Event, StepCompletedEvent, StepFailedEvent};
 use ironflow_store::entities::{StepStatus, StepUpdate};
 
 use crate::error::ApiError;
@@ -20,6 +20,10 @@ use crate::state::AppState;
 /// After persisting the update, broadcasts a matching [`Event::StepCompleted`]
 /// or [`Event::StepFailed`] so SSE subscribers see step-level progress while
 /// the worker is running the pipeline remotely.
+///
+/// An update moving the step to `AwaitingApproval` means a gate just opened
+/// on the worker: an [`Event::ApprovalRequested`] carrying the stored approval
+/// requirement is published here, where the audit log subscriber lives.
 pub async fn update_step(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -29,8 +33,29 @@ pub async fn update_step(
     let duration_ms = update.duration_ms.unwrap_or(0);
     let cost_usd = update.cost_usd.unwrap_or_default();
     let error_msg = update.error.clone();
+    let opens_gate = update.status == Some(StepStatus::AwaitingApproval);
 
     state.store.update_step(id, update).await?;
+
+    if opens_gate && let Some(step) = state.store.get_step(id).await? {
+        let message = step
+            .input
+            .as_ref()
+            .and_then(|v| v.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        state
+            .engine
+            .event_publisher()
+            .publish(Event::ApprovalRequested(ApprovalRequestedEvent {
+                run_id: step.run_id,
+                step_id: step.id,
+                message,
+                requirement: step.approval_requirement.clone(),
+                at: Utc::now(),
+            }));
+    }
 
     if matches!(
         terminal_status,
@@ -74,13 +99,20 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
-    use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{NewStep, StepKind, StepStatus, step_trace_id};
+    use ironflow_engine::notify::{AuditLogSubscriber, Event};
+    use ironflow_store::audit_log_store::AuditLogStore;
+    use ironflow_store::entities::{
+        ApprovalRequirement, AuditLogFilter, EventKind, NewStep, StepKind, StepStatus,
+        step_trace_id,
+    };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
+    use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, from_slice, json, to_string};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::broadcast;
+    use tokio::time::sleep;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -173,6 +205,7 @@ mod tests {
             approval_deadline_at: None,
             approval_stage: None,
             approval_assignee: None,
+            approval_requirement: None,
             clear_approval_deadline: false,
         };
 
@@ -202,6 +235,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn awaiting_approval_update_publishes_approval_requested() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+        let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        let state = AppState::new(
+            store.clone(),
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        );
+
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "payments".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({"amount": 15000}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "finance-gate", 1),
+                name: "finance-gate".to_string(),
+                kind: StepKind::Approval,
+                position: 1,
+                input: Some(json!({"message": "Release the payment?"})),
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // What the worker sends when the gate opens.
+        let update = StepUpdate {
+            status: Some(StepStatus::AwaitingApproval),
+            approval_stage: Some(0),
+            approval_requirement: Some(ApprovalRequirement {
+                rule_index: Some(0),
+                condition: Some("payload.amount > 10000".to_string()),
+                required_approvers: 2,
+                approver_groups: vec!["finance".to_string()],
+                evaluated: Vec::new(),
+            }),
+            ..StepUpdate::default()
+        };
+
+        let app = create_router(state, RouterConfig::default());
+        let req = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/v1/internal/steps/{}", step.id))
+            .header("authorization", "Bearer test-worker-token")
+            .header("content-type", "application/json")
+            .body(Body::from(to_string(&update).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let stored = store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.approval_requirement, update.approval_requirement);
+
+        // The publisher dispatches to subscribers on a spawned task.
+        let mut entries = Vec::new();
+        for _ in 0..100 {
+            entries = store
+                .list_audit_logs(
+                    AuditLogFilter {
+                        event_type: Some(EventKind::ApprovalRequested),
+                        run_id: Some(run.id),
+                        ..AuditLogFilter::default()
+                    },
+                    1,
+                    10,
+                )
+                .await
+                .unwrap()
+                .items;
+            if !entries.is_empty() {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(entries.len(), 1, "expected one approval_requested entry");
+        let payload = &entries[0].payload;
+        assert_eq!(entries[0].step_id, Some(step.id));
+        assert_eq!(payload["message"], "Release the payment?");
+        assert_eq!(payload["requirement"]["required_approvers"], json!(2));
+        assert_eq!(
+            payload["requirement"]["approver_groups"],
+            json!(["finance"])
+        );
+    }
+
+    #[tokio::test]
     async fn update_step_not_found() {
         let state = test_state();
         let app = create_router(state, RouterConfig::default());
@@ -221,6 +376,7 @@ mod tests {
             approval_deadline_at: None,
             approval_stage: None,
             approval_assignee: None,
+            approval_requirement: None,
             clear_approval_deadline: false,
         };
 
