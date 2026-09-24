@@ -136,15 +136,23 @@ pub struct ListRunsQuery {
 impl ListRunsQuery {
     /// Parse the comma-separated `label` param into a `HashMap`.
     pub fn parse_labels(&self) -> Option<HashMap<String, String>> {
-        self.label.as_ref().and_then(|raw| {
-            let mut map = HashMap::new();
-            for entry in raw.split(',') {
-                let entry = entry.trim();
-                if let Some((k, v)) = entry.split_once(':') {
-                    map.insert(k.to_string(), v.to_string());
-                }
-            }
-            if map.is_empty() { None } else { Some(map) }
-        })
+        parse_label_param(&self.label)
     }
+}
+
+/// Parse a comma-separated `key:value` label query param into a `HashMap`.
+///
+/// Entries without a `:` are ignored. Returns `None` when the param is
+/// absent or contains no valid entry.
+pub(crate) fn parse_label_param(raw: &Option<String>) -> Option<HashMap<String, String>> {
+    raw.as_ref().and_then(|raw| {
+        let mut map = HashMap::new();
+        for entry in raw.split(',') {
+            let entry = entry.trim();
+            if let Some((k, v)) = entry.split_once(':') {
+                map.insert(k.to_string(), v.to_string());
+            }
+        }
+        if map.is_empty() { None } else { Some(map) }
+    })
 }

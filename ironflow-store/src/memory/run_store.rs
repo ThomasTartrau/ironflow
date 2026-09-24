@@ -695,6 +695,7 @@ impl RunStore for InMemoryStore {
             let mut failed_runs = 0u64;
             let mut cancelled_runs = 0u64;
             let mut active_runs = 0u64;
+            let mut awaiting_approval_runs = 0u64;
 
             for run in state.runs.values() {
                 if !run_matches_filter(run, &filter, &state.steps) {
@@ -709,10 +710,13 @@ impl RunStore for InMemoryStore {
                     RunStatus::Completed | RunStatus::Warning => completed_runs += 1,
                     RunStatus::Failed => failed_runs += 1,
                     RunStatus::Cancelled => cancelled_runs += 1,
+                    RunStatus::AwaitingApproval => {
+                        active_runs += 1;
+                        awaiting_approval_runs += 1;
+                    }
                     RunStatus::Pending
                     | RunStatus::Running
                     | RunStatus::Retrying
-                    | RunStatus::AwaitingApproval
                     | RunStatus::Sleeping => {
                         active_runs += 1;
                     }
@@ -725,6 +729,7 @@ impl RunStore for InMemoryStore {
                 failed_runs,
                 cancelled_runs,
                 active_runs,
+                awaiting_approval_runs,
                 total_cost_usd,
                 total_duration_ms,
             })
@@ -739,13 +744,15 @@ impl RunStore for InMemoryStore {
             let state = self.state.read().await;
             let now = Utc::now();
             let start = now - Duration::hours(filter.period.hours());
-            let granularity_secs = filter.granularity.seconds();
+            let run_filter = filter.to_run_filter();
             let buckets = aggregate_history_buckets(
-                state.runs.values(),
-                &filter.workflow_name,
+                state
+                    .runs
+                    .values()
+                    .filter(|r| run_matches_filter(r, &run_filter, &state.steps)),
                 start,
                 now,
-                granularity_secs,
+                filter.granularity,
             );
             Ok(buckets)
         })
@@ -2308,8 +2315,38 @@ mod tests {
             .await
             .unwrap();
 
+        let r4 = store
+            .create_run(new_run_req("wf"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(r4.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(r4.id, RunStatus::AwaitingApproval)
+            .await
+            .unwrap();
+
+        let r5 = store
+            .create_run(new_run_req("wf"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(r5.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(r5.id, RunStatus::Sleeping)
+            .await
+            .unwrap();
+
         let stats = store.get_stats(RunFilter::default()).await.unwrap();
-        assert_eq!(stats.active_runs, 3); // _r1 (Pending), r2 (Running), r3 (Retrying)
+        // _r1 (Pending), r2 (Running), r3 (Retrying), r4 (AwaitingApproval), r5 (Sleeping)
+        assert_eq!(stats.active_runs, 5);
+        assert_eq!(stats.awaiting_approval_runs, 1);
     }
 
     #[tokio::test]

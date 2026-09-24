@@ -184,18 +184,24 @@ pub trait RunStore: Send + Sync {
 
     /// Get aggregated statistics across runs matching the filter.
     ///
-    /// Returns counts of runs by terminal state, counts of active runs,
-    /// and totals for cost and duration. Computed efficiently by the store
-    /// implementation (single SQL query in PostgreSQL).
+    /// Returns counts of runs by terminal state, counts of active runs
+    /// (`Pending`, `Running`, `Retrying`, `AwaitingApproval` or `Sleeping`),
+    /// the number of runs awaiting approval, and totals for cost and duration.
+    /// Computed efficiently by the store implementation (single SQL query in
+    /// PostgreSQL).
     ///
     /// Pass [`RunFilter::default()`] to get stats across all runs.
     fn get_stats(&self, filter: RunFilter) -> StoreFuture<'_, RunStats>;
 
     /// Get time-bucketed historical statistics for trend charts.
     ///
-    /// Aggregates runs into time buckets based on the filter's granularity,
-    /// counting terminal statuses and computing duration percentiles.
-    /// Returns buckets ordered by time ascending; empty periods are omitted.
+    /// Aggregates runs created during the filter's period into time buckets
+    /// based on its granularity, counting every run status and computing
+    /// duration percentiles. Applies the same run filters as
+    /// [`get_stats`](Self::get_stats) (workflow substring, status, labels,
+    /// steps, author). Bucket boundaries are UTC and weeks start on Monday
+    /// (see [`HistoryGranularity::bucket_start`](crate::entities::HistoryGranularity::bucket_start)).
+    /// Returns buckets ordered by time ascending; empty buckets are omitted.
     ///
     /// # Errors
     ///
@@ -209,9 +215,9 @@ pub trait RunStore: Send + Sync {
     ///
     /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
     /// let filter = StatsHistoryFilter {
-    ///     workflow_name: None,
     ///     period: HistoryPeriod::SevenDays,
     ///     granularity: HistoryGranularity::OneDay,
+    ///     ..StatsHistoryFilter::default()
     /// };
     /// let buckets = store.get_stats_history(filter).await?;
     /// for b in &buckets {

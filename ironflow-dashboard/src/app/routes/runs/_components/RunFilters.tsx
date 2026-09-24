@@ -34,6 +34,7 @@ const STATUS_OPTIONS: RunStatus[] = [
 	"pending",
 	"running",
 	"completed",
+	"warning",
 	"failed",
 	"retrying",
 	"cancelled",
@@ -41,7 +42,16 @@ const STATUS_OPTIONS: RunStatus[] = [
 	"sleeping",
 ];
 
-export function RunFilters() {
+interface RunFiltersProps {
+	/**
+	 * Whether the filtered view is paginated. When `true`, every filter change
+	 * resets the `page` query param to 1. Pages without pagination (the
+	 * dashboard) pass `false` so no `page` param leaks into their URL.
+	 */
+	paginated?: boolean;
+}
+
+export function RunFilters({ paginated = true }: RunFiltersProps) {
 	const [open, setOpen] = useState(false);
 	const [labelInput, setLabelInput] = useState("");
 	const [filters, setFilters] = useQueryStates(
@@ -75,6 +85,7 @@ export function RunFilters() {
 		auth.status === "authenticated" ? auth.user.user_id : null;
 	// GET /users is admin-only: members get a "My runs only" toggle instead.
 	const users = useUsers({ enabled: isAdmin && open });
+	const pageReset = paginated ? { page: "1" } : {};
 
 	const activeCount = [
 		filters.workflow,
@@ -90,25 +101,25 @@ export function RunFilters() {
 			: undefined;
 
 	const handleWorkflowChange = (value: string) => {
-		setFilters({ workflow: value || null, page: "1" });
+		setFilters({ workflow: value || null, ...pageReset });
 	};
 
 	const handleStatusChange = (value: string | null) => {
-		setFilters({ status: value || null, page: "1" });
+		setFilters({ status: value || null, ...pageReset });
 	};
 
 	const handleHasStepsChange = (checked: boolean) => {
-		setFilters({ has_steps: checked, page: "1" });
+		setFilters({ has_steps: checked, ...pageReset });
 	};
 
 	const handleAuthorChange = (value: string | null) => {
-		setFilters({ created_by: value || null, page: "1" });
+		setFilters({ created_by: value || null, ...pageReset });
 	};
 
 	const handleMineOnlyChange = (checked: boolean) => {
 		setFilters({
 			created_by: checked ? currentUserId : null,
-			page: "1",
+			...pageReset,
 		});
 	};
 
@@ -121,13 +132,13 @@ export function RunFilters() {
 		if (!key || !value) return;
 		const normalized = `${key}:${value}`;
 		if (filters.label.includes(normalized)) return;
-		setFilters({ label: [...filters.label, normalized], page: "1" });
+		setFilters({ label: [...filters.label, normalized], ...pageReset });
 		setLabelInput("");
 	};
 
 	const handleRemoveLabel = (label: string) => {
 		const next = filters.label.filter((l) => l !== label);
-		setFilters({ label: next.length > 0 ? next : null, page: "1" });
+		setFilters({ label: next.length > 0 ? next : null, ...pageReset });
 	};
 
 	const handleLabelKeyDown = (e: React.KeyboardEvent) => {
@@ -320,7 +331,7 @@ export function RunFilters() {
 				<button
 					type="button"
 					aria-label="Remove workflow filter"
-					onClick={() => setFilters({ workflow: null, page: "1" })}
+					onClick={() => setFilters({ workflow: null, ...pageReset })}
 					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
 				>
 					workflow: {filters.workflow}
@@ -331,7 +342,7 @@ export function RunFilters() {
 				<button
 					type="button"
 					aria-label="Remove status filter"
-					onClick={() => setFilters({ status: null, page: "1" })}
+					onClick={() => setFilters({ status: null, ...pageReset })}
 					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
 				>
 					status: {filters.status}
@@ -342,7 +353,7 @@ export function RunFilters() {
 				<button
 					type="button"
 					aria-label="Remove author filter"
-					onClick={() => setFilters({ created_by: null, page: "1" })}
+					onClick={() => setFilters({ created_by: null, ...pageReset })}
 					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
 				>
 					author:{" "}

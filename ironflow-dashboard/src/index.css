@@ -81,6 +81,9 @@ html.dark body {
   --status-awaiting-bg: oklch(0.955 0.065 100);
   --status-awaiting-fg: oklch(0.520 0.130 95);
   --status-awaiting-border: oklch(0.885 0.085 100);
+  --status-sleeping-bg: oklch(0.950 0.040 280);
+  --status-sleeping-fg: oklch(0.500 0.140 280);
+  --status-sleeping-border: oklch(0.880 0.060 280);
   --status-rejected-bg: oklch(0.950 0.045 10);
   --status-rejected-fg: oklch(0.500 0.175 10);
   --status-rejected-border: oklch(0.880 0.070 10);
@@ -162,6 +165,9 @@ html.dark body {
   --status-awaiting-bg: oklch(0.300 0.060 95);
   --status-awaiting-fg: oklch(0.850 0.140 100);
   --status-awaiting-border: oklch(0.400 0.080 95);
+  --status-sleeping-bg: oklch(0.290 0.060 280);
+  --status-sleeping-fg: oklch(0.800 0.120 280);
+  --status-sleeping-border: oklch(0.390 0.080 280);
   --status-rejected-bg: oklch(0.295 0.075 10);
   --status-rejected-fg: oklch(0.800 0.140 10);
   --status-rejected-border: oklch(0.395 0.095 10);

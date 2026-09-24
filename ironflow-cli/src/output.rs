@@ -615,6 +615,10 @@ pub fn stats_table(stats: &StatsResponse) -> Table {
         Cell::new(stats.active_runs).fg(Color::Blue),
     ]);
     table.add_row(vec![
+        Cell::new("Awaiting approval"),
+        Cell::new(stats.awaiting_approval_runs).fg(Color::Magenta),
+    ]);
+    table.add_row(vec![
         Cell::new("Success rate"),
         Cell::new(format!("{:.1}%", stats.success_rate_percent)),
     ]);
@@ -636,19 +640,30 @@ pub fn stats_history_table(history: &StatsHistoryResponse) -> Table {
     table.set_header(vec![
         "Time",
         "Completed",
+        "Warning",
         "Failed",
         "Cancelled",
+        "Active",
+        "Success %",
         "Avg (ms)",
         "P95 (ms)",
         "Cost",
     ]);
 
     for bucket in &history.buckets {
+        let active = bucket.pending
+            + bucket.running
+            + bucket.retrying
+            + bucket.awaiting_approval
+            + bucket.sleeping;
         table.add_row(vec![
             Cell::new(bucket.time),
             Cell::new(bucket.completed).fg(Color::Green),
+            Cell::new(bucket.warning).fg(Color::Yellow),
             Cell::new(bucket.failed).fg(Color::Red),
             Cell::new(bucket.cancelled).fg(Color::Grey),
+            Cell::new(active).fg(Color::Blue),
+            Cell::new(format_success_rate(bucket.success_rate_percent)),
             Cell::new(bucket.avg_duration_ms),
             Cell::new(bucket.p95_duration_ms),
             Cell::new(format!("${:.4}", bucket.total_cost_usd)),
@@ -656,6 +671,11 @@ pub fn stats_history_table(history: &StatsHistoryResponse) -> Table {
     }
 
     table
+}
+
+/// Render an optional success rate: `-` when the bucket has no finished run.
+fn format_success_rate(rate: Option<f64>) -> String {
+    rate.map_or_else(|| "-".to_string(), |r| format!("{r:.1}%"))
 }
 
 /// Render a list of key versions as a comma-separated string.
@@ -1083,6 +1103,18 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
         }
+    }
+
+    #[test]
+    fn format_success_rate_renders_dash_when_absent() {
+        assert_eq!(format_success_rate(None), "-");
+    }
+
+    #[test]
+    fn format_success_rate_renders_one_decimal() {
+        assert_eq!(format_success_rate(Some(100.0)), "100.0%");
+        assert_eq!(format_success_rate(Some(200.0 / 3.0)), "66.7%");
+        assert_eq!(format_success_rate(Some(0.0)), "0.0%");
     }
 
     #[test]

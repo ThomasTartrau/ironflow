@@ -2,7 +2,7 @@
 
 use ironflow_sdk::types::{
     CreateRunRequest, CreatedByKind, MeResponse, RunResponse, RunStatus, ScopeEntry,
-    SecretResponse, StatsResponse, WorkflowSummary,
+    SecretResponse, StatsHistoryBucketResponse, StatsResponse, WorkflowSummary,
 };
 
 #[test]
@@ -113,6 +113,7 @@ fn deserialize_stats_response() {
         "failed_runs": 10,
         "cancelled_runs": 3,
         "active_runs": 7,
+        "awaiting_approval_runs": 2,
         "total_cost_usd": 12.50,
         "total_duration_ms": 500000,
         "success_rate_percent": 88.89
@@ -120,6 +121,55 @@ fn deserialize_stats_response() {
     let stats: StatsResponse = serde_json::from_str(json).unwrap();
     assert_eq!(stats.total_runs, 100);
     assert_eq!(stats.completed_runs, 80);
+    assert_eq!(stats.awaiting_approval_runs, 2);
+}
+
+#[test]
+fn deserialize_stats_history_bucket() {
+    let json = r#"{
+        "time": "2026-09-21T00:00:00Z",
+        "completed": 4,
+        "warning": 1,
+        "failed": 0,
+        "cancelled": 2,
+        "pending": 3,
+        "running": 5,
+        "retrying": 1,
+        "awaiting_approval": 1,
+        "sleeping": 1,
+        "success_rate_percent": null,
+        "avg_duration_ms": 1200,
+        "p95_duration_ms": 3400,
+        "total_cost_usd": 0.42
+    }"#;
+    let bucket: StatsHistoryBucketResponse = serde_json::from_str(json).unwrap();
+    assert_eq!(bucket.completed, 4);
+    assert_eq!(bucket.warning, 1);
+    assert_eq!(bucket.pending, 3);
+    assert_eq!(bucket.running, 5);
+    assert_eq!(bucket.retrying, 1);
+    assert_eq!(bucket.awaiting_approval, 1);
+    assert_eq!(bucket.sleeping, 1);
+    assert!(bucket.success_rate_percent.is_none());
+
+    let json = r#"{
+        "time": "2026-09-21T00:00:00Z",
+        "completed": 1,
+        "warning": 0,
+        "failed": 1,
+        "cancelled": 0,
+        "pending": 0,
+        "running": 0,
+        "retrying": 0,
+        "awaiting_approval": 0,
+        "sleeping": 0,
+        "success_rate_percent": 50.0,
+        "avg_duration_ms": 0,
+        "p95_duration_ms": 0,
+        "total_cost_usd": 0
+    }"#;
+    let bucket: StatsHistoryBucketResponse = serde_json::from_str(json).unwrap();
+    assert_eq!(bucket.success_rate_percent, Some(50.0));
 }
 
 #[test]

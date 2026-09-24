@@ -28,6 +28,7 @@ export function StatsCards({ stats }: StatsCardsProps) {
 			<StatCard
 				label="Active"
 				value={stats.active_runs}
+				hint={`${stats.awaiting_approval_runs} awaiting approval`}
 				icon={Zap}
 				iconClassName="bg-chart-3/15 text-chart-3"
 			/>

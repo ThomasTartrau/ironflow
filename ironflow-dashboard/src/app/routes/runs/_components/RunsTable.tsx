@@ -5,7 +5,7 @@ import { TriggerBadge } from "@/app/components/TriggerBadge";
 import { CreatedByBadge } from "@/app/components/CreatedByBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { RunLabels } from "@/app/components/RunLabels";
-import { formatDuration, formatCost } from "@/app/lib/format";
+import { formatRunDuration, formatCost } from "@/app/lib/format";
 import { Workflow } from "lucide-react";
 import {
 	Table,
@@ -98,7 +98,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 								<RunLabels labels={run.labels} />
 							</TableCell>
 							<TableCell className="tabular-nums">
-								{formatDuration(run.duration_ms)}
+								{formatRunDuration(run)}
 							</TableCell>
 							<TableCell className="tabular-nums">
 								{formatCost(run.cost_usd)}

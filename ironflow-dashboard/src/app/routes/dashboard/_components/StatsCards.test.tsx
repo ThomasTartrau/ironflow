@@ -8,6 +8,7 @@ function statsFixture(overrides: Partial<StatsResponse> = {}): StatsResponse {
 		total_runs: 10,
 		success_rate_percent: 80.0,
 		active_runs: 2,
+		awaiting_approval_runs: 1,
 		total_cost_usd: 1.5,
 		completed_runs: 8,
 		failed_runs: 2,
@@ -30,6 +31,7 @@ describe("StatsCards", () => {
 					total_runs: 0,
 					success_rate_percent: 0,
 					active_runs: 0,
+					awaiting_approval_runs: 0,
 					total_cost_usd: 0,
 				})}
 			/>,
@@ -41,5 +43,15 @@ describe("StatsCards", () => {
 	it("displays 'All time' label", () => {
 		render(<StatsCards stats={statsFixture()} />);
 		expect(screen.getByText("All time")).toBeInTheDocument();
+	});
+
+	it("displays the awaiting approval count under the active runs", () => {
+		render(
+			<StatsCards
+				stats={statsFixture({ active_runs: 5, awaiting_approval_runs: 3 })}
+			/>,
+		);
+		expect(screen.getByText("5")).toBeInTheDocument();
+		expect(screen.getByText("3 awaiting approval")).toBeInTheDocument();
 	});
 });

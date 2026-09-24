@@ -1,3 +1,5 @@
+import type { RunResponse, RunStatus } from "@/app/lib/types";
+
 export function capitalize(str: string): string {
 	return str
 		.split("_")
@@ -11,6 +13,33 @@ export function formatDuration(ms: number): string {
 	const minutes = Math.floor(ms / 60000);
 	const seconds = Math.floor((ms % 60000) / 1000);
 	return `${minutes}m ${seconds}s`;
+}
+
+const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
+	"completed",
+	"failed",
+	"cancelled",
+	"warning",
+]);
+
+/**
+ * Duration of a run for display.
+ *
+ * Finished runs show their recorded duration. `duration_ms` is only set once
+ * a run finishes, so an in-flight run shows the time elapsed since it
+ * started, and a run that never started shows `-`.
+ */
+export function formatRunDuration(
+	run: Pick<RunResponse, "status" | "duration_ms" | "started_at">,
+	now = Date.now(),
+): string {
+	if (TERMINAL_RUN_STATUSES.has(run.status)) {
+		return formatDuration(run.duration_ms);
+	}
+	if (run.started_at) {
+		return formatDuration(Math.max(0, now - Date.parse(run.started_at)));
+	}
+	return "-";
 }
 
 export function formatPercent(value: number, decimals = 1): string {

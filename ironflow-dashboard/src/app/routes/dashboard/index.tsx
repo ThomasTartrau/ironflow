@@ -23,7 +23,9 @@ import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { useRevalidateOnEvent } from "@/app/hooks/use-revalidate-on-event";
 import { RunFilters } from "../runs/_components/RunFilters";
 import { StatsCards } from "./_components/StatsCards";
-import { StatsCharts, PERIODS, type Period } from "./_components/StatsCharts";
+import { StatsCharts } from "./_components/StatsCharts";
+import { PERIODS, type Period } from "./_components/stats-chart-data";
+import { countActiveFilters, toFilterParams } from "./stats-filters";
 import { RecentRuns } from "./_components/RecentRuns";
 
 export interface DashboardLoaderData {
@@ -36,27 +38,14 @@ const filterParsers = {
 	status: parseAsString.withDefault(""),
 	has_steps: parseAsBoolean.withDefault(true),
 	label: parseAsArrayOf(parseAsString).withDefault([]),
+	created_by: parseAsString.withDefault(""),
 };
 
 const loadFilters = createLoader(filterParsers);
 
-function toApiParams(filters: {
-	workflow: string;
-	status: string;
-	has_steps: boolean;
-	label: string[];
-}): URLSearchParams {
-	const params = new URLSearchParams();
-	if (filters.workflow) params.set("workflow", filters.workflow);
-	if (filters.status) params.set("status", filters.status);
-	if (filters.has_steps) params.set("has_steps", "true");
-	if (filters.label.length > 0) params.set("label", filters.label.join(","));
-	return params;
-}
-
 export async function loader({ request }: LoaderFunctionArgs) {
 	const filters = loadFilters(request);
-	const filterParams = toApiParams(filters);
+	const filterParams = toFilterParams(filters);
 
 	const runsParams = new URLSearchParams(filterParams);
 	runsParams.set("page", "1");
@@ -82,6 +71,7 @@ export function Component() {
 		status: parseAsStringClient.withDefault(""),
 		has_steps: parseAsBooleanClient.withDefault(true),
 		label: parseAsArrayOfClient(parseAsStringClient).withDefault([]),
+		created_by: parseAsStringClient.withDefault(""),
 	});
 
 	const [period, setPeriod] = useQueryState(
@@ -89,12 +79,7 @@ export function Component() {
 		parseAsStringLiteral(PERIODS).withDefault("7d"),
 	);
 
-	const activeCount = [
-		filters.workflow,
-		filters.status,
-		!filters.has_steps ? "has_steps" : "",
-		filters.label.length > 0 ? "label" : "",
-	].filter(Boolean).length;
+	const activeCount = countActiveFilters(filters);
 
 	useDocumentMeta({
 		title: "Dashboard",
@@ -108,7 +93,7 @@ export function Component() {
 			description="Overview of your workflow executions."
 		>
 			<div className="space-y-6">
-				<RunFilters />
+				<RunFilters paginated={false} />
 				<div className="space-y-6">
 					{activeCount > 0 && (
 						<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded px-3 py-1.5">
@@ -137,7 +122,7 @@ export function Component() {
 								accent="var(--chart-1)"
 								actions={
 									<span className="text-xs text-muted-foreground">
-										All time
+										{activeCount > 0 ? "All time (filtered)" : "All time"}
 									</span>
 								}
 							>
@@ -156,8 +141,9 @@ export function Component() {
 								}
 							>
 								<StatsCharts
-									workflowFilter={filters.workflow}
+									filters={filters}
 									period={period}
+									refreshKey={stats}
 								/>
 							</CollapsibleSection>
 							<CollapsibleSection

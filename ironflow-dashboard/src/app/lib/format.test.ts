@@ -7,6 +7,7 @@ import {
 	formatPercent,
 	formatCost,
 	formatRemaining,
+	formatRunDuration,
 	shortenStepName,
 } from "./format";
 
@@ -201,5 +202,60 @@ describe("formatAssignee", () => {
 
 	it("returns an unprefixed value unchanged", () => {
 		expect(formatAssignee("release-managers")).toBe("release-managers");
+	});
+});
+
+describe("formatRunDuration", () => {
+	const now = Date.parse("2026-01-01T00:01:00Z");
+
+	it("shows the recorded duration of a finished run", () => {
+		for (const status of [
+			"completed",
+			"failed",
+			"cancelled",
+			"warning",
+		] as const) {
+			expect(
+				formatRunDuration(
+					{ status, duration_ms: 1500, started_at: "2026-01-01T00:00:00Z" },
+					now,
+				),
+			).toBe("1.5s");
+		}
+	});
+
+	it("shows the elapsed time of a started run", () => {
+		expect(
+			formatRunDuration(
+				{
+					status: "running",
+					duration_ms: 0,
+					started_at: "2026-01-01T00:00:30Z",
+				},
+				now,
+			),
+		).toBe("30.0s");
+	});
+
+	it("never shows a negative elapsed time", () => {
+		expect(
+			formatRunDuration(
+				{
+					status: "running",
+					duration_ms: 0,
+					started_at: "2026-01-01T00:02:00Z",
+				},
+				now,
+			),
+		).toBe("0ms");
+	});
+
+	it("shows a dash for a run that never started", () => {
+		expect(
+			formatRunDuration(
+				{ status: "pending", duration_ms: 0, started_at: null },
+				now,
+			),
+		).toBe("-");
 	});
 });

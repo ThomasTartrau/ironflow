@@ -261,13 +261,19 @@ mod tests {
             )
             .route(
                 "/api/v1/stats/history",
-                get(|| async {
+                get(|Query(params): Query<HashMap<String, String>>| async move {
                     Json(json!({
                         "data": {
                             "period": "7d",
                             "granularity": "1d",
                             "workflow": null,
                             "buckets": []
+                        },
+                        "meta": {
+                            "status": params.get("status").cloned(),
+                            "label": params.get("label").cloned(),
+                            "has_steps": params.get("has_steps").cloned(),
+                            "created_by": params.get("created_by").cloned()
                         }
                     }))
                 }),
@@ -848,6 +854,10 @@ mod tests {
             workflow: None,
             period: None,
             granularity: None,
+            status: None,
+            label: None,
+            has_steps: None,
+            created_by: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -856,6 +866,34 @@ mod tests {
         assert_eq!(parsed["data"]["period"], "7d");
         assert_eq!(parsed["data"]["granularity"], "1d");
         assert!(parsed["data"]["buckets"].as_array().unwrap().is_empty());
+        assert!(parsed["meta"]["status"].is_null());
+        assert!(parsed["meta"]["has_steps"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_stats_history_forwards_filters() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = GetStatsHistoryTool {
+            workflow: None,
+            period: Some("24h".to_string()),
+            granularity: None,
+            status: Some("failed".to_string()),
+            label: Some("env:prod".to_string()),
+            has_steps: Some(true),
+            created_by: Some("01936f5a-0000-7000-8000-000000000001".to_string()),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["meta"]["status"], "failed");
+        assert_eq!(parsed["meta"]["label"], "env:prod");
+        assert_eq!(parsed["meta"]["has_steps"], "true");
+        assert_eq!(
+            parsed["meta"]["created_by"],
+            "01936f5a-0000-7000-8000-000000000001"
+        );
     }
 
     // ---------------------------------------------------------------

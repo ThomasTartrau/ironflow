@@ -28,7 +28,7 @@ const RUN_BY_IDEMPOTENCY_KEY_SQL: &str = r#"
 "#;
 
 /// Build SQL WHERE conditions from a [`RunFilter`], returning `(where_clause, next_bind_idx)`.
-fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
+pub(super) fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
     let mut conditions = Vec::new();
     let mut bind_idx = 1u32;
 
@@ -79,7 +79,7 @@ fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
 }
 
 /// Bind [`RunFilter`] parameter values onto a dynamic SQL query.
-fn bind_run_filter_params<'q>(
+pub(super) fn bind_run_filter_params<'q>(
     mut query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     filter: &'q RunFilter,
 ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
@@ -1247,7 +1247,12 @@ impl RunStore for PostgresStore {
                     COUNT(*) FILTER (WHERE ast.name IN ('completed', 'warning')) as completed,
                     COUNT(*) FILTER (WHERE ast.name = 'failed') as failed,
                     COUNT(*) FILTER (WHERE ast.name = 'cancelled') as cancelled,
-                    COUNT(*) FILTER (WHERE ast.name IN ('pending', 'running', 'retrying')) as active,
+                    COUNT(*) FILTER (
+                        WHERE ast.name IN (
+                            'pending', 'running', 'retrying', 'awaiting_approval', 'sleeping'
+                        )
+                    ) as active,
+                    COUNT(*) FILTER (WHERE ast.name = 'awaiting_approval') as awaiting_approval,
                     COALESCE(SUM(r.cost_usd), 0) as total_cost,
                     COALESCE(SUM(r.duration_ms), 0)::BIGINT as total_duration
                 FROM ironflow.runs r
@@ -1268,6 +1273,7 @@ impl RunStore for PostgresStore {
                 failed_runs: row.get::<i64, _>("failed") as u64,
                 cancelled_runs: row.get::<i64, _>("cancelled") as u64,
                 active_runs: row.get::<i64, _>("active") as u64,
+                awaiting_approval_runs: row.get::<i64, _>("awaiting_approval") as u64,
                 total_cost_usd: row.get::<rust_decimal::Decimal, _>("total_cost"),
                 total_duration_ms: row.get::<i64, _>("total_duration") as u64,
             })

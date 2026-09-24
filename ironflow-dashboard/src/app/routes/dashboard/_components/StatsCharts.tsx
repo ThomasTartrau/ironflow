@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import {
 	BarChart,
 	Bar,
@@ -13,24 +13,23 @@ import {
 	Legend,
 	ResponsiveContainer,
 } from "recharts";
-import type { StatsHistoryBucketResponse } from "@/app/lib/types";
+import type {
+	StatsHistoryBucketResponse,
+	StatsHistoryResponse,
+} from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { formatDuration, formatCost } from "@/app/lib/format";
-
-export const PERIODS = ["24h", "7d", "30d", "90d"] as const;
-export type Period = (typeof PERIODS)[number];
+import { toFilterParams, type DashboardFilters } from "../stats-filters";
+import { STATUS_SERIES, toChartData, type Period } from "./stats-chart-data";
 
 interface StatsChartsProps {
-	workflowFilter: string;
+	filters: DashboardFilters;
 	period: Period;
-}
-
-function formatTime(time: string, period: Period): string {
-	const d = new Date(time);
-	if (period === "24h") {
-		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-	}
-	return d.toLocaleDateString([], { month: "short", day: "numeric" });
+	/**
+	 * Changes whenever the page data is revalidated (the loader result), so
+	 * the history is refetched on the same SSE events as the stats cards.
+	 */
+	refreshKey?: unknown;
 }
 
 function chartColor(index: number): string {
@@ -44,41 +43,41 @@ function chartColor(index: number): string {
 	return colors[index % colors.length];
 }
 
-export function StatsCharts({ workflowFilter, period }: StatsChartsProps) {
+export function StatsCharts({ filters, period, refreshKey }: StatsChartsProps) {
 	const [buckets, setBuckets] = useState<StatsHistoryBucketResponse[]>([]);
 	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | null>(null);
 
-	const fetchHistory = useCallback(async () => {
-		setLoading(true);
-		const params = new URLSearchParams({ period });
-		if (workflowFilter) params.set("workflow", workflowFilter);
-		const res = await api.get<{
-			period: string;
-			granularity: string;
-			workflow: string | null;
-			buckets: StatsHistoryBucketResponse[];
-		}>(`/stats/history?${params}`);
-		setBuckets(res.data.buckets);
-		setLoading(false);
-	}, [period, workflowFilter]);
+	const params = toFilterParams(filters);
+	params.set("period", period);
+	const paramsString = params.toString();
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is not read, it only signals a loader revalidation that must refetch the history.
 	useEffect(() => {
-		fetchHistory();
-	}, [fetchHistory]);
+		const controller = new AbortController();
+		const { signal } = controller;
+		setLoading(true);
+		api
+			.get<StatsHistoryResponse>(`/stats/history?${paramsString}`, { signal })
+			.then((res) => {
+				if (signal.aborted) return;
+				setBuckets(res.data.buckets);
+				setError(null);
+			})
+			.catch((err: unknown) => {
+				// A superseded request is aborted on purpose: not an error.
+				if (signal.aborted) return;
+				setError(err instanceof Error ? err.message : String(err));
+			})
+			.finally(() => {
+				if (!signal.aborted) setLoading(false);
+			});
+		return () => controller.abort();
+	}, [paramsString, refreshKey]);
 
-	const chartData = buckets.map((b) => ({
-		time: formatTime(b.time, period),
-		completed: b.completed,
-		failed: b.failed,
-		cancelled: b.cancelled,
-		avg_duration_ms: b.avg_duration_ms,
-		p95_duration_ms: b.p95_duration_ms,
-		total_cost_usd: Number(b.total_cost_usd),
-		success_rate:
-			b.completed + b.failed > 0
-				? Math.round((b.completed / (b.completed + b.failed)) * 100)
-				: 0,
-	}));
+	const chartData = toChartData(buckets, period);
+	// Buckets are zero-filled by the API, so "no data" means no run at all.
+	const hasRuns = chartData.some((d) => d.total > 0);
 
 	return (
 		<div
@@ -87,10 +86,17 @@ export function StatsCharts({ workflowFilter, period }: StatsChartsProps) {
 				loading ? "opacity-50 pointer-events-none transition-opacity" : ""
 			}
 		>
-			{chartData.length === 0 && !loading ? (
-				<p className="text-sm text-muted-foreground text-center py-8">
-					No data for this period.
+			{error && (
+				<p role="alert" className="text-sm text-destructive mb-3">
+					Could not load trends: {error}
 				</p>
+			)}
+			{!hasRuns && !loading ? (
+				!error && (
+					<p className="text-sm text-muted-foreground text-center py-8">
+						No data for this period.
+					</p>
+				)
 			) : (
 				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 					<ChartCard title="Volume & Status">
@@ -116,24 +122,15 @@ export function StatsCharts({ workflowFilter, period }: StatsChartsProps) {
 									}}
 								/>
 								<Legend wrapperStyle={{ fontSize: 12 }} />
-								<Bar
-									dataKey="completed"
-									stackId="status"
-									fill={chartColor(1)}
-									name="Completed"
-								/>
-								<Bar
-									dataKey="failed"
-									stackId="status"
-									fill="var(--destructive)"
-									name="Failed"
-								/>
-								<Bar
-									dataKey="cancelled"
-									stackId="status"
-									fill={chartColor(3)}
-									name="Cancelled"
-								/>
+								{STATUS_SERIES.map((series) => (
+									<Bar
+										key={series.key}
+										dataKey={series.key}
+										stackId="status"
+										fill={series.color}
+										name={series.label}
+									/>
+								))}
 							</BarChart>
 						</ResponsiveContainer>
 					</ChartCard>
@@ -208,11 +205,11 @@ export function StatsCharts({ workflowFilter, period }: StatsChartsProps) {
 								/>
 								<Area
 									type="monotone"
-									dataKey="total_cost_usd"
+									dataKey="cumulative_cost"
 									stroke={chartColor(3)}
 									fill={chartColor(3)}
 									fillOpacity={0.15}
-									name="Cost (USD)"
+									name="Cumulative cost (USD)"
 									strokeWidth={2}
 								/>
 							</AreaChart>
@@ -241,15 +238,18 @@ export function StatsCharts({ workflowFilter, period }: StatsChartsProps) {
 										borderRadius: 6,
 										fontSize: 12,
 									}}
-									formatter={(v) => `${v ?? 0}%`}
+									formatter={(v) => (v == null ? "-" : `${v}%`)}
 								/>
 								<Line
 									type="monotone"
 									dataKey="success_rate"
 									stroke={chartColor(1)}
 									name="Success Rate"
-									dot={false}
+									// Buckets without finished runs are gaps: a dot keeps
+									// an isolated value visible between two gaps.
+									dot={{ r: 2 }}
 									strokeWidth={2}
+									connectNulls={false}
 								/>
 							</LineChart>
 						</ResponsiveContainer>

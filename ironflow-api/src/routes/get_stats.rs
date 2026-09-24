@@ -59,6 +59,7 @@ pub async fn get_stats(
         failed_runs: stats.failed_runs,
         cancelled_runs: stats.cancelled_runs,
         active_runs: stats.active_runs,
+        awaiting_approval_runs: stats.awaiting_approval_runs,
         success_rate_percent,
         total_cost_usd: stats.total_cost_usd,
         total_duration_ms: stats.total_duration_ms,
@@ -213,6 +214,32 @@ mod tests {
             .await
             .unwrap();
 
+        // Awaiting approval
+        let r4 = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "d".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(r4.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(r4.id, RunStatus::AwaitingApproval)
+            .await
+            .unwrap();
+
         let state = test_state(store);
         let auth_header = make_auth_header(&state);
         let app = Router::new().route("/", get(get_stats)).with_state(state);
@@ -226,10 +253,11 @@ mod tests {
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = from_slice(&body).unwrap();
-        assert_eq!(json_val["data"]["total_runs"], 3);
+        assert_eq!(json_val["data"]["total_runs"], 4);
         assert_eq!(json_val["data"]["completed_runs"], 1);
         assert_eq!(json_val["data"]["failed_runs"], 1);
-        assert_eq!(json_val["data"]["active_runs"], 1);
+        assert_eq!(json_val["data"]["active_runs"], 2);
+        assert_eq!(json_val["data"]["awaiting_approval_runs"], 1);
 
         let rate = json_val["data"]["success_rate_percent"].as_f64().unwrap();
         assert!((rate - 50.0).abs() < 0.01);
