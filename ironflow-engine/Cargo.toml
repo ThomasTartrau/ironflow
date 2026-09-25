@@ -13,7 +13,7 @@ categories = ["asynchronous", "development-tools"]
 [dependencies]
 async-trait = "0.1"
 ironflow-artifacts = { version = "0.1.2", path = "../ironflow-artifacts" }
-ironflow-core = { version = "3.21.1", path = "../ironflow-core" }
+ironflow-core = { version = "3.22.0", path = "../ironflow-core" }
 ironflow-macros = { version = "0.1.1", path = "../ironflow-macros" }
 ironflow-store = { version = "2.37.0", path = "../ironflow-store" }
 

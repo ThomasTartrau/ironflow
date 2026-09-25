@@ -3496,7 +3496,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-core"
-version = "3.21.1"
+version = "3.22.0"
 dependencies = [
  "async-trait",
  "bollard",

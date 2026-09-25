@@ -27,7 +27,7 @@ store-postgres = ["ironflow-store/store-postgres"]
 ironflow-store = { version = "2.37.0", path = "../ironflow-store" }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
 ironflow-engine = { version = "2.39.0", path = "../ironflow-engine" }
-ironflow-core = { version = "3.21.1", path = "../ironflow-core" }
+ironflow-core = { version = "3.22.0", path = "../ironflow-core" }
 ironflow-auth = { version = "2.4.29", path = "../ironflow-auth" }
 ironflow-templates = { version = "0.1.2", path = "../ironflow-templates" }
 ironflow-types = { version = "0.2.1", path = "../ironflow-types" }
