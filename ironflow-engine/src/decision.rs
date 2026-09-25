@@ -110,7 +110,7 @@ use std::collections::BTreeMap;
 use ironflow_core::decision::{DecisionOutput, DecisionQuestion};
 use ironflow_core::error::DecisionError;
 
-pub use ironflow_macros::{DecisionAnswers, DecisionChoice};
+pub use ironflow_engine_macros::{DecisionAnswers, DecisionChoice};
 
 /// A struct whose fields are the questions of a decision step and whose
 /// values are the answers.
