@@ -22,6 +22,7 @@ pub mod list_workflows;
 pub mod metrics;
 pub mod openapi_spec;
 pub mod plan_workflow;
+pub mod replay_run;
 pub mod retry_run;
 pub mod run_events;
 pub mod schedules;
@@ -228,6 +229,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/runs/{id}/approve", post(approve_run::approve_run))
         .route("/runs/{id}/reject", post(approve_run::reject_run))
         .route("/runs/{id}/retry", post(retry_run::retry_run))
+        .route("/runs/{id}/replay", post(replay_run::replay_run))
         .route("/runs/{id}/events", get(run_events::run_events))
         .route(
             "/runs/{id}/steps/{step_id}/artifacts/{name}",

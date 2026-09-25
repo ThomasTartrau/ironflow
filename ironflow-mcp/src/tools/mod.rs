@@ -3,7 +3,7 @@
 //! Each tool lives in its own file, grouped by domain:
 //! - `workflows/` - list and inspect workflows
 //! - `runs/` - create, list, search, and inspect runs
-//! - `actions/` - cancel, approve, reject, retry runs
+//! - `actions/` - cancel, approve, reject, retry, replay runs
 //! - `secrets/` - list, create, update, delete, rotate secrets
 //! - `api_keys/` - list, create, delete API keys
 //! - `users/` - list, create, update role, delete users
@@ -24,7 +24,7 @@ pub mod stats;
 pub mod users;
 pub mod workflows;
 
-pub use actions::{ApproveRunTool, CancelRunTool, RejectRunTool, RetryRunTool};
+pub use actions::{ApproveRunTool, CancelRunTool, RejectRunTool, ReplayRunTool, RetryRunTool};
 pub use api_keys::{CreateApiKeyTool, DeleteApiKeyTool, ListApiKeysTool};
 pub use artifacts::DownloadArtifactTool;
 pub use audit_logs::ListAuditLogsTool;
@@ -58,6 +58,7 @@ rust_mcp_sdk::tool_box!(
         ApproveRunTool,
         RejectRunTool,
         RetryRunTool,
+        ReplayRunTool,
         GetStatsTool,
         GetStatsHistoryTool,
         ListSecretsTool,
@@ -242,6 +243,12 @@ mod tests {
             )
             .route(
                 "/api/v1/runs/{id}/retry",
+                post(|Path(id): Path<String>| async move {
+                    Json(json!({ "data": { "id": id, "status": "pending" } }))
+                }),
+            )
+            .route(
+                "/api/v1/runs/{id}/replay",
                 post(|Path(id): Path<String>| async move {
                     Json(json!({ "data": { "id": id, "status": "pending" } }))
                 }),
@@ -820,6 +827,25 @@ mod tests {
         let parsed = extract_json(&result);
 
         assert_eq!(parsed["id"], "r4");
+        assert_eq!(parsed["status"], "pending");
+    }
+
+    // ---------------------------------------------------------------
+    // ReplayRunTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn replay_run_returns_pending_status() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = ReplayRunTool {
+            run_id: "r5".to_string(),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["id"], "r5");
         assert_eq!(parsed["status"], "pending");
     }
 

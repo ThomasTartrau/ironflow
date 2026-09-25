@@ -1,4 +1,4 @@
-//! Run subcommands: create, list, get, cancel, approve, retry, watch, diff.
+//! Run subcommands: create, list, get, cancel, approve, retry, replay, watch, diff.
 
 use std::fs;
 use std::io::{Write as _, stdout};
@@ -104,6 +104,11 @@ pub enum RunCommands {
         /// original run.
         #[arg(long)]
         force: bool,
+    },
+    /// Replay a finished run on the current handler version.
+    Replay {
+        /// Run UUID.
+        id: Uuid,
     },
     /// Watch a run in real time via SSE.
     Watch {
@@ -282,6 +287,12 @@ pub async fn execute(
         }
         RunCommands::Retry { id, force } => {
             let response = client.retry_run(*id, *force).await?;
+            output::print_output(json_mode, &response, || {
+                output::runs_table(slice::from_ref(&response.data))
+            })?;
+        }
+        RunCommands::Replay { id } => {
+            let response = client.replay_run(*id).await?;
             output::print_output(json_mode, &response, || {
                 output::runs_table(slice::from_ref(&response.data))
             })?;

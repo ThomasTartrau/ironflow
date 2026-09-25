@@ -25,8 +25,8 @@ use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approval_delegations, approve_run, audit_logs, auth, cancel_run, create_run,
     download_artifact, get_run, get_run_logs, get_stats, get_stats_history, get_workflow,
-    health_check, list_runs, list_workflows, plan_workflow, retry_run, run_events, schedules,
-    secrets, users,
+    health_check, list_runs, list_workflows, plan_workflow, replay_run, retry_run, run_events,
+    schedules, secrets, users,
 };
 use ironflow_engine::notify::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
@@ -83,6 +83,7 @@ mod with_signup {
             approve_run::approve_run,
             approve_run::reject_run,
             retry_run::retry_run,
+            replay_run::replay_run,
             download_artifact::download_artifact,
             list_workflows::list_workflows,
             get_workflow::get_workflow,
@@ -245,6 +246,7 @@ mod without_signup {
             approve_run::approve_run,
             approve_run::reject_run,
             retry_run::retry_run,
+            replay_run::replay_run,
             download_artifact::download_artifact,
             list_workflows::list_workflows,
             get_workflow::get_workflow,

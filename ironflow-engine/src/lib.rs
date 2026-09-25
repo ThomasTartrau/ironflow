@@ -69,6 +69,7 @@ pub mod log_sender;
 pub mod notify;
 pub mod operation;
 pub mod plan;
+pub mod replay_policy;
 pub mod retry_policy;
 pub mod run_creator;
 pub mod schedule;

@@ -37,6 +37,11 @@ pub enum TriggerKind {
         /// The original run that failed.
         parent_run_id: Uuid,
     },
+    /// Replay of a previously finished run on the current handler version.
+    Replay {
+        /// The original run that was replayed.
+        original_run_id: Uuid,
+    },
     /// Triggered by a parent workflow as a sub-workflow step.
     Workflow,
     /// Triggered by a message consumed from a NATS subject.
@@ -76,6 +81,9 @@ mod tests {
             TriggerKind::Retry {
                 parent_run_id: Uuid::nil(),
             },
+            TriggerKind::Replay {
+                original_run_id: Uuid::nil(),
+            },
             TriggerKind::Nats {
                 subject: "workflows.deploy".to_string(),
             },
@@ -102,6 +110,16 @@ mod tests {
         let json = serde_json::to_string(&trigger).expect("serialize");
         assert!(json.contains("\"kind\":\"nats\""));
         assert!(json.contains("\"subject\":\"orders.created\""));
+    }
+
+    #[test]
+    fn replay_serializes_with_original_run_id() {
+        let trigger = TriggerKind::Replay {
+            original_run_id: Uuid::nil(),
+        };
+        let json = serde_json::to_string(&trigger).expect("serialize");
+        assert!(json.contains("\"kind\":\"replay\""));
+        assert!(json.contains("\"original_run_id\""));
     }
 
     #[test]

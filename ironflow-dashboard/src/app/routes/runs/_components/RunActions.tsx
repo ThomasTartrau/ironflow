@@ -6,6 +6,7 @@ import {
 	approveRun,
 	cancelRun,
 	rejectRun,
+	replayRun,
 	retryRun,
 } from "../_actions/actions";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ type PendingAction =
 	| "idle"
 	| "cancelling"
 	| "retrying"
+	| "replaying"
 	| "approving"
 	| "rejecting";
 
@@ -37,6 +39,7 @@ export function RunActions({ run }: RunActionsProps) {
 		run.status === "awaiting_approval" ||
 		run.status === "sleeping";
 	const canRetry = run.status === "failed" || run.status === "cancelled";
+	const canReplay = run.status === "completed" || run.status === "failed";
 	const canApprove = run.status === "awaiting_approval";
 	const isLoading = pendingAction !== "idle";
 
@@ -129,6 +132,29 @@ export function RunActions({ run }: RunActionsProps) {
 					variant="outline"
 				>
 					{pendingAction === "retrying" ? "Retrying..." : "Retry"}
+				</Button>
+			)}
+			{canReplay && (
+				<Button
+					onClick={() =>
+						handleAction(
+							"replaying",
+							() => replayRun(run.id),
+							{
+								loading: "Replaying run...",
+								success: "Run replayed",
+								error: "Failed to replay run",
+							},
+							(result) => {
+								const newRun = result as RunResponse;
+								navigate(`/runs/${newRun.id}`);
+							},
+						)
+					}
+					disabled={isLoading}
+					variant="outline"
+				>
+					{pendingAction === "replaying" ? "Replaying..." : "Replay"}
 				</Button>
 			)}
 		</div>
