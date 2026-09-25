@@ -12,7 +12,7 @@ categories = ["asynchronous", "development-tools"]
 
 [dependencies]
 async-trait = "0.1"
-ironflow-core = { version = "3.21.0", path = "../../ironflow-core" }
+ironflow-core = { version = "3.21.1", path = "../../ironflow-core" }
 ironflow-ops-common = { version = "0.1.10", path = "../common" }
 reqwest = { version = "0.13", features = ["json", "query"] }
 serde = { version = "1", features = ["derive"] }
