@@ -56,35 +56,67 @@ let config = DecisionConfig::new(state).model(OPENROUTER_MODEL);
 
 OpenRouter's `decisions` route is on an `alpha` path that may move; override it with
 `TypeSafeProvider::with_endpoint(url)` if it relocates. OpenRouter also requires
-question `instructions` and `criteria` to be strings, which the builder's `&str`
-arguments already satisfy.
+question `instructions` and `criteria` to be strings, which the derive's string
+literals already satisfy.
 
 ## The three question types
 
-| Type | Method | Answer |
-|------|--------|--------|
-| noul | `.noul(name, instructions)` | probability of "yes" in `[0, 1]` |
-| choice | `.choice(name, instructions, &options)` | selected option + per-option probabilities |
-| score | `.score(name, instructions, &levels)` | weighted score + per-level probabilities |
+The questions are the fields of a struct deriving `DecisionAnswers`; the options of a
+choice are the unit variants of an enum deriving `DecisionChoice`. `ctx.decision`
+returns the struct itself.
+
+| Type | Field attribute | Field type | Answer |
+|------|-----------------|------------|--------|
+| noul | `#[noul("..")]`, optionally `if_true = ".."`, `if_false = ".."` | `f64` | probability of "yes" in `[0, 1]` |
+| choice | `#[choice("..")]` | an enum deriving `DecisionChoice` | the option picked |
+| score | `#[score("..", levels = ["..", ".."])]` | `f64` | probability-weighted level index |
 
 ```rust,ignore
-let out = ctx.decision(
+use ironflow_engine::config::DecisionConfig;
+use ironflow_engine::decision::{DecisionAnswers, DecisionChoice};
+
+#[derive(DecisionChoice)]
+enum Team {
+    #[choice(description = "Payments, invoices, refunds")]
+    Billing,
+    Technical,
+    Sales,
+}
+
+#[derive(DecisionAnswers)]
+struct Triage {
+    #[noul("Does this convey urgency?")]
+    is_urgent: f64,
+    #[choice("Which team?")]
+    team: Team,
+    #[score("How frustrated?", levels = ["Calm", "Frustrated", "Very angry"])]
+    mood: f64,
+}
+
+let triage = ctx.decision(
     "triage",
     DecisionConfig::new("Payouts have been failing for 3 days")
-        .noul("is_urgent", "Does this convey urgency?")
-        .choice("team", "Which team?", &["billing", "technical", "sales"])
-        .score("mood", "How frustrated?", &["Calm", "Frustrated", "Very angry"])
+        .answers::<Triage>()
         .escalate_below(0.7),
 ).await?;
 
-let urgent = out.noul("is_urgent")?;      // f64
-let team = &out.choice("team")?.choice;   // &str
-let mood = out.score("mood")?.score;      // f64
+match triage.team {
+    Team::Billing => { /* .. */ }
+    Team::Technical | Team::Sales => { /* .. */ }
+}
 ```
 
-`choice` and `score` answers carry a `confidence`. A `noul` answer reports only a
-probability `p`; its confidence is derived as `2 * |p - 0.5|` (a coin flip is `0`,
-a certain yes/no is `1`).
+A question is named after its field. An option is labelled with its variant name in
+`snake_case`; `#[choice(rename = "..")]` changes the label and
+`#[choice(description = "..")]` tells the model what the option means (doc comments are
+never sent). A field without a question, a score without levels or a field of the wrong
+type does not compile. An option the provider returns that is not a variant fails the
+step with `DecisionError::UnknownChoice`.
+
+The options are fixed at compile time. `choice` and `score` answers carry a
+`confidence`; a `noul` answer reports only a probability `p`, and its confidence is
+derived as `2 * |p - 0.5|` (a coin flip is `0`, a certain yes/no is `1`). Confidence
+drives escalation, below; it is not part of the typed answer.
 
 ## Escalation
 

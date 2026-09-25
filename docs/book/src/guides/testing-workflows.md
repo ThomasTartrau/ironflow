@@ -41,7 +41,7 @@ async fn deploy_runs_build_then_ship() {
 
     assert_eq!(result.status(), RunStatus::Completed);
     assert_eq!(result.step_names(), vec!["build", "ship"]);
-    assert_eq!(result.step("build").output()["stdout"], "compiled");
+    assert_eq!(result.step("build").step_output().stdout(), "compiled");
     assert_eq!(result.step("ship").status(), StepStatus::Completed);
 }
 ```
@@ -95,9 +95,11 @@ sees exactly what the API and the dashboard would serve.
 | `run_id()`, `run()` | The run identity and the raw record. |
 | `step_results()` | Per-step metrics, empty when the run failed. |
 
-Each `TestStep` exposes `name()`, `kind()`, `status()`, `output()`, `input()`,
-`error()`, `duration()`, `cost_usd()`, `is_completed()`, `is_error_handler()`
-and `raw()`.
+Each `TestStep` exposes `name()`, `kind()`, `status()`, `step_output()`,
+`output()`, `input()`, `error()`, `duration()`, `cost_usd()`, `is_completed()`,
+`is_error_handler()` and `raw()`. `step_output()` reads the persisted output
+through the typed `StepOutput` accessors (`stdout()`, `status()`, `body()`,
+`text()`, `json::<T>()`); `output()` is the raw JSON.
 
 Steps of a parallel wave share a position and a handler may reuse a name:
 disambiguate those with `steps()` rather than `step(name)`.
@@ -224,8 +226,9 @@ let mut harness = TestEngine::new()
 let store = harness.store();
 
 let result = harness.run_workflow("parent", json!({})).await?;
-let child_run_id = result.step("child").output()["run_id"].as_str().unwrap();
-let child_steps = store.list_steps(child_run_id.parse()?).await?;
+// A workflow step stores a `SubWorkflowOutput`: read it back typed.
+let child: SubWorkflowOutput = result.step("child").step_output().json()?;
+let child_steps = store.list_steps(child.run_id()).await?;
 ```
 
 ## Limitations

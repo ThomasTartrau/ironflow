@@ -3,7 +3,7 @@
 use ironflow_core::retry::RetryPolicy;
 use serde::{Deserialize, Serialize};
 
-use super::artifact::{ArtifactInput, ArtifactOutput};
+use super::artifact::{ArtifactInput, ArtifactOutput, ArtifactRef};
 
 /// Serializable configuration for a shell step.
 ///
@@ -132,19 +132,28 @@ impl ShellConfig {
 
     /// Consume an artifact produced by an earlier step of the same run.
     ///
-    /// It is written into the working directory under its own name before the
-    /// command runs. Use [`input_at`](Self::input_at) to choose another path.
+    /// The handle comes from the producing step, see [`ArtifactRef`]. The
+    /// artifact is written into the working directory under its own name
+    /// before the command runs. Use [`input_at`](Self::input_at) to choose
+    /// another path.
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
     /// use ironflow_engine::config::ShellConfig;
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
     ///
-    /// let config = ShellConfig::new("./publish").input("build", "report.html");
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let build = ctx.shell("build", ShellConfig::new("./gen").output("report.html")).await?;
+    /// let report = build.artifact("report.html")?;
+    /// let config = ShellConfig::new("./publish").input(&report);
     /// assert_eq!(config.inputs[0].destination(), "report.html");
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn input(mut self, step: &str, name: &str) -> Self {
-        self.inputs.push(ArtifactInput::new(step, name));
+    pub fn input(mut self, artifact: &ArtifactRef) -> Self {
+        self.inputs.push(ArtifactInput::from(artifact));
         self
     }
 
@@ -184,14 +193,21 @@ impl ShellConfig {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
     /// use ironflow_engine::config::ShellConfig;
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
     ///
-    /// let config = ShellConfig::new("./publish").input_at("build", "report.html", "in/r.html");
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let build = ctx.shell("build", ShellConfig::new("./gen").output("report.html")).await?;
+    /// let report = build.artifact("report.html")?;
+    /// let config = ShellConfig::new("./publish").input_at(&report, "in/r.html");
     /// assert_eq!(config.inputs[0].destination(), "in/r.html");
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn input_at(mut self, step: &str, name: &str, dest: &str) -> Self {
-        self.inputs.push(ArtifactInput::new(step, name).at(dest));
+    pub fn input_at(mut self, artifact: &ArtifactRef, dest: &str) -> Self {
+        self.inputs.push(ArtifactInput::from(artifact).at(dest));
         self
     }
 }
@@ -230,12 +246,14 @@ mod tests {
         let config = ShellConfig::new("build")
             .output("a.txt")
             .output_typed("b", "text/csv")
-            .input("prev", "c.txt")
-            .input_at("prev", "d.txt", "in/d.txt");
+            .input(&ArtifactRef::new("prev", "c.txt"))
+            .input_at(&ArtifactRef::new("prev", "d.txt"), "in/d.txt");
 
         assert_eq!(config.outputs[0].pattern, "a.txt");
         assert_eq!(config.outputs[1].content_type.as_deref(), Some("text/csv"));
+        assert_eq!(config.inputs[0], ArtifactInput::new("prev", "c.txt"));
         assert_eq!(config.inputs[0].destination(), "c.txt");
+        assert_eq!(config.inputs[1].step, "prev");
         assert_eq!(config.inputs[1].destination(), "in/d.txt");
     }
 

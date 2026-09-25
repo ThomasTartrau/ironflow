@@ -67,7 +67,14 @@ use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use serde::Deserialize;
 use serde_json::{Value, json};
+
+/// What `Ping` returns, read back typed from the step output.
+#[derive(Deserialize)]
+struct Pong {
+    ok: bool,
+}
 
 struct Ping;
 
@@ -82,8 +89,8 @@ impl Operation for Ping {
 }
 
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    let out = ctx.operation("ping-upstream", &Ping).await?;
-    let _ok = out.output["ok"].as_bool().unwrap_or(false);
+    let pong: Pong = ctx.operation("ping-upstream", &Ping).await?.json()?;
+    let _ok = pong.ok;
     Ok(())
 }
 ```

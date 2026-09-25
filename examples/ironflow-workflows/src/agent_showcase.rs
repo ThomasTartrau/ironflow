@@ -1,4 +1,4 @@
-use ironflow_engine::config::AgentStepConfig;
+use ironflow_engine::config::{AgentStepConfig, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
@@ -37,8 +37,8 @@ impl WorkflowHandler for AgentShowcase {
                      you found. Think step by step before acting.",
                 )
                 .model("claude-opus-4-8")
-                .allow_tool("Bash")
-                .allow_tool("Read")
+                .allow_tool(Tool::Bash)
+                .allow_tool(Tool::Read)
                 .max_budget_usd(0.50)
                 .max_turns(6)
                 .verbose(true),

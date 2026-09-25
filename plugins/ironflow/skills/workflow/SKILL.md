@@ -89,7 +89,10 @@ impl WorkflowHandler for Deploy {
                 return Ok(());
             }
 
-            if input.environment == "production" {
+            if ctx
+                .when("production run", |i: &DeployInput| i.environment == "production")
+                .await?
+            {
                 // The run suspends here. After approval the handler is replayed from
                 // the top: completed steps come back from cache, this code runs again.
                 ctx.approval(
@@ -144,10 +147,11 @@ Then offer, in one sentence, the workflow reviewer (`/ironflow review`) and the 
 
 ## Rules that are not obvious
 
-- **Branches are invisible to the planner unless you declare them.** A plain `if` works, but `ctx.when("input.env == 'prod'", |p| p["env"] == "prod").await?` and `ctx.when_dynamic("build succeeded", build.is_success())` make it show up in `ironflow run plan <name>`, which lists the steps a run would create without executing anything. See `references/steps.md`.
+- **Branches are invisible to the planner unless you declare them.** A plain `if` works, but `ctx.when("production run", |i: &DeployInput| i.environment == "production").await?` and `ctx.when_dynamic("build succeeded", build.is_success())` make it show up in `ironflow run plan <name>`, which lists the steps a run would create without executing anything. The first argument is a label, never parsed; the closure gets the typed input. See `references/steps.md`.
+- **No stringly-typed access.** Read step outputs with `stdout()`, `stderr()`, `exit_code()`, `status()`, `body()`, the input with `ctx.input::<T>()`, decisions through a `#[derive(DecisionAnswers)]` struct, agent answers through `.output::<T>()`, and artifacts through the handle `step.artifact("file")?`. Never index the raw output JSON by key, and never copy a step name by hand where a handle exists. Sub-workflow children implement `TypedWorkflow`; `ctx.workflow(&Child, ChildInput { .. })` returns `run_id()` as a `Uuid`.
 - **Step names are cache keys.** Stable, unique within the run, no timestamps or random ids. In a loop, suffix with the loop index.
 - **Approval replays the handler.** Anything that is not a `ctx.*` step runs again after approval. Keep side effects inside steps. Details and a safe pattern: `references/approval-replay.md`.
-- **Agent steps: tools or structured output, not both.** `AgentStepConfig::new(prompt).allow_tool("Read")` and `.output::<T>()` are mutually exclusive by type.
+- **Agent steps: tools or structured output, not both.** `AgentStepConfig::new(prompt).allow_tool(Tool::Read)` and `.output::<T>()` are mutually exclusive by type. With `.output::<T>()`, `ctx.agent` returns the `T` itself.
 - **Budget.** Claude Code's system cache alone costs about `0.04` USD, so `max_budget_usd` below `0.10` fails. Put a `default_max_cost_usd` on the handler when it contains an agent step.
 - **User data goes through `env`, never into the command string.** `ShellConfig::new("echo \"$X\"").env("X", value)`.
 - **A failing step fails the run.** No hidden retries. `allow_failure()` on a step config lets the run continue with status `Warning`; `retry_policy(RetryPolicy::...)` opts into retries explicitly.

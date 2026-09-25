@@ -10,7 +10,7 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
-use crate::executor::StepOutput;
+use crate::executor::{StepArtifacts, StepOutput};
 use crate::operation::Operation;
 use crate::plan::{lock_plan, planned_custom_output};
 
@@ -69,7 +69,9 @@ impl WorkflowContext {
             if recorder.record(name, kind, &self.workflow_name, None) {
                 recorder.set_last(vec![name.to_string()]);
             }
-            return Ok(planned_custom_output(estimate));
+            let mut output = planned_custom_output(estimate);
+            output.artifacts = StepArtifacts::new(name, None, &[]);
+            return Ok(output);
         }
 
         let position = self.position;
@@ -135,6 +137,9 @@ impl WorkflowContext {
                     output_tokens: None,
                     model: None,
                     debug_messages: None,
+                    // An operation declares no output; its record is what
+                    // `put_artifact` attaches bytes to.
+                    artifacts: StepArtifacts::new(name, Some(step.id), &[]),
                 })
             }
             Err(err) => {

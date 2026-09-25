@@ -313,25 +313,38 @@ Steps produce text and JSON outputs by default. When a step produces *files*, de
 they are persisted with their size, MIME type and SHA-256, then made available to later steps and
 to the dashboard.
 
-```rust
+```rust,no_run
 use ironflow_engine::config::ShellConfig;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
 
-// Produce: every glob match becomes an artifact named after the file.
-let build = ShellConfig::new("cargo build --release && ./gen-report")
-    .dir("/app")
-    .output("target/report.html")
-    .output("target/*.log");
-assert_eq!(build.outputs.len(), 2);
+async fn release(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    // Produce: every glob match becomes an artifact named after the file.
+    let build = ctx
+        .shell(
+            "build",
+            ShellConfig::new("cargo build --release && ./gen-report")
+                .dir("/app")
+                .output("target/report.html")
+                .output("target/*.log"),
+        )
+        .await?;
 
-// Consume: the file is written into the working directory before the command runs.
-let publish = ShellConfig::new("./publish report.html")
-    .dir("/app")
-    .input("build", "report.html");
-assert_eq!(publish.inputs[0].destination(), "report.html");
+    // The producing step hands out the handle; a name it did not declare fails here.
+    let report = build.artifact("report.html")?;
+
+    // Consume: the file is written into the working directory before the command runs.
+    ctx.shell(
+        "publish",
+        ShellConfig::new("./publish report.html").dir("/app").input(&report),
+    )
+    .await?;
+    Ok(())
+}
 ```
 
-`ctx.put_artifact()` and `ctx.get_artifact()` cover custom operations and agent steps, which have
-no working directory to collect from.
+`ctx.put_artifact(&step_output, ..)` and `ctx.get_artifact(&handle)` cover custom operations and
+agent steps, which have no working directory to collect from.
 
 | Behaviour | Rule |
 |---|---|

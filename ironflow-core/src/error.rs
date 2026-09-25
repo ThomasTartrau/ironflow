@@ -275,6 +275,15 @@ pub enum DecisionError {
         /// The kind the answer actually is.
         actual: &'static str,
     },
+
+    /// A choice answer picked an option the question did not offer.
+    #[error("decision answer '{name}' picked '{choice}', which is not one of its options")]
+    UnknownChoice {
+        /// The answer name that was read.
+        name: String,
+        /// The option the provider returned.
+        choice: String,
+    },
 }
 
 #[cfg(test)]

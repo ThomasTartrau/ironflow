@@ -14,6 +14,9 @@ mod decision;
 mod http;
 mod interceptor;
 mod shell;
+mod step_artifacts;
+mod stored;
+mod workflow_output;
 
 use std::borrow::Cow;
 use std::future::Future;
@@ -37,6 +40,8 @@ pub use decision::{DecisionExecution, execute_decision};
 pub use http::HttpExecutor;
 pub use interceptor::{ApprovalOutcome, StepInterceptor};
 pub use shell::ShellExecutor;
+pub use step_artifacts::StepArtifacts;
+pub use workflow_output::SubWorkflowOutput;
 
 /// Result of executing a single step.
 #[derive(Debug, Clone)]
@@ -64,6 +69,9 @@ pub struct StepOutput {
     pub model: Option<String>,
     /// Conversation trace from verbose agent invocations.
     pub debug_messages: Option<Vec<DebugMessage>>,
+    /// Artifacts the step can hand out through [`artifact`](Self::artifact).
+    /// Filled by the workflow context; executors leave the default.
+    pub artifacts: StepArtifacts,
 }
 
 impl StepOutput {
@@ -118,7 +126,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde_json::json;
     ///
@@ -132,6 +140,7 @@ impl StepOutput {
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// assert_eq!(output.exit_code(), Some(0));
     /// ```
@@ -144,7 +153,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde_json::json;
     ///
@@ -158,6 +167,7 @@ impl StepOutput {
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// assert!(output.stdout().contains("42 tests"));
     /// ```
@@ -173,7 +183,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde_json::json;
     ///
@@ -187,6 +197,7 @@ impl StepOutput {
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// assert_eq!(output.stderr(), "warning: unused");
     /// ```
@@ -204,7 +215,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde_json::json;
     ///
@@ -218,6 +229,7 @@ impl StepOutput {
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// assert_eq!(output.status(), Some(204));
     /// ```
@@ -233,7 +245,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde_json::json;
     ///
@@ -247,6 +259,7 @@ impl StepOutput {
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// assert_eq!(output.body(), "{\"ok\":true}");
     /// ```
@@ -255,6 +268,33 @@ impl StepOutput {
             .get("body")
             .and_then(Value::as_str)
             .unwrap_or_default()
+    }
+
+    /// Text answer of an agent step without structured output, or an empty
+    /// string for other kinds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let answer = StepOutput {
+    ///     output: json!("Looks good."),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
+    /// };
+    /// assert_eq!(answer.text(), "Looks good.");
+    /// assert_eq!(StepOutput { output: json!({"stdout": "x"}), ..answer }.text(), "");
+    /// ```
+    pub fn text(&self) -> &str {
+        self.output.as_str().unwrap_or_default()
     }
 
     /// Whether the step succeeded from the point of view of its own kind.
@@ -269,7 +309,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde_json::json;
     ///
@@ -283,6 +323,7 @@ impl StepOutput {
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// assert!(!shell.is_success());
     ///
@@ -311,7 +352,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde::Deserialize;
     /// use serde_json::json;
@@ -331,6 +372,7 @@ impl StepOutput {
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// let review: Review = output.json()?;
     /// assert_eq!(review.score, 8);
@@ -641,6 +683,7 @@ mod tests {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         assert_eq!(output.debug_messages_json(), None);
@@ -658,6 +701,7 @@ mod tests {
             output_tokens: None,
             model: None,
             debug_messages: Some(Vec::new()),
+            artifacts: StepArtifacts::default(),
         };
 
         let json_val = output.debug_messages_json();
@@ -705,6 +749,7 @@ mod tests {
             output_tokens: None,
             model: None,
             debug_messages: Some(messages),
+            artifacts: StepArtifacts::default(),
         };
 
         let json_val = output.debug_messages_json();
@@ -730,6 +775,7 @@ mod tests {
             output_tokens: Some(200),
             model: Some("claude-sonnet".to_string()),
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         assert_eq!(output.duration_ms, 5000);
@@ -751,6 +797,7 @@ mod tests {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         assert!(output.input_tokens.is_none());
@@ -771,6 +818,7 @@ mod tests {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         let result = ParallelStepResult {
@@ -806,6 +854,7 @@ mod tests {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         assert_eq!(output.output, complex_output);
@@ -827,6 +876,7 @@ mod tests {
             output_tokens: Some(200),
             model: Some("claude-sonnet".to_string()),
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         let result = StepResult::from_success(trace_id, "build", &output);
@@ -870,6 +920,7 @@ mod tests {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         let result = StepResult::from_success(Uuid::nil(), "test", &output);
@@ -945,6 +996,7 @@ mod tests {
                     output_tokens: None,
                     model: None,
                     debug_messages: None,
+                    artifacts: StepArtifacts::default(),
                 })),
                 _ => None,
             }
@@ -1020,6 +1072,7 @@ mod output_helper_tests {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         }
     }
 
@@ -1134,5 +1187,12 @@ mod output_helper_tests {
         assert_eq!(out.status(), None);
         assert_eq!(out.stdout(), "");
         assert!(!out.is_success());
+    }
+
+    #[test]
+    fn text_reads_a_plain_agent_answer_only() {
+        assert_eq!(output(json!("plain text")).text(), "plain text");
+        assert_eq!(output(json!({"stdout": "x"})).text(), "");
+        assert_eq!(output(Value::Null).text(), "");
     }
 }

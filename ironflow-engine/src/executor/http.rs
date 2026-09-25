@@ -14,7 +14,7 @@ use ironflow_store::entities::StepKind;
 use crate::config::HttpConfig;
 use crate::error::EngineError;
 
-use super::{StepExecutor, StepOutput};
+use super::{StepArtifacts, StepExecutor, StepOutput};
 
 /// Executor for HTTP steps.
 ///
@@ -98,6 +98,7 @@ impl StepExecutor for HttpExecutor<'_> {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         })
     }
 }

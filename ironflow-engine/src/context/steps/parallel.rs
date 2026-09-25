@@ -21,7 +21,7 @@ use crate::context::failure::{
 };
 use crate::error::EngineError;
 use crate::executor::{
-    ParallelStepResult, StepOutput, StepResult, execute_step_config_intercepted,
+    ParallelStepResult, StepArtifacts, StepOutput, StepResult, execute_step_config_intercepted,
 };
 use crate::guard::WorkflowRejection;
 use crate::log_sender::StepLogSender;
@@ -90,9 +90,11 @@ impl WorkflowContext {
                     }
                     names.push((*name).to_string());
                     let estimate = recorder.estimate_for(name);
+                    let mut output = planned_output(config, estimate);
+                    output.artifacts = StepArtifacts::new(name, None, config.declared_outputs());
                     results.push(ParallelStepResult {
                         name: (*name).to_string(),
-                        output: planned_output(config, estimate),
+                        output,
                         step_id: Uuid::now_v7(),
                     });
                 }
@@ -463,11 +465,13 @@ impl WorkflowContext {
         let results: Vec<ParallelStepResult> = step_records
             .iter()
             .enumerate()
-            .map(|(idx, (step_id, _trace_id, name, _))| {
-                let output = match indexed_results[idx].take() {
+            .map(|(idx, (step_id, _trace_id, name, config))| {
+                let mut output = match indexed_results[idx].take() {
                     Some(Ok(o)) => o,
                     _ => unreachable!("all steps succeeded if no error returned"),
                 };
+                output.artifacts =
+                    StepArtifacts::new(name, Some(*step_id), config.declared_outputs());
                 ParallelStepResult {
                     name: name.clone(),
                     output,

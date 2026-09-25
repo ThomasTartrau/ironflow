@@ -23,7 +23,7 @@ impl WorkflowContext {
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     /// let resp = ctx.http("health", HttpConfig::get("https://api.example.com/health")).await?;
-    /// println!("status: {}", resp.output["status"]);
+    /// println!("status: {:?}, body: {}", resp.status(), resp.body());
     /// # Ok(())
     /// # }
     /// ```

@@ -5,7 +5,7 @@
 //! [`Engine::plan_handler`](crate::engine::Engine::plan_handler) without
 //! changing what the handler does at run time.
 
-use serde_json::Value;
+use serde::de::DeserializeOwned;
 
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
@@ -17,16 +17,21 @@ const DYNAMIC_REASON: &str =
     "depends on a previous step's output, which is synthetic while planning";
 
 impl WorkflowContext {
-    /// Evaluate a named branch condition against the run input.
+    /// Evaluate a named branch condition against the typed run input.
     ///
-    /// Outside plan mode this simply applies `predicate` to
-    /// [`payload`](Self::payload). In plan mode the result is also recorded as
+    /// The run payload is deserialized into `T`, exactly like
+    /// [`input`](Self::input), and `predicate` decides the branch on it. `label`
+    /// is a human-readable name for the branch, shown in the plan; it is never
+    /// parsed nor evaluated. In plan mode the result is also recorded as
     /// [`ConditionResult::Evaluated`] on the next planned step, so the operator
     /// sees which branch the plan followed and why.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Store`] when the run payload cannot be read.
+    /// Returns [`EngineError::Store`] when the run payload cannot be read, and
+    /// [`EngineError::Serialization`] when it does not match `T`: a misspelled
+    /// field or variant fails the branch instead of silently taking the other
+    /// one.
     ///
     /// # Examples
     ///
@@ -34,9 +39,22 @@ impl WorkflowContext {
     /// use ironflow_engine::context::WorkflowContext;
     /// use ironflow_engine::config::ShellConfig;
     /// use ironflow_engine::error::EngineError;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize, PartialEq)]
+    /// #[serde(rename_all = "lowercase")]
+    /// enum Env {
+    ///     Prod,
+    ///     Staging,
+    /// }
+    ///
+    /// #[derive(Deserialize)]
+    /// struct DeployInput {
+    ///     env: Env,
+    /// }
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    /// if ctx.when("input.env == 'prod'", |p| p["env"] == "prod").await? {
+    /// if ctx.when("production run", |i: &DeployInput| i.env == Env::Prod).await? {
     ///     ctx.shell("deploy-prod", ShellConfig::new("./deploy prod")).await?;
     /// } else {
     ///     ctx.skip("deploy-prod", "not a production run").await?;
@@ -44,16 +62,17 @@ impl WorkflowContext {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn when<F>(&mut self, expression: &str, predicate: F) -> Result<bool, EngineError>
+    pub async fn when<T, F>(&mut self, label: &str, predicate: F) -> Result<bool, EngineError>
     where
-        F: FnOnce(&Value) -> bool,
+        T: DeserializeOwned,
+        F: FnOnce(&T) -> bool,
     {
-        let payload = self.payload().await?;
-        let value = predicate(&payload);
+        let input: T = self.input().await?;
+        let value = predicate(&input);
 
         if let Some(plan) = self.plan().cloned() {
             lock_plan(&plan).set_condition(ConditionResult::Evaluated {
-                expression: expression.to_string(),
+                expression: label.to_string(),
                 value,
             });
         }
@@ -64,7 +83,8 @@ impl WorkflowContext {
     /// Record a branch condition whose value depends on a previous step's
     /// output.
     ///
-    /// Returns `value` unchanged. Under planning, step outputs are synthetic,
+    /// Returns `value` unchanged; `label` names the branch in the plan. Under
+    /// planning, step outputs are synthetic,
     /// so the condition is recorded as [`ConditionResult::Unevaluable`]: the
     /// plan still follows the branch the synthetic output produces, and the
     /// operator is told the other branch may run instead.
@@ -84,10 +104,10 @@ impl WorkflowContext {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn when_dynamic(&mut self, expression: &str, value: bool) -> bool {
+    pub fn when_dynamic(&mut self, label: &str, value: bool) -> bool {
         if let Some(plan) = self.plan().cloned() {
             lock_plan(&plan).set_condition(ConditionResult::Unevaluable {
-                expression: expression.to_string(),
+                expression: label.to_string(),
                 reason: DYNAMIC_REASON.to_string(),
             });
         }

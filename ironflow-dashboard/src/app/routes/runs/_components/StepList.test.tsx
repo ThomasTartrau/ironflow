@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { StepResponse } from "@/app/lib/types";
 import {
 	ApprovalProgress,
-	describeApprovalRule,
+	describeApprovalReason,
 	StepTokenUsage,
 } from "./StepList";
 
@@ -15,11 +15,9 @@ function requirementFixture(
 	overrides: Partial<ApprovalRequirement> = {},
 ): ApprovalRequirement {
 	return {
-		rule_index: 0,
-		condition: "payload.amount > 10000",
+		reason: "amount > 10k",
 		required_approvers: 3,
 		approver_groups: ["finance"],
-		evaluated: [],
 		...overrides,
 	};
 }
@@ -64,7 +62,7 @@ describe("ApprovalProgress", () => {
 		expect(screen.getByText("2/3 approvals")).toBeInTheDocument();
 	});
 
-	it("counts a rule-less gate against a single approval", () => {
+	it("counts a gate without approvers against a single approval", () => {
 		render(
 			<ApprovalProgress
 				step={stepFixture({
@@ -105,23 +103,23 @@ describe("ApprovalProgress", () => {
 	});
 });
 
-describe("describeApprovalRule", () => {
-	it("names the matched rule and its condition", () => {
-		expect(describeApprovalRule(requirementFixture())).toBe(
-			"Rule #1: payload.amount > 10000",
+describe("describeApprovalReason", () => {
+	it("shows the reason the workflow gave for its approvers", () => {
+		expect(describeApprovalReason(requirementFixture())).toBe(
+			"Reason: amount > 10k",
 		);
 	});
 
-	it("reports the default rule when no condition matched", () => {
-		const requirement = requirementFixture({
-			rule_index: null,
-			condition: null,
-			required_approvers: 1,
-		});
-
-		expect(describeApprovalRule(requirement)).toBe(
-			"Default rule (no condition matched)",
+	it("says so when the workflow gave no reason", () => {
+		expect(describeApprovalReason(requirementFixture({ reason: null }))).toBe(
+			"No reason given",
 		);
+	});
+
+	it("treats a missing reason like an absent one", () => {
+		expect(
+			describeApprovalReason(requirementFixture({ reason: undefined })),
+		).toBe("No reason given");
 	});
 });
 

@@ -15,7 +15,7 @@ use crate::error::EngineError;
 use crate::log_sender::StepLogSender;
 use crate::notify::LogStream;
 
-use super::{StepExecutor, StepOutput};
+use super::{StepArtifacts, StepExecutor, StepOutput};
 
 /// Executor for agent (AI) steps.
 ///
@@ -157,6 +157,7 @@ impl StepExecutor for AgentExecutor<'_> {
             output_tokens,
             model: result.model().map(String::from),
             debug_messages,
+            artifacts: StepArtifacts::default(),
         })
     }
 }

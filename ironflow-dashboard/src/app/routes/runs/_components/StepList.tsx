@@ -96,23 +96,22 @@ function ApprovalSla({ step }: { step: StepResponse }) {
 }
 
 /**
- * One-line summary of the approval rule that set a gate's requirement.
+ * One-line summary of why the workflow required these approvers.
  */
-export function describeApprovalRule(
+export function describeApprovalReason(
 	requirement: NonNullable<StepResponse["approval_requirement"]>,
 ): string {
-	if (requirement.rule_index === null || requirement.rule_index === undefined) {
-		return "Default rule (no condition matched)";
-	}
-	return `Rule #${requirement.rule_index + 1}: ${requirement.condition ?? ""}`;
+	return requirement.reason
+		? `Reason: ${requirement.reason}`
+		: "No reason given";
 }
 
 /**
  * Vote counter for an approval gate, e.g. `1/2 approvals`.
  *
- * When the gate carries an approval requirement, a tooltip explains which
- * rule set it, who may vote and who already approved. Renders nothing for
- * any other step.
+ * When the gate carries an approval requirement, a tooltip explains why the
+ * workflow required it, who may vote and who already approved. Renders
+ * nothing for any other step.
  */
 export function ApprovalProgress({ step }: { step: StepResponse }) {
 	const required = step.approvals_required;
@@ -143,7 +142,7 @@ export function ApprovalProgress({ step }: { step: StepResponse }) {
 				<TooltipTrigger render={<span className="shrink-0">{badge}</span>} />
 				<TooltipContent side="bottom">
 					<div className="space-y-1 text-xs">
-						<p className="font-mono">{describeApprovalRule(requirement)}</p>
+						<p>{describeApprovalReason(requirement)}</p>
 						<p>
 							Allowed: {groups.length > 0 ? groups.join(", ") : "any approver"}
 						</p>

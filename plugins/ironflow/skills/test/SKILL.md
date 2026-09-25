@@ -50,7 +50,7 @@ async fn deploy_builds_then_ships() {
 
     assert_eq!(result.status(), RunStatus::Completed);
     assert_eq!(result.step_names(), vec!["build", "ship"]);
-    assert_eq!(result.step("build").output()["stdout"], "compiled");
+    assert_eq!(result.step("build").step_output().stdout(), "compiled");
     assert_eq!(result.step("ship").status(), StepStatus::Completed);
 }
 ```

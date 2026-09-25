@@ -129,9 +129,8 @@ pub struct Step {
     /// User or group the approval is currently assigned to, after reassignment.
     #[serde(default)]
     pub approval_assignee: Option<Assignee>,
-    /// Approval requirement evaluated from the step's approval rules when the
-    /// gate opened. `None` for steps without rules: one approval resolves the
-    /// gate.
+    /// Approvers the handler required when the gate opened. `None` for a gate
+    /// opened without approvers: one approval resolves it.
     #[serde(default)]
     pub approval_requirement: Option<ApprovalRequirement>,
     /// Votes cast on the approval gate so far, at most one per user.
@@ -232,7 +231,7 @@ pub struct StepUpdate {
     /// New approval assignee.
     #[serde(default)]
     pub approval_assignee: Option<Assignee>,
-    /// Approval requirement evaluated when the gate opened.
+    /// Approval requirement recorded when the gate opened.
     #[serde(default)]
     pub approval_requirement: Option<ApprovalRequirement>,
     /// Clear the approval deadline (sets it to `NULL`). Wins over
@@ -303,11 +302,9 @@ mod tests {
             approval_stage: 2,
             approval_assignee: Some(Assignee::group("sre-oncall")),
             approval_requirement: Some(ApprovalRequirement {
-                rule_index: Some(0),
-                condition: Some("payload.amount > 10000".to_string()),
+                reason: Some("amount > 10k".to_string()),
                 required_approvers: 2,
                 approver_groups: vec!["finance".to_string()],
-                evaluated: Vec::new(),
             }),
             approvals: vec![StepApproval {
                 user_id: Uuid::now_v7(),

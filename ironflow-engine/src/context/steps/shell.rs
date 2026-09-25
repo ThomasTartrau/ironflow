@@ -26,7 +26,7 @@ impl WorkflowContext {
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     /// let files = ctx.shell("list", ShellConfig::new("ls -la")).await?;
-    /// println!("stdout: {}", files.output["stdout"]);
+    /// println!("stdout: {}", files.stdout());
     /// # Ok(())
     /// # }
     /// ```

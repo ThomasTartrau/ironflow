@@ -995,6 +995,7 @@ pub fn handle_nonzero_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::Tool;
     use serde_json::json;
 
     #[test]
@@ -1392,7 +1393,8 @@ mod tests {
 
     #[test]
     fn build_args_disallowed_tools_flag_joined_with_commas() {
-        let config = AgentConfig::new("hello").disallowed_tools(["Write", "Edit", "Bash"]);
+        let config =
+            AgentConfig::new("hello").disallowed_tools([Tool::Write, Tool::Edit, Tool::Bash]);
         let args = build_args(&config).unwrap();
 
         let pos = args
@@ -1405,10 +1407,10 @@ mod tests {
     #[test]
     fn build_args_disallowed_tools_combined_with_allowed_tools() {
         let config: AgentConfig = AgentConfig::new("hello")
-            .allow_tool("Read")
-            .allow_tool("Grep")
+            .allow_tool(Tool::Read)
+            .allow_tool(Tool::Grep)
             .into();
-        let config = config.disallowed_tools(["Write", "Edit"]);
+        let config = config.disallowed_tools([Tool::Write, Tool::Edit]);
         let args = build_args(&config).unwrap();
 
         let allowed_pos = args

@@ -10,7 +10,7 @@ use serde_json::{Value, json, to_value};
 use ironflow_core::error::{AgentError, OperationError};
 
 use crate::error::EngineError;
-use crate::executor::StepOutput;
+use crate::executor::{StepArtifacts, StepOutput};
 
 #[cfg(feature = "prometheus")]
 pub(super) fn record_retry_metric(kind: &str, outcome: &str) {
@@ -56,6 +56,7 @@ pub(super) fn allowed_failure_output(
         output_tokens: partial.and_then(|p| p.output_tokens),
         model: None,
         debug_messages: None,
+        artifacts: StepArtifacts::default(),
     }
 }
 

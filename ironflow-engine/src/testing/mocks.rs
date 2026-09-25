@@ -22,7 +22,7 @@ use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFut
 
 use crate::config::{ApprovalConfig, HttpConfig, ShellConfig, StepConfig};
 use crate::error::EngineError;
-use crate::executor::{ApprovalOutcome, StepInterceptor, StepOutput};
+use crate::executor::{ApprovalOutcome, StepArtifacts, StepInterceptor, StepOutput};
 
 /// Message carried by [`MissingAgentProvider`] failures.
 const MISSING_AGENT_PROVIDER: &str = "TestEngine has no agent provider: call with_mock_agent(...), with_recorded_agent(...) or \
@@ -115,6 +115,7 @@ impl MockShellOutput {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         })
     }
 }
@@ -245,6 +246,7 @@ impl MockHttpResponse {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         }
     }
 }

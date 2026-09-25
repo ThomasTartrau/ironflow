@@ -1,11 +1,12 @@
 #![cfg(feature = "store-postgres")]
 
-//! Integration tests for dynamic approval rules on PostgreSQL.
+//! Integration tests for multi-approver gates on PostgreSQL.
 //!
 //! These tests need a real database (`DATABASE_URL`) because what they check --
 //! the JSONB columns on `ironflow.steps`, the `@>` guard that keeps a vote
-//! idempotent, and the cascade from `iam.users` onto `iam.user_groups` -- lives
-//! in the schema and in SQL, not in Rust.
+//! idempotent, the cascade from `iam.users` onto `iam.user_groups` and the
+//! migration of requirements written by approval rules -- lives in the schema
+//! and in SQL, not in Rust.
 //!
 //! Run them with:
 //!
@@ -18,21 +19,55 @@ use std::env::var;
 
 use chrono::Utc;
 use ironflow_store::entities::{
-    ApprovalRequirement, ApprovalRuleEvaluation, NewRun, NewStep, NewUser, Step, StepApproval,
-    StepKind, StepUpdate, TriggerKind, step_trace_id,
+    ApprovalRequirement, NewRun, NewStep, NewUser, Step, StepApproval, StepKind, StepUpdate,
+    TriggerKind, step_trace_id,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
-use serde_json::json;
+use serde_json::{Value, json};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Row, query, raw_sql};
 use uuid::Uuid;
+
+/// Up script of the migration that replaced approval rules by a reason.
+const REASON_UP: &str =
+    include_str!("../migrations/20260925095549_approval_requirement_reason.up.sql");
+
+/// Down script of the same migration.
+const REASON_DOWN: &str =
+    include_str!("../migrations/20260925095549_approval_requirement_reason.down.sql");
 
 async fn get_store() -> PostgresStore {
     let url = var("DATABASE_URL").expect("DATABASE_URL must be set");
     PostgresStore::new(&url)
         .await
         .expect("failed to connect to PostgreSQL")
+}
+
+/// A raw pool, to write and read the JSONB column the way a migration sees it.
+async fn raw_pool() -> PgPool {
+    let url = var("DATABASE_URL").expect("DATABASE_URL must be set");
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .expect("failed to connect to PostgreSQL")
+}
+
+/// A requirement exactly as approval rules stored it.
+fn rule_requirement() -> Value {
+    json!({
+        "rule_index": 1,
+        "condition": "payload.amount > 10000",
+        "required_approvers": 2,
+        "approver_groups": ["finance"],
+        "evaluated": [
+            {"index": 0, "condition": "payload.amount > 100000", "matched": false},
+            {"index": 1, "condition": "payload.amount > 10000", "matched": true}
+        ]
+    })
 }
 
 /// Create one run holding one approval step.
@@ -100,15 +135,9 @@ async fn requirement_roundtrips_through_update_step() {
     assert!(step.approvals.is_empty());
 
     let requirement = ApprovalRequirement {
-        rule_index: Some(0),
-        condition: Some("payload.amount > 10000".to_string()),
+        reason: Some("amount > 10k".to_string()),
         required_approvers: 2,
         approver_groups: vec!["finance".to_string()],
-        evaluated: vec![ApprovalRuleEvaluation {
-            index: 0,
-            condition: "payload.amount > 10000".to_string(),
-            matched: true,
-        }],
     };
 
     store
@@ -127,6 +156,102 @@ async fn requirement_roundtrips_through_update_step() {
 
     let listed = store.list_steps(step.run_id).await.expect("list");
     assert_eq!(listed[0].approval_requirement, Some(requirement));
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn migration_turns_a_rule_requirement_into_a_reason() {
+    let store = get_store().await;
+    let pool = raw_pool().await;
+    let step = gate(&store).await;
+
+    query("UPDATE ironflow.steps SET approval_requirement = $1 WHERE id = $2")
+        .bind(rule_requirement())
+        .bind(step.id)
+        .execute(&pool)
+        .await
+        .expect("store a rule requirement");
+
+    raw_sql(REASON_UP).execute(&pool).await.expect("migrate up");
+    // Idempotent: a second run leaves the migrated row as it is.
+    raw_sql(REASON_UP)
+        .execute(&pool)
+        .await
+        .expect("migrate up again");
+
+    let fetched = store.get_step(step.id).await.expect("get").expect("exists");
+    assert_eq!(
+        fetched.approval_requirement,
+        Some(ApprovalRequirement {
+            reason: Some("payload.amount > 10000".to_string()),
+            required_approvers: 2,
+            approver_groups: vec!["finance".to_string()],
+        })
+    );
+
+    let raw: Value = query("SELECT approval_requirement FROM ironflow.steps WHERE id = $1")
+        .bind(step.id)
+        .fetch_one(&pool)
+        .await
+        .expect("read row")
+        .get("approval_requirement");
+    assert_eq!(
+        raw,
+        json!({
+            "reason": "payload.amount > 10000",
+            "required_approvers": 2,
+            "approver_groups": ["finance"]
+        })
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn migration_down_restores_the_rule_shape() {
+    let store = get_store().await;
+    let pool = raw_pool().await;
+    let step = gate(&store).await;
+
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                approval_requirement: Some(ApprovalRequirement {
+                    reason: Some("amount > 10k".to_string()),
+                    required_approvers: 2,
+                    approver_groups: vec!["finance".to_string()],
+                }),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("set requirement");
+
+    // The down script rewrites every row: run it in a transaction that is
+    // rolled back, so the shared database keeps the current shape.
+    let mut tx = pool.begin().await.expect("begin");
+    raw_sql(REASON_DOWN)
+        .execute(&mut *tx)
+        .await
+        .expect("migrate down");
+    let raw: Value = query("SELECT approval_requirement FROM ironflow.steps WHERE id = $1")
+        .bind(step.id)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("read row")
+        .get("approval_requirement");
+    tx.rollback().await.expect("rollback");
+
+    assert_eq!(
+        raw,
+        json!({
+            "rule_index": 0,
+            "condition": "amount > 10k",
+            "required_approvers": 2,
+            "approver_groups": ["finance"],
+            "evaluated": []
+        })
+    );
 }
 
 #[tokio::test]

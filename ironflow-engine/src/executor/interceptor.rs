@@ -67,7 +67,7 @@ impl ApprovalOutcome {
 /// ```
 /// use ironflow_engine::config::{ShellConfig, StepConfig};
 /// use ironflow_engine::error::EngineError;
-/// use ironflow_engine::executor::{StepInterceptor, StepOutput};
+/// use ironflow_engine::executor::{StepArtifacts, StepInterceptor, StepOutput};
 /// use rust_decimal::Decimal;
 /// use serde_json::json;
 ///
@@ -86,6 +86,7 @@ impl ApprovalOutcome {
 ///                 output_tokens: None,
 ///                 model: None,
 ///                 debug_messages: None,
+///                 artifacts: StepArtifacts::default(),
 ///             })),
 ///             _ => None,
 ///         }
