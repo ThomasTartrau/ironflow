@@ -1119,6 +1119,11 @@ impl RunStore for PostgresStore {
             push_set!("duration_ms", update.duration_ms);
             push_set!("cost_usd", update.cost_usd);
             push_set!("input_tokens", update.input_tokens);
+            push_set!("cache_read_input_tokens", update.cache_read_input_tokens);
+            push_set!(
+                "cache_creation_input_tokens",
+                update.cache_creation_input_tokens
+            );
             push_set!("output_tokens", update.output_tokens);
             push_set!("started_at", update.started_at);
             push_set!("completed_at", update.completed_at);
@@ -1158,6 +1163,12 @@ impl RunStore for PostgresStore {
                 query = query.bind(cost);
             }
             if let Some(tokens) = update.input_tokens {
+                query = query.bind(tokens as i64);
+            }
+            if let Some(tokens) = update.cache_read_input_tokens {
+                query = query.bind(tokens as i64);
+            }
+            if let Some(tokens) = update.cache_creation_input_tokens {
                 query = query.bind(tokens as i64);
             }
             if let Some(tokens) = update.output_tokens {

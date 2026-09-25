@@ -248,6 +248,8 @@ impl WorkflowTracker {
                     duration_ms = step.duration_ms,
                     cost_usd = step.cost_usd,
                     prompt_usd = bd.prompt_usd,
+                    cache_read_usd = bd.cache_read_usd,
+                    cache_write_usd = bd.cache_write_usd,
                     completion_usd = bd.completion_usd,
                     input_tokens = step.input_tokens,
                     output_tokens = step.output_tokens,
@@ -435,6 +437,8 @@ mod tests {
         let result = make_agent_result(Some(0.05), Some(1000), Some(500));
         let bd = CostBreakdown {
             prompt_usd: 0.003,
+            cache_read_usd: 0.0,
+            cache_write_usd: 0.0,
             completion_usd: 0.047,
             total_usd: 0.05,
         };
@@ -449,6 +453,8 @@ mod tests {
         let result = make_agent_result(Some(0.01), Some(100), Some(50));
         let bd = CostBreakdown {
             prompt_usd: 0.003,
+            cache_read_usd: 0.0,
+            cache_write_usd: 0.0,
             completion_usd: 0.007,
             total_usd: 0.01,
         };

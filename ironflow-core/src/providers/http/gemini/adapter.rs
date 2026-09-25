@@ -193,17 +193,18 @@ impl HttpAgentAdapter for GeminiAdapter {
         }
 
         if let Some(usage) = data.get("usageMetadata") {
-            let input = usage
-                .get("promptTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let (uncached, cached) = split_prompt_tokens(usage);
+            let input = uncached.unwrap_or(0);
+            let cache_read = cached.unwrap_or(0);
             let output = usage
                 .get("candidatesTokenCount")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            if input > 0 || output > 0 {
+            if input > 0 || cache_read > 0 || output > 0 {
                 return Some(SseDelta::Usage {
                     input_tokens: input,
+                    cache_read_input_tokens: cache_read,
+                    cache_creation_input_tokens: 0,
                     output_tokens: output,
                 });
             }
@@ -225,9 +226,13 @@ impl HttpAgentAdapter for GeminiAdapter {
                 SseDelta::Text(t) => text_parts.push(t),
                 SseDelta::Usage {
                     input_tokens,
+                    cache_read_input_tokens,
                     output_tokens,
+                    ..
                 } => {
                     usage.input_tokens = Some(input_tokens);
+                    usage.cache_read_input_tokens =
+                        (cache_read_input_tokens > 0).then_some(cache_read_input_tokens);
                     usage.output_tokens = Some(output_tokens);
                 }
                 _ => {}
@@ -261,9 +266,16 @@ impl HttpAgentAdapter for GeminiAdapter {
         })
     }
 
-    fn compute_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+    fn compute_cost(&self, model: &str, usage: &HttpUsage) -> Option<f64> {
         let pricing = StaticPricing::new();
-        let bd = CostBreakdown::compute(&pricing, model, input_tokens, output_tokens);
+        let bd = CostBreakdown::compute_with_cache(
+            &pricing,
+            model,
+            usage.input_tokens.unwrap_or(0),
+            usage.cache_read_input_tokens.unwrap_or(0),
+            usage.cache_creation_input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+        );
         Some(bd.total_usd)
     }
 
@@ -305,12 +317,31 @@ fn adapt_schema_for_gemini(schema: &Value) -> Value {
     }
 }
 
+/// Split Gemini `promptTokenCount` into `(uncached, cached)`.
+///
+/// Gemini's `promptTokenCount` includes `cachedContentTokenCount`, so the
+/// cached part is subtracted (saturating at 0) to keep `input_tokens` uncached.
+fn split_prompt_tokens(usage: &Value) -> (Option<u64>, Option<u64>) {
+    let prompt = usage.get("promptTokenCount").and_then(|v| v.as_u64());
+    let cached = usage
+        .get("cachedContentTokenCount")
+        .and_then(|v| v.as_u64());
+    (
+        prompt.map(|p| p.saturating_sub(cached.unwrap_or(0))),
+        cached,
+    )
+}
+
 fn parse_gemini_usage(body: &Value) -> HttpUsage {
     let usage = body.get("usageMetadata");
+    let (input_tokens, cache_read_input_tokens) = match usage {
+        Some(u) => split_prompt_tokens(u),
+        None => (None, None),
+    };
     HttpUsage {
-        input_tokens: usage
-            .and_then(|u| u.get("promptTokenCount"))
-            .and_then(|v| v.as_u64()),
+        input_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens: None,
         output_tokens: usage
             .and_then(|u| u.get("candidatesTokenCount"))
             .and_then(|v| v.as_u64()),
@@ -378,6 +409,72 @@ mod tests {
         assert_eq!(result.usage.input_tokens, Some(10));
         assert_eq!(result.usage.output_tokens, Some(5));
         assert_eq!(result.model.as_deref(), Some("gemini-3.5-flash"));
+    }
+
+    #[test]
+    fn parse_response_cache_read_cached_content_token_count() {
+        let a = adapter();
+        let body = json!({
+            "candidates": [{"content": {"parts": [{"text": "Hello!"}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 5, "cachedContentTokenCount": 600}
+        });
+        let config = AgentConfig::new("Hi");
+        let result = a.parse_response(&body, &config).expect("parse failed");
+
+        assert_eq!(result.usage.input_tokens, Some(400));
+        assert_eq!(result.usage.cache_read_input_tokens, Some(600));
+        assert!(result.usage.cache_creation_input_tokens.is_none());
+        assert_eq!(result.usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_response_cache_read_absent_is_none() {
+        let a = adapter();
+        let body = json!({
+            "candidates": [{"content": {"parts": [{"text": "Hello!"}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 5}
+        });
+        let config = AgentConfig::new("Hi");
+        let result = a.parse_response(&body, &config).expect("parse failed");
+
+        assert_eq!(result.usage.input_tokens, Some(1000));
+        assert!(result.usage.cache_read_input_tokens.is_none());
+    }
+
+    #[test]
+    fn parse_response_cache_read_larger_than_prompt_saturates() {
+        let a = adapter();
+        let body = json!({
+            "candidates": [{"content": {"parts": [{"text": "Hello!"}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 5, "cachedContentTokenCount": 300}
+        });
+        let config = AgentConfig::new("Hi");
+        let result = a.parse_response(&body, &config).expect("parse failed");
+
+        assert_eq!(result.usage.input_tokens, Some(0));
+        assert_eq!(result.usage.cache_read_input_tokens, Some(300));
+    }
+
+    #[test]
+    fn parse_sse_line_cache_read_usage() {
+        let a = adapter();
+        let line = r#"{"candidates":[{"content":{"parts":[],"role":"model"}}],"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":5,"cachedContentTokenCount":600}}"#;
+        let delta = a.parse_sse_line(line).expect("parse_sse failed");
+        assert!(matches!(
+            delta,
+            SseDelta::Usage {
+                input_tokens: 400,
+                cache_read_input_tokens: 600,
+                cache_creation_input_tokens: 0,
+                output_tokens: 5
+            }
+        ));
+
+        let result = a
+            .fold_sse_deltas(vec![delta], &AgentConfig::new("Hi"))
+            .expect("fold failed");
+        assert_eq!(result.usage.input_tokens, Some(400));
+        assert_eq!(result.usage.cache_read_input_tokens, Some(600));
     }
 
     #[test]

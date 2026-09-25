@@ -191,6 +191,12 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
         duration_ms: row.get::<i64, _>("duration_ms") as u64,
         cost_usd,
         input_tokens: row.get::<Option<i64>, _>("input_tokens").map(|v| v as u64),
+        cache_read_input_tokens: row
+            .get::<Option<i64>, _>("cache_read_input_tokens")
+            .map(|v| v as u64),
+        cache_creation_input_tokens: row
+            .get::<Option<i64>, _>("cache_creation_input_tokens")
+            .map(|v| v as u64),
         output_tokens: row.get::<Option<i64>, _>("output_tokens").map(|v| v as u64),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),

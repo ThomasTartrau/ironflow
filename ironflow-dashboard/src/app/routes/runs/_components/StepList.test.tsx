@@ -1,7 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { StepResponse } from "@/app/lib/types";
-import { ApprovalProgress, describeApprovalRule } from "./StepList";
+import {
+	ApprovalProgress,
+	describeApprovalRule,
+	StepTokenUsage,
+} from "./StepList";
 
 const RUN_ID = "019a3f2b-0000-7000-8000-0000000000ff";
 
@@ -118,5 +122,48 @@ describe("describeApprovalRule", () => {
 		expect(describeApprovalRule(requirement)).toBe(
 			"Default rule (no condition matched)",
 		);
+	});
+});
+
+describe("StepTokenUsage", () => {
+	const agentStep = (overrides: Partial<StepResponse> = {}) =>
+		stepFixture({
+			name: "review",
+			kind: "agent",
+			status: "completed",
+			approval_requirement: null,
+			approvals: [],
+			approvals_required: null,
+			input_tokens: 100,
+			output_tokens: 20,
+			...overrides,
+		});
+
+	it("shows cache read and cache write tokens", () => {
+		render(
+			<StepTokenUsage
+				step={agentStep({
+					cache_read_input_tokens: 5000,
+					cache_creation_input_tokens: 300,
+				})}
+			/>,
+		);
+
+		expect(screen.getByText("5,000 cache read")).toBeInTheDocument();
+		expect(screen.getByText("300 cache write")).toBeInTheDocument();
+	});
+
+	it("hides cache tokens when they are null", () => {
+		render(
+			<StepTokenUsage
+				step={agentStep({
+					cache_read_input_tokens: null,
+					cache_creation_input_tokens: null,
+				})}
+			/>,
+		);
+
+		expect(screen.queryByText(/cache read/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/cache write/)).not.toBeInTheDocument();
 	});
 });

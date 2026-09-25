@@ -272,6 +272,8 @@ mod tests {
             session_id: None,
             cost_usd: Some(0.01),
             input_tokens: Some(10),
+            cache_read_input_tokens: Some(5),
+            cache_creation_input_tokens: Some(3),
             output_tokens: Some(50),
             model: Some("claude-sonnet".to_string()),
             duration_ms: 100,
@@ -387,6 +389,14 @@ mod tests {
         assert_eq!(result.value, expected.value);
         assert_eq!(result.cost_usd, expected.cost_usd);
         assert_eq!(result.input_tokens, expected.input_tokens);
+        assert_eq!(
+            result.cache_read_input_tokens,
+            expected.cache_read_input_tokens
+        );
+        assert_eq!(
+            result.cache_creation_input_tokens,
+            expected.cache_creation_input_tokens
+        );
     }
 
     // ──── fixture_path naming ─────────────────────────────────────
@@ -484,6 +494,8 @@ mod tests {
             session_id: Some("sess-42".to_string()),
             cost_usd: Some(0.05),
             input_tokens: Some(20),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: Some(100),
             model: Some("claude-sonnet".to_string()),
             duration_ms: 500,

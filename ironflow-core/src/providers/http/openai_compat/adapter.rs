@@ -149,17 +149,18 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
         let data: Value = serde_json::from_str(line).ok()?;
 
         if let Some(usage) = data.get("usage") {
-            let input = usage
-                .get("prompt_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let (uncached, cached) = split_prompt_tokens(usage);
+            let input = uncached.unwrap_or(0);
+            let cache_read = cached.unwrap_or(0);
             let output = usage
                 .get("completion_tokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            if input > 0 || output > 0 {
+            if input > 0 || cache_read > 0 || output > 0 {
                 return Some(SseDelta::Usage {
                     input_tokens: input,
+                    cache_read_input_tokens: cache_read,
+                    cache_creation_input_tokens: 0,
                     output_tokens: output,
                 });
             }
@@ -233,9 +234,13 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
                 }
                 SseDelta::Usage {
                     input_tokens,
+                    cache_read_input_tokens,
                     output_tokens,
+                    ..
                 } => {
                     usage.input_tokens = Some(input_tokens);
+                    usage.cache_read_input_tokens =
+                        (cache_read_input_tokens > 0).then_some(cache_read_input_tokens);
                     usage.output_tokens = Some(output_tokens);
                 }
                 SseDelta::Done | SseDelta::StructuredValue(_) => {}
@@ -281,9 +286,16 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
         })
     }
 
-    fn compute_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+    fn compute_cost(&self, model: &str, usage: &HttpUsage) -> Option<f64> {
         let pricing = StaticPricing::new();
-        let bd = CostBreakdown::compute(&pricing, model, input_tokens, output_tokens);
+        let bd = CostBreakdown::compute_with_cache(
+            &pricing,
+            model,
+            usage.input_tokens.unwrap_or(0),
+            usage.cache_read_input_tokens.unwrap_or(0),
+            usage.cache_creation_input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+        );
         Some(bd.total_usd)
     }
 
@@ -345,12 +357,32 @@ fn parse_tool_calls(message: &Value) -> Vec<HttpToolCall> {
         .unwrap_or_default()
 }
 
+/// Split OpenAI `prompt_tokens` into `(uncached, cached)`.
+///
+/// OpenAI reports cached tokens inside `prompt_tokens_details.cached_tokens`,
+/// and `prompt_tokens` includes them. The uncached part saturates at 0.
+fn split_prompt_tokens(usage: &Value) -> (Option<u64>, Option<u64>) {
+    let prompt = usage.get("prompt_tokens").and_then(|v| v.as_u64());
+    let cached = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|v| v.as_u64());
+    (
+        prompt.map(|p| p.saturating_sub(cached.unwrap_or(0))),
+        cached,
+    )
+}
+
 fn parse_usage(body: &Value) -> HttpUsage {
     let usage = body.get("usage");
+    let (input_tokens, cache_read_input_tokens) = match usage {
+        Some(u) => split_prompt_tokens(u),
+        None => (None, None),
+    };
     HttpUsage {
-        input_tokens: usage
-            .and_then(|u| u.get("prompt_tokens"))
-            .and_then(|v| v.as_u64()),
+        input_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens: None,
         output_tokens: usage
             .and_then(|u| u.get("completion_tokens"))
             .and_then(|v| v.as_u64()),
@@ -513,9 +545,81 @@ mod tests {
             delta,
             SseDelta::Usage {
                 input_tokens: 100,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
                 output_tokens: 50
             }
         ));
+    }
+
+    #[test]
+    fn parse_sse_line_usage_cache_read() {
+        let adapter = openai_adapter();
+        let line = r#"{"usage":{"prompt_tokens":1000,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":800}}}"#;
+        let delta = adapter.parse_sse_line(line).expect("test");
+        assert!(matches!(
+            delta,
+            SseDelta::Usage {
+                input_tokens: 200,
+                cache_read_input_tokens: 800,
+                cache_creation_input_tokens: 0,
+                output_tokens: 50
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_usage_cache_read_from_prompt_tokens_details() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 800}
+            }
+        });
+        let usage = parse_usage(&body);
+        assert_eq!(usage.input_tokens, Some(200));
+        assert_eq!(usage.cache_read_input_tokens, Some(800));
+        assert!(usage.cache_creation_input_tokens.is_none());
+        assert_eq!(usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_usage_cache_read_absent() {
+        let body = json!({"usage": {"prompt_tokens": 1000, "completion_tokens": 5}});
+        let usage = parse_usage(&body);
+        assert_eq!(usage.input_tokens, Some(1000));
+        assert!(usage.cache_read_input_tokens.is_none());
+        assert!(usage.cache_creation_input_tokens.is_none());
+    }
+
+    #[test]
+    fn parse_usage_cache_read_larger_than_prompt_saturates() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 150}
+            }
+        });
+        let usage = parse_usage(&body);
+        assert_eq!(usage.input_tokens, Some(0));
+        assert_eq!(usage.cache_read_input_tokens, Some(150));
+    }
+
+    #[test]
+    fn fold_sse_deltas_cache_read_zero_is_none() {
+        let adapter = openai_adapter();
+        let deltas = vec![SseDelta::Usage {
+            input_tokens: 10,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 5,
+        }];
+        let config = AgentConfig::new("Hi");
+        let result = adapter.fold_sse_deltas(deltas, &config).expect("test");
+        assert!(result.usage.cache_read_input_tokens.is_none());
+        assert!(result.usage.cache_creation_input_tokens.is_none());
     }
 
     #[test]
@@ -560,6 +664,8 @@ mod tests {
             SseDelta::Text("lo".to_string()),
             SseDelta::Usage {
                 input_tokens: 10,
+                cache_read_input_tokens: 40,
+                cache_creation_input_tokens: 0,
                 output_tokens: 5,
             },
             SseDelta::Done,
@@ -569,6 +675,7 @@ mod tests {
 
         assert_eq!(result.text.as_deref(), Some("Hello"));
         assert_eq!(result.usage.input_tokens, Some(10));
+        assert_eq!(result.usage.cache_read_input_tokens, Some(40));
         assert_eq!(result.usage.output_tokens, Some(5));
     }
 

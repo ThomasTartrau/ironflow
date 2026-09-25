@@ -570,6 +570,8 @@ impl RunStore for InMemoryStore {
                 duration_ms: 0,
                 cost_usd: Decimal::ZERO,
                 input_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 output_tokens: None,
                 created_at: now,
                 updated_at: now,
@@ -633,6 +635,12 @@ impl RunStore for InMemoryStore {
             }
             if let Some(tokens) = update.input_tokens {
                 step.input_tokens = Some(tokens);
+            }
+            if let Some(tokens) = update.cache_read_input_tokens {
+                step.cache_read_input_tokens = Some(tokens);
+            }
+            if let Some(tokens) = update.cache_creation_input_tokens {
+                step.cache_creation_input_tokens = Some(tokens);
             }
             if let Some(tokens) = update.output_tokens {
                 step.output_tokens = Some(tokens);

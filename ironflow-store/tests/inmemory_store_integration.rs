@@ -595,6 +595,8 @@ async fn update_step_applies_partial_updates() {
                 duration_ms: Some(1500),
                 cost_usd: Some(Decimal::new(50, 2)),
                 input_tokens: Some(100),
+                cache_read_input_tokens: Some(1000),
+                cache_creation_input_tokens: Some(50),
                 output_tokens: Some(200),
                 ..StepUpdate::default()
             },
@@ -611,6 +613,8 @@ async fn update_step_applies_partial_updates() {
     assert_eq!(step.duration_ms, 1500);
     assert_eq!(step.cost_usd, Decimal::new(50, 2));
     assert_eq!(step.input_tokens, Some(100));
+    assert_eq!(step.cache_read_input_tokens, Some(1000));
+    assert_eq!(step.cache_creation_input_tokens, Some(50));
     assert_eq!(step.output_tokens, Some(200));
 }
 

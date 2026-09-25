@@ -55,8 +55,12 @@ pub struct StepResponse {
     /// Cost in USD.
     #[cfg_attr(feature = "openapi", schema(value_type = f64))]
     pub cost_usd: Decimal,
-    /// Input token count (agent steps).
+    /// Uncached input token count (agent steps).
     pub input_tokens: Option<u64>,
+    /// Input tokens served from the prompt cache (agent steps).
+    pub cache_read_input_tokens: Option<u64>,
+    /// Input tokens written to the prompt cache (agent steps).
+    pub cache_creation_input_tokens: Option<u64>,
     /// Output token count (agent steps).
     pub output_tokens: Option<u64>,
     /// When created.
@@ -143,6 +147,8 @@ impl StepResponse {
             duration_ms: step.duration_ms,
             cost_usd: step.cost_usd,
             input_tokens: step.input_tokens,
+            cache_read_input_tokens: step.cache_read_input_tokens,
+            cache_creation_input_tokens: step.cache_creation_input_tokens,
             output_tokens: step.output_tokens,
             created_at: step.created_at,
             updated_at: step.updated_at,

@@ -26,8 +26,12 @@ pub enum SseDelta {
     },
     /// Token usage reported at stream end.
     Usage {
-        /// Input tokens consumed.
+        /// Uncached input tokens consumed (excludes cache reads and writes).
         input_tokens: u64,
+        /// Input tokens served from the prompt cache (0 when not reported).
+        cache_read_input_tokens: u64,
+        /// Input tokens written to the prompt cache (0 when not reported).
+        cache_creation_input_tokens: u64,
         /// Output tokens generated.
         output_tokens: u64,
     },

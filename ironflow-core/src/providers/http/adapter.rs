@@ -48,8 +48,12 @@ pub struct HttpToolCall {
 /// Token usage from a single turn.
 #[derive(Debug, Default)]
 pub struct HttpUsage {
-    /// Input/prompt tokens consumed.
+    /// Uncached input/prompt tokens consumed (excludes cache reads and writes).
     pub input_tokens: Option<u64>,
+    /// Input tokens served from the prompt cache.
+    pub cache_read_input_tokens: Option<u64>,
+    /// Input tokens written to the prompt cache.
+    pub cache_creation_input_tokens: Option<u64>,
     /// Output/completion tokens generated.
     pub output_tokens: Option<u64>,
 }
@@ -85,8 +89,10 @@ pub trait HttpAgentAdapter: Send + Sync + 'static {
         config: &AgentConfig,
     ) -> Result<TurnResult, AgentError>;
 
-    /// Compute cost in USD from token counts. Returns `None` if unknown.
-    fn compute_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64>;
+    /// Compute cost in USD from the token usage of one turn, pricing
+    /// uncached input, cache reads, cache writes and output separately.
+    /// Returns `None` if unknown.
+    fn compute_cost(&self, model: &str, usage: &HttpUsage) -> Option<f64>;
 
     /// Resolve model alias (e.g. "sonnet") to a provider-specific model ID.
     fn resolve_model(&self, model: &str) -> String;
@@ -239,6 +245,8 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
 struct LoopState {
     start: Instant,
     total_input_tokens: u64,
+    total_cache_read_tokens: Option<u64>,
+    total_cache_creation_tokens: Option<u64>,
     total_output_tokens: u64,
     total_cost: f64,
     model_name: Option<String>,
@@ -251,6 +259,8 @@ impl LoopState {
         Self {
             start,
             total_input_tokens: 0,
+            total_cache_read_tokens: None,
+            total_cache_creation_tokens: None,
             total_output_tokens: 0,
             total_cost: 0.0,
             model_name: None,
@@ -269,6 +279,8 @@ impl LoopState {
                 None
             },
             input_tokens: Some(self.total_input_tokens),
+            cache_read_input_tokens: self.total_cache_read_tokens,
+            cache_creation_input_tokens: self.total_cache_creation_tokens,
             output_tokens: Some(self.total_output_tokens),
             model: self.model_name,
             duration_ms: self.start.elapsed().as_millis() as u64,
@@ -336,14 +348,21 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
                 let turn_output = turn_result.usage.output_tokens.unwrap_or(0);
                 state.total_input_tokens += turn_input;
                 state.total_output_tokens += turn_output;
+                if let Some(v) = turn_result.usage.cache_read_input_tokens {
+                    state.total_cache_read_tokens =
+                        Some(state.total_cache_read_tokens.unwrap_or(0) + v);
+                }
+                if let Some(v) = turn_result.usage.cache_creation_input_tokens {
+                    state.total_cache_creation_tokens =
+                        Some(state.total_cache_creation_tokens.unwrap_or(0) + v);
+                }
 
                 if state.model_name.is_none() {
                     state.model_name = turn_result.model.clone();
                 }
 
                 if let Some(ref model) = state.model_name
-                    && let Some(turn_cost) =
-                        self.adapter.compute_cost(model, turn_input, turn_output)
+                    && let Some(turn_cost) = self.adapter.compute_cost(model, &turn_result.usage)
                 {
                     state.total_cost += turn_cost;
                 }
@@ -383,6 +402,8 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
                         turns = turn + 1,
                         duration_ms = state.start.elapsed().as_millis() as u64,
                         input_tokens = state.total_input_tokens,
+                        cache_read_input_tokens = state.total_cache_read_tokens,
+                        cache_creation_input_tokens = state.total_cache_creation_tokens,
                         output_tokens = state.total_output_tokens,
                         "invocation complete"
                     );

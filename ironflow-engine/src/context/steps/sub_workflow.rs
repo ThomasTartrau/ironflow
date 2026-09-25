@@ -342,6 +342,8 @@ impl WorkflowContext {
                         duration_ms: total_duration,
                         cost_usd: child_ctx.total_cost_usd,
                         input_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         output_tokens: None,
                         model: None,
                         debug_messages: None,

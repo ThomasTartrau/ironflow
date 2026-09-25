@@ -52,6 +52,7 @@
 //! # Panel: Agent token throughput (input + output per minute)
 //! rate(ironflow_agent_tokens_input_total[5m])
 //! rate(ironflow_agent_tokens_output_total[5m])
+//! rate(ironflow_agent_tokens_cache_read_total[5m])
 //!
 //! # Panel: Shell / HTTP step duration P95
 //! histogram_quantile(0.95, rate(ironflow_shell_duration_seconds_bucket[5m]))

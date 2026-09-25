@@ -3161,6 +3161,16 @@ export interface components {
 			 */
 			attempt: number;
 			/**
+			 * Format: int64
+			 * @description Input tokens written to the prompt cache (agent steps).
+			 */
+			cache_creation_input_tokens?: number | null;
+			/**
+			 * Format: int64
+			 * @description Input tokens served from the prompt cache (agent steps).
+			 */
+			cache_read_input_tokens?: number | null;
+			/**
 			 * Format: date-time
 			 * @description When execution completed.
 			 */
@@ -3201,7 +3211,7 @@ export interface components {
 			} | null;
 			/**
 			 * Format: int64
-			 * @description Input token count (agent steps).
+			 * @description Uncached input token count (agent steps).
 			 */
 			input_tokens?: number | null;
 			/** @description Step operation type. */

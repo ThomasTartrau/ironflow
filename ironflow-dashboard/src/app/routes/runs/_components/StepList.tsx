@@ -164,6 +164,30 @@ export function ApprovalProgress({ step }: { step: StepResponse }) {
 	);
 }
 
+export function StepTokenUsage({ step }: { step: StepResponse }) {
+	if (step.input_tokens === null) return null;
+
+	return (
+		<span className="flex items-center gap-1">
+			<Cpu className="w-3 h-3" />
+			{step.input_tokens?.toLocaleString()} in /{" "}
+			{step.output_tokens?.toLocaleString()} out
+			{step.cache_read_input_tokens != null &&
+				step.cache_read_input_tokens > 0 && (
+					<span className="flex items-center gap-1">
+						{step.cache_read_input_tokens.toLocaleString()} cache read
+					</span>
+				)}
+			{step.cache_creation_input_tokens != null &&
+				step.cache_creation_input_tokens > 0 && (
+					<span className="flex items-center gap-1">
+						{step.cache_creation_input_tokens.toLocaleString()} cache write
+					</span>
+				)}
+		</span>
+	);
+}
+
 function getKindColor(kind: string): string {
 	switch (kind) {
 		case "shell":
@@ -771,13 +795,7 @@ function StepRow({ step }: { step: StepResponse }) {
 									<DollarSign className="w-3 h-3" />
 									{formatCost(step.cost_usd)}
 								</span>
-								{step.input_tokens !== null && (
-									<span className="flex items-center gap-1">
-										<Cpu className="w-3 h-3" />
-										{step.input_tokens?.toLocaleString()} in /{" "}
-										{step.output_tokens?.toLocaleString()} out
-									</span>
-								)}
+								<StepTokenUsage step={step} />
 							</div>
 
 							{step.status === "skipped" &&

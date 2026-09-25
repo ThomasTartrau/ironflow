@@ -94,8 +94,14 @@ pub struct Step {
     pub duration_ms: u64,
     /// Cost in USD (agent steps only).
     pub cost_usd: Decimal,
-    /// Input token count (agent steps only).
+    /// Uncached input token count (agent steps only).
     pub input_tokens: Option<u64>,
+    /// Input tokens served from the prompt cache (agent steps only).
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+    /// Input tokens written to the prompt cache (agent steps only).
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
     /// Output token count (agent steps only).
     pub output_tokens: Option<u64>,
     /// When the step was created.
@@ -200,8 +206,14 @@ pub struct StepUpdate {
     pub duration_ms: Option<u64>,
     /// Cost in USD.
     pub cost_usd: Option<Decimal>,
-    /// Input token count.
+    /// Uncached input token count.
     pub input_tokens: Option<u64>,
+    /// Input tokens served from the prompt cache.
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+    /// Input tokens written to the prompt cache.
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
     /// Output token count.
     pub output_tokens: Option<u64>,
     /// When execution started.
@@ -278,6 +290,8 @@ mod tests {
             duration_ms: 2500,
             cost_usd: Decimal::new(150, 2),
             input_tokens: Some(100),
+            cache_read_input_tokens: Some(4000),
+            cache_creation_input_tokens: Some(300),
             output_tokens: Some(200),
             created_at: now,
             updated_at: now,
@@ -318,6 +332,11 @@ mod tests {
         assert_eq!(back.duration_ms, step.duration_ms);
         assert_eq!(back.cost_usd, step.cost_usd);
         assert_eq!(back.input_tokens, step.input_tokens);
+        assert_eq!(back.cache_read_input_tokens, step.cache_read_input_tokens);
+        assert_eq!(
+            back.cache_creation_input_tokens,
+            step.cache_creation_input_tokens
+        );
         assert_eq!(back.output_tokens, step.output_tokens);
         assert_eq!(back.approval_deadline_at, step.approval_deadline_at);
         assert_eq!(back.approval_stage, step.approval_stage);
@@ -343,6 +362,8 @@ mod tests {
             "duration_ms": 0,
             "cost_usd": 0.0,
             "input_tokens": null,
+            "cache_read_input_tokens": null,
+            "cache_creation_input_tokens": null,
             "output_tokens": null,
             "created_at": "2026-09-21T12:00:00Z",
             "updated_at": "2026-09-21T12:00:00Z",
@@ -354,6 +375,8 @@ mod tests {
         let step: Step = serde_json::from_value(payload).expect("deserialize");
 
         assert_eq!(step.approval_stage, 0);
+        assert!(step.cache_read_input_tokens.is_none());
+        assert!(step.cache_creation_input_tokens.is_none());
         assert!(step.approval_deadline_at.is_none());
         assert!(step.approval_assignee.is_none());
         assert!(step.approval_requirement.is_none());
@@ -369,6 +392,8 @@ mod tests {
         assert!(update.duration_ms.is_none());
         assert!(update.cost_usd.is_none());
         assert!(update.input_tokens.is_none());
+        assert!(update.cache_read_input_tokens.is_none());
+        assert!(update.cache_creation_input_tokens.is_none());
         assert!(update.output_tokens.is_none());
         assert!(update.started_at.is_none());
         assert!(update.completed_at.is_none());
@@ -389,6 +414,8 @@ mod tests {
             duration_ms: Some(1000),
             cost_usd: Some(Decimal::new(50, 2)),
             input_tokens: Some(50),
+            cache_read_input_tokens: Some(2000),
+            cache_creation_input_tokens: Some(150),
             output_tokens: Some(75),
             started_at: None,
             completed_at: None,
@@ -408,12 +435,39 @@ mod tests {
         assert_eq!(back.duration_ms, update.duration_ms);
         assert_eq!(back.cost_usd, update.cost_usd);
         assert_eq!(back.input_tokens, update.input_tokens);
+        assert_eq!(back.cache_read_input_tokens, update.cache_read_input_tokens);
+        assert_eq!(
+            back.cache_creation_input_tokens,
+            update.cache_creation_input_tokens
+        );
         assert_eq!(back.output_tokens, update.output_tokens);
         assert_eq!(back.approval_deadline_at, update.approval_deadline_at);
         assert_eq!(back.approval_stage, update.approval_stage);
         assert_eq!(back.approval_assignee, update.approval_assignee);
         assert_eq!(back.approval_requirement, update.approval_requirement);
         assert_eq!(back.clear_approval_deadline, update.clear_approval_deadline);
+    }
+
+    #[test]
+    fn stepupdate_deserializes_without_cache_fields() {
+        let payload = json!({
+            "status": "completed",
+            "output": null,
+            "error": null,
+            "duration_ms": 10,
+            "cost_usd": null,
+            "input_tokens": 12,
+            "output_tokens": 3,
+            "started_at": null,
+            "completed_at": null,
+            "debug_messages": null
+        });
+
+        let update: StepUpdate = serde_json::from_value(payload).expect("deserialize");
+
+        assert_eq!(update.input_tokens, Some(12));
+        assert!(update.cache_read_input_tokens.is_none());
+        assert!(update.cache_creation_input_tokens.is_none());
     }
 
     #[test]
