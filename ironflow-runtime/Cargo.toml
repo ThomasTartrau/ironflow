@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-runtime"
-version = "2.4.44"
+version = "2.4.45"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -13,8 +13,8 @@ exclude = [".gitlab-ci.yml", "release-plz.toml"]
 
 [dependencies]
 ironflow-core = { version = "3.20.0", path = "../ironflow-core" }
-ironflow-engine = { version = "2.38.5", path = "../ironflow-engine" }
-ironflow-store = { version = "2.36.1", path = "../ironflow-store" }
+ironflow-engine = { version = "2.38.6", path = "../ironflow-engine" }
+ironflow-store = { version = "2.36.2", path = "../ironflow-store" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-util = "0.7"
