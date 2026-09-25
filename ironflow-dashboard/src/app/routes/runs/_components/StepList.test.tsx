@@ -92,7 +92,9 @@ describe("ApprovalProgress", () => {
 
 	it("renders nothing when the required count is absent", () => {
 		const { container } = render(
-			<ApprovalProgress step={stepFixture({ approvals_required: undefined })} />,
+			<ApprovalProgress
+				step={stepFixture({ approvals_required: undefined })}
+			/>,
 		);
 
 		expect(container).toBeEmptyDOMElement();

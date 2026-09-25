@@ -3075,7 +3075,9 @@ export interface components {
 			 * @description When this approval gate expires, if it carries an SLA deadline.
 			 */
 			approval_deadline_at?: string | null;
-			approval_requirement?: null | components["schemas"]["ApprovalRequirement"];
+			approval_requirement?:
+				| null
+				| components["schemas"]["ApprovalRequirement"];
 			/**
 			 * Format: int64
 			 * @description Seconds left before the gate escalates. Clamped at 0, `None` when the
