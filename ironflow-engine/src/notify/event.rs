@@ -8,7 +8,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use ironflow_store::entities::LogStream;
-use ironflow_store::models::{Assignee, RunStatus, StepKind};
+use ironflow_store::models::{ApprovalRequirement, Assignee, RunStatus, StepKind};
+
+/// Vote counts assumed for approval events serialized before multi-approver
+/// gates existed: one approval was always enough.
+fn default_approval_count() -> u32 {
+    1
+}
 
 /// Payload of the `Event::RunCreated` event.
 ///
@@ -282,6 +288,9 @@ pub struct StepFailedEvent {
 
 /// Payload of the `Event::ApprovalRequested` event.
 ///
+/// Published when an approval gate opens. Carries the requirement evaluated
+/// from the gate's approval rules, if it has any.
+///
 /// # Examples
 ///
 /// ```
@@ -293,6 +302,7 @@ pub struct StepFailedEvent {
 ///     run_id: Uuid::now_v7(),
 ///     step_id: Uuid::now_v7(),
 ///     message: "Deploy to prod?".to_string(),
+///     requirement: None,
 ///     at: Utc::now(),
 /// };
 /// assert_eq!(payload.message, "Deploy to prod?");
@@ -306,11 +316,20 @@ pub struct ApprovalRequestedEvent {
     pub step_id: Uuid,
     /// Message displayed to reviewers.
     pub message: String,
+    /// Requirement evaluated from the gate's approval rules. `None` for a
+    /// gate without rules: one approval resolves it.
+    #[serde(default)]
+    pub requirement: Option<ApprovalRequirement>,
     /// When the approval was requested.
     pub at: DateTime<Utc>,
 }
 
 /// Payload of the `Event::ApprovalGranted` event.
+///
+/// Published for every vote cast on a gate. A vote with
+/// `approvals_received < approvals_required` is recorded but does not resolve
+/// the gate: the run stays `AwaitingApproval` until enough distinct approvers
+/// voted.
 ///
 /// # Examples
 ///
@@ -321,18 +340,34 @@ pub struct ApprovalRequestedEvent {
 ///
 /// let payload = ApprovalGrantedEvent {
 ///     run_id: Uuid::now_v7(),
+///     step_id: Some(Uuid::now_v7()),
 ///     approved_by: "alice".to_string(),
+///     approvals_received: 1,
+///     approvals_required: 2,
+///     requirement: None,
 ///     at: Utc::now(),
 /// };
-/// assert_eq!(payload.approved_by, "alice");
+/// assert!(payload.approvals_received < payload.approvals_required);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ApprovalGrantedEvent {
     /// Run identifier.
     pub run_id: Uuid,
+    /// Approval step identifier. `None` in events recorded before it existed.
+    #[serde(default)]
+    pub step_id: Option<Uuid>,
     /// User who approved (ID or username).
     pub approved_by: String,
+    /// Distinct approvals recorded on the gate, this one included.
+    #[serde(default = "default_approval_count")]
+    pub approvals_received: u32,
+    /// Distinct approvals needed to resolve the gate.
+    #[serde(default = "default_approval_count")]
+    pub approvals_required: u32,
+    /// Requirement evaluated from the gate's approval rules, if any.
+    #[serde(default)]
+    pub requirement: Option<ApprovalRequirement>,
     /// When the approval was granted.
     pub at: DateTime<Utc>,
 }
@@ -348,7 +383,9 @@ pub struct ApprovalGrantedEvent {
 ///
 /// let payload = ApprovalRejectedEvent {
 ///     run_id: Uuid::now_v7(),
+///     step_id: Some(Uuid::now_v7()),
 ///     rejected_by: "bob".to_string(),
+///     requirement: None,
 ///     at: Utc::now(),
 /// };
 /// assert_eq!(payload.rejected_by, "bob");
@@ -358,8 +395,14 @@ pub struct ApprovalGrantedEvent {
 pub struct ApprovalRejectedEvent {
     /// Run identifier.
     pub run_id: Uuid,
+    /// Approval step identifier. `None` in events recorded before it existed.
+    #[serde(default)]
+    pub step_id: Option<Uuid>,
     /// User who rejected (ID or username).
     pub rejected_by: String,
+    /// Requirement evaluated from the gate's approval rules, if any.
+    #[serde(default)]
+    pub requirement: Option<ApprovalRequirement>,
     /// When the rejection occurred.
     pub at: DateTime<Utc>,
 }
@@ -795,8 +838,10 @@ impl Event {
     /// Only [`StepCompleted`](Event::StepCompleted),
     /// [`StepFailed`](Event::StepFailed),
     /// [`ApprovalRequested`](Event::ApprovalRequested) and
-    /// [`ApprovalEscalated`](Event::ApprovalEscalated) carry a step
-    /// identifier; every other variant returns `None`.
+    /// [`ApprovalEscalated`](Event::ApprovalEscalated) always carry a step
+    /// identifier; [`ApprovalGranted`](Event::ApprovalGranted) and
+    /// [`ApprovalRejected`](Event::ApprovalRejected) carry one when it was
+    /// recorded; every other variant returns `None`.
     ///
     /// # Examples
     ///
@@ -824,13 +869,13 @@ impl Event {
             Event::StepFailed(e) => Some(e.step_id),
             Event::ApprovalRequested(e) => Some(e.step_id),
             Event::ApprovalEscalated(e) => Some(e.step_id),
+            Event::ApprovalGranted(e) => e.step_id,
+            Event::ApprovalRejected(e) => e.step_id,
             Event::RunCreated(_)
             | Event::RunStatusChanged(_)
             | Event::RunFailed(_)
             | Event::RunBudgetExceeded(_)
             | Event::RetryForced(_)
-            | Event::ApprovalGranted(_)
-            | Event::ApprovalRejected(_)
             | Event::LogLine(_)
             | Event::UserSignedIn(_)
             | Event::UserSignedUp(_)
@@ -985,11 +1030,73 @@ mod tests {
     }
 
     #[test]
+    fn legacy_approval_granted_defaults_to_a_single_vote() {
+        let raw = r#"{"type":"approval_granted","run_id":"01890000-0000-7000-8000-000000000000","approved_by":"alice","at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("deserialize");
+        let Event::ApprovalGranted(event) = event else {
+            panic!("expected approval_granted");
+        };
+
+        assert_eq!(event.step_id, None);
+        assert_eq!(event.approvals_received, 1);
+        assert_eq!(event.approvals_required, 1);
+        assert!(event.requirement.is_none());
+    }
+
+    #[test]
+    fn legacy_approval_requested_and_rejected_have_no_requirement() {
+        let raw = r#"{"type":"approval_requested","run_id":"01890000-0000-7000-8000-000000000000","step_id":"01890000-0000-7000-8000-000000000001","message":"ok?","at":"2026-01-01T00:00:00Z"}"#;
+        let requested: Event = serde_json::from_str(raw).expect("deserialize");
+        let Event::ApprovalRequested(requested) = requested else {
+            panic!("expected approval_requested");
+        };
+        assert!(requested.requirement.is_none());
+
+        let raw = r#"{"type":"approval_rejected","run_id":"01890000-0000-7000-8000-000000000000","rejected_by":"bob","at":"2026-01-01T00:00:00Z"}"#;
+        let rejected: Event = serde_json::from_str(raw).expect("deserialize");
+        let Event::ApprovalRejected(rejected) = rejected else {
+            panic!("expected approval_rejected");
+        };
+        assert_eq!(rejected.step_id, None);
+        assert!(rejected.requirement.is_none());
+    }
+
+    #[test]
+    fn approval_granted_roundtrips_the_vote_counts() {
+        let requirement = ApprovalRequirement {
+            rule_index: Some(0),
+            condition: Some("payload.amount > 10000".to_string()),
+            required_approvers: 2,
+            approver_groups: vec!["finance".to_string()],
+            evaluated: Vec::new(),
+        };
+        let event = Event::ApprovalGranted(ApprovalGrantedEvent {
+            run_id: Uuid::now_v7(),
+            step_id: Some(Uuid::now_v7()),
+            approved_by: "alice".to_string(),
+            approvals_received: 1,
+            approvals_required: 2,
+            requirement: Some(requirement.clone()),
+            at: Utc::now(),
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        let Event::ApprovalGranted(back) = back else {
+            panic!("expected approval_granted");
+        };
+        assert_eq!(back.approvals_received, 1);
+        assert_eq!(back.approvals_required, 2);
+        assert_eq!(back.requirement, Some(requirement));
+    }
+
+    #[test]
     fn approval_requested_serde_roundtrip() {
         let event = Event::ApprovalRequested(ApprovalRequestedEvent {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             message: "Deploy to prod?".to_string(),
+            requirement: None,
             at: Utc::now(),
         });
 
@@ -1200,16 +1307,23 @@ mod tests {
                 run_id,
                 step_id: Uuid::now_v7(),
                 message: "ok?".to_string(),
+                requirement: None,
                 at: now,
             }),
             Event::ApprovalGranted(ApprovalGrantedEvent {
                 run_id,
+                step_id: None,
                 approved_by: "alice".to_string(),
+                approvals_received: 1,
+                approvals_required: 1,
+                requirement: None,
                 at: now,
             }),
             Event::ApprovalRejected(ApprovalRejectedEvent {
                 run_id,
+                step_id: None,
                 rejected_by: "bob".to_string(),
+                requirement: None,
                 at: now,
             }),
             Event::LogLine(LogLineEvent {
@@ -1285,6 +1399,23 @@ mod tests {
                 run_id,
                 step_id,
                 message: "ok?".to_string(),
+                requirement: None,
+                at: now,
+            }),
+            Event::ApprovalGranted(ApprovalGrantedEvent {
+                run_id,
+                step_id: Some(step_id),
+                approved_by: "alice".to_string(),
+                approvals_received: 1,
+                approvals_required: 2,
+                requirement: None,
+                at: now,
+            }),
+            Event::ApprovalRejected(ApprovalRejectedEvent {
+                run_id,
+                step_id: Some(step_id),
+                rejected_by: "bob".to_string(),
+                requirement: None,
                 at: now,
             }),
         ];
@@ -1304,9 +1435,14 @@ mod tests {
                 workflow_name: "w".to_string(),
                 at: now,
             }),
+            // A granted event recorded before step ids were carried.
             Event::ApprovalGranted(ApprovalGrantedEvent {
                 run_id,
+                step_id: None,
                 approved_by: "alice".to_string(),
+                approvals_received: 1,
+                approvals_required: 1,
+                requirement: None,
                 at: now,
             }),
             // LogLine carries a step_id field but is reported as a run-level
@@ -1480,6 +1616,7 @@ mod tests {
                     run_id: id,
                     step_id: id,
                     message: "ok?".to_string(),
+                    requirement: None,
                     at: now,
                 }),
                 "approval_requested",
@@ -1487,7 +1624,11 @@ mod tests {
             (
                 Event::ApprovalGranted(ApprovalGrantedEvent {
                     run_id: id,
+                    step_id: Some(id),
                     approved_by: "alice".to_string(),
+                    approvals_received: 1,
+                    approvals_required: 1,
+                    requirement: None,
                     at: now,
                 }),
                 "approval_granted",
@@ -1495,7 +1636,9 @@ mod tests {
             (
                 Event::ApprovalRejected(ApprovalRejectedEvent {
                     run_id: id,
+                    step_id: Some(id),
                     rejected_by: "bob".to_string(),
+                    requirement: None,
                     at: now,
                 }),
                 "approval_rejected",

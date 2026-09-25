@@ -1,5 +1,7 @@
 //! [`UserStore`] trait implementation for [`InMemoryStore`].
 
+use std::collections::BTreeSet;
+
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -107,6 +109,7 @@ impl UserStore for InMemoryStore {
                 .users
                 .remove(&id)
                 .ok_or(StoreError::UserNotFound(id))?;
+            state.user_groups.remove(&id);
             Ok(())
         })
     }
@@ -134,6 +137,34 @@ impl UserStore for InMemoryStore {
             user.password_hash = password_hash;
             user.updated_at = Utc::now();
             Ok(())
+        })
+    }
+
+    fn list_user_groups(&self, user_id: Uuid) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            Ok(state
+                .user_groups
+                .get(&user_id)
+                .map(|groups| groups.iter().cloned().collect())
+                .unwrap_or_default())
+        })
+    }
+
+    fn set_user_groups(&self, user_id: Uuid, groups: Vec<String>) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            if !state.users.contains_key(&user_id) {
+                return Err(StoreError::UserNotFound(user_id));
+            }
+            let groups: BTreeSet<String> = groups.into_iter().collect();
+            let sorted: Vec<String> = groups.iter().cloned().collect();
+            if groups.is_empty() {
+                state.user_groups.remove(&user_id);
+            } else {
+                state.user_groups.insert(user_id, groups);
+            }
+            Ok(sorted)
         })
     }
 }
@@ -440,5 +471,77 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, StoreError::UserNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn set_user_groups_replaces_sorts_and_dedups() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+
+        let groups = store
+            .set_user_groups(
+                user.id,
+                vec!["sre".to_string(), "finance".to_string(), "sre".to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(groups, vec!["finance".to_string(), "sre".to_string()]);
+        assert_eq!(store.list_user_groups(user.id).await.unwrap(), groups);
+
+        let replaced = store
+            .set_user_groups(user.id, vec!["legal".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(replaced, vec!["legal".to_string()]);
+        assert_eq!(
+            store.list_user_groups(user.id).await.unwrap(),
+            vec!["legal".to_string()]
+        );
+
+        let cleared = store.set_user_groups(user.id, Vec::new()).await.unwrap();
+        assert!(cleared.is_empty());
+        assert!(store.list_user_groups(user.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_user_groups_unknown_user_is_not_found() {
+        let store = InMemoryStore::new();
+        let err = store
+            .set_user_groups(Uuid::now_v7(), vec!["sre".to_string()])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::UserNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn list_user_groups_unknown_user_is_empty() {
+        let store = InMemoryStore::new();
+        assert!(
+            store
+                .list_user_groups(Uuid::now_v7())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_user_removes_group_membership() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        store
+            .set_user_groups(user.id, vec!["sre".to_string()])
+            .await
+            .unwrap();
+
+        store.delete_user(user.id).await.unwrap();
+
+        assert!(store.list_user_groups(user.id).await.unwrap().is_empty());
     }
 }

@@ -1,4 +1,4 @@
-//! User subcommands: list, create, delete, set-role.
+//! User subcommands: list, create, delete, set-role, groups, set-groups.
 
 use std::slice;
 
@@ -59,6 +59,23 @@ pub enum UserCommands {
         #[arg(long)]
         member: bool,
     },
+    /// Show the groups a user belongs to.
+    Groups {
+        /// User UUID.
+        id: Uuid,
+    },
+    /// Replace the groups a user belongs to.
+    ///
+    /// Group membership restricts who may vote on an approval gate whose rule
+    /// lists approver groups. Without any `--group`, the user leaves every
+    /// group.
+    SetGroups {
+        /// User UUID.
+        id: Uuid,
+        /// Group name. Repeat the flag for several groups.
+        #[arg(long = "group")]
+        groups: Vec<String>,
+    },
 }
 
 /// Execute a user subcommand.
@@ -109,6 +126,18 @@ pub async fn execute(client: &IronflowClient, args: &UserArgs, json_mode: bool) 
             let response = client.update_role(*id, &request).await?;
             output::print_output(json_mode, &response, || {
                 output::users_table(slice::from_ref(&response.data))
+            })?;
+        }
+        UserCommands::Groups { id } => {
+            let response = client.get_user_groups(*id).await?;
+            output::print_output(json_mode, &response, || {
+                output::user_groups_table(&response.data)
+            })?;
+        }
+        UserCommands::SetGroups { id, groups } => {
+            let response = client.update_user_groups(*id, groups).await?;
+            output::print_output(json_mode, &response, || {
+                output::user_groups_table(&response.data)
             })?;
         }
     }

@@ -6,6 +6,7 @@
 
 mod agent;
 mod approval;
+mod approval_rule;
 mod artifact;
 mod decision;
 pub mod delay;
@@ -16,16 +17,19 @@ mod workflow;
 
 pub use agent::AgentStepConfig;
 pub use approval::ApprovalConfig;
+pub use approval_rule::ApprovalRule;
 pub use artifact::{ArtifactInput, ArtifactOutput};
 pub use decision::{DEFAULT_DECISION_MODEL, DecisionConfig};
 pub use delay::DelayConfig;
 pub use escalation::{EscalationPolicy, NotificationTarget};
 pub use http::HttpConfig;
-// Re-exported so workflow authors can name approval assignees without depending
-// on `ironflow-store` directly.
-pub use ironflow_store::entities::Assignee;
+// Re-exported so workflow authors can name approval assignees and read approval
+// requirements without depending on `ironflow-store` directly.
+pub use ironflow_store::entities::{ApprovalRequirement, Assignee};
 pub use shell::ShellConfig;
 pub use workflow::WorkflowStepConfig;
+
+pub use crate::expression::{Expression, ExpressionError};
 
 use ironflow_core::retry::RetryPolicy;
 use ironflow_store::entities::StepKind;

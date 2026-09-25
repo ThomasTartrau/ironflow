@@ -3,6 +3,7 @@
 //! Includes FSM state resolution from lib_fsm schema.
 
 use rust_decimal::Decimal;
+use serde_json::{Value, from_value};
 use sqlx::Row;
 
 use crate::entities::{Assignee, FsmState, Run, RunActor, RunStatus, Step, StepKind, StepStatus};
@@ -205,6 +206,15 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
             .map(|s| s.parse::<Assignee>())
             .transpose()
             .map_err(|e| StoreError::Database(e.to_string()))?,
+        approval_requirement: row
+            .try_get::<Option<Value>, _>("approval_requirement")
+            .unwrap_or(None)
+            .and_then(|v| from_value(v).ok()),
+        approvals: row
+            .try_get::<Value, _>("approvals")
+            .ok()
+            .and_then(|v| from_value(v).ok())
+            .unwrap_or_default(),
     })
 }
 

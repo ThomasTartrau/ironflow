@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -257,6 +259,65 @@ impl UserStore for PostgresStore {
                 return Err(StoreError::UserNotFound(id));
             }
             Ok(())
+        })
+    }
+
+    fn list_user_groups(&self, user_id: Uuid) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT group_name FROM iam.user_groups WHERE user_id = $1 ORDER BY group_name",
+            )
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))
+        })
+    }
+
+    fn set_user_groups(&self, user_id: Uuid, groups: Vec<String>) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            let groups: Vec<String> = groups
+                .into_iter()
+                .collect::<BTreeSet<String>>()
+                .into_iter()
+                .collect();
+
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let exists = sqlx::query_scalar::<_, i32>("SELECT 1 FROM iam.users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            if exists.is_none() {
+                return Err(StoreError::UserNotFound(user_id));
+            }
+
+            sqlx::query("DELETE FROM iam.user_groups WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            sqlx::query(
+                "INSERT INTO iam.user_groups (user_id, group_name) \
+                 SELECT $1, UNNEST($2::text[]) ON CONFLICT DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(&groups)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(groups)
         })
     }
 }

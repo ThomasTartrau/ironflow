@@ -7,7 +7,7 @@ use crate::entities::{
     MeResponse, RotateSecretsRequest, RotateSecretsResponse, RunDetailResponse, RunResponse,
     ScheduleResponse, SecretResponse, SetSecretRequest, SignInRequest, StatsHistoryBucketResponse,
     StatsHistoryResponse, StatsResponse, StepResponse, UpdateRoleRequest, UpdateScheduleRequest,
-    UserResponse,
+    UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -36,7 +36,9 @@ use ironflow_engine::notify::{
     WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowStepCompletedEvent,
     WorkflowStepFailedEvent, WorkflowStepStartedEvent,
 };
-use ironflow_store::entities::{AuditLogEntry, LogEntry, LogStream};
+use ironflow_store::entities::{
+    ApprovalRequirement, ApprovalRuleEvaluation, AuditLogEntry, LogEntry, LogStream, StepApproval,
+};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
@@ -100,6 +102,8 @@ mod with_signup {
             users::create::create_user,
             users::delete::delete_user,
             users::update_role::update_role,
+            users::groups::get_user_groups,
+            users::groups::update_user_groups,
             secrets::create::create_secret,
             secrets::list::list_secrets,
             secrets::update::update_secret,
@@ -139,6 +143,8 @@ mod with_signup {
                 CreateUserRequest,
                 UserResponse,
                 UpdateRoleRequest,
+                UpdateUserGroupsRequest,
+                UserGroupsResponse,
                 ListWorkflowsQuery,
                 WorkflowSummary,
                 WorkflowDetailResponse,
@@ -171,6 +177,9 @@ mod with_signup {
                 ApprovalRequestedEvent,
                 ApprovalGrantedEvent,
                 ApprovalRejectedEvent,
+                ApprovalRequirement,
+                ApprovalRuleEvaluation,
+                StepApproval,
                 ApprovalEscalatedEvent,
                 LogLineEvent,
                 UserSignedInEvent,
@@ -255,6 +264,8 @@ mod without_signup {
             users::create::create_user,
             users::delete::delete_user,
             users::update_role::update_role,
+            users::groups::get_user_groups,
+            users::groups::update_user_groups,
             secrets::create::create_secret,
             secrets::list::list_secrets,
             secrets::update::update_secret,
@@ -293,6 +304,8 @@ mod without_signup {
                 CreateUserRequest,
                 UserResponse,
                 UpdateRoleRequest,
+                UpdateUserGroupsRequest,
+                UserGroupsResponse,
                 ListWorkflowsQuery,
                 WorkflowSummary,
                 WorkflowDetailResponse,
@@ -325,6 +338,9 @@ mod without_signup {
                 ApprovalRequestedEvent,
                 ApprovalGrantedEvent,
                 ApprovalRejectedEvent,
+                ApprovalRequirement,
+                ApprovalRuleEvaluation,
+                StepApproval,
                 LogLineEvent,
                 UserSignedInEvent,
                 UserSignedUpEvent,

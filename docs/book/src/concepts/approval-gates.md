@@ -197,6 +197,152 @@ A delegated decision names both people. The `approval_granted` (or
 An admin, or the assignee resolving their own gate, is recorded under their own
 name alone.
 
+## Dynamic approval rules
+
+A gate can require more than one approval, and restrict who may vote, depending
+on the run itself: a small payment needs one approver, a large one needs two
+people from finance. Add approval rules with `with_rule`:
+
+```rust,ignore
+use ironflow_engine::config::{ApprovalConfig, ApprovalRule};
+
+ctx.approval(
+    "payment-gate",
+    ApprovalConfig::new("Release the payment?")
+        .with_rule(
+            ApprovalRule::new("payload.amount > 100000", 3)
+                .with_approver_groups(["finance", "board"]),
+        )
+        .with_rule(ApprovalRule::new("payload.amount > 10000", 2).with_approver_groups(["finance"]))
+        .with_rule(ApprovalRule::new("labels.env == 'production'", 2)),
+).await?;
+```
+
+The rules are evaluated once, when the gate opens, in the order they were added.
+**The first matching rule wins** and sets the number of distinct approvals the
+gate needs (`required_approvers`) and, optionally, the groups whose members may
+vote (`approver_groups`). When no rule matches, the default applies: one
+approval, under the usual assignee rules. A gate without any rule behaves
+exactly as before.
+
+The outcome is stored on the step as an `ApprovalRequirement` (matched rule
+index and condition, required count, groups, and every rule evaluated up to the
+match). It is the source of truth from then on: replaying or resuming the run
+never re-evaluates the rules. `GET /api/v1/runs/:id` exposes it on the step as
+`approval_requirement`, with the votes cast so far in `approvals` and the count
+needed in `approvals_required`; the dashboard shows it as an `n/m approvals`
+badge.
+
+`ApprovalRule::new` panics on an invalid condition or on zero approvers, so a
+broken rule fails when the workflow is built, not when a gate opens. A JSON
+config with a bad condition or `required_approvers: 0` is rejected on
+deserialization.
+
+### Condition syntax
+
+A condition is a small boolean expression:
+
+| Syntax | Example |
+|--------|---------|
+| Dotted path | `payload.customer.tier` |
+| Bracket path | `steps["risk-assessment"].output.level`, `payload.items[0]` |
+| Literals | `10000`, `-2.5`, `"high"`, `'high'`, `true`, `false`, `null` |
+| Comparisons | `==`, `!=`, `>`, `>=`, `<`, `<=` |
+| Boolean | `&&`, `||`, `!`, parentheses |
+
+Every path starts from one of these roots:
+
+| Root | Content |
+|------|---------|
+| `output` | Output of the previous step (the last one of a parallel batch) |
+| `payload` | The run payload |
+| `labels` | The run labels |
+| `metadata` | `run_id`, `workflow_name`, `trigger`, `attempt`, `handler_version` |
+| `steps.<name>` | `output`, `kind` and `status` of every step completed earlier in the same attempt, including every step of a parallel batch |
+
+Evaluation never fails:
+
+- a missing path is `null`, so `payload.missing > 1` is false and
+  `payload.missing != 'x'` is true;
+- numbers compare numerically, and a string holding a number is coerced when
+  compared to a number -- labels are always strings, yet `labels.priority > 3`
+  works;
+- strings compare lexicographically; any other type mismatch is false;
+- a bare path is tested for truthiness: `null`, `false`, `0`, `""`, `[]` and
+  `{}` are false.
+
+An unknown root (`foo.bar`), a source longer than 4096 bytes or nested deeper
+than 64 levels is rejected when the rule is built.
+
+### Voting
+
+- **One vote per user.** Votes are counted by user ID: an API key votes as its
+  owner, and the same user approving twice gets `409 Conflict`.
+- **An admin's approval is one vote.** Admins may always vote, even on a gate
+  restricted to groups, but they do not override the count.
+- **A rejection vetoes.** One rejection from anyone allowed to vote fails the
+  run, even after partial approvals.
+- Until the count is reached, `POST /approve` returns `200` with the run still
+  `awaiting_approval`, the gate keeps its SLA timer, and the CLI prints
+  `Approval recorded; more approvals are required.`
+
+An `EscalationPolicy::AutoApprove` still resolves the gate outright, whatever
+the required count.
+
+### Approver groups
+
+When the matched rule lists `approver_groups`, only members of at least one of
+those groups (and admins) may vote. The gate's assignee and approval
+delegations are not consulted. A listed group without members leaves the gate
+to admins.
+
+Group membership is managed by admins:
+
+```bash
+# Put alice in finance and legal (replaces her current groups).
+ironflow user set-groups <alice-id> --group finance --group legal
+
+# Show her groups.
+ironflow user groups <alice-id>
+
+# Remove her from every group.
+ironflow user set-groups <alice-id>
+```
+
+The same operations are available as `GET` and `PUT /api/v1/users/:id/groups`.
+Group names are 1 to 64 characters from `[A-Za-z0-9_.-]`, at most 50 per user.
+
+### Audit events
+
+- `approval_requested` is published when the gate opens and carries the
+  evaluated `requirement`.
+- `approval_granted` is published for **every** vote, with the `step_id`,
+  `approvals_received`, `approvals_required` and the `requirement`. The gate
+  resolves when `approvals_received >= approvals_required`.
+- `approval_rejected` carries the `step_id` and the `requirement`.
+
+```json
+{
+  "type": "approval_granted",
+  "run_id": "01932f...",
+  "step_id": "01932f...",
+  "approved_by": "alice",
+  "approvals_received": 1,
+  "approvals_required": 2,
+  "requirement": {
+    "rule_index": 1,
+    "condition": "payload.amount > 10000",
+    "required_approvers": 2,
+    "approver_groups": ["finance"],
+    "evaluated": [
+      { "index": 0, "condition": "payload.amount > 100000", "matched": false },
+      { "index": 1, "condition": "payload.amount > 10000", "matched": true }
+    ]
+  },
+  "at": "2026-09-24T10:15:00Z"
+}
+```
+
 ## Step replay
 
 After an approval, the engine re-executes the handler from the beginning. Completed steps return their cached output immediately -- they do not re-run. The approved gate is skipped, and execution resumes with the next step.

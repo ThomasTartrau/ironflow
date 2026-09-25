@@ -7,7 +7,9 @@ use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::{AuthMethod, Authenticated};
 use ironflow_engine::notify::{ApprovalGrantedEvent, ApprovalRejectedEvent, Event};
-use ironflow_store::models::{Assignee, Run, RunStatus, Step, StepStatus, StepUpdate};
+use ironflow_store::models::{
+    Assignee, Run, RunStatus, Step, StepApproval, StepStatus, StepUpdate,
+};
 use tokio::spawn;
 use uuid::Uuid;
 
@@ -18,8 +20,16 @@ use crate::state::AppState;
 
 /// Approve a run that is awaiting human approval.
 ///
-/// Transitions the run from `AwaitingApproval` back to `Running`.
-/// Returns 400 if the run is not in `AwaitingApproval` state.
+/// Records the caller's vote on the open gate. Votes are counted per user: an
+/// API key votes as its owner, and an admin's vote counts as one vote like any
+/// other. Once the gate holds as many distinct approvals as its
+/// [`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)
+/// requires (one for a gate without approval rules), the run transitions from
+/// `AwaitingApproval` back to `Running` and resumes. Until then the response
+/// returns the run still `AwaitingApproval`, and the gate keeps its SLA timer.
+///
+/// Returns 400 if the run is not in `AwaitingApproval` state, 403 if the
+/// caller may not vote on the gate, and 409 if the caller already approved it.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -28,11 +38,12 @@ use crate::state::AppState;
         tags = ["runs"],
         params(("id" = Uuid, Path, description = "Run ID")),
         responses(
-            (status = 200, description = "Run approved successfully", body = RunResponse),
+            (status = 200, description = "Approval recorded. The run is `running` once enough distinct approvals were collected, and still `awaiting_approval` when more approvals are required", body = RunResponse),
             (status = 400, description = "Run not awaiting approval"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
-            (status = 404, description = "Run not found")
+            (status = 404, description = "Run not found"),
+            (status = 409, description = "Caller already approved this gate")
         ),
         security(("Bearer" = []))
     )
@@ -47,7 +58,9 @@ pub async fn approve_run(
 
 /// Reject a run that is awaiting human approval.
 ///
-/// Transitions the run from `AwaitingApproval` to `Failed`.
+/// Transitions the run from `AwaitingApproval` to `Failed`. A single rejection
+/// from anyone allowed to vote on the gate vetoes it, even after partial
+/// approvals.
 /// Returns 400 if the run is not in `AwaitingApproval` state.
 #[cfg_attr(
     feature = "openapi",
@@ -78,6 +91,9 @@ pub async fn reject_run(
 /// decision is recorded.
 ///
 /// - An admin resolves any gate under their own name.
+/// - When the gate's approval requirement lists approver groups, only members
+///   of at least one of them may vote; the assignee and delegation rules below
+///   are not consulted.
 /// - The user a gate is assigned to resolves it under their own name.
 /// - Anyone else gets through only when the gate is assigned to an individual
 ///   user and the caller holds an active delegation from that user covering
@@ -112,6 +128,23 @@ async fn authorize_approver(
         .iter()
         .find(|s| s.status.state == StepStatus::AwaitingApproval)
         .ok_or(ApiError::Forbidden)?;
+
+    // Groups restrict who may vote. A listed group without members leaves the
+    // gate to admins.
+    if let Some(requirement) = gate
+        .approval_requirement
+        .as_ref()
+        .filter(|r| !r.allows_everyone())
+    {
+        let groups = state.store.list_user_groups(auth.user_id).await?;
+        let member = groups
+            .iter()
+            .any(|g| requirement.approver_groups.contains(g));
+        if member {
+            return Ok(caller);
+        }
+        return Err(ApiError::Forbidden);
+    }
 
     let assignee_name = match gate.approval_assignee.as_ref() {
         Some(Assignee::User(name)) => name,
@@ -165,6 +198,55 @@ async fn resolve_approval(
     let steps = state.store.list_steps(id).await?;
 
     let actor = authorize_approver(&auth, &state, &run, &steps).await?;
+    let gate = steps
+        .iter()
+        .find(|s| s.status.state == StepStatus::AwaitingApproval);
+    let publisher = state.engine.event_publisher();
+
+    let mut granted = None;
+    if target_status == RunStatus::Running {
+        let mut event = ApprovalGrantedEvent {
+            run_id: id,
+            step_id: None,
+            approved_by: actor.clone(),
+            approvals_received: 1,
+            approvals_required: 1,
+            requirement: None,
+            at: Utc::now(),
+        };
+
+        if let Some(gate) = gate {
+            if gate.approvals.iter().any(|a| a.user_id == auth.user_id) {
+                return Err(ApiError::Conflict(
+                    "you have already approved this gate".to_string(),
+                ));
+            }
+
+            let vote = StepApproval {
+                user_id: auth.user_id,
+                approved_by: actor.clone(),
+                at: event.at,
+            };
+            let updated = state.store.record_step_approval(gate.id, vote).await?;
+
+            event.step_id = Some(gate.id);
+            event.approvals_received = updated.approvals.len() as u32;
+            event.approvals_required = gate
+                .approval_requirement
+                .as_ref()
+                .map_or(1, |r| r.required_approvers);
+            event.requirement = gate.approval_requirement.clone();
+        }
+
+        // Not enough distinct approvers yet: the vote is recorded, the gate
+        // stays open and keeps its SLA timer, the run keeps waiting.
+        if event.approvals_received < event.approvals_required {
+            publisher.publish(Event::ApprovalGranted(event));
+            let pending = state.get_run_or_404(id).await?;
+            return Ok(ok(RunResponse::from(pending)));
+        }
+        granted = Some(event);
+    }
 
     for step in &steps {
         if step.status.state != StepStatus::AwaitingApproval {
@@ -190,20 +272,15 @@ async fn resolve_approval(
 
     state.store.update_run_status(id, target_status).await?;
 
-    let publisher = state.engine.event_publisher();
-    let now = Utc::now();
-    if target_status == RunStatus::Running {
-        publisher.publish(Event::ApprovalGranted(ApprovalGrantedEvent {
+    match granted {
+        Some(event) => publisher.publish(Event::ApprovalGranted(event)),
+        None => publisher.publish(Event::ApprovalRejected(ApprovalRejectedEvent {
             run_id: id,
-            approved_by: actor,
-            at: now,
-        }));
-    } else {
-        publisher.publish(Event::ApprovalRejected(ApprovalRejectedEvent {
-            run_id: id,
+            step_id: gate.map(|g| g.id),
             rejected_by: actor,
-            at: now,
-        }));
+            requirement: gate.and_then(|g| g.approval_requirement.clone()),
+            at: Utc::now(),
+        })),
     }
 
     // On approval, resume the run in the background.
@@ -243,8 +320,8 @@ mod tests {
     use ironflow_store::audit_log_store::AuditLogStore;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
-        AuditLogFilter, EventKind, NewApprovalDelegation, NewRun, NewStep, NewUser, RunStatus,
-        StepKind, StepStatus, TriggerKind, User, step_trace_id,
+        ApprovalRequirement, AuditLogFilter, EventKind, NewApprovalDelegation, NewRun, NewStep,
+        NewUser, RunStatus, StepKind, StepStatus, TriggerKind, User, step_trace_id,
     };
     use ironflow_store::store::RunStore;
     use ironflow_store::user_store::UserStore;
@@ -1139,6 +1216,301 @@ mod tests {
             payload["approved_by"], "testuser",
             "an admin approves under their own name"
         );
+    }
+
+    // -- multi-approver gates --
+
+    /// A `payments` run awaiting approval on a gate whose stored requirement
+    /// needs `required` distinct approvals from members of `groups`.
+    async fn run_with_gate_requiring(
+        store: &Arc<InMemoryStore>,
+        required: u32,
+        groups: &[&str],
+    ) -> (Uuid, Uuid) {
+        let run_id = run_with_gate_assigned_to(store, "payments", None).await;
+        let gate = store.list_steps(run_id).await.unwrap().remove(0);
+        let requirement = ApprovalRequirement {
+            rule_index: Some(0),
+            condition: Some("payload.amount > 10000".to_string()),
+            required_approvers: required,
+            approver_groups: groups.iter().map(|g| g.to_string()).collect(),
+            evaluated: Vec::new(),
+        };
+        store
+            .update_step(
+                gate.id,
+                StepUpdate {
+                    approval_requirement: Some(requirement),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        (run_id, gate.id)
+    }
+
+    /// A non-admin user belonging to the `finance` group.
+    async fn finance_member(store: &Arc<InMemoryStore>, username: &str) -> User {
+        let user = member(store, username).await;
+        store
+            .set_user_groups(user.id, vec!["finance".to_string()])
+            .await
+            .expect("set groups");
+        user
+    }
+
+    #[tokio::test]
+    async fn first_of_two_approvals_keeps_the_gate_open() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = finance_member(&store, "alice").await;
+        let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state(store.clone());
+        let auth = member_header(&alice, &state);
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::AwaitingApproval);
+        let gate = store.get_step(gate_id).await.unwrap().unwrap();
+        assert_eq!(gate.status.state, StepStatus::AwaitingApproval);
+        assert!(
+            gate.approval_deadline_at.is_some(),
+            "a partially approved gate keeps its SLA timer"
+        );
+        assert_eq!(gate.approvals.len(), 1);
+        assert_eq!(gate.approvals[0].user_id, alice.id);
+        assert_eq!(gate.approvals[0].approved_by, "alice");
+    }
+
+    #[tokio::test]
+    async fn partial_approval_returns_the_run_still_awaiting_approval() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = finance_member(&store, "alice").await;
+        let (run_id, _gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state(store.clone());
+        let auth = member_header(&alice, &state);
+        let app = Router::new()
+            .route("/{id}/approve", post(approve_run))
+            .with_state(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{run_id}/approve"))
+            .header("content-type", "application/json")
+            .header("authorization", auth)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"], "awaiting_approval");
+    }
+
+    #[tokio::test]
+    async fn second_distinct_approver_resolves_the_gate() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = finance_member(&store, "alice").await;
+        let bob = finance_member(&store, "bob").await;
+        let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state(store.clone());
+        let alice_auth = member_header(&alice, &state);
+        let bob_auth = member_header(&bob, &state);
+        assert_eq!(
+            resolve_as(state.clone(), &alice_auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+        assert_eq!(
+            resolve_as(state, &bob_auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Running);
+        let gate = store.get_step(gate_id).await.unwrap().unwrap();
+        assert!(gate.approval_deadline_at.is_none());
+        let voters: Vec<Uuid> = gate.approvals.iter().map(|a| a.user_id).collect();
+        assert_eq!(voters, vec![alice.id, bob.id]);
+    }
+
+    #[tokio::test]
+    async fn the_same_user_cannot_approve_twice() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = finance_member(&store, "alice").await;
+        let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state(store.clone());
+        let auth = member_header(&alice, &state);
+        assert_eq!(
+            resolve_as(state.clone(), &auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::CONFLICT
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::AwaitingApproval);
+        let gate = store.get_step(gate_id).await.unwrap().unwrap();
+        assert_eq!(gate.approvals.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_non_member_of_the_approver_groups_is_forbidden() {
+        let store = Arc::new(InMemoryStore::new());
+        let carol = member(&store, "carol").await;
+        store
+            .set_user_groups(carol.id, vec!["legal".to_string()])
+            .await
+            .unwrap();
+        let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state(store.clone());
+        let auth = member_header(&carol, &state);
+        assert_eq!(
+            resolve_as(state.clone(), &auth, run_id, "approve").await,
+            HttpStatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "reject").await,
+            HttpStatusCode::FORBIDDEN
+        );
+
+        let gate = store.get_step(gate_id).await.unwrap().unwrap();
+        assert!(gate.approvals.is_empty());
+        assert_eq!(gate.status.state, StepStatus::AwaitingApproval);
+    }
+
+    #[tokio::test]
+    async fn approver_groups_override_the_assignee() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = member(&store, "alice").await;
+        let bob = finance_member(&store, "bob").await;
+        let (run_id, _gate_id) = run_with_gate_requiring(&store, 1, &["finance"]).await;
+        let gate = store.list_steps(run_id).await.unwrap().remove(0);
+        store
+            .update_step(
+                gate.id,
+                StepUpdate {
+                    approval_assignee: Some(Assignee::user("alice")),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let alice_auth = member_header(&alice, &state);
+        assert_eq!(
+            resolve_as(state.clone(), &alice_auth, run_id, "approve").await,
+            HttpStatusCode::FORBIDDEN,
+            "the assignee is not a member of the approver groups"
+        );
+
+        let bob_auth = member_header(&bob, &state);
+        assert_eq!(
+            resolve_as(state, &bob_auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn an_admin_vote_counts_as_one() {
+        let store = Arc::new(InMemoryStore::new());
+        let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state(store.clone());
+        let auth = make_auth_header(&state);
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::AwaitingApproval);
+        let gate = store.get_step(gate_id).await.unwrap().unwrap();
+        assert_eq!(gate.approvals.len(), 1);
+        assert_eq!(gate.approvals[0].approved_by, "testuser");
+    }
+
+    #[tokio::test]
+    async fn a_rejection_after_a_partial_approval_fails_the_run() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = finance_member(&store, "alice").await;
+        let bob = finance_member(&store, "bob").await;
+        let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state_with_audit_log(store.clone());
+        let alice_auth = member_header(&alice, &state);
+        let bob_auth = member_header(&bob, &state);
+        assert_eq!(
+            resolve_as(state.clone(), &alice_auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+        assert_eq!(
+            resolve_as(state, &bob_auth, run_id, "reject").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Failed);
+        let gate = store.get_step(gate_id).await.unwrap().unwrap();
+        assert_eq!(gate.status.state, StepStatus::Rejected);
+        assert!(gate.approval_deadline_at.is_none());
+
+        let payload = await_audit_payload(&store, run_id, EventKind::ApprovalRejected).await;
+        assert_eq!(payload["rejected_by"], "bob");
+        assert_eq!(payload["step_id"], json!(gate_id));
+        assert_eq!(payload["requirement"]["required_approvers"], json!(2));
+    }
+
+    #[tokio::test]
+    async fn granted_audit_entry_carries_the_vote_counts() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = finance_member(&store, "alice").await;
+        let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
+
+        let state = test_state_with_audit_log(store.clone());
+        let auth = member_header(&alice, &state);
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let payload = await_audit_payload(&store, run_id, EventKind::ApprovalGranted).await;
+        assert_eq!(payload["approved_by"], "alice");
+        assert_eq!(payload["step_id"], json!(gate_id));
+        assert_eq!(payload["approvals_received"], json!(1));
+        assert_eq!(payload["approvals_required"], json!(2));
+        assert_eq!(payload["requirement"]["rule_index"], json!(0));
+    }
+
+    #[tokio::test]
+    async fn a_rule_less_gate_is_resolved_by_one_approval() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = run_with_gate_assigned_to(&store, "deploy", None).await;
+
+        let state = test_state_with_audit_log(store.clone());
+        let auth = make_auth_header(&state);
+        assert_eq!(
+            resolve_as(state, &auth, run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Running);
+        let payload = await_audit_payload(&store, run_id, EventKind::ApprovalGranted).await;
+        assert_eq!(payload["approvals_received"], json!(1));
+        assert_eq!(payload["approvals_required"], json!(1));
+        assert_eq!(payload["requirement"], JsonValue::Null);
     }
 
     #[tokio::test]

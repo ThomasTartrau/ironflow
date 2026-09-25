@@ -365,6 +365,7 @@ mod tests {
             run_id: Uuid::now_v7(),
             step_id: Uuid::now_v7(),
             message: "Deploy to prod?".to_string(),
+            requirement: None,
             at: Utc::now(),
         });
 

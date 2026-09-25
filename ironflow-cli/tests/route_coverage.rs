@@ -178,6 +178,16 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/users/{id}/role",
         Coverage::Command(&["user", "set-role", UUID, "--admin"]),
     ),
+    (
+        "GET",
+        "/api/v1/users/{id}/groups",
+        Coverage::Command(&["user", "groups", UUID]),
+    ),
+    (
+        "PUT",
+        "/api/v1/users/{id}/groups",
+        Coverage::Command(&["user", "set-groups", UUID, "--group", "finance"]),
+    ),
     // ── Audit logs ──
     (
         "GET",

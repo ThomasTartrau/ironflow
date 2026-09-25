@@ -269,6 +269,10 @@ pub async fn execute(
             output::print_output(json_mode, &response, || {
                 output::runs_table(slice::from_ref(&response.data))
             })?;
+            // A multi-approver gate stays open until enough distinct users voted.
+            if !json_mode && matches!(response.data.status, RunStatus::AwaitingApproval) {
+                println!("Approval recorded; more approvals are required.");
+            }
         }
         RunCommands::Reject { id } => {
             let response = client.reject_run(*id).await?;

@@ -40,8 +40,8 @@ use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
 use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
 use crate::notify::{
-    Event, EventPublisher, EventSubscriber, RunBudgetExceededEvent, RunFailedEvent,
-    RunStatusChangedEvent, WorkflowEventBus,
+    ApprovalRequestedEvent, Event, EventPublisher, EventSubscriber, RunBudgetExceededEvent,
+    RunFailedEvent, RunStatusChangedEvent, WorkflowEventBus,
 };
 use crate::plan::{
     ExecutionPlan, PlanOptions, PlanRecorder, SharedPlanRecorder, estimate_durations, lock_plan,
@@ -1396,6 +1396,21 @@ impl Engine {
                     message = %message,
                     "run awaiting approval"
                 );
+
+                // The requirement was evaluated and stored when the gate opened.
+                let requirement = self
+                    .store
+                    .get_step(step_id)
+                    .await?
+                    .and_then(|s| s.approval_requirement);
+                self.event_publisher
+                    .publish(Event::ApprovalRequested(ApprovalRequestedEvent {
+                        run_id: approval_run_id,
+                        step_id,
+                        message: message.clone(),
+                        requirement,
+                        at: Utc::now(),
+                    }));
             }
             Err(EngineError::DelaySleeping {
                 run_id: delay_run_id,

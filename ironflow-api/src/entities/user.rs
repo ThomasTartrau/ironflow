@@ -61,3 +61,25 @@ pub struct UpdateRoleRequest {
     /// New admin status.
     pub is_admin: bool,
 }
+
+/// Request body for replacing a user's group memberships (admin only).
+///
+/// Group names are trimmed and deduplicated. Each must be 1 to 64 characters
+/// from `[A-Za-z0-9_.-]`, with at most 50 groups. An empty list removes the
+/// user from every group.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserGroupsRequest {
+    /// The complete new set of groups.
+    pub groups: Vec<String>,
+}
+
+/// Response DTO for a user's group memberships.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Serialize)]
+pub struct UserGroupsResponse {
+    /// User ID.
+    pub user_id: Uuid,
+    /// Groups the user belongs to, sorted by name.
+    pub groups: Vec<String>,
+}

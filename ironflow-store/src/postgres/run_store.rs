@@ -1,11 +1,13 @@
 use chrono::{DateTime, Duration, Utc};
+use serde_json::to_value;
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::entities::{
     IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
     PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter, RunStats,
-    RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepDependency, StepUpdate,
+    RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval,
+    StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -1129,6 +1131,12 @@ impl RunStore for PostgresStore {
             }
             push_set!("approval_stage", update.approval_stage);
             push_set!("approval_assignee", update.approval_assignee);
+            let requirement_json = update
+                .approval_requirement
+                .as_ref()
+                .map(to_value)
+                .transpose()?;
+            push_set!("approval_requirement", requirement_json);
 
             let sql = format!(
                 "UPDATE ironflow.steps SET {} WHERE id = ${bind_idx}",
@@ -1175,6 +1183,9 @@ impl RunStore for PostgresStore {
             if let Some(ref assignee) = update.approval_assignee {
                 query = query.bind(assignee.to_string());
             }
+            if let Some(ref requirement) = requirement_json {
+                query = query.bind(requirement);
+            }
 
             query = query.bind(id);
 
@@ -1212,6 +1223,33 @@ impl RunStore for PostgresStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             row.map(|r| row_to_step(&r)).transpose()
+        })
+    }
+
+    fn record_step_approval(&self, step_id: Uuid, approval: StepApproval) -> StoreFuture<'_, Step> {
+        Box::pin(async move {
+            let approval_json = to_value(&approval)?;
+
+            // The `@>` guard makes the append idempotent under concurrent votes
+            // of the same user: zero rows updated simply means the vote exists.
+            sqlx::query(
+                r#"
+                UPDATE ironflow.steps
+                   SET approvals = approvals || jsonb_build_array($2::jsonb), updated_at = NOW()
+                 WHERE id = $1
+                   AND NOT (approvals @> jsonb_build_array(jsonb_build_object('user_id', $3::text)))
+                "#,
+            )
+            .bind(step_id)
+            .bind(approval_json)
+            .bind(approval.user_id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            self.get_step(step_id)
+                .await?
+                .ok_or(StoreError::StepNotFound(step_id))
         })
     }
 

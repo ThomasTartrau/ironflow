@@ -2,5 +2,6 @@
 
 pub mod create;
 pub mod delete;
+pub mod groups;
 pub mod list;
 pub mod update_role;

@@ -6,6 +6,7 @@
 pub mod api_key;
 pub mod api_key_scope;
 mod approval_delegation;
+mod approval_requirement;
 mod artifact;
 mod assignee;
 mod audit_log;
@@ -33,6 +34,7 @@ pub use approval_delegation::{
     ApprovalDelegation, DelegationFilter, NewApprovalDelegation, WorkflowFilterError,
     validate_workflow_filter,
 };
+pub use approval_requirement::{ApprovalRequirement, ApprovalRuleEvaluation, StepApproval};
 pub use artifact::{Artifact, ArtifactLookup, NewArtifact};
 pub use assignee::{Assignee, AssigneeParseError};
 pub use audit_log::{AuditLogEntry, AuditLogFilter, NewAuditLogEntry};

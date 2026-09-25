@@ -31,7 +31,7 @@
 //! # }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -60,6 +60,8 @@ pub(super) struct State {
     pub(super) step_dependencies: Vec<crate::entities::StepDependency>,
     pub(super) artifacts: HashMap<Uuid, crate::entities::Artifact>,
     pub(super) users: HashMap<Uuid, User>,
+    /// Group membership per user, kept sorted and deduplicated.
+    pub(super) user_groups: HashMap<Uuid, BTreeSet<String>>,
     pub(super) api_keys: HashMap<Uuid, crate::entities::ApiKey>,
     pub(super) secrets: HashMap<String, EncryptedSecret>,
     pub(super) schedules: HashMap<Uuid, crate::entities::Schedule>,

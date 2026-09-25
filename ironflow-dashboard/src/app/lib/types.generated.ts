@@ -390,8 +390,16 @@ export interface paths {
 		put?: never;
 		/**
 		 * Approve a run that is awaiting human approval.
-		 * @description Transitions the run from `AwaitingApproval` back to `Running`.
-		 *     Returns 400 if the run is not in `AwaitingApproval` state.
+		 * @description Records the caller's vote on the open gate. Votes are counted per user: an
+		 *     API key votes as its owner, and an admin's vote counts as one vote like any
+		 *     other. Once the gate holds as many distinct approvals as its
+		 *     [`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)
+		 *     requires (one for a gate without approval rules), the run transitions from
+		 *     `AwaitingApproval` back to `Running` and resumes. Until then the response
+		 *     returns the run still `AwaitingApproval`, and the gate keeps its SLA timer.
+		 *
+		 *     Returns 400 if the run is not in `AwaitingApproval` state, 403 if the
+		 *     caller may not vote on the gate, and 409 if the caller already approved it.
 		 */
 		post: operations["approve_run"];
 		delete?: never;
@@ -486,7 +494,9 @@ export interface paths {
 		put?: never;
 		/**
 		 * Reject a run that is awaiting human approval.
-		 * @description Transitions the run from `AwaitingApproval` to `Failed`.
+		 * @description Transitions the run from `AwaitingApproval` to `Failed`. A single rejection
+		 *     from anyone allowed to vote on the gate vetoes it, even after partial
+		 *     approvals.
 		 *     Returns 400 if the run is not in `AwaitingApproval` state.
 		 */
 		post: operations["reject_run"];
@@ -899,6 +909,41 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/users/{id}/groups": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List the groups a user belongs to. Admin only.
+		 * @description # Errors
+		 *
+		 *     - 403 if the caller is not an admin
+		 *     - 404 if the user does not exist
+		 */
+		get: operations["get_user_groups"];
+		/**
+		 * Replace the groups a user belongs to. Admin only.
+		 * @description Names are trimmed, deduplicated and returned sorted. An empty list removes
+		 *     the user from every group.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if a group name is empty, longer than 64 characters, uses a
+		 *       character outside `[A-Za-z0-9_.-]`, or if more than 50 groups are given
+		 *     - 403 if the caller is not an admin
+		 *     - 404 if the user does not exist
+		 */
+		put: operations["update_user_groups"];
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/users/{id}/role": {
 		parameters: {
 			query?: never;
@@ -1146,6 +1191,11 @@ export interface components {
 		/**
 		 * @description Payload of the `Event::ApprovalGranted` event.
 		 *
+		 *     Published for every vote cast on a gate. A vote with
+		 *     `approvals_received < approvals_required` is recorded but does not resolve
+		 *     the gate: the run stays `AwaitingApproval` until enough distinct approvers
+		 *     voted.
+		 *
 		 *     # Examples
 		 *
 		 *     ```
@@ -1155,13 +1205,27 @@ export interface components {
 		 *
 		 *     let payload = ApprovalGrantedEvent {
 		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Some(Uuid::now_v7()),
 		 *         approved_by: "alice".to_string(),
+		 *         approvals_received: 1,
+		 *         approvals_required: 2,
+		 *         requirement: None,
 		 *         at: Utc::now(),
 		 *     };
-		 *     assert_eq!(payload.approved_by, "alice");
+		 *     assert!(payload.approvals_received < payload.approvals_required);
 		 *     ```
 		 */
 		ApprovalGrantedEvent: {
+			/**
+			 * Format: int32
+			 * @description Distinct approvals recorded on the gate, this one included.
+			 */
+			approvals_received?: number;
+			/**
+			 * Format: int32
+			 * @description Distinct approvals needed to resolve the gate.
+			 */
+			approvals_required?: number;
 			/** @description User who approved (ID or username). */
 			approved_by: string;
 			/**
@@ -1169,11 +1233,17 @@ export interface components {
 			 * @description When the approval was granted.
 			 */
 			at: string;
+			requirement?: null | components["schemas"]["ApprovalRequirement"];
 			/**
 			 * Format: uuid
 			 * @description Run identifier.
 			 */
 			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description Approval step identifier. `None` in events recorded before it existed.
+			 */
+			step_id?: string | null;
 		};
 		/**
 		 * @description Payload of the `Event::ApprovalRejected` event.
@@ -1187,7 +1257,9 @@ export interface components {
 		 *
 		 *     let payload = ApprovalRejectedEvent {
 		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Some(Uuid::now_v7()),
 		 *         rejected_by: "bob".to_string(),
+		 *         requirement: None,
 		 *         at: Utc::now(),
 		 *     };
 		 *     assert_eq!(payload.rejected_by, "bob");
@@ -1201,14 +1273,23 @@ export interface components {
 			at: string;
 			/** @description User who rejected (ID or username). */
 			rejected_by: string;
+			requirement?: null | components["schemas"]["ApprovalRequirement"];
 			/**
 			 * Format: uuid
 			 * @description Run identifier.
 			 */
 			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description Approval step identifier. `None` in events recorded before it existed.
+			 */
+			step_id?: string | null;
 		};
 		/**
 		 * @description Payload of the `Event::ApprovalRequested` event.
+		 *
+		 *     Published when an approval gate opens. Carries the requirement evaluated
+		 *     from the gate's approval rules, if it has any.
 		 *
 		 *     # Examples
 		 *
@@ -1221,6 +1302,7 @@ export interface components {
 		 *         run_id: Uuid::now_v7(),
 		 *         step_id: Uuid::now_v7(),
 		 *         message: "Deploy to prod?".to_string(),
+		 *         requirement: None,
 		 *         at: Utc::now(),
 		 *     };
 		 *     assert_eq!(payload.message, "Deploy to prod?");
@@ -1234,6 +1316,7 @@ export interface components {
 			at: string;
 			/** @description Message displayed to reviewers. */
 			message: string;
+			requirement?: null | components["schemas"]["ApprovalRequirement"];
 			/**
 			 * Format: uuid
 			 * @description Run identifier.
@@ -1244,6 +1327,78 @@ export interface components {
 			 * @description Approval step identifier.
 			 */
 			step_id: string;
+		};
+		/**
+		 * @description The approval requirement evaluated when a gate opened.
+		 *
+		 *     A step without approval rules carries no requirement at all; the default
+		 *     value (one approval from anyone allowed to answer the gate) applies.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::ApprovalRequirement;
+		 *
+		 *     let requirement = ApprovalRequirement {
+		 *         rule_index: Some(0),
+		 *         condition: Some("payload.amount > 10000".to_string()),
+		 *         required_approvers: 2,
+		 *         approver_groups: vec!["finance".to_string()],
+		 *         evaluated: Vec::new(),
+		 *     };
+		 *     assert!(!requirement.is_satisfied_by(1));
+		 *     assert!(requirement.is_satisfied_by(2));
+		 *     assert!(!requirement.allows_everyone());
+		 *     ```
+		 */
+		ApprovalRequirement: {
+			/**
+			 * @description Groups whose members may vote. Empty means anyone allowed to answer
+			 *     the gate may vote.
+			 */
+			approver_groups?: string[];
+			/** @description Source of the matched rule condition. */
+			condition?: string | null;
+			/** @description Rules evaluated in order, up to and including the matched one. */
+			evaluated?: components["schemas"]["ApprovalRuleEvaluation"][];
+			/**
+			 * Format: int32
+			 * @description Number of distinct approvals needed to resolve the gate.
+			 */
+			required_approvers: number;
+			/**
+			 * Format: int32
+			 * @description Index of the matched rule. `None` means no rule matched and the default
+			 *     requirement applies.
+			 */
+			rule_index?: number | null;
+		};
+		/**
+		 * @description Outcome of evaluating one approval rule when a gate opens.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::ApprovalRuleEvaluation;
+		 *
+		 *     let evaluation = ApprovalRuleEvaluation {
+		 *         index: 0,
+		 *         condition: "payload.amount > 10000".to_string(),
+		 *         matched: true,
+		 *     };
+		 *     assert!(evaluation.matched);
+		 *     ```
+		 */
+		ApprovalRuleEvaluation: {
+			/** @description Source of the rule condition. */
+			condition: string;
+			/**
+			 * Format: int32
+			 * @description Position of the rule in the step configuration (0-based).
+			 */
+			index: number;
+			/** @description Whether the condition evaluated to `true`. */
+			matched: boolean;
 		};
 		/**
 		 * @description An artifact as exposed by the REST API.
@@ -2817,6 +2972,41 @@ export interface components {
 			total_runs: number;
 		};
 		/**
+		 * @description One vote cast on an approval gate.
+		 *
+		 *     Votes are unique per [`user_id`](StepApproval::user_id): an API key votes as
+		 *     its owner, and a user voting twice is ignored by the store.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_store::entities::StepApproval;
+		 *     use uuid::Uuid;
+		 *
+		 *     let vote = StepApproval {
+		 *         user_id: Uuid::now_v7(),
+		 *         approved_by: "alice".to_string(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(vote.approved_by, "alice");
+		 *     ```
+		 */
+		StepApproval: {
+			/** @description Display name of the voter at vote time. */
+			approved_by: string;
+			/**
+			 * Format: date-time
+			 * @description When the vote was cast.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description The user who voted.
+			 */
+			user_id: string;
+		};
+		/**
 		 * @description Payload of the `Event::StepCompleted` event.
 		 *
 		 *     # Examples
@@ -2938,12 +3128,23 @@ export interface components {
 			 * @description When this approval gate expires, if it carries an SLA deadline.
 			 */
 			approval_deadline_at?: string | null;
+			approval_requirement?:
+				| null
+				| components["schemas"]["ApprovalRequirement"];
 			/**
 			 * Format: int64
 			 * @description Seconds left before the gate escalates. Clamped at 0, `None` when the
 			 *     step has no deadline.
 			 */
 			approval_seconds_remaining?: number | null;
+			/** @description Votes cast on the approval gate so far, at most one per user. */
+			approvals?: components["schemas"]["StepApproval"][];
+			/**
+			 * Format: int32
+			 * @description Distinct approvals the gate needs: the requirement's count, `1` for an
+			 *     approval step without rules, `None` for any other step kind.
+			 */
+			approvals_required?: number | null;
 			/**
 			 * @description Files this step produced, downloadable through the artifact route.
 			 *
@@ -3160,6 +3361,27 @@ export interface components {
 		UpdateSecretRequest: {
 			/** @description New secret value (plaintext, will be encrypted at rest). */
 			value: string;
+		};
+		/**
+		 * @description Request body for replacing a user's group memberships (admin only).
+		 *
+		 *     Group names are trimmed and deduplicated. Each must be 1 to 64 characters
+		 *     from `[A-Za-z0-9_.-]`, with at most 50 groups. An empty list removes the
+		 *     user from every group.
+		 */
+		UpdateUserGroupsRequest: {
+			/** @description The complete new set of groups. */
+			groups: string[];
+		};
+		/** @description Response DTO for a user's group memberships. */
+		UserGroupsResponse: {
+			/** @description Groups the user belongs to, sorted by name. */
+			groups: string[];
+			/**
+			 * Format: uuid
+			 * @description User ID.
+			 */
+			user_id: string;
 		};
 		/** @description Response DTO for a user (never exposes password hash). */
 		UserResponse: {
@@ -4211,7 +4433,7 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description Run approved successfully */
+			/** @description Approval recorded. The run is `running` once enough distinct approvals were collected, and still `awaiting_approval` when more approvals are required */
 			200: {
 				headers: {
 					[name: string]: unknown;
@@ -4243,6 +4465,13 @@ export interface operations {
 			};
 			/** @description Run not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Caller already approved this gate */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -5295,6 +5524,106 @@ export interface operations {
 				content?: never;
 			};
 			/** @description Cannot delete self */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden (not an admin) */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description User not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	get_user_groups: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description User ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description User groups */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserGroupsResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden (not an admin) */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description User not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	update_user_groups: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description User ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		/** @description Complete new set of groups */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["UpdateUserGroupsRequest"];
+			};
+		};
+		responses: {
+			/** @description User groups replaced */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["UserGroupsResponse"];
+				};
+			};
+			/** @description Invalid group name or too many groups */
 			400: {
 				headers: {
 					[name: string]: unknown;

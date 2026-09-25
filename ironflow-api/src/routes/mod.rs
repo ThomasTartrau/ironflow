@@ -256,6 +256,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/users/{id}", delete(users::delete::delete_user))
         .route("/users/{id}/role", patch(users::update_role::update_role))
         .route(
+            "/users/{id}/groups",
+            get(users::groups::get_user_groups).put(users::groups::update_user_groups),
+        )
+        .route(
             "/secrets",
             get(secrets::list::list_secrets).post(secrets::create::create_secret),
         )

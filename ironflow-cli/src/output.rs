@@ -14,7 +14,8 @@ use ironflow_sdk::types::{
     ApiKeyResponse, ApiKeyScope, ArtifactResponse, AuditLogEntry, CreateApiKeyResponse,
     ExecutionPlanResponse, KeyVersionsResponse, PlannedStepResponse, RunDetailResponse,
     RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsHistoryResponse, StatsResponse,
-    StepResponse, StepStatus, UserResponse, WorkflowDetailResponse, WorkflowSummary,
+    StepResponse, StepStatus, UserGroupsResponse, UserResponse, WorkflowDetailResponse,
+    WorkflowSummary,
 };
 use serde::Serialize;
 use serde_json::to_string_pretty;
@@ -945,6 +946,21 @@ pub fn users_table(users: &[UserResponse]) -> Table {
     table
 }
 
+/// Render a user's group memberships.
+pub fn user_groups_table(resp: &UserGroupsResponse) -> Table {
+    let mut table = base_table();
+    table.set_header(vec!["User ID", "Groups"]);
+
+    let groups = if resp.groups.is_empty() {
+        "-".to_string()
+    } else {
+        resp.groups.join(", ")
+    };
+    table.add_row(vec![Cell::new(resp.user_id), Cell::new(groups)]);
+
+    table
+}
+
 /// Render a side-by-side comparison of two runs of the same workflow.
 pub fn run_diff_table(a: &RunDetailResponse, b: &RunDetailResponse) -> Table {
     let (ra, rb) = (&a.run, &b.run);
@@ -1476,6 +1492,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn user_groups_table_has_header_and_lists_the_groups() {
+        let resp = UserGroupsResponse {
+            user_id: Uuid::now_v7(),
+            groups: vec!["finance".to_string(), "sre".to_string()],
+        };
+        let output = user_groups_table(&resp).to_string();
+        for header in ["User ID", "Groups"] {
+            assert!(output.contains(header), "missing {header} in {output}");
+        }
+        assert!(output.contains(&resp.user_id.to_string()), "{output}");
+        assert!(output.contains("finance, sre"), "{output}");
+    }
+
+    #[test]
+    fn user_groups_table_shows_a_dash_without_groups() {
+        let resp = UserGroupsResponse {
+            user_id: Uuid::now_v7(),
+            groups: Vec::new(),
+        };
+        let output = user_groups_table(&resp).to_string();
+        assert!(output.contains("Groups"), "{output}");
+        assert!(output.contains(" - "), "{output}");
+        assert!(!output.contains("finance"), "{output}");
+    }
+
     // ── Audit logs ─────────────────────────────────────────────
 
     #[test]
@@ -1501,7 +1543,7 @@ mod tests {
         let output = audit_logs_table(slice::from_ref(&entry)).to_string();
         assert!(output.contains("run_created"), "{output}");
         // Absent IDs collapse to a dash rather than an empty cell.
-        assert!(output.contains('-'), "{output}");
+        assert!(output.contains(" - "), "{output}");
     }
 
     #[test]

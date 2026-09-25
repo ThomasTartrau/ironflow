@@ -817,6 +817,43 @@ impl IronflowClient {
         .await
     }
 
+    /// `GET /api/v1/users/:id/groups` -- List a user's groups (admin only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401, 403, or 404.
+    pub async fn get_user_groups(
+        &self,
+        id: Uuid,
+    ) -> Result<ApiResponse<types::UserGroupsResponse>, Error> {
+        self.send_envelope(self.get(&format!("/api/v1/users/{id}/groups")))
+            .await
+    }
+
+    /// `PUT /api/v1/users/:id/groups` -- Replace a user's groups (admin only).
+    ///
+    /// Group membership restricts who may vote on an approval gate whose rule
+    /// lists approver groups. An empty slice removes the user from every
+    /// group.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 400 (invalid group name), 401, 403, or 404.
+    pub async fn update_user_groups(
+        &self,
+        id: Uuid,
+        groups: &[String],
+    ) -> Result<ApiResponse<types::UserGroupsResponse>, Error> {
+        let request = types::UpdateUserGroupsRequest {
+            groups: groups.to_vec(),
+        };
+        self.send_envelope(
+            self.put(&format!("/api/v1/users/{id}/groups"))
+                .json(&request),
+        )
+        .await
+    }
+
     // ── Secrets (admin) ────────────────────────────────────────────
 
     /// `GET /api/v1/secrets` -- List secrets (admin only).
