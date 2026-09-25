@@ -321,6 +321,11 @@ release-plz-update:
 
 # release-plz-release creates tags and publishes crates. Runs on all main commits
 # (regular commits may have crates ready to publish, release commits always do).
+# When HEAD is the merge of a release MR, release-plz checks out the last commit
+# of that MR before publishing, but keeps the package paths read from HEAD. A crate
+# renamed or moved on main after the release MR was opened is then missing at that
+# commit ("manifest path ... does not exist"). Pushing any regular commit to main
+# unblocks it: release-plz publishes from HEAD when HEAD is not a release MR merge.
 release-plz-release:
   stage: release
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
