@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "ironflow-core",
-    "ironflow-macros",
+    "ironflow-engine-macros",
     "ironflow-runtime",
     "ironflow-artifacts",
     "ironflow-store",

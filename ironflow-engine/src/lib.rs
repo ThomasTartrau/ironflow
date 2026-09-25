@@ -46,7 +46,7 @@
 //! }
 //! ```
 
-// The derives of `ironflow-macros` expand to `::ironflow_engine::...`; this
+// The derives of `ironflow-engine-macros` expand to `::ironflow_engine::...`; this
 // lets the crate's own tests and doc examples use them too.
 extern crate self as ironflow_engine;
 

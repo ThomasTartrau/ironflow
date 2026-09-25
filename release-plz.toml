@@ -41,7 +41,7 @@ commit_parsers = [
 name = "ironflow-core"
 
 [[package]]
-name = "ironflow-macros"
+name = "ironflow-engine-macros"
 
 [[package]]
 name = "ironflow-store"

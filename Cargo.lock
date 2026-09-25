@@ -3542,7 +3542,7 @@ dependencies = [
  "hmac 0.12.1",
  "ironflow-artifacts",
  "ironflow-core",
- "ironflow-macros",
+ "ironflow-engine-macros",
  "ironflow-store",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3560,6 +3560,15 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "ironflow-engine-macros"
+version = "0.1.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3600,15 +3609,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "ironflow-macros"
-version = "0.1.1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
