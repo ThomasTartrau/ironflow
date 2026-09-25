@@ -214,7 +214,6 @@ async fn rate_limiter_delays_after_429() {
     use ironflow_sdk::rate_limit::RateLimiter;
 
     let limiter = RateLimiter::new();
-    limiter.record(Duration::from_secs(1)).await;
 
     let counter = Counter::new();
     let app = Router::new()
@@ -247,10 +246,13 @@ async fn rate_limiter_delays_after_429() {
             base_delay: Duration::from_millis(10),
             max_delay: Duration::from_millis(100),
         },
-        limiter,
+        limiter.clone(),
     );
 
+    // Record after building the client: its construction can take several
+    // hundred milliseconds and would eat into the rate limit window.
     let start = tokio::time::Instant::now();
+    limiter.record(Duration::from_secs(1)).await;
     let _ = client.list_runs().await.unwrap();
     assert!(
         start.elapsed() >= Duration::from_millis(700),
