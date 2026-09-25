@@ -81,7 +81,7 @@ impl StepOutput {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::executor::StepOutput;
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
     /// use rust_decimal::Decimal;
     /// use serde_json::json;
     ///
@@ -95,6 +95,7 @@ impl StepOutput {
     ///     output_tokens: Some(50),
     ///     model: None,
     ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
     /// };
     /// assert_eq!(output.total_tokens(), 5350);
     /// ```
@@ -285,6 +286,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
