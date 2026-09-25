@@ -1397,7 +1397,7 @@ impl Engine {
                     "run awaiting approval"
                 );
 
-                // The requirement was evaluated and stored when the gate opened.
+                // The requirement was recorded when the gate opened.
                 let requirement = self
                     .store
                     .get_step(step_id)

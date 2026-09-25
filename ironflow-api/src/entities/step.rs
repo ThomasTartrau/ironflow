@@ -90,8 +90,8 @@ pub struct StepResponse {
     /// Serialized as a prefixed string: `user:{name}` or `group:{name}`.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub approval_assignee: Option<Assignee>,
-    /// Approval requirement evaluated from the gate's approval rules when it
-    /// opened. `None` for steps without rules.
+    /// Approvers the workflow handler required when the gate opened. `None`
+    /// for a gate opened without approvers.
     #[serde(default)]
     pub approval_requirement: Option<ApprovalRequirement>,
     /// Votes cast on the approval gate so far, at most one per user.
@@ -332,11 +332,9 @@ mod tests {
     async fn an_approval_requirement_sets_the_required_count() {
         let mut gate = gate_with_deadline(3600).await;
         let requirement = ApprovalRequirement {
-            rule_index: Some(0),
-            condition: Some("payload.amount > 10000".to_string()),
+            reason: Some("amount > 100k".to_string()),
             required_approvers: 3,
             approver_groups: vec!["finance".to_string()],
-            evaluated: Vec::new(),
         };
         gate.approval_requirement = Some(requirement.clone());
         gate.approvals = vec![StepApproval {

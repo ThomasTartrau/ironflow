@@ -101,8 +101,72 @@ pub struct ArtifactInput {
     pub dest: Option<String>,
 }
 
+/// A handle on an artifact produced by an earlier step of the run.
+///
+/// Only the producing step hands one out: [`StepOutput::artifact`](crate::executor::StepOutput::artifact)
+/// for a file a shell step declared with [`ShellConfig::output`](super::ShellConfig::output),
+/// [`WorkflowContext::put_artifact`](crate::context::WorkflowContext::put_artifact)
+/// for bytes stored by hand. Pass it to [`ShellConfig::input`](super::ShellConfig::input)
+/// or [`WorkflowContext::get_artifact`](crate::context::WorkflowContext::get_artifact):
+/// the producer's name is never copied by hand.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_engine::config::ShellConfig;
+/// use ironflow_engine::context::WorkflowContext;
+/// use ironflow_engine::error::EngineError;
+///
+/// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+/// let build = ctx
+///     .shell("build", ShellConfig::new("./gen-report").output("target/report.html"))
+///     .await?;
+/// let report = build.artifact("report.html")?;
+/// assert_eq!(report.step(), "build");
+///
+/// ctx.shell("publish", ShellConfig::new("./publish report.html").input(&report))
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactRef {
+    step: String,
+    name: String,
+}
+
+impl ArtifactRef {
+    /// A handle on `name` produced by the step called `step`.
+    pub(crate) fn new(step: &str, name: &str) -> Self {
+        Self {
+            step: step.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    /// Name of the step that produced the artifact.
+    pub fn step(&self) -> &str {
+        &self.step
+    }
+
+    /// Name of the artifact: the file name, without its directory.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl From<&ArtifactRef> for ArtifactInput {
+    fn from(artifact: &ArtifactRef) -> Self {
+        Self::new(artifact.step(), artifact.name())
+    }
+}
+
 impl ArtifactInput {
     /// Consume `name` as produced by the step called `step`.
+    ///
+    /// Workflow code passes an [`ArtifactRef`] to
+    /// [`ShellConfig::input`](super::ShellConfig::input) instead; this builds
+    /// the stored form directly.
     pub fn new(step: &str, name: &str) -> Self {
         Self {
             step: step.to_string(),
@@ -173,6 +237,13 @@ mod tests {
         let json = serde_json::to_string(&input).expect("serialize");
         let parsed: ArtifactInput = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, input);
+    }
+
+    #[test]
+    fn a_handle_becomes_an_input_on_its_own_name() {
+        let input = ArtifactInput::from(&ArtifactRef::new("build", "report.html"));
+        assert_eq!(input, ArtifactInput::new("build", "report.html"));
+        assert_eq!(input.destination(), "report.html");
     }
 
     #[test]

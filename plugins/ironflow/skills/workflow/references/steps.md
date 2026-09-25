@@ -76,7 +76,7 @@ Either tools or a structured output, never both (enforced by the type state).
 
 ```rust,no_run
 use ironflow_core::operations::agent::Model;
-use ironflow_engine::config::AgentStepConfig;
+use ironflow_engine::config::{AgentStepConfig, Tool};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use schemars::JsonSchema;
@@ -89,8 +89,9 @@ struct Review {
 }
 
 async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineError> {
-    // Structured output: the provider is constrained to the schema of `Review`.
-    let out = ctx
+    // Structured output: the provider is constrained to the schema of `Review`,
+    // and the step returns the `Review` itself.
+    let review = ctx
         .agent(
             "review",
             AgentStepConfig::new(&format!("Review this diff:\n{diff}"))
@@ -101,25 +102,28 @@ async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineErro
                 .output::<Review>(),
         )
         .await?;
-    let review: Review = out.json()?;
     let _ = (review.score, review.summary);
 
-    // Tools: the agent can act, and answers in free text.
+    // Tools: the agent can act, and answers in free text. `Tool::Custom` carries
+    // an MCP tool or a permission pattern.
     let explore = ctx
         .agent(
             "explore",
             AgentStepConfig::new("List the top-level files and summarise the project.")
-                .allow_tool("Bash")
-                .allow_tool("Read")
+                .allow_tool(Tool::Bash)
+                .allow_tool(Tool::Read)
                 .max_turns(6)
                 .max_budget_usd(0.50)
                 .verbose(true),
         )
         .await?;
-    let _text = explore.output.as_str().unwrap_or_default();
+    let _text = explore.text();
     Ok(())
 }
 ```
+
+A structured answer that does not match its type fails the step with
+`EngineError::Serialization`.
 
 `Model::SONNET`, `Model::OPUS`, `Model::HAIKU` are aliases resolved by the provider;
 pass a full model id string for a pinned version. `verbose(true)` records the tool
@@ -202,41 +206,47 @@ async fn escalating(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 Every firing is recorded in the audit log as an `approval_escalated` event with the
 stage, the policy, what it did and why.
 
-### Dynamic approval rules
+### Several approvers
 
-`with_rule` makes the number of approvals, and who may give them, depend on the run.
-Rules are evaluated once, when the gate opens, in the order they were added: the first
-matching condition sets `required_approvers` and the optional `approver_groups`. When
-none matches, one approval is enough, as for a gate without rules.
+`requiring` makes the number of approvals, and who may give them, depend on the run.
+Compute the `Approvers` in plain Rust from the typed input and earlier step outputs;
+the gate records them when it opens and keeps them on replay.
 
 ```rust,no_run
-use ironflow_engine::config::{ApprovalConfig, ApprovalRule};
+use ironflow_engine::config::{ApprovalConfig, Approvers};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Payment {
+    amount: u64,
+}
 
 async fn payment_gate(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let payment: Payment = ctx.input().await?;
+    let approvers = match payment.amount {
+        // Three approvers from finance or the board above 100k.
+        a if a > 100_000 => Approvers::at_least(3)
+            .from_groups(["finance", "board"])
+            .because("amount > 100k"),
+        // Two distinct approvers from finance above 10k.
+        a if a > 10_000 => Approvers::at_least(2)
+            .from_groups(["finance"])
+            .because("amount > 10k"),
+        _ => Approvers::any(),
+    };
     ctx.approval(
         "release-payment",
-        ApprovalConfig::new("Release the payment?")
-            // Two distinct approvers from the finance group above 10k.
-            .with_rule(
-                ApprovalRule::new("payload.amount > 10000", 2).with_approver_groups(["finance"]),
-            )
-            // Any second approver for production runs.
-            .with_rule(ApprovalRule::new("labels.env == 'production'", 2)),
+        ApprovalConfig::new("Release the payment?").requiring(approvers),
     )
     .await?;
     Ok(())
 }
 ```
 
-Conditions read `output` (previous step), `payload`, `labels`, `metadata`
-(`run_id`, `workflow_name`, `trigger`, `attempt`, `handler_version`) and
-`steps.<name>.output` / `steps["risk-assessment"].output` for completed steps. They
-support `==`, `!=`, `>`, `>=`, `<`, `<=`, `&&`, `||`, `!` and parentheses. A missing
-path is `null`, and label strings are compared as numbers against numbers
-(`labels.priority > 3`). `ApprovalRule::new` panics on an invalid condition or on zero
-approvers, so a broken rule fails at build time.
+`because(..)` is an audit label shown on the dashboard, never evaluated.
+`Approvers::at_least(0)` and a blank group name panic.
 
 Each user votes once (an admin's vote counts as one); a single rejection fails the run.
 Group membership is managed by admins with `ironflow user set-groups <id> --group
@@ -251,35 +261,62 @@ structured verdict. Wire a `DecisionProvider` into the worker that runs the work
 (`Engine::with_decision_provider(...)`); without one, a decision step fails with
 `NoDecisionProvider`.
 
+The questions are the fields of a struct deriving `DecisionAnswers`; the options of a
+choice are the unit variants of an enum deriving `DecisionChoice` (label: the variant in
+`snake_case`, or `#[choice(rename = "..")]`; `#[choice(description = "..")]` is sent to
+the model). `ctx.decision` returns the struct.
+
 ```rust,no_run
 use ironflow_engine::config::{DecisionConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::decision::{DecisionAnswers, DecisionChoice};
 use ironflow_engine::error::EngineError;
 
+#[derive(Debug, DecisionChoice)]
+enum Team {
+    #[choice(description = "Payments, invoices, refunds")]
+    Billing,
+    Technical,
+    Sales,
+}
+
+#[derive(Debug, DecisionAnswers)]
+struct Triage {
+    /// f64 in [0, 1]: probability of "yes".
+    #[noul("Does this convey urgency?")]
+    is_urgent: f64,
+    #[choice("Which team?")]
+    team: Team,
+    /// f64: probability-weighted level index.
+    #[score("How frustrated?", levels = ["Calm", "Frustrated", "Very angry"])]
+    mood: f64,
+}
+
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    let out = ctx
+    let triage = ctx
         .decision(
             "triage",
             DecisionConfig::new("Payouts have been failing for 3 days")
-                .noul("is_urgent", "Does this convey urgency?")
-                .choice("team", "Which team?", &["billing", "technical", "sales"])
-                .score("mood", "How frustrated?", &["Calm", "Frustrated", "Very angry"])
+                .answers::<Triage>()
                 // Below 0.7 confidence, suspend for human review.
                 .escalate_below(0.7),
         )
         .await?;
 
-    // Answers are read by name, typed.
-    let urgent = out.noul("is_urgent")?; // f64 in [0, 1]
-    let team = &out.choice("team")?.choice; // selected option
-    let _mood = out.score("mood")?.score; // weighted score
-    let _ = urgent;
-
-    let cmd = format!("echo routed to {team}");
-    ctx.shell("route", ShellConfig::new(&cmd)).await?;
+    if triage.is_urgent > 0.8 && triage.mood > 1.5 {
+        ctx.shell(
+            "route",
+            ShellConfig::new("echo \"routed to $TEAM\"").env("TEAM", triage.team.label()),
+        )
+        .await?;
+    }
     Ok(())
 }
 ```
+
+A field without a question, a score without levels, or a field whose type does not fit
+its question does not compile. An option the provider returns that is not a variant fails
+the step.
 
 When any answer's confidence falls below `escalate_below`, the run moves to
 `AwaitingApproval` exactly like an approval gate. On resume the decision is **not**
@@ -287,11 +324,24 @@ re-run: the stored answers are replayed as-is, so the routing above stays stable
 
 ## Sub-workflow
 
+A child called as a sub-workflow declares its input type with `TypedWorkflow`; the parent
+can then only pass that type.
+
 ```rust,no_run
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
-use serde_json::json;
+use ironflow_engine::executor::StepOutput;
+use ironflow_engine::handler::{
+    HandlerFuture, TypedWorkflow, WorkflowHandler, sub_workflow_names,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct CollectInput {
+    scope: String,
+}
 
 struct Collect;
 
@@ -299,21 +349,52 @@ impl WorkflowHandler for Collect {
     fn name(&self) -> &str {
         "collect"
     }
+    fn input_schema(&self) -> Option<Value> {
+        Self::typed_input_schema()
+    }
     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move { Ok(()) })
     }
 }
 
+impl TypedWorkflow for Collect {
+    type Input = CollectInput;
+}
+
+struct Report;
+
+impl WorkflowHandler for Report {
+    fn name(&self) -> &str {
+        "report"
+    }
+    // The handlers themselves, not their names: a typo does not compile.
+    fn sub_workflows(&self) -> Vec<String> {
+        sub_workflow_names(&[&Collect])
+    }
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            // Runs `Collect` as a child run. Its cost is added to the parent.
+            let child = ctx
+                .workflow(&Collect, CollectInput { scope: "system".to_string() })
+                .await?;
+            // Read the child's steps through the typed accessors.
+            for step in ctx.store().list_steps(child.run_id()).await? {
+                let _stdout = StepOutput::from(&step).stdout().to_string();
+            }
+            Ok(())
+        })
+    }
+}
+
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    // Runs `Collect` as a child run. Its cost is added to the parent.
-    let child = ctx.workflow(&Collect, json!({"scope": "system"})).await?;
-    let _child_run_id = child.output.get("run_id").and_then(|v| v.as_str());
+    ctx.workflow(&Collect, CollectInput { scope: "disk".to_string() })
+        .await?;
     Ok(())
 }
 ```
 
-Declare it in the parent's `sub_workflows()` so the dashboard draws the call graph. A child
-never sees the parent's artifacts; pass what it needs in the payload.
+`child.run_id()` is a `Uuid` (nil while planning). A child never sees the parent's
+artifacts; pass what it needs in its input.
 
 ## Parallel
 
@@ -350,10 +431,27 @@ branch visible to `ironflow run plan` without changing what the handler does.
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use serde::Deserialize;
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum Env {
+    Prod,
+    Staging,
+}
+
+#[derive(Deserialize)]
+struct DeployInput {
+    env: Env,
+}
 
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    // Resolved against the run input: the plan reports it as `evaluated`.
-    if ctx.when("input.env == 'prod'", |p| p["env"] == "prod").await? {
+    // Resolved against the typed run input: the plan reports it as `evaluated`,
+    // labelled "production run". A payload that is not a `DeployInput` fails.
+    if ctx
+        .when("production run", |i: &DeployInput| i.env == Env::Prod)
+        .await?
+    {
         ctx.shell("deploy-prod", ShellConfig::new("./deploy prod")).await?;
     } else {
         ctx.skip("deploy-prod", "not a production run").await?;
@@ -402,25 +500,38 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 ## Artifacts
 
-Files a step produces are collected by glob and handed to later steps.
+Files a step produces are collected by glob and handed to later steps through a
+handle the producing step gives out.
 
 ```rust,no_run
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use ironflow_engine::operation::Operation;
 
-async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    ctx.shell(
-        "report",
-        ShellConfig::new("./gen-report > report.html").dir("/app").output("report.html"),
-    )
-    .await?;
+async fn example(ctx: &mut WorkflowContext, summarize: &dyn Operation) -> Result<(), EngineError> {
+    let report = ctx
+        .shell(
+            "report",
+            ShellConfig::new("./gen-report > out/report.html").dir("/app").output("out/*.html"),
+        )
+        .await?;
+    // The handle is named after the file. A name the step did not declare fails here.
+    let html = report.artifact("report.html")?;
+
     // The file is written into the working directory before the command runs.
     ctx.shell(
         "publish",
-        ShellConfig::new("./publish report.html").dir("/app").input("report", "report.html"),
+        ShellConfig::new("./publish report.html").dir("/app").input(&html),
     )
     .await?;
+
+    // Custom operations store bytes by hand and get a handle back.
+    let summary = ctx.operation("summarize", summarize).await?;
+    let json = ctx
+        .put_artifact(&summary, "summary.json", None, br#"{"ok":true}"#.to_vec())
+        .await?;
+    let _bytes = ctx.get_artifact(&json).await?;
     Ok(())
 }
 ```
@@ -454,12 +565,12 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 | `description()` | `""` | Shown in dashboard and CLI |
 | `source_code()` | `None` | `Some(include_str!("file.rs"))` |
 | `category()` | `None` | `"data/etl"` groups workflows in the UI tree |
-| `input_schema()` | `None` | `Some(input_schema_for::<T>())` |
+| `input_schema()` | `None` | `Some(input_schema_for::<T>())`, or `Self::typed_input_schema()` with `TypedWorkflow` |
 | `default_labels()` | empty | Labels applied to every run |
 | `schedule()` | `None` | `CronSchedule`, wired by the runtime |
 | `default_max_cost_usd()` | `None` | Cost cap for runs of this handler |
 | `version()` / `compatible_versions()` | `"1"` / empty | Retry compatibility across handler versions |
-| `sub_workflows()` | empty | Names of handlers invoked through `ctx.workflow` |
+| `sub_workflows()` | empty | `sub_workflow_names(&[&Child])`: the handlers invoked through `ctx.workflow` |
 | `guard_config()` | `None` | Recursion depth, fan-out, token and time guards |
 
 `describe()` assembles all of them. Override it only for metadata the methods cannot express.

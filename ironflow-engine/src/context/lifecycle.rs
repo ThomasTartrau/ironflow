@@ -6,7 +6,7 @@
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde_json::{Value, json, to_value};
+use serde_json::{json, to_value};
 use tokio::time::sleep;
 use tracing::{Span, error, info, warn};
 use uuid::Uuid;
@@ -18,7 +18,7 @@ use ironflow_store::models::{
 use crate::budget::step_budget_usd;
 use crate::config::StepConfig;
 use crate::error::EngineError;
-use crate::executor::{StepOutput, StepResult, execute_step_config_intercepted};
+use crate::executor::{StepArtifacts, StepOutput, StepResult, execute_step_config_intercepted};
 use crate::log_sender::StepLogSender;
 use crate::notify::{
     WorkflowAgentStepTokensUsedEvent, WorkflowEvent, WorkflowStepCompletedEvent,
@@ -100,15 +100,7 @@ impl WorkflowContext {
         if step.status.state != StepStatus::Completed {
             return None;
         }
-        let output = StepOutput {
-            output: step.output.clone().unwrap_or(Value::Null),
-            duration_ms: step.duration_ms,
-            cost_usd: step.cost_usd,
-            input_tokens: step.input_tokens,
-            output_tokens: step.output_tokens,
-            model: None,
-            debug_messages: None,
-        };
+        let output = StepOutput::from(step);
         self.total_cost_usd += output.cost_usd;
         self.total_duration_ms += output.duration_ms;
         self.last_step_ids = vec![step.id];
@@ -119,6 +111,30 @@ impl WorkflowContext {
             "step replayed from previous execution"
         );
         Some(output)
+    }
+
+    /// Internal: execute a step with full persistence lifecycle, and give its
+    /// output the artifact handles the step can hand out.
+    pub(crate) async fn execute_step(
+        &mut self,
+        name: &str,
+        kind: StepKind,
+        config: StepConfig,
+    ) -> Result<StepOutput, EngineError> {
+        let declared = config.declared_outputs().to_vec();
+        let planning = self.is_planning();
+
+        let mut output = self.run_step(name, kind, config).await?;
+
+        // Every successful path records the step in `last_step_ids`; while
+        // planning nothing is recorded.
+        let step_id = if planning {
+            None
+        } else {
+            self.last_step_ids.last().copied()
+        };
+        output.artifacts = StepArtifacts::new(name, step_id, &declared);
+        Ok(output)
     }
 
     /// Internal: execute a step with full persistence lifecycle.
@@ -133,7 +149,7 @@ impl WorkflowContext {
             step.trace_id,
         )
     )]
-    pub(crate) async fn execute_step(
+    async fn run_step(
         &mut self,
         name: &str,
         kind: StepKind,
@@ -235,6 +251,7 @@ impl WorkflowContext {
                     output_tokens: None,
                     model: None,
                     debug_messages: None,
+                    artifacts: StepArtifacts::default(),
                 });
             }
             return Err(err);

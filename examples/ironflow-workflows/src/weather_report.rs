@@ -28,12 +28,8 @@ impl WorkflowHandler for WeatherReport {
                 )
                 .await?;
 
-            // Extract the raw JSON body from the HTTP response
-            let body = weather
-                .output
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
+            // The raw JSON body of the HTTP response
+            let body = weather.body();
 
             // Step 2: Ask an AI agent to summarize the weather data
             ctx.agent(

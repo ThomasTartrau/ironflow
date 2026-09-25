@@ -1,4 +1,4 @@
-//! Integration tests for dynamic approval rules on the in-memory store.
+//! Integration tests for multi-approver gates on the in-memory store.
 //!
 //! Covers the persisted approval requirement, the vote log of a gate and the
 //! user group membership used to restrict who may vote.
@@ -50,15 +50,9 @@ async fn gate() -> (InMemoryStore, Uuid, Step) {
 
 fn requirement() -> ApprovalRequirement {
     ApprovalRequirement {
-        rule_index: Some(0),
-        condition: Some("payload.amount > 10000".to_string()),
+        reason: Some("amount > 10k".to_string()),
         required_approvers: 2,
         approver_groups: vec!["finance".to_string()],
-        evaluated: vec![ApprovalRuleEvaluation {
-            index: 0,
-            condition: "payload.amount > 10000".to_string(),
-            matched: true,
-        }],
     }
 }
 

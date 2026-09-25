@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use chrono::Utc;
 use rust_decimal::Decimal;
-use serde_json::{Value, json, to_value};
+use serde_json::{Value, to_value};
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -18,20 +18,21 @@ use ironflow_store::models::{
     step_trace_id,
 };
 
-use crate::config::{StepConfig, WorkflowStepConfig};
+use crate::config::WorkflowStepConfig;
 use crate::context::WorkflowContext;
 use crate::error::EngineError;
-use crate::executor::StepOutput;
+use crate::executor::SubWorkflowOutput;
 use crate::guard::WorkflowRejection;
-use crate::handler::WorkflowHandler;
-use crate::plan::{SharedPlanRecorder, lock_plan, planned_output};
+use crate::handler::{TypedWorkflow, WorkflowHandler};
+use crate::plan::{SharedPlanRecorder, lock_plan};
 
 impl WorkflowContext {
     /// Execute a sub-workflow step.
     ///
-    /// Creates a child run for the named workflow handler, executes it with
-    /// its own steps and lifecycle, and returns a [`StepOutput`] containing
-    /// the child run ID and aggregated metrics.
+    /// Creates a child run of `handler` whose payload is `input`, executes it
+    /// with its own steps and lifecycle, and returns its run ID and aggregated
+    /// metrics. The child declares its input type through [`TypedWorkflow`],
+    /// so only a `W::Input` is accepted.
     ///
     /// Requires the context to be created with
     /// `with_handler_resolver`.
@@ -39,25 +40,113 @@ impl WorkflowContext {
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered
-    /// with the given name, or if no handler resolver is available.
+    /// with the given name, or if no handler resolver is available, and
+    /// [`EngineError::Serialization`] if `input` cannot be serialized.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// use ironflow_engine::context::WorkflowContext;
     /// use ironflow_engine::error::EngineError;
-    /// use serde_json::json;
+    /// use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize)]
+    /// struct CollectInput {
+    ///     scope: String,
+    /// }
+    ///
+    /// struct Collect;
+    ///
+    /// impl WorkflowHandler for Collect {
+    ///     fn name(&self) -> &str { "collect" }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// impl TypedWorkflow for Collect {
+    ///     type Input = CollectInput;
+    /// }
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    /// // let result = ctx.workflow(&MySubWorkflow, json!({})).await?;
+    /// let child = ctx.workflow(&Collect, CollectInput { scope: "system".to_string() }).await?;
+    /// let steps = ctx.store().list_steps(child.run_id()).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn workflow(
+    ///
+    /// Any other input type is a compile error:
+    ///
+    /// ```compile_fail,E0308
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// # use ironflow_engine::error::EngineError;
+    /// # use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+    /// # #[derive(serde::Serialize, serde::Deserialize)]
+    /// # struct CollectInput { scope: String }
+    /// # struct Collect;
+    /// # impl WorkflowHandler for Collect {
+    /// #     fn name(&self) -> &str { "collect" }
+    /// #     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    /// #         Box::pin(async move { Ok(()) })
+    /// #     }
+    /// # }
+    /// # impl TypedWorkflow for Collect { type Input = CollectInput; }
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// ctx.workflow(&Collect, serde_json::json!({"scope": "system"})).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn workflow<W: TypedWorkflow>(
+        &mut self,
+        handler: &W,
+        input: W::Input,
+    ) -> Result<SubWorkflowOutput, EngineError> {
+        let payload = to_value(&input)?;
+        self.run_sub_workflow(handler, payload).await
+    }
+
+    /// Execute a sub-workflow step whose child is only known at run time.
+    ///
+    /// Same as [`workflow`](Self::workflow), without the compile-time check of
+    /// the payload: the child must deserialize `payload` itself.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`workflow`](Self::workflow).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_engine::handler::WorkflowHandler;
+    /// use serde_json::json;
+    ///
+    /// # #[allow(deprecated)]
+    /// # async fn example(ctx: &mut WorkflowContext, child: &dyn WorkflowHandler) -> Result<(), EngineError> {
+    /// let result = ctx.workflow_dyn(child, json!({"scope": "system"})).await?;
+    /// println!("child run {}", result.run_id());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[deprecated(
+        note = "implement `TypedWorkflow` on the child and call `workflow`: its payload is then checked at compile time"
+    )]
+    pub async fn workflow_dyn(
         &mut self,
         handler: &dyn WorkflowHandler,
         payload: Value,
-    ) -> Result<StepOutput, EngineError> {
+    ) -> Result<SubWorkflowOutput, EngineError> {
+        self.run_sub_workflow(handler, payload).await
+    }
+
+    /// Record, then run or plan, a sub-workflow step.
+    async fn run_sub_workflow(
+        &mut self,
+        handler: &dyn WorkflowHandler,
+        payload: Value,
+    ) -> Result<SubWorkflowOutput, EngineError> {
         // Plan mode: record the invocation, expand the child handler in the
         // same recorder, and return a synthetic output. No child run is
         // created and no step of the child is executed.
@@ -103,8 +192,8 @@ impl WorkflowContext {
 
         match self.execute_child_workflow(&config).await {
             Ok((output, child_had_allowed_failure)) => {
-                self.total_cost_usd += output.cost_usd;
-                self.total_duration_ms += output.duration_ms;
+                self.total_cost_usd += output.cost_usd();
+                self.total_duration_ms += output.duration_ms();
                 if child_had_allowed_failure {
                     self.has_allowed_failure = true;
                 }
@@ -115,9 +204,9 @@ impl WorkflowContext {
                         step.id,
                         StepUpdate {
                             status: Some(StepStatus::Completed),
-                            output: Some(output.output.clone()),
-                            duration_ms: Some(output.duration_ms),
-                            cost_usd: Some(output.cost_usd),
+                            output: Some(to_value(&output)?),
+                            duration_ms: Some(output.duration_ms()),
+                            cost_usd: Some(output.cost_usd()),
                             completed_at: Some(completed_at),
                             ..StepUpdate::default()
                         },
@@ -127,7 +216,7 @@ impl WorkflowContext {
                 info!(
                     run_id = %self.run_id,
                     child_workflow = %config.workflow_name,
-                    duration_ms = output.duration_ms,
+                    duration_ms = output.duration_ms(),
                     "workflow step completed"
                 );
 
@@ -170,17 +259,22 @@ impl WorkflowContext {
         plan: &SharedPlanRecorder,
         handler: &dyn WorkflowHandler,
         payload: Value,
-    ) -> Result<StepOutput, EngineError> {
+    ) -> Result<SubWorkflowOutput, EngineError> {
         self.position += 1;
         let sub_name = handler.name().to_string();
+        // No child run exists while planning: a nil id and zero metrics.
+        let planned = SubWorkflowOutput::new(
+            Uuid::nil(),
+            &sub_name,
+            RunStatus::Completed,
+            Decimal::ZERO,
+            0,
+        );
 
         {
             let mut recorder = lock_plan(plan);
             if !recorder.record(&sub_name, StepKind::Workflow, &self.workflow_name, None) {
-                return Ok(planned_output(
-                    &StepConfig::Workflow(WorkflowStepConfig::new(&sub_name, payload)),
-                    None,
-                ));
+                return Ok(planned);
             }
             recorder.set_last(vec![sub_name.clone()]);
         }
@@ -209,10 +303,7 @@ impl WorkflowContext {
             recorder.leave_workflow();
         }
 
-        Ok(planned_output(
-            &StepConfig::Workflow(WorkflowStepConfig::new(&sub_name, payload)),
-            None,
-        ))
+        Ok(planned)
     }
 
     /// Execute a child workflow and return aggregated output plus whether
@@ -220,7 +311,7 @@ impl WorkflowContext {
     async fn execute_child_workflow(
         &self,
         config: &WorkflowStepConfig,
-    ) -> Result<(StepOutput, bool), EngineError> {
+    ) -> Result<(SubWorkflowOutput, bool), EngineError> {
         let resolver = self.handler_resolver.as_ref().ok_or_else(|| {
             EngineError::InvalidWorkflow(
                 "sub-workflow requires a handler resolver (use Engine to execute)".to_string(),
@@ -331,21 +422,13 @@ impl WorkflowContext {
 
                 let child_had_allowed_failure = child_ctx.has_allowed_failure;
                 Ok((
-                    StepOutput {
-                        output: json!({
-                            "run_id": child_run_id,
-                            "workflow_name": config.workflow_name,
-                            "status": child_status,
-                            "cost_usd": child_ctx.total_cost_usd,
-                            "duration_ms": total_duration,
-                        }),
-                        duration_ms: total_duration,
-                        cost_usd: child_ctx.total_cost_usd,
-                        input_tokens: None,
-                        output_tokens: None,
-                        model: None,
-                        debug_messages: None,
-                    },
+                    SubWorkflowOutput::new(
+                        child_run_id,
+                        &config.workflow_name,
+                        child_status,
+                        child_ctx.total_cost_usd,
+                        total_duration,
+                    ),
                     child_had_allowed_failure,
                 ))
             }

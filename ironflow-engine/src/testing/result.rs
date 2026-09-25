@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use ironflow_store::models::{Run, RunStatus, Step, StepKind, StepStatus};
 
-use crate::executor::StepResult;
+use crate::executor::{StepOutput, StepResult};
 
 /// Stand-in for a step that recorded no input, and for a run with no steps.
 static NULL: Value = Value::Null;
@@ -28,7 +28,7 @@ static NULL: Value = Value::Null;
 /// # fn example(result: &TestResult) {
 /// let build = result.step("build");
 /// assert_eq!(build.status(), StepStatus::Completed);
-/// assert_eq!(build.output()["exit_code"], 0);
+/// assert_eq!(build.step_output().exit_code(), Some(0));
 /// # }
 /// ```
 #[derive(Debug, Clone)]
@@ -98,6 +98,26 @@ impl TestStep {
     /// The underlying store record, for assertions the accessors do not cover.
     pub fn raw(&self) -> &Step {
         &self.step
+    }
+
+    /// The persisted output read through the typed [`StepOutput`] accessors:
+    /// `stdout()`, `status()`, `body()`, `json::<T>()`...
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::executor::SubWorkflowOutput;
+    /// use ironflow_engine::testing::TestResult;
+    ///
+    /// # fn example(result: &TestResult) -> Result<(), ironflow_engine::error::EngineError> {
+    /// assert_eq!(result.step("build").step_output().stdout(), "compiled");
+    /// let child: SubWorkflowOutput = result.step("collect").step_output().json()?;
+    /// println!("child run {}", child.run_id());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn step_output(&self) -> StepOutput {
+        StepOutput::from(&self.step)
     }
 }
 

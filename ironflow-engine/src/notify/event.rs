@@ -288,8 +288,8 @@ pub struct StepFailedEvent {
 
 /// Payload of the `Event::ApprovalRequested` event.
 ///
-/// Published when an approval gate opens. Carries the requirement evaluated
-/// from the gate's approval rules, if it has any.
+/// Published when an approval gate opens. Carries the approvers the handler
+/// required, if it set any.
 ///
 /// # Examples
 ///
@@ -316,8 +316,8 @@ pub struct ApprovalRequestedEvent {
     pub step_id: Uuid,
     /// Message displayed to reviewers.
     pub message: String,
-    /// Requirement evaluated from the gate's approval rules. `None` for a
-    /// gate without rules: one approval resolves it.
+    /// Approvers the handler required. `None` for a gate opened without
+    /// approvers: one approval resolves it.
     #[serde(default)]
     pub requirement: Option<ApprovalRequirement>,
     /// When the approval was requested.
@@ -365,7 +365,7 @@ pub struct ApprovalGrantedEvent {
     /// Distinct approvals needed to resolve the gate.
     #[serde(default = "default_approval_count")]
     pub approvals_required: u32,
-    /// Requirement evaluated from the gate's approval rules, if any.
+    /// Approvers the handler required, if any.
     #[serde(default)]
     pub requirement: Option<ApprovalRequirement>,
     /// When the approval was granted.
@@ -400,7 +400,7 @@ pub struct ApprovalRejectedEvent {
     pub step_id: Option<Uuid>,
     /// User who rejected (ID or username).
     pub rejected_by: String,
-    /// Requirement evaluated from the gate's approval rules, if any.
+    /// Approvers the handler required, if any.
     #[serde(default)]
     pub requirement: Option<ApprovalRequirement>,
     /// When the rejection occurred.
@@ -1064,11 +1064,9 @@ mod tests {
     #[test]
     fn approval_granted_roundtrips_the_vote_counts() {
         let requirement = ApprovalRequirement {
-            rule_index: Some(0),
-            condition: Some("payload.amount > 10000".to_string()),
+            reason: Some("amount > 10k".to_string()),
             required_approvers: 2,
             approver_groups: vec!["finance".to_string()],
-            evaluated: Vec::new(),
         };
         let event = Event::ApprovalGranted(ApprovalGrantedEvent {
             run_id: Uuid::now_v7(),

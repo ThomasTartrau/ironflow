@@ -1,6 +1,6 @@
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 
 /// Workflow C: collects raw system metrics (disk, memory, uptime).
 pub struct Collect;
@@ -32,4 +32,9 @@ impl WorkflowHandler for Collect {
             Ok(())
         })
     }
+}
+
+/// Called as a sub-workflow by [`Enrich`](super::Enrich), with no input.
+impl TypedWorkflow for Collect {
+    type Input = ();
 }

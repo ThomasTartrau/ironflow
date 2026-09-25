@@ -12,14 +12,14 @@ use uuid::Uuid;
 
 use ironflow_artifacts::name::guess_content_type;
 use ironflow_artifacts::stream_from_bytes;
-use ironflow_store::entities::Artifact;
 use ironflow_store::models::ArtifactLookup;
 
 use crate::artifact::{
     ArtifactSink, ArtifactUpload, StepLocation, collect_outputs, materialize_inputs,
 };
-use crate::config::StepConfig;
+use crate::config::{ArtifactRef, StepConfig};
 use crate::error::EngineError;
+use crate::executor::StepOutput;
 
 use super::WorkflowContext;
 
@@ -33,7 +33,8 @@ impl WorkflowContext {
         })
     }
 
-    /// Store an in-memory payload as an artifact of the given step.
+    /// Store an in-memory payload as an artifact of the step that produced
+    /// `producer`, and return a handle on it.
     ///
     /// The declarative [`ShellConfig::output`](crate::config::ShellConfig::output)
     /// covers shell steps; this covers custom operations and agent steps, which
@@ -43,45 +44,58 @@ impl WorkflowContext {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::ArtifactsUnavailable`] when no backend is
-    /// attached, [`EngineError::Artifact`] when the name is invalid or storage
-    /// fails, and [`EngineError::Store`] when the step already owns that name.
+    /// Returns [`EngineError::StepConfig`] when `producer` does not come from a
+    /// recorded step (built by hand, or while planning),
+    /// [`EngineError::ArtifactsUnavailable`] when no backend is attached,
+    /// [`EngineError::Artifact`] when the name is invalid or storage fails, and
+    /// [`EngineError::Store`] when the step already owns that name.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// use ironflow_engine::context::WorkflowContext;
     /// use ironflow_engine::error::EngineError;
-    /// use uuid::Uuid;
+    /// use ironflow_engine::operation::Operation;
     ///
-    /// # async fn example(ctx: &WorkflowContext, step_id: Uuid) -> Result<(), EngineError> {
-    /// let artifact = ctx
-    ///     .put_artifact(step_id, "summary.json", None, br#"{"ok":true}"#.to_vec())
+    /// # async fn example(ctx: &mut WorkflowContext, generate: &dyn Operation) -> Result<(), EngineError> {
+    /// let out = ctx.operation("generate", generate).await?;
+    /// let summary = ctx
+    ///     .put_artifact(&out, "summary.json", None, br#"{"ok":true}"#.to_vec())
     ///     .await?;
-    /// assert_eq!(artifact.content_type, "application/json");
+    /// let bytes = ctx.get_artifact(&summary).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn put_artifact(
         &self,
-        step_id: Uuid,
+        producer: &StepOutput,
         name: &str,
         content_type: Option<&str>,
         content: Vec<u8>,
-    ) -> Result<Artifact, EngineError> {
+    ) -> Result<ArtifactRef, EngineError> {
+        let step_id = producer.artifacts.step_id().ok_or_else(|| {
+            EngineError::StepConfig(format!(
+                "cannot attach artifact {name:?}: the output does not come from a recorded step"
+            ))
+        })?;
         let sink = self.artifact_sink()?;
-        sink.put(
-            ArtifactUpload {
-                run_id: self.run_id,
-                step_id,
-                name: name.to_string(),
-                content_type: content_type
-                    .map(str::to_string)
-                    .unwrap_or_else(|| guess_content_type(name)),
-            },
-            stream_from_bytes(content),
-        )
-        .await
+        let artifact = sink
+            .put(
+                ArtifactUpload {
+                    run_id: self.run_id,
+                    step_id,
+                    name: name.to_string(),
+                    content_type: content_type
+                        .map(str::to_string)
+                        .unwrap_or_else(|| guess_content_type(name)),
+                },
+                stream_from_bytes(content),
+            )
+            .await?;
+        Ok(ArtifactRef::new(
+            producer.artifacts.step_name(),
+            &artifact.name,
+        ))
     }
 
     /// Read back an artifact produced earlier in this run.
@@ -99,16 +113,18 @@ impl WorkflowContext {
     /// # Examples
     ///
     /// ```no_run
+    /// use ironflow_engine::config::ShellConfig;
     /// use ironflow_engine::context::WorkflowContext;
     /// use ironflow_engine::error::EngineError;
     ///
-    /// # async fn example(ctx: &WorkflowContext) -> Result<(), EngineError> {
-    /// let bytes = ctx.get_artifact("build", "report.html").await?;
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let build = ctx.shell("build", ShellConfig::new("./gen").output("report.html")).await?;
+    /// let bytes = ctx.get_artifact(&build.artifact("report.html")?).await?;
     /// println!("{} bytes", bytes.len());
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn get_artifact(&self, step: &str, name: &str) -> Result<Vec<u8>, EngineError> {
+    pub async fn get_artifact(&self, artifact: &ArtifactRef) -> Result<Vec<u8>, EngineError> {
         let sink = self.artifact_sink()?;
 
         let artifact = self
@@ -117,13 +133,13 @@ impl WorkflowContext {
                 run_id: self.run_id,
                 attempt: self.attempt,
                 before_position: self.position,
-                step_name: step.to_string(),
-                name: name.to_string(),
+                step_name: artifact.step().to_string(),
+                name: artifact.name().to_string(),
             })
             .await?
             .ok_or_else(|| EngineError::ArtifactNotFound {
-                step: step.to_string(),
-                name: name.to_string(),
+                step: artifact.step().to_string(),
+                name: artifact.name().to_string(),
             })?;
 
         let mut content = sink.get(&artifact).await?;

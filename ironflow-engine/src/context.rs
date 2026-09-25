@@ -18,7 +18,7 @@
 //! # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 //! let build = ctx.shell("build", ShellConfig::new("cargo build")).await?;
 //! let review = ctx.agent("review", AgentStepConfig::new(
-//!     &format!("Build output:\n{}", build.output["stdout"])
+//!     &format!("Build output:\n{}", build.stdout())
 //! )).await?;
 //! # Ok(())
 //! # }
@@ -76,7 +76,7 @@ pub(crate) type HandlerResolver =
 ///
 /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 /// let result = ctx.shell("greet", ShellConfig::new("echo hello")).await?;
-/// assert!(result.output["stdout"].as_str().unwrap().contains("hello"));
+/// assert!(result.stdout().contains("hello"));
 /// # Ok(())
 /// # }
 /// ```

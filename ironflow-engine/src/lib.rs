@@ -38,13 +38,17 @@
 //!         Box::pin(async move {
 //!             let build = ctx.shell("build", ShellConfig::new("cargo build")).await?;
 //!             ctx.agent("review", AgentStepConfig::new(
-//!                 &format!("Review: {}", build.output["stdout"])
+//!                 &format!("Review: {}", build.stdout())
 //!             )).await?;
 //!             Ok(())
 //!         })
 //!     }
 //! }
 //! ```
+
+// The derives of `ironflow-macros` expand to `::ironflow_engine::...`; this
+// lets the crate's own tests and doc examples use them too.
+extern crate self as ironflow_engine;
 
 /// Engine version, compiled from `Cargo.toml` at build time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -53,11 +57,11 @@ pub mod artifact;
 pub mod budget;
 pub mod config;
 pub mod context;
+pub mod decision;
 pub mod engine;
 pub mod error;
 pub mod escalation;
 pub mod executor;
-pub mod expression;
 pub mod fsm;
 pub mod guard;
 pub mod handler;
@@ -75,14 +79,13 @@ pub mod prelude {
     pub use crate::artifact::{ArtifactSink, ArtifactUpload, DirectArtifactSink};
     pub use crate::budget::BudgetConfig;
     pub use crate::config::{
-        AgentStepConfig, ApprovalConfig, ApprovalRule, DelayConfig, EscalationPolicy, HttpConfig,
+        AgentStepConfig, ApprovalConfig, Approvers, DelayConfig, EscalationPolicy, HttpConfig,
         NotificationTarget, ShellConfig, StepConfig,
     };
     pub use crate::context::WorkflowContext;
     pub use crate::engine::{Engine, EnqueueOptions, WorkflowResult};
     pub use crate::error::EngineError;
     pub use crate::executor::StepResult;
-    pub use crate::expression::Expression;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
     pub use crate::guard::{WorkflowGuardConfig, WorkflowGuardState, WorkflowRejection};
     pub use crate::handler::{HandlerFuture, WorkflowHandler};

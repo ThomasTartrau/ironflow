@@ -103,6 +103,15 @@ pub enum EngineError {
         pattern: String,
     },
 
+    /// A handle was asked for an artifact the step never declared.
+    #[error("step {step:?} declares no artifact output named {name:?}")]
+    ArtifactNotDeclared {
+        /// Name of the step the handle was asked from.
+        step: String,
+        /// Name of the artifact that was asked for.
+        name: String,
+    },
+
     /// A step asked for an artifact that no earlier step produced.
     #[error("no artifact {name:?} produced by step {step:?} before this point")]
     ArtifactNotFound {
@@ -235,6 +244,18 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("\"build\""));
         assert!(msg.contains("target/report.html"));
+    }
+
+    #[test]
+    fn artifact_not_declared_display_names_the_step_and_artifact() {
+        let err = EngineError::ArtifactNotDeclared {
+            step: "build".to_string(),
+            name: "report.htm".to_string(),
+        };
+
+        let msg = err.to_string();
+        assert!(msg.contains("\"build\""));
+        assert!(msg.contains("\"report.htm\""));
     }
 
     #[test]

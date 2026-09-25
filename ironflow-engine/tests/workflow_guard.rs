@@ -18,7 +18,7 @@ use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::guard::{WORKFLOW_GUARD_REJECTED_CODE, WorkflowGuardConfig};
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, TriggerKind};
 
@@ -37,13 +37,17 @@ impl WorkflowHandler for RootWorkflow {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&ChildWorkflow, json!({})).await?;
+            ctx.workflow(&ChildWorkflow, ()).await?;
             Ok(())
         })
     }
 }
 
 struct ChildWorkflow;
+
+impl TypedWorkflow for ChildWorkflow {
+    type Input = ();
+}
 
 impl WorkflowHandler for ChildWorkflow {
     fn name(&self) -> &str {
@@ -52,13 +56,17 @@ impl WorkflowHandler for ChildWorkflow {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&GrandchildWorkflow, json!({})).await?;
+            ctx.workflow(&GrandchildWorkflow, ()).await?;
             Ok(())
         })
     }
 }
 
 struct GrandchildWorkflow;
+
+impl TypedWorkflow for GrandchildWorkflow {
+    type Input = ();
+}
 
 impl WorkflowHandler for GrandchildWorkflow {
     fn name(&self) -> &str {
@@ -76,6 +84,10 @@ impl WorkflowHandler for GrandchildWorkflow {
 /// A workflow that creates a cycle: A -> B -> A.
 struct CycleA;
 
+impl TypedWorkflow for CycleA {
+    type Input = ();
+}
+
 impl WorkflowHandler for CycleA {
     fn name(&self) -> &str {
         "cycle-a"
@@ -83,13 +95,17 @@ impl WorkflowHandler for CycleA {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&CycleB, json!({})).await?;
+            ctx.workflow(&CycleB, ()).await?;
             Ok(())
         })
     }
 }
 
 struct CycleB;
+
+impl TypedWorkflow for CycleB {
+    type Input = ();
+}
 
 impl WorkflowHandler for CycleB {
     fn name(&self) -> &str {
@@ -98,7 +114,7 @@ impl WorkflowHandler for CycleB {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&CycleA, json!({})).await?;
+            ctx.workflow(&CycleA, ()).await?;
             Ok(())
         })
     }
@@ -117,7 +133,7 @@ impl WorkflowHandler for FanOutWorkflow {
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
             for _ in 0..self.count {
-                ctx.workflow(&GrandchildWorkflow, json!({})).await?;
+                ctx.workflow(&GrandchildWorkflow, ()).await?;
             }
             Ok(())
         })
@@ -138,7 +154,7 @@ impl WorkflowHandler for StrictGuardWorkflow {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&ChildWorkflow, json!({})).await?;
+            ctx.workflow(&ChildWorkflow, ()).await?;
             Ok(())
         })
     }
@@ -158,7 +174,7 @@ impl WorkflowHandler for PermissiveGuardWorkflow {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&ChildWorkflow, json!({})).await?;
+            ctx.workflow(&ChildWorkflow, ()).await?;
             Ok(())
         })
     }

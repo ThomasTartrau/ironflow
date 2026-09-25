@@ -13,7 +13,10 @@ Pass a list of step configurations to `ctx.parallel()`. All steps run concurrent
 ## How it works
 
 - All steps in a `parallel()` call start at the same time
-- The method returns a `Vec<ParallelResult>` with outputs in the same order as the input
+- The method returns a `Vec<ParallelStepResult>` with outputs in the same order as the input;
+  each `output` reads through the same typed accessors as a single step (`stdout()`,
+  `status()`, `body()`, `is_success()`) and hands out the artifacts its step declared
+  (`r.output.artifact("report.html")?`)
 - If `fail_fast` is `true` (the second argument), the remaining steps are cancelled when one fails
 - If `fail_fast` is `false`, all steps run to completion regardless of individual failures
 

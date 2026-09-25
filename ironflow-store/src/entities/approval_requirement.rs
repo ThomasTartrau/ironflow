@@ -1,43 +1,18 @@
-//! Dynamic approval requirement -- how many votes, and from whom, a gate needs.
+//! Approval requirement -- how many votes, and from whom, a gate needs.
 //!
-//! When an approval gate opens, the engine evaluates the approval rules of the
-//! step in order and records the outcome as an [`ApprovalRequirement`] on the
-//! step. Every vote cast on the gate is then appended as a [`StepApproval`].
-//! The gate resolves once the number of distinct votes reaches
+//! The workflow handler computes the approvers of a gate in Rust when the gate
+//! opens; the engine records them as an [`ApprovalRequirement`] on the step.
+//! Every vote cast on the gate is then appended as a [`StepApproval`]. The gate
+//! resolves once the number of distinct votes reaches
 //! [`ApprovalRequirement::required_approvers`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Outcome of evaluating one approval rule when a gate opens.
+/// The approval requirement recorded when a gate opened.
 ///
-/// # Examples
-///
-/// ```
-/// use ironflow_store::entities::ApprovalRuleEvaluation;
-///
-/// let evaluation = ApprovalRuleEvaluation {
-///     index: 0,
-///     condition: "payload.amount > 10000".to_string(),
-///     matched: true,
-/// };
-/// assert!(evaluation.matched);
-/// ```
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ApprovalRuleEvaluation {
-    /// Position of the rule in the step configuration (0-based).
-    pub index: u32,
-    /// Source of the rule condition.
-    pub condition: String,
-    /// Whether the condition evaluated to `true`.
-    pub matched: bool,
-}
-
-/// The approval requirement evaluated when a gate opened.
-///
-/// A step without approval rules carries no requirement at all; the default
+/// A gate opened without approvers carries no requirement at all; the default
 /// value (one approval from anyone allowed to answer the gate) applies.
 ///
 /// # Examples
@@ -46,11 +21,9 @@ pub struct ApprovalRuleEvaluation {
 /// use ironflow_store::entities::ApprovalRequirement;
 ///
 /// let requirement = ApprovalRequirement {
-///     rule_index: Some(0),
-///     condition: Some("payload.amount > 10000".to_string()),
+///     reason: Some("amount > 10k".to_string()),
 ///     required_approvers: 2,
 ///     approver_groups: vec!["finance".to_string()],
-///     evaluated: Vec::new(),
 /// };
 /// assert!(!requirement.is_satisfied_by(1));
 /// assert!(requirement.is_satisfied_by(2));
@@ -59,31 +32,25 @@ pub struct ApprovalRuleEvaluation {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApprovalRequirement {
-    /// Index of the matched rule. `None` means no rule matched and the default
-    /// requirement applies.
-    pub rule_index: Option<u32>,
-    /// Source of the matched rule condition.
-    pub condition: Option<String>,
+    /// Why the handler asked for these approvers, for the audit trail. Never
+    /// evaluated.
+    #[serde(default)]
+    pub reason: Option<String>,
     /// Number of distinct approvals needed to resolve the gate.
     pub required_approvers: u32,
     /// Groups whose members may vote. Empty means anyone allowed to answer
     /// the gate may vote.
     #[serde(default)]
     pub approver_groups: Vec<String>,
-    /// Rules evaluated in order, up to and including the matched one.
-    #[serde(default)]
-    pub evaluated: Vec<ApprovalRuleEvaluation>,
 }
 
 impl Default for ApprovalRequirement {
-    /// One approval, from anyone, no matched rule.
+    /// One approval, from anyone, no reason.
     fn default() -> Self {
         Self {
-            rule_index: None,
-            condition: None,
+            reason: None,
             required_approvers: 1,
             approver_groups: Vec::new(),
-            evaluated: Vec::new(),
         }
     }
 }
@@ -156,22 +123,9 @@ mod tests {
 
     fn requirement(required: u32) -> ApprovalRequirement {
         ApprovalRequirement {
-            rule_index: Some(1),
-            condition: Some("labels.env == \"production\"".to_string()),
+            reason: Some("production deploy".to_string()),
             required_approvers: required,
             approver_groups: vec!["sre".to_string()],
-            evaluated: vec![
-                ApprovalRuleEvaluation {
-                    index: 0,
-                    condition: "payload.amount > 10000".to_string(),
-                    matched: false,
-                },
-                ApprovalRuleEvaluation {
-                    index: 1,
-                    condition: "labels.env == \"production\"".to_string(),
-                    matched: true,
-                },
-            ],
         }
     }
 
@@ -184,24 +138,34 @@ mod tests {
     }
 
     #[test]
-    fn requirement_defaults_missing_lists() {
+    fn requirement_defaults_missing_reason_and_groups() {
+        let back: ApprovalRequirement =
+            from_value(json!({"required_approvers": 1})).expect("deserialize");
+        assert_eq!(back, ApprovalRequirement::default());
+    }
+
+    #[test]
+    fn requirement_written_by_approval_rules_still_deserializes() {
+        // Shape stored before approval rules were replaced by `Approvers`.
         let back: ApprovalRequirement = from_value(json!({
-            "rule_index": null,
-            "condition": null,
-            "required_approvers": 1
+            "rule_index": 0,
+            "condition": "payload.amount > 10000",
+            "required_approvers": 2,
+            "approver_groups": ["finance"],
+            "evaluated": [{"index": 0, "condition": "payload.amount > 10000", "matched": true}]
         }))
         .expect("deserialize");
-        assert_eq!(back, ApprovalRequirement::default());
+        assert_eq!(back.reason, None);
+        assert_eq!(back.required_approvers, 2);
+        assert_eq!(back.approver_groups, vec!["finance"]);
     }
 
     #[test]
     fn default_requires_one_approval_from_anyone() {
         let req = ApprovalRequirement::default();
-        assert_eq!(req.rule_index, None);
-        assert_eq!(req.condition, None);
+        assert_eq!(req.reason, None);
         assert_eq!(req.required_approvers, 1);
         assert!(req.approver_groups.is_empty());
-        assert!(req.evaluated.is_empty());
         assert!(req.allows_everyone());
     }
 

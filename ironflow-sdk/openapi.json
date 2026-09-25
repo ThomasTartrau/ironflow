@@ -208,7 +208,7 @@
           },
           "requirement": {
             "$ref": "#/components/schemas/ApprovalRequirement",
-            "description": "Requirement evaluated from the gate's approval rules, if any.",
+            "description": "Approvers the handler required, if any.",
             "nullable": true
           },
           "run_id": {
@@ -244,7 +244,7 @@
           },
           "requirement": {
             "$ref": "#/components/schemas/ApprovalRequirement",
-            "description": "Requirement evaluated from the gate's approval rules, if any.",
+            "description": "Approvers the handler required, if any.",
             "nullable": true
           },
           "run_id": {
@@ -267,7 +267,7 @@
         "type": "object"
       },
       "ApprovalRequestedEvent": {
-        "description": "Payload of the `Event::ApprovalRequested` event.\n\nPublished when an approval gate opens. Carries the requirement evaluated\nfrom the gate's approval rules, if it has any.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRequestedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRequestedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    message: \"Deploy to prod?\".to_string(),\n    requirement: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.message, \"Deploy to prod?\");\n```",
+        "description": "Payload of the `Event::ApprovalRequested` event.\n\nPublished when an approval gate opens. Carries the approvers the handler\nrequired, if it set any.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ApprovalRequestedEvent;\nuse uuid::Uuid;\n\nlet payload = ApprovalRequestedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    message: \"Deploy to prod?\".to_string(),\n    requirement: None,\n    at: Utc::now(),\n};\nassert_eq!(payload.message, \"Deploy to prod?\");\n```",
         "properties": {
           "at": {
             "description": "When the approval was requested.",
@@ -280,7 +280,7 @@
           },
           "requirement": {
             "$ref": "#/components/schemas/ApprovalRequirement",
-            "description": "Requirement evaluated from the gate's approval rules. `None` for a\ngate without rules: one approval resolves it.",
+            "description": "Approvers the handler required. `None` for a gate opened without\napprovers: one approval resolves it.",
             "nullable": true
           },
           "run_id": {
@@ -303,7 +303,7 @@
         "type": "object"
       },
       "ApprovalRequirement": {
-        "description": "The approval requirement evaluated when a gate opened.\n\nA step without approval rules carries no requirement at all; the default\nvalue (one approval from anyone allowed to answer the gate) applies.\n\n# Examples\n\n```\nuse ironflow_store::entities::ApprovalRequirement;\n\nlet requirement = ApprovalRequirement {\n    rule_index: Some(0),\n    condition: Some(\"payload.amount > 10000\".to_string()),\n    required_approvers: 2,\n    approver_groups: vec![\"finance\".to_string()],\n    evaluated: Vec::new(),\n};\nassert!(!requirement.is_satisfied_by(1));\nassert!(requirement.is_satisfied_by(2));\nassert!(!requirement.allows_everyone());\n```",
+        "description": "The approval requirement recorded when a gate opened.\n\nA gate opened without approvers carries no requirement at all; the default\nvalue (one approval from anyone allowed to answer the gate) applies.\n\n# Examples\n\n```\nuse ironflow_store::entities::ApprovalRequirement;\n\nlet requirement = ApprovalRequirement {\n    reason: Some(\"amount > 10k\".to_string()),\n    required_approvers: 2,\n    approver_groups: vec![\"finance\".to_string()],\n};\nassert!(!requirement.is_satisfied_by(1));\nassert!(requirement.is_satisfied_by(2));\nassert!(!requirement.allows_everyone());\n```",
         "properties": {
           "approver_groups": {
             "description": "Groups whose members may vote. Empty means anyone allowed to answer\nthe gate may vote.",
@@ -312,59 +312,20 @@
             },
             "type": "array"
           },
-          "condition": {
-            "description": "Source of the matched rule condition.",
+          "reason": {
+            "description": "Why the handler asked for these approvers, for the audit trail. Never\nevaluated.",
             "nullable": true,
             "type": "string"
-          },
-          "evaluated": {
-            "description": "Rules evaluated in order, up to and including the matched one.",
-            "items": {
-              "$ref": "#/components/schemas/ApprovalRuleEvaluation"
-            },
-            "type": "array"
           },
           "required_approvers": {
             "description": "Number of distinct approvals needed to resolve the gate.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
-          },
-          "rule_index": {
-            "description": "Index of the matched rule. `None` means no rule matched and the default\nrequirement applies.",
-            "format": "int32",
-            "minimum": 0,
-            "nullable": true,
-            "type": "integer"
           }
         },
         "required": [
           "required_approvers"
-        ],
-        "type": "object"
-      },
-      "ApprovalRuleEvaluation": {
-        "description": "Outcome of evaluating one approval rule when a gate opens.\n\n# Examples\n\n```\nuse ironflow_store::entities::ApprovalRuleEvaluation;\n\nlet evaluation = ApprovalRuleEvaluation {\n    index: 0,\n    condition: \"payload.amount > 10000\".to_string(),\n    matched: true,\n};\nassert!(evaluation.matched);\n```",
-        "properties": {
-          "condition": {
-            "description": "Source of the rule condition.",
-            "type": "string"
-          },
-          "index": {
-            "description": "Position of the rule in the step configuration (0-based).",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "matched": {
-            "description": "Whether the condition evaluated to `true`.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "index",
-          "condition",
-          "matched"
         ],
         "type": "object"
       },
@@ -2646,7 +2607,7 @@
           },
           "approval_requirement": {
             "$ref": "#/components/schemas/ApprovalRequirement",
-            "description": "Approval requirement evaluated from the gate's approval rules when it\nopened. `None` for steps without rules.",
+            "description": "Approvers the workflow handler required when the gate opened. `None`\nfor a gate opened without approvers.",
             "nullable": true
           },
           "approval_seconds_remaining": {
@@ -4412,7 +4373,7 @@
     },
     "/api/v1/runs/{id}/approve": {
       "post": {
-        "description": "Records the caller's vote on the open gate. Votes are counted per user: an\nAPI key votes as its owner, and an admin's vote counts as one vote like any\nother. Once the gate holds as many distinct approvals as its\n[`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)\nrequires (one for a gate without approval rules), the run transitions from\n`AwaitingApproval` back to `Running` and resumes. Until then the response\nreturns the run still `AwaitingApproval`, and the gate keeps its SLA timer.\n\nReturns 400 if the run is not in `AwaitingApproval` state, 403 if the\ncaller may not vote on the gate, and 409 if the caller already approved it.",
+        "description": "Records the caller's vote on the open gate. Votes are counted per user: an\nAPI key votes as its owner, and an admin's vote counts as one vote like any\nother. Once the gate holds as many distinct approvals as its\n[`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)\nrequires (one for a gate opened without approvers), the run transitions from\n`AwaitingApproval` back to `Running` and resumes. Until then the response\nreturns the run still `AwaitingApproval`, and the gate keeps its SLA timer.\n\nReturns 400 if the run is not in `AwaitingApproval` state, 403 if the\ncaller may not vote on the gate, and 409 if the caller already approved it.",
         "operationId": "approve_run",
         "parameters": [
           {

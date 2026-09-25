@@ -19,7 +19,7 @@ use ironflow_engine::config::{AgentStepConfig, ShellConfig, StepConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::{Engine, EnqueueOptions};
 use ironflow_engine::error::{EngineError, RUN_BUDGET_EXCEEDED_CODE};
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, RunUpdate, TriggerKind};
 use ironflow_store::store::RunStore;
@@ -129,6 +129,10 @@ impl WorkflowHandler for ParallelAgents {
 /// Sub-workflow with a single agent step.
 struct ChildOneAgent;
 
+impl TypedWorkflow for ChildOneAgent {
+    type Input = ();
+}
+
 impl WorkflowHandler for ChildOneAgent {
     fn name(&self) -> &str {
         "child-one-agent"
@@ -154,7 +158,7 @@ impl WorkflowHandler for ParentWithChild {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&ChildOneAgent, json!({})).await?;
+            ctx.workflow(&ChildOneAgent, ()).await?;
             for i in 0..self.n {
                 ctx.agent(&format!("parent-step-{i}"), agent_config())
                     .await?;
