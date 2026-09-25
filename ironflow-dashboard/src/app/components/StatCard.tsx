@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 interface StatCardProps {
 	label: string;
 	value: React.ReactNode;
+	/** Secondary line rendered under the value. */
+	hint?: React.ReactNode;
 	icon?: LucideIcon;
 	iconClassName?: string;
 	className?: string;
@@ -13,6 +15,7 @@ interface StatCardProps {
 export function StatCard({
 	label,
 	value,
+	hint,
 	icon: Icon,
 	iconClassName,
 	className,
@@ -37,6 +40,9 @@ export function StatCard({
 						<p className="text-xl font-semibold tracking-tight truncate tabular-nums">
 							{value}
 						</p>
+						{hint != null && (
+							<p className="text-xs text-muted-foreground truncate">{hint}</p>
+						)}
 					</div>
 				</div>
 			</CardContent>

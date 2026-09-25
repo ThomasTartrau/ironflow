@@ -84,3 +84,28 @@ describe("RunsTable version column", () => {
 		expect(screen.getByText("1.2.0")).toBeInTheDocument();
 	});
 });
+
+describe("RunsTable duration column", () => {
+	it("shows a dash for a pending run that never started", () => {
+		const run = {
+			...runFixture({ kind: "system", id: null, label: "api" }),
+			status: "pending" as const,
+			duration_ms: 0,
+			started_at: null,
+		};
+		renderTable([run]);
+		expect(screen.getByText("-")).toBeInTheDocument();
+		expect(screen.queryByText("0ms")).toBeNull();
+	});
+
+	it("shows the recorded duration of a completed run", () => {
+		const run = {
+			...runFixture({ kind: "system", id: null, label: "api" }),
+			status: "completed" as const,
+			duration_ms: 2500,
+			started_at: "2026-01-01T00:00:00Z",
+		};
+		renderTable([run]);
+		expect(screen.getByText("2.5s")).toBeInTheDocument();
+	});
+});

@@ -83,6 +83,51 @@ pub struct ListRunsFilter<'a> {
     pub created_by: Option<Uuid>,
 }
 
+/// Query options for [`IronflowClient::stats_history_with`].
+///
+/// The filters have the same semantics as [`ListRunsFilter`]: `workflow` is a
+/// case-insensitive substring match.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_sdk::client::StatsHistoryParams;
+///
+/// let params = StatsHistoryParams {
+///     period: Some("24h"),
+///     status: Some("failed"),
+///     label: Some("env:prod"),
+///     ..Default::default()
+/// };
+/// assert_eq!(params.period, Some("24h"));
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StatsHistoryParams<'a> {
+    /// Filter by workflow name (case-insensitive substring match).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<&'a str>,
+    /// Time period to query: `24h`, `7d`, `30d` or `90d`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<&'a str>,
+    /// Bucket granularity: `1h`, `1d` or `1w`. Derived from the period when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub granularity: Option<&'a str>,
+    /// Filter by run status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'a str>,
+    /// Filter by labels. Comma-separated `key:value` pairs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<&'a str>,
+    /// Filter runs that have/don't have steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_steps: Option<bool>,
+    /// Filter by author: the user ID that triggered the run.
+    ///
+    /// Also matches runs triggered by one of that user's API keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+}
+
 /// Filtering options for [`IronflowClient::get_run_logs`].
 ///
 /// # Examples
@@ -573,13 +618,19 @@ impl IronflowClient {
 
     /// `GET /api/v1/stats/history` -- Time-bucketed historical statistics.
     ///
+    /// Shorthand for [`stats_history_with`](Self::stats_history_with) without
+    /// run filters other than `workflow`.
+    ///
     /// # Examples
     ///
     /// ```no_run
     /// # async fn example(client: &ironflow_sdk::IronflowClient) -> Result<(), ironflow_sdk::error::Error> {
     /// let history = client.stats_history(Some("deploy"), Some("7d"), None).await?;
     /// for bucket in &history.data.buckets {
-    ///     println!("{}: {} completed", bucket.time, bucket.completed);
+    ///     println!(
+    ///         "{}: {} completed, {} warning, {} running",
+    ///         bucket.time, bucket.completed, bucket.warning, bucket.running
+    ///     );
     /// }
     /// # Ok(())
     /// # }
@@ -594,18 +645,48 @@ impl IronflowClient {
         period: Option<&str>,
         granularity: Option<&str>,
     ) -> Result<ApiResponse<types::StatsHistoryResponse>, Error> {
-        let mut params = Vec::new();
-        if let Some(w) = workflow {
-            params.push(("workflow", w));
-        }
-        if let Some(p) = period {
-            params.push(("period", p));
-        }
-        if let Some(g) = granularity {
-            params.push(("granularity", g));
-        }
-        let req = self.get("/api/v1/stats/history").query(&params);
-        self.send_envelope(req).await
+        self.stats_history_with(&StatsHistoryParams {
+            workflow,
+            period,
+            granularity,
+            ..StatsHistoryParams::default()
+        })
+        .await
+    }
+
+    /// `GET /api/v1/stats/history` with every query parameter.
+    ///
+    /// Returns one bucket per granularity step over the whole period
+    /// (zero-filled), each with a counter per run status and the success rate.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_sdk::client::StatsHistoryParams;
+    ///
+    /// # async fn example(client: &ironflow_sdk::IronflowClient) -> Result<(), ironflow_sdk::error::Error> {
+    /// let params = StatsHistoryParams {
+    ///     period: Some("24h"),
+    ///     label: Some("env:prod"),
+    ///     ..Default::default()
+    /// };
+    /// let history = client.stats_history_with(&params).await?;
+    /// for bucket in &history.data.buckets {
+    ///     println!("{}: {:?}", bucket.time, bucket.success_rate_percent);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 401 or 400.
+    pub async fn stats_history_with(
+        &self,
+        params: &StatsHistoryParams<'_>,
+    ) -> Result<ApiResponse<types::StatsHistoryResponse>, Error> {
+        self.send_envelope(self.get("/api/v1/stats/history").query(params))
+            .await
     }
 
     // ── Auth ───────────────────────────────────────────────────────

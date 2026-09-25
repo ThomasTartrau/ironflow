@@ -283,9 +283,9 @@ async fn unauthenticated_returns_401() {
 // Row 8: Route registered at /api/v1/stats/history (same as row 7 but explicit check)
 // Covered by all tests above -- any 200 proves the route is registered.
 
-// Row 7: Empty store returns empty buckets
+// Row 7: Empty store returns a zero-filled bucket grid
 #[tokio::test]
-async fn empty_store_returns_empty_buckets() {
+async fn empty_store_returns_zero_filled_buckets() {
     let store = Arc::new(InMemoryStore::new());
     let state = test_state(store);
     let auth_header = make_auth_header(&state);
@@ -302,5 +302,21 @@ async fn empty_store_returns_empty_buckets() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json_val: JsonValue = from_slice(&body).unwrap();
     let buckets = json_val["data"]["buckets"].as_array().unwrap();
-    assert!(buckets.is_empty());
+    assert!(!buckets.is_empty());
+    for bucket in buckets {
+        for key in [
+            "completed",
+            "warning",
+            "failed",
+            "cancelled",
+            "pending",
+            "running",
+            "retrying",
+            "awaiting_approval",
+            "sleeping",
+        ] {
+            assert_eq!(bucket[key], 0, "{key} should be 0");
+        }
+        assert!(bucket["success_rate_percent"].is_null());
+    }
 }

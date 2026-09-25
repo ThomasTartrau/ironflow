@@ -28,11 +28,11 @@ impl GetStatsTool {
 /// Get time-bucketed historical statistics for trend charts.
 #[mcp_tool(
     name = "get_stats_history",
-    description = "Get time-bucketed historical statistics: run counts by status, average and p95 duration, cost per time bucket. Supports workflow filter, period (24h/7d/30d/90d), and granularity (1h/1d/1w)."
+    description = "Get time-bucketed historical statistics: one bucket per step over the whole period (zero-filled, UTC, weeks start on Monday), with a run count for every status (completed, warning, failed, cancelled, pending, running, retrying, awaiting_approval, sleeping), success rate, average and p95 duration, and cost. Supports period (24h/7d/30d/90d), granularity (1h/1d/1w), and the same filters as get_stats: workflow (substring), status, label (key:value pairs), has_steps, created_by (user ID)."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GetStatsHistoryTool {
-    /// Filter by workflow name. Omit to aggregate all workflows.
+    /// Filter by workflow name (case-insensitive substring). Omit to aggregate all workflows.
     #[serde(default)]
     pub workflow: Option<String>,
     /// Time period: 24h, 7d, 30d, 90d. Defaults to 7d.
@@ -41,6 +41,18 @@ pub struct GetStatsHistoryTool {
     /// Bucket granularity: 1h, 1d, 1w. Auto-derived from period when omitted.
     #[serde(default)]
     pub granularity: Option<String>,
+    /// Filter by run status (pending, running, completed, failed, etc.).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Filter by labels. Comma-separated `key:value` pairs.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Filter by step presence (only applies to completed/cancelled runs).
+    #[serde(default)]
+    pub has_steps: Option<bool>,
+    /// Filter by author: the user ID that triggered the run.
+    #[serde(default)]
+    pub created_by: Option<String>,
 }
 
 impl GetStatsHistoryTool {
@@ -59,6 +71,18 @@ impl GetStatsHistoryTool {
         }
         if let Some(ref g) = self.granularity {
             params.push(("granularity", g.as_str()));
+        }
+        if let Some(ref s) = self.status {
+            params.push(("status", s.as_str()));
+        }
+        if let Some(ref l) = self.label {
+            params.push(("label", l.as_str()));
+        }
+        if let Some(has_steps) = self.has_steps {
+            params.push(("has_steps", if has_steps { "true" } else { "false" }));
+        }
+        if let Some(ref c) = self.created_by {
+            params.push(("created_by", c.as_str()));
         }
 
         let history: Value = client

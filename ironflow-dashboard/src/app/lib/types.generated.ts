@@ -827,9 +827,14 @@ export interface paths {
 		};
 		/**
 		 * Get time-bucketed historical statistics for trend charts.
-		 * @description Returns aggregated run counts, duration metrics, and cost per time
-		 *     bucket. Accepts optional `workflow`, `period`, and `granularity`
-		 *     query parameters.
+		 * @description Returns run counts for every status, the success rate, duration metrics
+		 *     and cost per time bucket. Runs are bucketed by creation time and counted
+		 *     under their current status. Buckets use UTC boundaries (weeks start on
+		 *     Monday) and cover the whole period: buckets without runs are zero-filled.
+		 *
+		 *     Accepts `period` and `granularity`, plus the same filters as
+		 *     `GET /api/v1/stats` and `GET /api/v1/runs` (`workflow` as a
+		 *     case-insensitive substring, `status`, `has_steps`, `label`, `created_by`).
 		 */
 		get: operations["get_stats_history"];
 		put?: never;
@@ -2648,6 +2653,10 @@ export interface components {
 		/**
 		 * @description One time bucket in the history response.
 		 *
+		 *     Runs are assigned to the bucket of their creation time and counted under
+		 *     their current status. Each status has its own counter, so the counters add
+		 *     up to the number of runs created in the bucket.
+		 *
 		 *     # Examples
 		 *
 		 *     ```
@@ -2662,17 +2671,23 @@ export interface components {
 			avg_duration_ms: number;
 			/**
 			 * Format: int64
-			 * @description Number of cancelled runs in this bucket.
+			 * @description Number of runs created in this bucket and currently awaiting approval.
+			 */
+			awaiting_approval: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs created in this bucket and currently cancelled.
 			 */
 			cancelled: number;
 			/**
 			 * Format: int64
-			 * @description Number of completed runs in this bucket.
+			 * @description Number of runs created in this bucket and currently completed.
+			 *     Strict: runs in the `warning` state are counted in `warning`.
 			 */
 			completed: number;
 			/**
 			 * Format: int64
-			 * @description Number of failed runs in this bucket.
+			 * @description Number of runs created in this bucket and currently failed.
 			 */
 			failed: number;
 			/**
@@ -2680,6 +2695,33 @@ export interface components {
 			 * @description 95th percentile duration in milliseconds.
 			 */
 			p95_duration_ms: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs created in this bucket and currently pending.
+			 */
+			pending: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs created in this bucket and currently retrying.
+			 */
+			retrying: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs created in this bucket and currently running.
+			 */
+			running: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs created in this bucket and currently sleeping.
+			 */
+			sleeping: number;
+			/**
+			 * Format: double
+			 * @description Success rate: (completed + warning) / (completed + warning + failed),
+			 *     as a percentage. `null` when the bucket has no completed, warning or
+			 *     failed run.
+			 */
+			success_rate_percent?: number | null;
 			/**
 			 * Format: date-time
 			 * @description Start of the time bucket.
@@ -2690,6 +2732,11 @@ export interface components {
 			 * @description Total cost in USD.
 			 */
 			total_cost_usd: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs created in this bucket and currently in `warning`.
+			 */
+			warning: number;
 		};
 		/**
 		 * @description Time-bucketed historical statistics response.
@@ -2701,7 +2748,7 @@ export interface components {
 		 *     ```
 		 */
 		StatsHistoryResponse: {
-			/** @description Aggregated buckets, sorted by time ascending. */
+			/** @description Every bucket of the period, zero-filled, sorted by time ascending. */
 			buckets: components["schemas"]["StatsHistoryBucketResponse"][];
 			/** @description The granularity of each bucket. */
 			granularity: components["schemas"]["HistoryGranularity"];
@@ -2724,9 +2771,15 @@ export interface components {
 		StatsResponse: {
 			/**
 			 * Format: int64
-			 * @description Number of pending or running runs.
+			 * @description Number of active runs: pending, running, retrying, awaiting approval
+			 *     or sleeping.
 			 */
 			active_runs: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs awaiting approval. A subset of `active_runs`.
+			 */
+			awaiting_approval_runs: number;
 			/**
 			 * Format: int64
 			 * @description Number of cancelled runs.
@@ -5072,12 +5125,32 @@ export interface operations {
 	get_stats_history: {
 		parameters: {
 			query?: {
-				/** @description Filter by workflow name. Omit to aggregate all workflows. */
+				/**
+				 * @description Filter by workflow name (case-insensitive substring match, same as
+				 *     `GET /api/v1/runs`). Omit to aggregate all workflows.
+				 */
 				workflow?: string | null;
 				/** @description Time period to query. Defaults to `7d`. */
 				period?: null | components["schemas"]["HistoryPeriod"];
 				/** @description Bucket granularity. Auto-derived from period when omitted. */
 				granularity?: null | components["schemas"]["HistoryGranularity"];
+				/** @description Filter by run status. */
+				status?: null | components["schemas"]["RunStatus"];
+				/**
+				 * @description Filter by step presence (only applies to completed/cancelled runs).
+				 *     Non-terminal runs (pending, running, etc.) are always included.
+				 *     When `true`, only count completed/cancelled runs that have steps.
+				 *     When `false`, only count completed/cancelled runs without steps.
+				 */
+				has_steps?: boolean | null;
+				/** @description Filter by labels. Comma-separated `key:value` pairs. */
+				label?: string | null;
+				/**
+				 * @description Filter by author: the user ID that triggered the run.
+				 *
+				 *     Also matches runs triggered by one of that user's API keys.
+				 */
+				created_by?: string | null;
 			};
 			header?: never;
 			path?: never;
@@ -5094,7 +5167,7 @@ export interface operations {
 					"application/json": components["schemas"]["StatsHistoryResponse"];
 				};
 			};
-			/** @description Invalid period or granularity */
+			/** @description Invalid period, granularity or filter */
 			400: {
 				headers: {
 					[name: string]: unknown;

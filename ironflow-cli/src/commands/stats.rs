@@ -3,6 +3,8 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use ironflow_sdk::IronflowClient;
+use ironflow_sdk::client::StatsHistoryParams;
+use uuid::Uuid;
 
 use crate::output;
 
@@ -31,7 +33,7 @@ pub struct StatsArgs {
 pub enum StatsCommands {
     /// Show time-bucketed historical statistics.
     History {
-        /// Filter by workflow name.
+        /// Filter by workflow name (case-insensitive substring match).
         #[arg(long)]
         workflow: Option<String>,
         /// Time period: 24h, 7d, 30d, 90d. Defaults to 7d.
@@ -40,6 +42,20 @@ pub enum StatsCommands {
         /// Bucket granularity: 1h, 1d, 1w. Auto-derived from period when omitted.
         #[arg(long)]
         granularity: Option<String>,
+        /// Filter by run status (pending, running, completed, failed, etc.).
+        #[arg(long)]
+        status: Option<String>,
+        /// Filter by labels. Comma-separated `key:value` pairs.
+        #[arg(long)]
+        label: Option<String>,
+        /// Filter by step presence (only applies to completed/cancelled runs).
+        #[arg(long)]
+        has_steps: Option<bool>,
+        /// Filter by author: the user ID that triggered the run.
+        ///
+        /// Also matches runs triggered by one of that user's API keys.
+        #[arg(long)]
+        created_by: Option<Uuid>,
     },
 }
 
@@ -58,14 +74,21 @@ pub async fn execute(client: &IronflowClient, args: &StatsArgs, json_mode: bool)
             workflow,
             period,
             granularity,
+            status,
+            label,
+            has_steps,
+            created_by,
         }) => {
-            let response = client
-                .stats_history(
-                    workflow.as_deref(),
-                    Some(period.as_str()),
-                    granularity.as_deref(),
-                )
-                .await?;
+            let params = StatsHistoryParams {
+                workflow: workflow.as_deref(),
+                period: Some(period.as_str()),
+                granularity: granularity.as_deref(),
+                status: status.as_deref(),
+                label: label.as_deref(),
+                has_steps: *has_steps,
+                created_by: *created_by,
+            };
+            let response = client.stats_history_with(&params).await?;
             output::print_output(json_mode, &response, || {
                 output::stats_history_table(&response.data)
             })?;
