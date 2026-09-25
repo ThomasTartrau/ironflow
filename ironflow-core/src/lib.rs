@@ -109,7 +109,7 @@ pub mod prelude {
     pub use crate::operations::http::{Http, HttpOutput};
     pub use crate::operations::shell::{Shell, ShellOutput};
     pub use crate::parallel::{try_join_all, try_join_all_limited};
-    pub use crate::pricing::{CostBreakdown, PricingSource, StaticPricing};
+    pub use crate::pricing::{CostBreakdown, ModelPricing, PricingSource, StaticPricing};
     pub use crate::provider::{AgentConfig, AgentProvider, DebugMessage, DebugToolCall, LogSink};
     pub use crate::providers::claude::ClaudeCodeProvider;
     pub use crate::providers::record_replay::RecordReplayProvider;

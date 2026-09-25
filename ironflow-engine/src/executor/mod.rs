@@ -57,8 +57,12 @@ pub struct StepOutput {
     pub duration_ms: u64,
     /// Cost in USD (agent steps only).
     pub cost_usd: Decimal,
-    /// Input token count (agent steps only).
+    /// Uncached input token count (agent steps only).
     pub input_tokens: Option<u64>,
+    /// Input tokens served from the prompt cache (agent steps only).
+    pub cache_read_input_tokens: Option<u64>,
+    /// Input tokens written to the prompt cache (agent steps only).
+    pub cache_creation_input_tokens: Option<u64>,
     /// Output token count (agent steps only).
     pub output_tokens: Option<u64>,
     /// Model identifier used for agent steps (e.g. `"claude-sonnet-4-20250514"`).
@@ -71,6 +75,42 @@ pub struct StepOutput {
 }
 
 impl StepOutput {
+    /// Total tokens consumed by the step: uncached input, cache reads, cache
+    /// writes and output. Missing counts are treated as 0 and the sum saturates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let output = StepOutput {
+    ///     output: json!("ok"),
+    ///     duration_ms: 10,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: Some(100),
+    ///     cache_read_input_tokens: Some(5000),
+    ///     cache_creation_input_tokens: Some(200),
+    ///     output_tokens: Some(50),
+    ///     model: None,
+    ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
+    /// };
+    /// assert_eq!(output.total_tokens(), 5350);
+    /// ```
+    pub fn total_tokens(&self) -> u64 {
+        [
+            self.input_tokens,
+            self.cache_read_input_tokens,
+            self.cache_creation_input_tokens,
+            self.output_tokens,
+        ]
+        .into_iter()
+        .map(|t| t.unwrap_or(0))
+        .fold(0u64, u64::saturating_add)
+    }
+
     /// Serialize debug messages to a JSON [`Value`] for store persistence.
     ///
     /// Returns `None` when verbose mode was off (no messages captured).
@@ -96,6 +136,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -121,6 +163,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -149,6 +193,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -179,6 +225,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -207,6 +255,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -236,6 +286,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -269,6 +321,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -316,6 +370,8 @@ impl StepOutput {
     ///     duration_ms: 3,
     ///     cost_usd: Decimal::ZERO,
     ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
     ///     output_tokens: None,
     ///     model: None,
     ///     debug_messages: None,
@@ -625,6 +681,8 @@ mod tests {
             duration_ms: 100,
             cost_usd: rust_decimal::Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: None,
@@ -641,6 +699,8 @@ mod tests {
             duration_ms: 100,
             cost_usd: rust_decimal::Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: Some(Vec::new()),
@@ -687,6 +747,8 @@ mod tests {
             duration_ms: 100,
             cost_usd: rust_decimal::Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: Some(messages),
@@ -711,6 +773,8 @@ mod tests {
             duration_ms: 5000,
             cost_usd: rust_decimal::Decimal::new(123, 2),
             input_tokens: Some(100),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: Some(200),
             model: Some("claude-sonnet".to_string()),
             debug_messages: None,
@@ -731,6 +795,8 @@ mod tests {
             duration_ms: 0,
             cost_usd: rust_decimal::Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: None,
@@ -750,6 +816,8 @@ mod tests {
             duration_ms: 1000,
             cost_usd: rust_decimal::Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: None,
@@ -784,6 +852,8 @@ mod tests {
             duration_ms: 100,
             cost_usd: rust_decimal::Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: None,
@@ -804,6 +874,8 @@ mod tests {
             duration_ms: 1500,
             cost_usd: Decimal::new(42, 2),
             input_tokens: Some(100),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: Some(200),
             model: Some("claude-sonnet".to_string()),
             debug_messages: None,
@@ -846,6 +918,8 @@ mod tests {
             duration_ms: 0,
             cost_usd: Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: None,
@@ -920,6 +994,8 @@ mod tests {
                     duration_ms: 0,
                     cost_usd: Decimal::ZERO,
                     input_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     output_tokens: None,
                     model: None,
                     debug_messages: None,
@@ -994,11 +1070,37 @@ mod output_helper_tests {
             duration_ms: 1,
             cost_usd: Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
         }
+    }
+
+    #[test]
+    fn agent_total_tokens_includes_cache_tokens() {
+        let mut out = output(json!("ok"));
+        out.input_tokens = Some(100);
+        out.cache_read_input_tokens = Some(5000);
+        out.cache_creation_input_tokens = Some(200);
+        out.output_tokens = Some(50);
+        assert_eq!(out.total_tokens(), 5350);
+    }
+
+    #[test]
+    fn agent_total_tokens_all_none_is_zero() {
+        let out = output(json!("ok"));
+        assert_eq!(out.total_tokens(), 0);
+    }
+
+    #[test]
+    fn agent_total_tokens_saturates() {
+        let mut out = output(json!("ok"));
+        out.input_tokens = Some(u64::MAX);
+        out.cache_read_input_tokens = Some(10);
+        assert_eq!(out.total_tokens(), u64::MAX);
     }
 
     #[test]

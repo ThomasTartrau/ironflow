@@ -121,7 +121,7 @@ pub struct ClaudeJsonOutput {
 /// Token usage statistics from the `claude` CLI.
 #[derive(Deserialize)]
 pub struct ClaudeUsage {
-    /// Direct input tokens consumed.
+    /// Uncached input tokens consumed (excludes cache reads and writes).
     pub input_tokens: Option<u64>,
     /// Output tokens generated.
     pub output_tokens: Option<u64>,
@@ -132,13 +132,6 @@ pub struct ClaudeUsage {
 }
 
 impl ClaudeUsage {
-    /// Total input tokens including cache creation and read tokens.
-    pub fn total_input_tokens(&self) -> u64 {
-        self.input_tokens.unwrap_or(0)
-            + self.cache_creation_input_tokens.unwrap_or(0)
-            + self.cache_read_input_tokens.unwrap_or(0)
-    }
-
     /// Total output tokens.
     pub fn total_output_tokens(&self) -> u64 {
         self.output_tokens.unwrap_or(0)
@@ -548,7 +541,15 @@ pub fn parse_response(
             let usage = Box::new(PartialUsage {
                 cost_usd: parsed.total_cost_usd,
                 duration_ms: parsed.duration_ms,
-                input_tokens: parsed.usage.as_ref().map(|u| u.total_input_tokens()),
+                input_tokens: parsed.usage.as_ref().and_then(|u| u.input_tokens),
+                cache_read_input_tokens: parsed
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.cache_read_input_tokens),
+                cache_creation_input_tokens: parsed
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.cache_creation_input_tokens),
                 output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
             });
 
@@ -600,7 +601,15 @@ pub fn parse_response(
         value,
         session_id: parsed.session_id,
         cost_usd: parsed.total_cost_usd,
-        input_tokens: parsed.usage.as_ref().map(|u| u.total_input_tokens()),
+        input_tokens: parsed.usage.as_ref().and_then(|u| u.input_tokens),
+        cache_read_input_tokens: parsed
+            .usage
+            .as_ref()
+            .and_then(|u| u.cache_read_input_tokens),
+        cache_creation_input_tokens: parsed
+            .usage
+            .as_ref()
+            .and_then(|u| u.cache_creation_input_tokens),
         output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
         model: model_name,
         duration_ms: parsed.duration_ms.unwrap_or(fallback_duration_ms),
@@ -1024,7 +1033,9 @@ mod tests {
         assert_eq!(parsed.duration_ms, Some(1500));
 
         let usage = parsed.usage.unwrap();
-        assert_eq!(usage.total_input_tokens(), 150); // 100 + 20 + 30
+        assert_eq!(usage.input_tokens, Some(100));
+        assert_eq!(usage.cache_creation_input_tokens, Some(20));
+        assert_eq!(usage.cache_read_input_tokens, Some(30));
         assert_eq!(usage.total_output_tokens(), 50);
 
         let model_usage = parsed.model_usage.unwrap();
@@ -1093,19 +1104,23 @@ mod tests {
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
         };
-        assert_eq!(usage.total_input_tokens(), 0);
+        assert!(usage.input_tokens.is_none());
+        assert!(usage.cache_creation_input_tokens.is_none());
+        assert!(usage.cache_read_input_tokens.is_none());
         assert_eq!(usage.total_output_tokens(), 0);
     }
 
     #[test]
-    fn claude_usage_sums_cache_tokens() {
+    fn claude_usage_keeps_cache_tokens_separate() {
         let usage = ClaudeUsage {
             input_tokens: Some(50),
             output_tokens: Some(25),
             cache_creation_input_tokens: Some(10),
             cache_read_input_tokens: Some(15),
         };
-        assert_eq!(usage.total_input_tokens(), 75); // 50 + 10 + 15
+        assert_eq!(usage.input_tokens, Some(50));
+        assert_eq!(usage.cache_creation_input_tokens, Some(10));
+        assert_eq!(usage.cache_read_input_tokens, Some(15));
         assert_eq!(usage.total_output_tokens(), 25);
     }
 
@@ -1283,6 +1298,28 @@ mod tests {
         assert_eq!(output.value, Value::String("Hello".to_string()));
         assert_eq!(output.session_id, Some("s1".to_string()));
         assert_eq!(output.duration_ms, 100);
+    }
+
+    #[test]
+    fn parse_response_propagates_cache_read_and_creation_tokens() {
+        let stdout = r#"{"session_id":"s1","result":"Hello","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":20,"cache_read_input_tokens":3000},"total_cost_usd":0.05,"duration_ms":100}"#;
+        let config = AgentConfig::new("test");
+        let output = parse_response(stdout, &config, 200).unwrap();
+        assert_eq!(output.input_tokens, Some(100));
+        assert_eq!(output.cache_read_input_tokens, Some(3000));
+        assert_eq!(output.cache_creation_input_tokens, Some(20));
+        assert_eq!(output.output_tokens, Some(50));
+        assert_eq!(output.cost_usd, Some(0.05));
+    }
+
+    #[test]
+    fn parse_response_cache_read_absent_is_none() {
+        let stdout = r#"{"session_id":"s1","result":"Hello","usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.01,"duration_ms":100}"#;
+        let config = AgentConfig::new("test");
+        let output = parse_response(stdout, &config, 200).unwrap();
+        assert_eq!(output.input_tokens, Some(10));
+        assert!(output.cache_read_input_tokens.is_none());
+        assert!(output.cache_creation_input_tokens.is_none());
     }
 
     #[test]
@@ -1753,7 +1790,9 @@ mod tests {
             AgentError::SchemaValidation { partial_usage, .. } => {
                 assert_eq!(partial_usage.cost_usd, Some(0.30));
                 assert_eq!(partial_usage.duration_ms, Some(4500));
-                assert_eq!(partial_usage.input_tokens, Some(580)); // 500 + 50 + 30
+                assert_eq!(partial_usage.input_tokens, Some(500));
+                assert_eq!(partial_usage.cache_creation_input_tokens, Some(50));
+                assert_eq!(partial_usage.cache_read_input_tokens, Some(30));
                 assert_eq!(partial_usage.output_tokens, Some(200));
             }
             other => panic!("expected SchemaValidation, got {other:?}"),
@@ -1850,7 +1889,9 @@ mod tests {
                 assert!((limit_usd - 0.25).abs() < f64::EPSILON);
                 assert_eq!(partial_usage.cost_usd, Some(0.30));
                 assert_eq!(partial_usage.duration_ms, Some(4500));
-                assert_eq!(partial_usage.input_tokens, Some(580)); // 500 + 50 + 30
+                assert_eq!(partial_usage.input_tokens, Some(500));
+                assert_eq!(partial_usage.cache_creation_input_tokens, Some(50));
+                assert_eq!(partial_usage.cache_read_input_tokens, Some(30));
                 assert_eq!(partial_usage.output_tokens, Some(200));
                 assert!(debug_messages.is_empty());
             }

@@ -2,8 +2,10 @@
 //!
 //! Provides a provider-agnostic pricing interface ([`PricingSource`]) with a
 //! built-in static implementation ([`StaticPricing`]) that covers all supported
-//! model families. Cost is computed into a [`CostBreakdown`] with prompt and
-//! completion components, rounded to 6 decimal places.
+//! model families. Cost is computed into a [`CostBreakdown`] with uncached
+//! prompt, cache read, cache write and completion components, rounded to 6
+//! decimal places. Per-model rates, including prompt-cache rates, are exposed
+//! through [`ModelPricing`].
 //!
 //! The [`spawn_log`] helper emits cost telemetry in a fire-and-forget task so
 //! tracking never blocks step execution.
@@ -41,9 +43,86 @@ pub trait PricingSource: Send + Sync {
     ///
     /// Returns `None` when the model is not in the catalog.
     fn price_per_1m(&self, model: &str) -> Option<(f64, f64)>;
+
+    /// Return the full [`ModelPricing`] (including prompt-cache rates) for the
+    /// given model.
+    ///
+    /// The default implementation derives it from
+    /// [`price_per_1m`](PricingSource::price_per_1m) with
+    /// [`ModelPricing::without_cache`], so cache tokens are billed at the
+    /// input rate. Returns `None` when the model is not in the catalog.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::pricing::{PricingSource, StaticPricing};
+    ///
+    /// let pricing = StaticPricing::new();
+    /// if let Some(p) = pricing.model_pricing("claude-sonnet-4-6") {
+    ///     println!("cache read: ${}/Mtok", p.cache_read_per_1m);
+    /// }
+    /// ```
+    fn model_pricing(&self, model: &str) -> Option<ModelPricing> {
+        self.price_per_1m(model)
+            .map(|(i, o)| ModelPricing::without_cache(i, o))
+    }
 }
 
-/// Computed cost for a single LLM call, split into prompt and completion.
+/// Per-million-token rates for a single model, in USD.
+///
+/// Separates uncached input, output, prompt-cache reads and prompt-cache
+/// writes, which providers bill at different rates.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::pricing::ModelPricing;
+///
+/// let p = ModelPricing::without_cache(3.0, 15.0);
+/// assert_eq!(p.cache_read_per_1m, 3.0);
+/// assert_eq!(p.cache_write_per_1m, 3.0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelPricing {
+    /// Price per million uncached input tokens.
+    pub input_per_1m: f64,
+    /// Price per million output tokens.
+    pub output_per_1m: f64,
+    /// Price per million input tokens served from the prompt cache.
+    pub cache_read_per_1m: f64,
+    /// Price per million input tokens written to the prompt cache.
+    pub cache_write_per_1m: f64,
+}
+
+impl ModelPricing {
+    /// Build pricing for a model without a known cache rate.
+    ///
+    /// Both cache rates are set equal to `input_per_1m`, so costs are never
+    /// underestimated.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::pricing::ModelPricing;
+    ///
+    /// let p = ModelPricing::without_cache(0.5, 1.5);
+    /// assert_eq!(p.input_per_1m, 0.5);
+    /// assert_eq!(p.output_per_1m, 1.5);
+    /// assert_eq!(p.cache_read_per_1m, 0.5);
+    /// ```
+    #[must_use]
+    pub fn without_cache(input_per_1m: f64, output_per_1m: f64) -> Self {
+        Self {
+            input_per_1m,
+            output_per_1m,
+            cache_read_per_1m: input_per_1m,
+            cache_write_per_1m: input_per_1m,
+        }
+    }
+}
+
+/// Computed cost for a single LLM call, split into uncached prompt, cache
+/// read, cache write and completion.
 ///
 /// All values are in USD, rounded to 6 decimal places.
 ///
@@ -59,11 +138,16 @@ pub trait PricingSource: Send + Sync {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CostBreakdown {
-    /// Cost of prompt (input) tokens in USD.
+    /// Cost of uncached prompt (input) tokens in USD.
     pub prompt_usd: f64,
+    /// Cost of input tokens served from the prompt cache in USD.
+    pub cache_read_usd: f64,
+    /// Cost of input tokens written to the prompt cache in USD.
+    pub cache_write_usd: f64,
     /// Cost of completion (output) tokens in USD.
     pub completion_usd: f64,
-    /// Total cost in USD (`prompt_usd + completion_usd`).
+    /// Total cost in USD: sum of `prompt_usd`, `cache_read_usd`,
+    /// `cache_write_usd` and `completion_usd`.
     pub total_usd: f64,
 }
 
@@ -97,22 +181,62 @@ impl CostBreakdown {
         input_tokens: u64,
         output_tokens: u64,
     ) -> Self {
-        let (inp_rate, out_rate) = source.price_per_1m(model).unwrap_or_else(|| {
+        Self::compute_with_cache(source, model, input_tokens, 0, 0, output_tokens)
+    }
+
+    /// Compute the cost for an LLM call, pricing prompt-cache tokens separately.
+    ///
+    /// `input_tokens` is the uncached input only. Cache reads and writes are
+    /// billed at the rates returned by [`PricingSource::model_pricing`]. When
+    /// the model is unknown the fallback Sonnet price is used (cache rates
+    /// equal to the input rate) and a warning is logged.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::pricing::{CostBreakdown, StaticPricing};
+    ///
+    /// let pricing = StaticPricing::new();
+    /// let bd = CostBreakdown::compute_with_cache(
+    ///     &pricing,
+    ///     "claude-sonnet-4-6",
+    ///     1_000,
+    ///     50_000,
+    ///     2_000,
+    ///     500,
+    /// );
+    /// println!("cache read: ${:.6}", bd.cache_read_usd);
+    /// ```
+    pub fn compute_with_cache(
+        source: &dyn PricingSource,
+        model: &str,
+        input_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+        output_tokens: u64,
+    ) -> Self {
+        let rates = source.model_pricing(model).unwrap_or_else(|| {
             warn!(
                 model,
                 fallback_input = SONNET_FALLBACK.0,
                 fallback_output = SONNET_FALLBACK.1,
                 "unknown model, falling back to Claude Sonnet pricing"
             );
-            SONNET_FALLBACK
+            ModelPricing::without_cache(SONNET_FALLBACK.0, SONNET_FALLBACK.1)
         });
 
-        let prompt_usd = round6(input_tokens as f64 / 1_000_000.0 * inp_rate);
-        let completion_usd = round6(output_tokens as f64 / 1_000_000.0 * out_rate);
-        let total_usd = round6(prompt_usd + completion_usd);
+        let prompt_usd = round6(input_tokens as f64 / 1_000_000.0 * rates.input_per_1m);
+        let cache_read_usd =
+            round6(cache_read_tokens as f64 / 1_000_000.0 * rates.cache_read_per_1m);
+        let cache_write_usd =
+            round6(cache_write_tokens as f64 / 1_000_000.0 * rates.cache_write_per_1m);
+        let completion_usd = round6(output_tokens as f64 / 1_000_000.0 * rates.output_per_1m);
+        let total_usd = round6(prompt_usd + cache_read_usd + cache_write_usd + completion_usd);
 
         Self {
             prompt_usd,
+            cache_read_usd,
+            cache_write_usd,
             completion_usd,
             total_usd,
         }
@@ -202,12 +326,49 @@ impl Default for StaticPricing {
     }
 }
 
+/// Return `(read_multiplier, write_multiplier)` applied to the input rate for
+/// prompt-cache tokens, keyed by the matched pricing table entry.
+///
+/// Returns `None` for model families without a known cache rate.
+fn cache_multipliers(key: &str) -> Option<(f64, f64)> {
+    if key.starts_with("claude-") || matches!(key, "sonnet" | "opus" | "haiku") {
+        Some((0.1, 1.25))
+    } else if key.starts_with("gpt-5") {
+        Some((0.1, 1.0))
+    } else if key.starts_with("gpt-4.1") {
+        Some((0.25, 1.0))
+    } else if key.starts_with("gpt-4o") {
+        Some((0.5, 1.0))
+    } else if key.starts_with("gemini-") {
+        Some((0.25, 1.0))
+    } else {
+        None
+    }
+}
+
+impl StaticPricing {
+    /// Find the most specific table entry matching `model`.
+    fn find_entry(&self, model: &str) -> Option<&(&'static str, f64, f64)> {
+        self.entries.iter().find(|(key, _, _)| model.contains(key))
+    }
+}
+
 impl PricingSource for StaticPricing {
     fn price_per_1m(&self, model: &str) -> Option<(f64, f64)> {
-        self.entries
-            .iter()
-            .find(|(key, _, _)| model.contains(key))
-            .map(|(_, inp, out)| (*inp, *out))
+        self.find_entry(model).map(|(_, inp, out)| (*inp, *out))
+    }
+
+    fn model_pricing(&self, model: &str) -> Option<ModelPricing> {
+        let (key, input, output) = *self.find_entry(model)?;
+        Some(match cache_multipliers(key) {
+            Some((read_mult, write_mult)) => ModelPricing {
+                input_per_1m: input,
+                output_per_1m: output,
+                cache_read_per_1m: input * read_mult,
+                cache_write_per_1m: input * write_mult,
+            },
+            None => ModelPricing::without_cache(input, output),
+        })
     }
 }
 
@@ -233,6 +394,8 @@ pub fn spawn_log(step_name: &str, model: &str, breakdown: CostBreakdown) {
             step = %step,
             model = %model,
             prompt_usd = breakdown.prompt_usd,
+            cache_read_usd = breakdown.cache_read_usd,
+            cache_write_usd = breakdown.cache_write_usd,
             completion_usd = breakdown.completion_usd,
             total_usd = breakdown.total_usd,
             "agent step cost"
@@ -412,6 +575,116 @@ mod tests {
         assert_eq!(bd.prompt_usd, 5.0);
         assert_eq!(bd.completion_usd, 12.5);
         assert_eq!(bd.total_usd, 17.5);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn pricing_cache_read_rate_is_ten_percent_for_claude() {
+        let pricing = StaticPricing::new();
+        let p = pricing.model_pricing("claude-sonnet-4-6").unwrap();
+        assert_close(p.input_per_1m, 3.0);
+        assert_close(p.output_per_1m, 15.0);
+        assert_close(p.cache_read_per_1m, 0.3);
+        assert_close(p.cache_write_per_1m, 3.75);
+
+        let alias = pricing.model_pricing("sonnet").unwrap();
+        assert_close(alias.cache_read_per_1m, 0.3);
+    }
+
+    #[test]
+    fn pricing_unknown_cache_rate_defaults_to_input() {
+        let pricing = StaticPricing::new();
+        let p = pricing.model_pricing("mistral-large").unwrap();
+        assert_close(p.cache_read_per_1m, 0.50);
+        assert_close(p.cache_write_per_1m, 0.50);
+    }
+
+    #[test]
+    fn pricing_cache_read_breakdown_total_includes_four_parts() {
+        let pricing = StaticPricing::new();
+        let bd = CostBreakdown::compute_with_cache(
+            &pricing,
+            "claude-opus-5",
+            1_000_000,
+            1_000_000,
+            1_000_000,
+            1_000_000,
+        );
+        assert_eq!(bd.prompt_usd, 5.0);
+        assert_eq!(bd.cache_read_usd, 0.5);
+        assert_eq!(bd.cache_write_usd, 6.25);
+        assert_eq!(bd.completion_usd, 25.0);
+        assert_eq!(bd.total_usd, 36.75);
+    }
+
+    #[test]
+    fn pricing_compute_without_cache_matches_legacy() {
+        let pricing = StaticPricing::new();
+        let bd = CostBreakdown::compute(&pricing, "claude-opus-5", 1_000_000, 500_000);
+        assert_eq!(bd.cache_read_usd, 0.0);
+        assert_eq!(bd.cache_write_usd, 0.0);
+        assert_eq!(
+            bd,
+            CostBreakdown::compute_with_cache(&pricing, "claude-opus-5", 1_000_000, 0, 0, 500_000)
+        );
+    }
+
+    #[test]
+    fn pricing_unknown_model_cache_fallback() {
+        let pricing = StaticPricing::new();
+        assert!(pricing.model_pricing("totally-unknown-model-xyz").is_none());
+        let bd = CostBreakdown::compute_with_cache(
+            &pricing,
+            "totally-unknown-model-xyz",
+            0,
+            1_000_000,
+            1_000_000,
+            0,
+        );
+        // Sonnet fallback input rate applies to both cache components.
+        assert_eq!(bd.cache_read_usd, 3.0);
+        assert_eq!(bd.cache_write_usd, 3.0);
+        assert_eq!(bd.total_usd, 6.0);
+    }
+
+    #[test]
+    fn pricing_openai_cache_read_rate() {
+        let pricing = StaticPricing::new();
+        let p = pricing.model_pricing("gpt-4.1").unwrap();
+        assert_close(p.cache_read_per_1m, 0.5);
+        assert_close(p.cache_write_per_1m, 2.0);
+
+        let gpt5 = pricing.model_pricing("gpt-5.4").unwrap();
+        assert_close(gpt5.cache_read_per_1m, 0.25);
+
+        let gpt4o = pricing.model_pricing("gpt-4o").unwrap();
+        assert_close(gpt4o.cache_read_per_1m, 1.25);
+
+        let gemini = pricing.model_pricing("gemini-2.5-pro").unwrap();
+        assert_close(gemini.cache_read_per_1m, 0.3125);
+    }
+
+    #[test]
+    fn pricing_default_model_pricing_impl_without_cache() {
+        struct FlatPricing;
+
+        impl PricingSource for FlatPricing {
+            fn price_per_1m(&self, model: &str) -> Option<(f64, f64)> {
+                (model == "flat").then_some((2.0, 8.0))
+            }
+        }
+
+        let p = FlatPricing.model_pricing("flat").unwrap();
+        assert_eq!(p, ModelPricing::without_cache(2.0, 8.0));
+        assert_eq!(p.cache_read_per_1m, 2.0);
+        assert_eq!(p.cache_write_per_1m, 2.0);
+        assert!(FlatPricing.model_pricing("other").is_none());
     }
 
     #[test]

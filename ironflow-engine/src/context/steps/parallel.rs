@@ -301,10 +301,7 @@ impl WorkflowContext {
 
                     // Record token usage in the guard for agent steps.
                     if matches!(step_config, StepConfig::Agent(_)) {
-                        let tokens = output
-                            .input_tokens
-                            .unwrap_or(0)
-                            .saturating_add(output.output_tokens.unwrap_or(0));
+                        let tokens = output.total_tokens();
                         if tokens > 0
                             && let Err(guard_err) = self.guard_record_tokens(tokens)
                         {
@@ -328,6 +325,8 @@ impl WorkflowContext {
                                 duration_ms: Some(output.duration_ms),
                                 cost_usd: Some(output.cost_usd),
                                 input_tokens: output.input_tokens,
+                                cache_read_input_tokens: output.cache_read_input_tokens,
+                                cache_creation_input_tokens: output.cache_creation_input_tokens,
                                 output_tokens: output.output_tokens,
                                 completed_at: Some(completed_at),
                                 debug_messages: debug_messages_json,
@@ -345,10 +344,7 @@ impl WorkflowContext {
                     if let Some(ref bus) = self.event_bus
                         && matches!(step_config, StepConfig::Agent(_))
                     {
-                        let tokens = output
-                            .input_tokens
-                            .unwrap_or(0)
-                            .saturating_add(output.output_tokens.unwrap_or(0));
+                        let tokens = output.total_tokens();
                         bus.publish(
                             self.run_id,
                             WorkflowEvent::AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent {
@@ -397,6 +393,12 @@ impl WorkflowContext {
                                 duration_ms: partial.as_ref().and_then(|p| p.duration_ms),
                                 cost_usd: partial.as_ref().and_then(|p| p.cost_usd),
                                 input_tokens: partial.as_ref().and_then(|p| p.input_tokens),
+                                cache_read_input_tokens: partial
+                                    .as_ref()
+                                    .and_then(|p| p.cache_read_input_tokens),
+                                cache_creation_input_tokens: partial
+                                    .as_ref()
+                                    .and_then(|p| p.cache_creation_input_tokens),
                                 output_tokens: partial.as_ref().and_then(|p| p.output_tokens),
                                 ..StepUpdate::default()
                             },

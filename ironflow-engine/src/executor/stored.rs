@@ -34,6 +34,8 @@ impl From<&Step> for StepOutput {
             duration_ms: step.duration_ms,
             cost_usd: step.cost_usd,
             input_tokens: step.input_tokens,
+            cache_read_input_tokens: step.cache_read_input_tokens,
+            cache_creation_input_tokens: step.cache_creation_input_tokens,
             output_tokens: step.output_tokens,
             model: None,
             debug_messages: None,

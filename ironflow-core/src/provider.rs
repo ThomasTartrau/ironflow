@@ -809,8 +809,16 @@ pub struct AgentOutput {
     /// Total cost in USD for this invocation, if reported by the provider.
     pub cost_usd: Option<f64>,
 
-    /// Number of input tokens consumed, if reported.
+    /// Uncached input tokens (excludes cache reads and writes), if reported.
     pub input_tokens: Option<u64>,
+
+    /// Input tokens served from the prompt cache, if reported.
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+
+    /// Input tokens written to the prompt cache, if reported.
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
 
     /// Number of output tokens generated, if reported.
     pub output_tokens: Option<u64>,
@@ -985,6 +993,8 @@ impl AgentOutput {
             session_id: None,
             cost_usd: None,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             duration_ms: 0,
@@ -1187,6 +1197,8 @@ mod tests {
             session_id: Some("sess-abc".to_string()),
             cost_usd: Some(0.01),
             input_tokens: Some(500),
+            cache_read_input_tokens: Some(4000),
+            cache_creation_input_tokens: Some(120),
             output_tokens: Some(200),
             model: Some("claude-sonnet".to_string()),
             duration_ms: 3000,
@@ -1199,9 +1211,29 @@ mod tests {
         assert_eq!(back.session_id, Some("sess-abc".to_string()));
         assert_eq!(back.cost_usd, Some(0.01));
         assert_eq!(back.input_tokens, Some(500));
+        assert_eq!(back.cache_read_input_tokens, Some(4000));
+        assert_eq!(back.cache_creation_input_tokens, Some(120));
         assert_eq!(back.output_tokens, Some(200));
         assert_eq!(back.model, Some("claude-sonnet".to_string()));
         assert_eq!(back.duration_ms, 3000);
+    }
+
+    #[test]
+    fn agent_output_deserializes_without_cache_fields() {
+        let raw = json!({
+            "value": "ok",
+            "session_id": null,
+            "cost_usd": 0.01,
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "model": null,
+            "duration_ms": 100,
+            "debug_messages": null
+        });
+        let back: AgentOutput = serde_json::from_value(raw).unwrap();
+        assert_eq!(back.input_tokens, Some(10));
+        assert_eq!(back.cache_read_input_tokens, None);
+        assert_eq!(back.cache_creation_input_tokens, None);
     }
 
     #[test]
@@ -1228,6 +1260,8 @@ mod tests {
         assert_eq!(output.session_id, None);
         assert_eq!(output.cost_usd, None);
         assert_eq!(output.input_tokens, None);
+        assert_eq!(output.cache_read_input_tokens, None);
+        assert_eq!(output.cache_creation_input_tokens, None);
         assert_eq!(output.output_tokens, None);
         assert_eq!(output.model, None);
         assert_eq!(output.duration_ms, 0);
@@ -1250,6 +1284,8 @@ mod tests {
             session_id: None,
             cost_usd: None,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             duration_ms: 0,
@@ -1535,6 +1571,8 @@ mod tests {
                     session_id: self.output.session_id.clone(),
                     cost_usd: self.output.cost_usd,
                     input_tokens: self.output.input_tokens,
+                    cache_read_input_tokens: self.output.cache_read_input_tokens,
+                    cache_creation_input_tokens: self.output.cache_creation_input_tokens,
                     output_tokens: self.output.output_tokens,
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,

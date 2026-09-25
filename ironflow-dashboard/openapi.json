@@ -5550,6 +5550,24 @@
             "description": "Which run attempt produced this step (1-based).\n\nA run retried twice exposes steps with `attempt` 1, 2 and 3. Steps from\nearlier attempts are kept so a failed attempt stays inspectable.",
             "minimum": 0
           },
+          "cache_creation_input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Input tokens written to the prompt cache (agent steps).",
+            "minimum": 0
+          },
+          "cache_read_input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Input tokens served from the prompt cache (agent steps).",
+            "minimum": 0
+          },
           "completed_at": {
             "type": [
               "string",
@@ -5614,7 +5632,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Input token count (agent steps).",
+            "description": "Uncached input token count (agent steps).",
             "minimum": 0
           },
           "kind": {

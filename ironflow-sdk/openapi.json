@@ -2643,6 +2643,20 @@
             "minimum": 0,
             "type": "integer"
           },
+          "cache_creation_input_tokens": {
+            "description": "Input tokens written to the prompt cache (agent steps).",
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "description": "Input tokens served from the prompt cache (agent steps).",
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
           "completed_at": {
             "description": "When execution completed.",
             "format": "date-time",
@@ -2696,7 +2710,7 @@
             "type": "object"
           },
           "input_tokens": {
-            "description": "Input token count (agent steps).",
+            "description": "Uncached input token count (agent steps).",
             "format": "int64",
             "minimum": 0,
             "nullable": true,

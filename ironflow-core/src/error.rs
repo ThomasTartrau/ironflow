@@ -126,8 +126,12 @@ pub struct PartialUsage {
     pub cost_usd: Option<f64>,
     /// Wall-clock duration reported by the CLI, in milliseconds.
     pub duration_ms: Option<u64>,
-    /// Input tokens consumed before the failure.
+    /// Uncached input tokens consumed before the failure.
     pub input_tokens: Option<u64>,
+    /// Input tokens served from the prompt cache before the failure.
+    pub cache_read_input_tokens: Option<u64>,
+    /// Input tokens written to the prompt cache before the failure.
+    pub cache_creation_input_tokens: Option<u64>,
     /// Output tokens generated before the failure.
     pub output_tokens: Option<u64>,
 }

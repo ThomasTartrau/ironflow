@@ -133,6 +133,8 @@ mod tests {
             duration_ms: 0,
             cost_usd: Decimal::ZERO,
             input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             model: None,
             debug_messages: None,

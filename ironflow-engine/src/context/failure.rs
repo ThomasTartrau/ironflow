@@ -51,6 +51,8 @@ pub(super) fn allowed_failure_output(
         duration_ms: partial.and_then(|p| p.duration_ms).unwrap_or(0),
         cost_usd: partial.and_then(|p| p.cost_usd).unwrap_or(Decimal::ZERO),
         input_tokens: partial.and_then(|p| p.input_tokens),
+        cache_read_input_tokens: partial.and_then(|p| p.cache_read_input_tokens),
+        cache_creation_input_tokens: partial.and_then(|p| p.cache_creation_input_tokens),
         output_tokens: partial.and_then(|p| p.output_tokens),
         model: None,
         debug_messages: None,
@@ -81,6 +83,8 @@ pub(super) struct StepPartialUsage {
     pub(super) cost_usd: Option<Decimal>,
     pub(super) duration_ms: Option<u64>,
     pub(super) input_tokens: Option<u64>,
+    pub(super) cache_read_input_tokens: Option<u64>,
+    pub(super) cache_creation_input_tokens: Option<u64>,
     pub(super) output_tokens: Option<u64>,
 }
 
@@ -113,6 +117,8 @@ pub(super) fn extract_partial_usage_from_error(err: &EngineError) -> Option<Step
                 .and_then(|c| Decimal::try_from(c).ok()),
             duration_ms: partial_usage.duration_ms,
             input_tokens: partial_usage.input_tokens,
+            cache_read_input_tokens: partial_usage.cache_read_input_tokens,
+            cache_creation_input_tokens: partial_usage.cache_creation_input_tokens,
             output_tokens: partial_usage.output_tokens,
         });
     }

@@ -265,6 +265,8 @@ impl WorkflowContext {
             duration_ms: execution.duration_ms,
             cost_usd: execution.cost_usd,
             input_tokens: Some(execution.input_tokens),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: Some(execution.output_tokens),
             model: execution.output.model.as_ref().map(ToString::to_string),
             debug_messages: None,

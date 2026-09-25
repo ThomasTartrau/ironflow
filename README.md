@@ -1092,6 +1092,8 @@ Runtime::new().webhook_with_context(
 | `ironflow_agent_cost_usd_total` | Gauge | `model` |
 | `ironflow_agent_tokens_input_total` | Counter | `model` |
 | `ironflow_agent_tokens_output_total` | Counter | `model` |
+| `ironflow_agent_tokens_cache_read_total` | Counter | `model` |
+| `ironflow_agent_tokens_cache_write_total` | Counter | `model` |
 | `ironflow_webhook_received_total` | Counter | `path`, `auth` |
 | `ironflow_runs_reaped_total` | Counter | `outcome` |
 | `ironflow_worker_leases_lost_total` | Counter | |

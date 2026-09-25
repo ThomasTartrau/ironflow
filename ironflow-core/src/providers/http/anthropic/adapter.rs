@@ -247,6 +247,8 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
                 let output = usage.get("output_tokens").and_then(|v| v.as_u64())?;
                 Some(SseDelta::Usage {
                     input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                     output_tokens: output,
                 })
             }
@@ -254,8 +256,18 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
                 let message = data.get("message")?;
                 let usage = message.get("usage")?;
                 let input = usage.get("input_tokens").and_then(|v| v.as_u64())?;
+                let cache_read = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let cache_creation = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 Some(SseDelta::Usage {
                     input_tokens: input,
+                    cache_read_input_tokens: cache_read,
+                    cache_creation_input_tokens: cache_creation,
                     output_tokens: 0,
                 })
             }
@@ -272,6 +284,8 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
         let mut text_parts: Vec<String> = Vec::new();
         let mut tool_builders: Vec<ToolBuilder> = Vec::new();
         let mut input_tokens: u64 = 0;
+        let mut cache_read_tokens: u64 = 0;
+        let mut cache_creation_tokens: u64 = 0;
         let mut output_tokens: u64 = 0;
 
         for delta in deltas {
@@ -297,9 +311,13 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
                 }
                 SseDelta::Usage {
                     input_tokens: i,
+                    cache_read_input_tokens: cr,
+                    cache_creation_input_tokens: cc,
                     output_tokens: o,
                 } => {
                     input_tokens += i;
+                    cache_read_tokens += cr;
+                    cache_creation_tokens += cc;
                     output_tokens += o;
                 }
                 SseDelta::Done | SseDelta::StructuredValue(_) => {}
@@ -335,15 +353,25 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             structured_value,
             usage: HttpUsage {
                 input_tokens: Some(input_tokens),
+                cache_read_input_tokens: (cache_read_tokens > 0).then_some(cache_read_tokens),
+                cache_creation_input_tokens: (cache_creation_tokens > 0)
+                    .then_some(cache_creation_tokens),
                 output_tokens: Some(output_tokens),
             },
             model: None,
         })
     }
 
-    fn compute_cost(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+    fn compute_cost(&self, model: &str, usage: &HttpUsage) -> Option<f64> {
         let pricing = StaticPricing::new();
-        let bd = CostBreakdown::compute(&pricing, model, input_tokens, output_tokens);
+        let bd = CostBreakdown::compute_with_cache(
+            &pricing,
+            model,
+            usage.input_tokens.unwrap_or(0),
+            usage.cache_read_input_tokens.unwrap_or(0),
+            usage.cache_creation_input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+        );
         Some(bd.total_usd)
     }
 
@@ -362,6 +390,12 @@ fn parse_anthropic_usage(body: &Value) -> HttpUsage {
     HttpUsage {
         input_tokens: usage
             .and_then(|u| u.get("input_tokens"))
+            .and_then(|v| v.as_u64()),
+        cache_read_input_tokens: usage
+            .and_then(|u| u.get("cache_read_input_tokens"))
+            .and_then(|v| v.as_u64()),
+        cache_creation_input_tokens: usage
+            .and_then(|u| u.get("cache_creation_input_tokens"))
             .and_then(|v| v.as_u64()),
         output_tokens: usage
             .and_then(|u| u.get("output_tokens"))
@@ -438,6 +472,134 @@ mod tests {
         assert!(result.structured_value.is_none());
         assert_eq!(result.usage.input_tokens, Some(10));
         assert_eq!(result.usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_response_cache_read_and_creation_usage() {
+        let a = adapter();
+        let body = json!({
+            "content": [{"type": "text", "text": "Hello!"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 2000,
+                "cache_creation_input_tokens": 300
+            },
+            "model": "claude-sonnet-4-6"
+        });
+        let config = AgentConfig::new("Hi");
+        let result = a.parse_response(&body, &config).expect("parse failed");
+
+        assert_eq!(result.usage.input_tokens, Some(10));
+        assert_eq!(result.usage.cache_read_input_tokens, Some(2000));
+        assert_eq!(result.usage.cache_creation_input_tokens, Some(300));
+        assert_eq!(result.usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_response_cache_read_absent_is_none() {
+        let a = adapter();
+        let body = json!({
+            "content": [{"type": "text", "text": "Hello!"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        let config = AgentConfig::new("Hi");
+        let result = a.parse_response(&body, &config).expect("parse failed");
+
+        assert!(result.usage.cache_read_input_tokens.is_none());
+        assert!(result.usage.cache_creation_input_tokens.is_none());
+    }
+
+    #[test]
+    fn parse_sse_message_start_cache_read_usage() {
+        let a = adapter();
+        let line = r#"{"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":1,"cache_read_input_tokens":4000,"cache_creation_input_tokens":250}}}"#;
+        let delta = a.parse_sse_line(line).expect("parse_sse failed");
+        match delta {
+            SseDelta::Usage {
+                input_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                output_tokens,
+            } => {
+                assert_eq!(input_tokens, 12);
+                assert_eq!(cache_read_input_tokens, 4000);
+                assert_eq!(cache_creation_input_tokens, 250);
+                assert_eq!(output_tokens, 0);
+            }
+            other => panic!("expected usage delta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fold_sse_deltas_cache_read_summed() {
+        let a = adapter();
+        let deltas = vec![
+            SseDelta::Usage {
+                input_tokens: 12,
+                cache_read_input_tokens: 4000,
+                cache_creation_input_tokens: 250,
+                output_tokens: 0,
+            },
+            SseDelta::Text("ok".to_string()),
+            SseDelta::Usage {
+                input_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+                output_tokens: 30,
+            },
+            SseDelta::Done,
+        ];
+        let config = AgentConfig::new("Hi");
+        let result = a.fold_sse_deltas(deltas, &config).expect("fold failed");
+
+        assert_eq!(result.usage.input_tokens, Some(12));
+        assert_eq!(result.usage.cache_read_input_tokens, Some(4000));
+        assert_eq!(result.usage.cache_creation_input_tokens, Some(250));
+        assert_eq!(result.usage.output_tokens, Some(30));
+    }
+
+    #[test]
+    fn fold_sse_deltas_cache_read_zero_is_none() {
+        let a = adapter();
+        let deltas = vec![SseDelta::Usage {
+            input_tokens: 12,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 3,
+        }];
+        let config = AgentConfig::new("Hi");
+        let result = a.fold_sse_deltas(deltas, &config).expect("fold failed");
+
+        assert!(result.usage.cache_read_input_tokens.is_none());
+        assert!(result.usage.cache_creation_input_tokens.is_none());
+    }
+
+    #[test]
+    fn compute_cost_cache_read_cheaper_than_input() {
+        let a = adapter();
+        let cache_only = HttpUsage {
+            input_tokens: Some(0),
+            cache_read_input_tokens: Some(1_000_000),
+            cache_creation_input_tokens: None,
+            output_tokens: Some(0),
+        };
+        let uncached = HttpUsage {
+            input_tokens: Some(1_000_000),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            output_tokens: Some(0),
+        };
+        let cache_cost = a
+            .compute_cost("claude-sonnet-4-6", &cache_only)
+            .expect("cost");
+        let input_cost = a
+            .compute_cost("claude-sonnet-4-6", &uncached)
+            .expect("cost");
+        assert!((cache_cost - 0.3).abs() < 1e-9);
+        assert!((input_cost - 3.0).abs() < 1e-9);
     }
 
     #[test]

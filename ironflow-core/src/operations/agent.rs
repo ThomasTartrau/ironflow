@@ -735,6 +735,8 @@ impl Agent {
             duration_ms = output.duration_ms,
             cost_usd = output.cost_usd,
             input_tokens = output.input_tokens,
+            cache_read_input_tokens = output.cache_read_input_tokens,
+            cache_creation_input_tokens = output.cache_creation_input_tokens,
             output_tokens = output.output_tokens,
             model = output.model,
             "agent completed"
@@ -751,6 +753,12 @@ impl Agent {
             }
             if let Some(tokens) = output.input_tokens {
                 metrics::counter!(metric_names::AGENT_TOKENS_INPUT_TOTAL, "model" => model_label.clone()).increment(tokens);
+            }
+            if let Some(t) = output.cache_read_input_tokens {
+                metrics::counter!(metric_names::AGENT_TOKENS_CACHE_READ_TOTAL, "model" => model_label.clone()).increment(t);
+            }
+            if let Some(t) = output.cache_creation_input_tokens {
+                metrics::counter!(metric_names::AGENT_TOKENS_CACHE_WRITE_TOTAL, "model" => model_label.clone()).increment(t);
             }
             if let Some(tokens) = output.output_tokens {
                 metrics::counter!(metric_names::AGENT_TOKENS_OUTPUT_TOTAL, "model" => model_label)
@@ -841,9 +849,49 @@ impl AgentResult {
         self.output.cost_usd
     }
 
-    /// Return the number of input tokens consumed, if reported.
+    /// Return the number of uncached input tokens consumed, if reported.
+    ///
+    /// Excludes tokens served from or written to the prompt cache, see
+    /// [`AgentResult::cache_read_input_tokens`] and
+    /// [`AgentResult::cache_creation_input_tokens`].
     pub fn input_tokens(&self) -> Option<u64> {
         self.output.input_tokens
+    }
+
+    /// Return the number of input tokens served from the prompt cache, if reported.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let result = Agent::new().prompt("Summarize the README").run(&provider).await?;
+    /// println!("cache read: {:?}", result.cache_read_input_tokens());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn cache_read_input_tokens(&self) -> Option<u64> {
+        self.output.cache_read_input_tokens
+    }
+
+    /// Return the number of input tokens written to the prompt cache, if reported.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let result = Agent::new().prompt("Summarize the README").run(&provider).await?;
+    /// println!("cache write: {:?}", result.cache_creation_input_tokens());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn cache_creation_input_tokens(&self) -> Option<u64> {
+        self.output.cache_creation_input_tokens
     }
 
     /// Return the number of output tokens generated, if reported.
@@ -890,6 +938,8 @@ mod tests {
                     session_id: self.output.session_id.clone(),
                     cost_usd: self.output.cost_usd,
                     input_tokens: self.output.input_tokens,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     output_tokens: self.output.output_tokens,
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
@@ -912,6 +962,8 @@ mod tests {
                     session_id: self.output.session_id.clone(),
                     cost_usd: self.output.cost_usd,
                     input_tokens: self.output.input_tokens,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     output_tokens: self.output.output_tokens,
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
@@ -927,6 +979,8 @@ mod tests {
             session_id: Some("sess-123".to_string()),
             cost_usd: Some(0.05),
             input_tokens: Some(100),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: Some(50),
             model: Some("sonnet".to_string()),
             duration_ms: 1500,
@@ -1136,6 +1190,8 @@ mod tests {
                 session_id: Some("s-1".to_string()),
                 cost_usd: Some(0.123),
                 input_tokens: Some(999),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 output_tokens: Some(456),
                 model: Some("opus".to_string()),
                 duration_ms: 2000,
@@ -1407,6 +1463,8 @@ mod tests {
                         session_id: self.output.session_id.clone(),
                         cost_usd: self.output.cost_usd,
                         input_tokens: self.output.input_tokens,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         output_tokens: self.output.output_tokens,
                         model: self.output.model.clone(),
                         duration_ms: self.output.duration_ms,
@@ -1627,6 +1685,8 @@ mod tests {
                     session_id: self.output.session_id.clone(),
                     cost_usd: self.output.cost_usd,
                     input_tokens: self.output.input_tokens,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     output_tokens: self.output.output_tokens,
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
