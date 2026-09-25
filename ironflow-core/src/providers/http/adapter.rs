@@ -1,9 +1,12 @@
 //! Core adapter trait and generic provider wrapper for HTTP-based LLM APIs.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::future::join_all;
 use reqwest::Client;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
 use crate::error::AgentError;
@@ -315,6 +318,100 @@ fn extract_text_value(turn_result: &TurnResult) -> Value {
         .unwrap_or(Value::String(String::new()))
 }
 
+/// Execute a single tool call and return its `(content, is_error)` result.
+///
+/// Mirrors the model's routing rules: MCP-prefixed names are resolved
+/// through `route_tool_call` when connectors are registered, otherwise the
+/// name is looked up directly. An unknown tool or a routing failure is
+/// reported back to the model as an error, never aborts the turn.
+async fn execute_tool_call(
+    tc: &HttpToolCall,
+    registry: &ToolRegistry,
+    provider_name: &'static str,
+) -> (String, bool) {
+    debug!(
+        provider = provider_name,
+        tool = %tc.name,
+        call_id = %tc.id,
+        "executing tool call"
+    );
+
+    let connectors = registry.connectors();
+    let registry_key = if connectors.is_empty() {
+        tc.name.clone()
+    } else {
+        match route_tool_call(&tc.name, connectors) {
+            Ok(routed) => routed.registry_key,
+            Err(routing_err) => return (routing_err.to_string(), true),
+        }
+    };
+
+    match registry.execute(&registry_key, tc.input.clone()).await {
+        Some(Ok(output)) => (output.content, output.is_error),
+        Some(Err(err)) => (format!("Tool execution error: {err}"), true),
+        None => (format!("Unknown tool: {}", tc.name), true),
+    }
+}
+
+/// Execute every tool call of one turn.
+///
+/// Calls are processed in the model's order. A maximal run of consecutive
+/// read-only calls (see [`Tool::read_only`](crate::providers::http::tools::Tool::read_only))
+/// is executed concurrently via `join_all`, bounded by `max_parallel` permits
+/// on a [`Semaphore`]. A non-read-only call is a barrier: it waits for the
+/// previous group to finish, runs alone, and the next group only starts once
+/// it completes. An unknown tool name (not present in the registry) is
+/// treated as non-read-only.
+///
+/// Returns `(content, is_error)` pairs in the same order as `tool_calls`,
+/// regardless of completion order within a parallel group.
+///
+/// # Panics
+///
+/// Panics if the internal semaphore is closed, which cannot happen since it
+/// is never closed.
+async fn execute_turn_tool_calls(
+    tool_calls: &[HttpToolCall],
+    registry: &ToolRegistry,
+    provider_name: &'static str,
+    max_parallel: usize,
+) -> Vec<(String, bool)> {
+    let max_parallel = max_parallel.max(1);
+    let mut results = Vec::with_capacity(tool_calls.len());
+    let mut idx = 0;
+
+    while idx < tool_calls.len() {
+        if registry.is_read_only(&tool_calls[idx].name) {
+            let end = tool_calls[idx..]
+                .iter()
+                .position(|tc| !registry.is_read_only(&tc.name))
+                .map(|offset| idx + offset)
+                .unwrap_or(tool_calls.len());
+
+            let semaphore = Arc::new(Semaphore::new(max_parallel));
+            let group_results = join_all(tool_calls[idx..end].iter().map(|tc| {
+                let semaphore = Arc::clone(&semaphore);
+                async move {
+                    let _permit = semaphore
+                        .acquire()
+                        .await
+                        .expect("semaphore closed unexpectedly");
+                    execute_tool_call(tc, registry, provider_name).await
+                }
+            }))
+            .await;
+
+            results.extend(group_results);
+            idx = end;
+        } else {
+            results.push(execute_tool_call(&tool_calls[idx], registry, provider_name).await);
+            idx += 1;
+        }
+    }
+
+    results
+}
+
 impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
@@ -459,42 +556,18 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
                 assistant_msg["tool_calls"] = Value::Array(assistant_tool_calls);
                 messages.push(assistant_msg);
 
-                // Execute each tool call
+                // Execute tool calls (consecutive read-only calls run concurrently)
+                let max_parallel = config.max_parallel_tools.max(1);
+                let results = execute_turn_tool_calls(
+                    &turn_result.tool_calls,
+                    registry,
+                    self.adapter.provider_name(),
+                    max_parallel,
+                )
+                .await;
+
                 let mut tool_results_debug: Vec<DebugToolResult> = Vec::new();
-
-                for tc in &turn_result.tool_calls {
-                    debug!(
-                        provider = self.adapter.provider_name(),
-                        tool = %tc.name,
-                        call_id = %tc.id,
-                        "executing tool call"
-                    );
-
-                    let connectors = registry.connectors();
-                    let (content, is_error) = if !connectors.is_empty() {
-                        match route_tool_call(&tc.name, connectors) {
-                            Ok(routed) => {
-                                match registry
-                                    .execute(&routed.registry_key, tc.input.clone())
-                                    .await
-                                {
-                                    Some(Ok(output)) => (output.content, output.is_error),
-                                    Some(Err(err)) => {
-                                        (format!("Tool execution error: {err}"), true)
-                                    }
-                                    None => (format!("Unknown tool: {}", tc.name), true),
-                                }
-                            }
-                            Err(routing_err) => (routing_err.to_string(), true),
-                        }
-                    } else {
-                        match registry.execute(&tc.name, tc.input.clone()).await {
-                            Some(Ok(output)) => (output.content, output.is_error),
-                            Some(Err(err)) => (format!("Tool execution error: {err}"), true),
-                            None => (format!("Unknown tool: {}", tc.name), true),
-                        }
-                    };
-
+                for (tc, (content, is_error)) in turn_result.tool_calls.iter().zip(results) {
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -530,5 +603,229 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
             );
             Ok(state.into_output(Value::String(String::new())))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::time::sleep;
+
+    use crate::providers::http::tools::{Tool, ToolError, ToolOutput};
+
+    use super::*;
+
+    type CallLog = Arc<Mutex<Vec<(String, Instant, Instant)>>>;
+
+    struct DelayTool {
+        name: String,
+        read_only: bool,
+        delay: Duration,
+        concurrent: Arc<AtomicUsize>,
+        max_concurrent: Arc<AtomicUsize>,
+        log: Option<CallLog>,
+    }
+
+    impl DelayTool {
+        fn new(name: &str, read_only: bool, delay_ms: u64) -> Self {
+            Self {
+                name: name.to_string(),
+                read_only,
+                delay: Duration::from_millis(delay_ms),
+                concurrent: Arc::new(AtomicUsize::new(0)),
+                max_concurrent: Arc::new(AtomicUsize::new(0)),
+                log: None,
+            }
+        }
+
+        fn with_counters(mut self, concurrent: &Arc<AtomicUsize>, max: &Arc<AtomicUsize>) -> Self {
+            self.concurrent = Arc::clone(concurrent);
+            self.max_concurrent = Arc::clone(max);
+            self
+        }
+
+        fn with_log(mut self, log: &CallLog) -> Self {
+            self.log = Some(Arc::clone(log));
+            self
+        }
+    }
+
+    impl Tool for DelayTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "Sleeps then returns its name"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+
+        fn read_only(&self) -> bool {
+            self.read_only
+        }
+
+        fn execute(
+            &self,
+            _input: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
+            Box::pin(async move {
+                let start = Instant::now();
+                let now = self.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_concurrent.fetch_max(now, Ordering::SeqCst);
+                sleep(self.delay).await;
+                self.concurrent.fetch_sub(1, Ordering::SeqCst);
+                let end = Instant::now();
+                if let Some(ref log) = self.log {
+                    log.lock()
+                        .expect("log mutex poisoned")
+                        .push((self.name.clone(), start, end));
+                }
+                Ok(ToolOutput::success(self.name.clone()))
+            })
+        }
+    }
+
+    fn call(id: &str, name: &str) -> HttpToolCall {
+        HttpToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            input: json!({}),
+        }
+    }
+
+    fn entry(log: &CallLog, name: &str) -> (Instant, Instant) {
+        let entries = log.lock().expect("log mutex poisoned");
+        let (_, start, end) = entries
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("no log entry for {name}"));
+        (*start, *end)
+    }
+
+    #[tokio::test]
+    async fn parallel_read_only_tools() {
+        let registry = ToolRegistry::new()
+            .register(DelayTool::new("read_a", true, 200))
+            .register(DelayTool::new("read_b", true, 200));
+        let calls = vec![call("1", "read_a"), call("2", "read_b")];
+
+        let started = Instant::now();
+        let results = execute_turn_tool_calls(&calls, &registry, "test", 4).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(350),
+            "read-only calls should run concurrently, took {elapsed:?}"
+        );
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|(_, is_error)| !is_error));
+    }
+
+    #[tokio::test]
+    async fn write_tool_is_barrier() {
+        let log: CallLog = Arc::new(Mutex::new(Vec::new()));
+        let registry = ToolRegistry::new()
+            .register(DelayTool::new("read1", true, 100).with_log(&log))
+            .register(DelayTool::new("write", false, 100).with_log(&log))
+            .register(DelayTool::new("read2", true, 100).with_log(&log));
+        let calls = vec![call("1", "read1"), call("2", "write"), call("3", "read2")];
+
+        let results = execute_turn_tool_calls(&calls, &registry, "test", 4).await;
+        assert_eq!(results.len(), 3);
+
+        let (_, read1_end) = entry(&log, "read1");
+        let (write_start, write_end) = entry(&log, "write");
+        let (read2_start, _) = entry(&log, "read2");
+
+        assert!(write_start >= read1_end, "write must wait for read1");
+        assert!(read2_start >= write_end, "read2 must wait for write");
+    }
+
+    #[tokio::test]
+    async fn tool_results_keep_call_order() {
+        let registry = ToolRegistry::new()
+            .register(DelayTool::new("a", true, 150))
+            .register(DelayTool::new("b", true, 50))
+            .register(DelayTool::new("c", true, 100));
+        let calls = vec![call("1", "a"), call("2", "b"), call("3", "c")];
+
+        let results = execute_turn_tool_calls(&calls, &registry, "test", 4).await;
+
+        assert_eq!(
+            results,
+            vec![
+                ("a".to_string(), false),
+                ("b".to_string(), false),
+                ("c".to_string(), false),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn max_parallel_tools_one_is_sequential() {
+        let cur = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let registry = ToolRegistry::new()
+            .register(DelayTool::new("a", true, 50).with_counters(&cur, &peak))
+            .register(DelayTool::new("b", true, 50).with_counters(&cur, &peak))
+            .register(DelayTool::new("c", true, 50).with_counters(&cur, &peak));
+        let calls = vec![call("1", "a"), call("2", "b"), call("3", "c")];
+
+        let results = execute_turn_tool_calls(&calls, &registry, "test", 1).await;
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn read_only_group_respects_max_parallel() {
+        let cur = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let registry = ToolRegistry::new()
+            .register(DelayTool::new("a", true, 50).with_counters(&cur, &peak))
+            .register(DelayTool::new("b", true, 50).with_counters(&cur, &peak))
+            .register(DelayTool::new("c", true, 50).with_counters(&cur, &peak));
+        let calls = vec![call("1", "a"), call("2", "b"), call("3", "c")];
+
+        let results = execute_turn_tool_calls(&calls, &registry, "test", 2).await;
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn max_parallel_zero_is_floored_to_one() {
+        let registry = ToolRegistry::new().register(DelayTool::new("a", true, 10));
+        let calls = vec![call("1", "a")];
+
+        let results = execute_turn_tool_calls(&calls, &registry, "test", 0).await;
+
+        assert_eq!(results, vec![("a".to_string(), false)]);
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_call_is_treated_as_barrier() {
+        let registry = ToolRegistry::new();
+        let calls = vec![call("1", "missing")];
+
+        let results = execute_turn_tool_calls(&calls, &registry, "test", 4).await;
+
+        assert_eq!(results, vec![("Unknown tool: missing".to_string(), true)]);
+    }
+
+    #[tokio::test]
+    async fn empty_tool_calls_return_empty_results() {
+        let registry = ToolRegistry::new();
+
+        let results = execute_turn_tool_calls(&[], &registry, "test", 4).await;
+
+        assert!(results.is_empty());
     }
 }

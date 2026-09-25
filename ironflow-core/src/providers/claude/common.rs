@@ -1697,6 +1697,7 @@ mod tests {
             allowed_tools: vec!["WebSearch".to_string(), "WebFetch".to_string()],
             disallowed_tools: vec![],
             max_turns: Some(5),
+            max_parallel_tools: 4,
             permission_mode: PermissionMode::Default,
             system_prompt: None,
             max_budget_usd: None,

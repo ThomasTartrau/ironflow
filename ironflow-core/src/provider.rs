@@ -190,6 +190,12 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// Maximum number of agentic turns before the provider should stop.
     pub max_turns: Option<u32>,
 
+    /// Maximum number of tool calls executed concurrently within a single
+    /// turn's group of consecutive read-only calls (default 4). `1` restores
+    /// fully sequential tool execution.
+    #[serde(default = "default_max_parallel_tools")]
+    pub max_parallel_tools: usize,
+
     /// Maximum spend in USD for this single invocation.
     pub max_budget_usd: Option<f64>,
 
@@ -297,6 +303,10 @@ fn default_model() -> String {
     Model::SONNET.to_string()
 }
 
+fn default_max_parallel_tools() -> usize {
+    4
+}
+
 // ── Constructor (base type only) ───────────────────────────────────
 
 impl AgentConfig {
@@ -309,6 +319,7 @@ impl AgentConfig {
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             max_turns: None,
+            max_parallel_tools: 4,
             max_budget_usd: None,
             working_dir: None,
             mcp_config: None,
@@ -353,6 +364,27 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// Set the maximum number of turns.
     pub fn max_turns(mut self, turns: u32) -> Self {
         self.max_turns = Some(turns);
+        self
+    }
+
+    /// Set the maximum number of tool calls executed concurrently within a
+    /// turn's group of consecutive read-only calls.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n` is `0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("summarize the repo").max_parallel_tools(2);
+    /// assert_eq!(config.max_parallel_tools, 2);
+    /// ```
+    pub fn max_parallel_tools(mut self, n: usize) -> Self {
+        assert!(n > 0, "max_parallel_tools must be greater than 0");
+        self.max_parallel_tools = n;
         self
     }
 
@@ -617,6 +649,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             allowed_tools: self.allowed_tools,
             disallowed_tools: self.disallowed_tools,
             max_turns: self.max_turns,
+            max_parallel_tools: self.max_parallel_tools,
             max_budget_usd: self.max_budget_usd,
             working_dir: self.working_dir,
             mcp_config: self.mcp_config,
@@ -1116,6 +1149,7 @@ mod tests {
             allowed_tools: vec!["Read".to_string(), "Write".to_string()],
             disallowed_tools: vec!["Bash".to_string()],
             max_turns: Some(10),
+            max_parallel_tools: 2,
             max_budget_usd: Some(2.5),
             working_dir: Some("/tmp".to_string()),
             mcp_config: Some("{}".to_string()),
@@ -1145,6 +1179,7 @@ mod tests {
         assert_eq!(back.prompt, "do stuff");
         assert_eq!(back.allowed_tools, vec!["Read", "Write"]);
         assert_eq!(back.max_turns, Some(10));
+        assert_eq!(back.max_parallel_tools, 2);
         assert_eq!(back.max_budget_usd, Some(2.5));
         assert_eq!(back.working_dir, Some("/tmp".to_string()));
         assert_eq!(back.mcp_config, Some("{}".to_string()));
@@ -1160,6 +1195,7 @@ mod tests {
             allowed_tools: vec![],
             disallowed_tools: vec![],
             max_turns: None,
+            max_parallel_tools: 4,
             max_budget_usd: None,
             working_dir: None,
             mcp_config: None,
@@ -1609,5 +1645,31 @@ mod tests {
 
         let lines = sink.0.lock().unwrap();
         assert!(lines.is_empty(), "default impl should not emit any logs");
+    }
+
+    #[test]
+    fn max_parallel_tools_defaults_to_four() {
+        assert_eq!(AgentConfig::new("hi").max_parallel_tools, 4);
+    }
+
+    #[test]
+    fn max_parallel_tools_builder_sets_value() {
+        let config = AgentConfig::new("hi").max_parallel_tools(2);
+        assert_eq!(config.max_parallel_tools, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_parallel_tools must be greater than 0")]
+    fn max_parallel_tools_zero_panics() {
+        let _ = AgentConfig::new("hi").max_parallel_tools(0);
+    }
+
+    #[test]
+    fn max_parallel_tools_missing_from_json_defaults_to_four() {
+        let json = serde_json::to_value(AgentConfig::new("hi")).unwrap();
+        let mut obj = json.as_object().unwrap().clone();
+        obj.remove("max_parallel_tools");
+        let back: AgentConfig = serde_json::from_value(Value::Object(obj)).unwrap();
+        assert_eq!(back.max_parallel_tools, 4);
     }
 }

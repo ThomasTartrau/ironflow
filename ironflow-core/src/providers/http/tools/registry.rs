@@ -110,6 +110,16 @@ impl ToolRegistry {
         self.index.contains_key(name)
     }
 
+    /// Returns whether the tool registered under `name` is read-only.
+    ///
+    /// Returns `false` (not read-only) for a name that is not registered,
+    /// so unknown tool calls act as barriers rather than being parallelized.
+    pub fn is_read_only(&self, name: &str) -> bool {
+        self.index
+            .get(name)
+            .is_some_and(|&idx| self.tools[idx].read_only())
+    }
+
     /// Register a connector name for MCP prefix routing.
     ///
     /// Called by `register_mcp_tools` to track which prefixes are valid for
@@ -200,6 +210,29 @@ mod tests {
         }
     }
 
+    struct ReadOnlyTool;
+
+    impl Tool for ReadOnlyTool {
+        fn name(&self) -> &str {
+            "lookup"
+        }
+        fn description(&self) -> &str {
+            "Reads without side effects"
+        }
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+        fn execute(
+            &self,
+            _input: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
+            Box::pin(async { Ok(ToolOutput::success("found")) })
+        }
+        fn read_only(&self) -> bool {
+            true
+        }
+    }
+
     #[test]
     fn registry_new_is_empty() {
         let registry = ToolRegistry::new();
@@ -279,5 +312,23 @@ mod tests {
             .expect("tool should exist");
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn is_read_only_true_for_read_only_tool() {
+        let registry = ToolRegistry::new().register(ReadOnlyTool);
+        assert!(registry.is_read_only("lookup"));
+    }
+
+    #[test]
+    fn is_read_only_false_for_default_tool() {
+        let registry = ToolRegistry::new().register(AddTool);
+        assert!(!registry.is_read_only("add"));
+    }
+
+    #[test]
+    fn is_read_only_false_for_unknown_tool() {
+        let registry = ToolRegistry::new().register(ReadOnlyTool);
+        assert!(!registry.is_read_only("nonexistent"));
     }
 }

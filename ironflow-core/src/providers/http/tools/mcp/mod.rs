@@ -92,12 +92,17 @@ pub async fn register_mcp_tools(
 
     for tool_def in tools {
         let registry_name = format!("{}{CONNECTOR_SEPARATOR}{}", prefix, tool_def.name);
+        let read_only = tool_def
+            .annotations
+            .as_ref()
+            .is_some_and(|a| a.read_only_hint);
         let bridge = McpBridgeTool::new(
             conn.clone(),
             registry_name,
             tool_def.name,
             tool_def.description.unwrap_or_default(),
             tool_def.input_schema,
+            read_only,
         );
         registry = registry.register(bridge);
     }

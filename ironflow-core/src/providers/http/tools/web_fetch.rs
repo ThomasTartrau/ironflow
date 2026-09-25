@@ -75,6 +75,10 @@ impl Tool for WebFetchTool {
         })
     }
 
+    fn read_only(&self) -> bool {
+        true
+    }
+
     fn execute(
         &self,
         input: Value,
@@ -163,5 +167,10 @@ mod tests {
             .expect("should succeed");
         assert!(result.is_error);
         assert!(result.content.contains("Request failed"));
+    }
+
+    #[test]
+    fn web_fetch_tool_is_read_only() {
+        assert!(WebFetchTool::new().read_only());
     }
 }

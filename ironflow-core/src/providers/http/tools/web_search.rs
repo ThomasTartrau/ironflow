@@ -88,6 +88,10 @@ impl Tool for WebSearchTool {
         })
     }
 
+    fn read_only(&self) -> bool {
+        true
+    }
+
     fn execute(
         &self,
         input: Value,
@@ -253,5 +257,10 @@ mod tests {
         let tool = WebSearchTool::brave("fake-key");
         let result = tool.execute(json!({})).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn web_search_tool_is_read_only() {
+        assert!(WebSearchTool::brave("fake-key").read_only());
     }
 }
