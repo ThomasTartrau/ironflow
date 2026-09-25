@@ -239,4 +239,9 @@ mod tests {
         let result = tool.execute(json!({})).await;
         assert!(result.is_err());
     }
+
+    #[test]
+    fn bash_tool_is_not_read_only() {
+        assert!(!BashTool::new().read_only());
+    }
 }

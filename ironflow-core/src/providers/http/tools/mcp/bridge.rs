@@ -33,6 +33,7 @@ use crate::providers::http::tools::{Tool, ToolError, ToolOutput};
 ///     "search".to_string(),
 ///     "Search for documents".to_string(),
 ///     json!({"type": "object", "properties": {"query": {"type": "string"}}}),
+///     false,
 /// );
 /// # Ok(())
 /// # }
@@ -43,6 +44,7 @@ pub struct McpBridgeTool {
     mcp_name: String,
     description: String,
     parameters_schema: Value,
+    read_only: bool,
 }
 
 impl McpBridgeTool {
@@ -50,6 +52,8 @@ impl McpBridgeTool {
     ///
     /// `registry_name` is the prefixed name used in the tool registry (e.g. `grafana__echo`).
     /// `mcp_name` is the original tool name as known by the MCP server (e.g. `echo`).
+    /// `read_only` marks the tool as safe to run in parallel with other
+    /// read-only calls (typically from the server's `readOnlyHint` annotation).
     ///
     /// # Examples
     ///
@@ -67,6 +71,7 @@ impl McpBridgeTool {
     ///     "echo".to_string(),
     ///     "Echo tool".to_string(),
     ///     json!({"type": "object", "properties": {}}),
+    ///     false,
     /// );
     /// assert_eq!(tool.name(), "srv__echo");
     /// # Ok(())
@@ -78,6 +83,7 @@ impl McpBridgeTool {
         mcp_name: String,
         description: String,
         parameters_schema: Value,
+        read_only: bool,
     ) -> Self {
         Self {
             connection,
@@ -85,6 +91,7 @@ impl McpBridgeTool {
             mcp_name,
             description,
             parameters_schema,
+            read_only,
         }
     }
 }
@@ -100,6 +107,10 @@ impl Tool for McpBridgeTool {
 
     fn parameters_schema(&self) -> Value {
         self.parameters_schema.clone()
+    }
+
+    fn read_only(&self) -> bool {
+        self.read_only
     }
 
     fn execute(

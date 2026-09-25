@@ -27,7 +27,7 @@ while IFS= read -r line; do
             # notification, no response
             ;;
         "tools/list")
-            echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"echo\",\"description\":\"Echoes input back\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"]}},{\"name\":\"add\",\"description\":\"Adds two numbers\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}}]}}"
+            echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"echo\",\"description\":\"Echoes input back\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"]},\"annotations\":{\"readOnlyHint\":true}},{\"name\":\"add\",\"description\":\"Adds two numbers\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}}]}}"
             ;;
         "tools/call")
             name=$(echo "$line" | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['params']['name'])" 2>/dev/null)
@@ -187,6 +187,21 @@ async fn register_mcp_tools_tracks_connector() {
             .expect("register should succeed");
 
         assert!(registry.connectors().contains("grafana"));
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn register_mcp_tools_reads_read_only_hint() {
+    timeout(Duration::from_secs(10), async {
+        let conn = spawn_echo_server().await;
+        let registry = register_mcp_tools(ToolRegistry::new(), conn, "test")
+            .await
+            .expect("register should succeed");
+
+        assert!(registry.is_read_only("test__echo"));
+        assert!(!registry.is_read_only("test__add"));
     })
     .await
     .expect("test timed out");

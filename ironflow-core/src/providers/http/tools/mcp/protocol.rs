@@ -69,6 +69,17 @@ pub struct McpToolDef {
     /// JSON Schema for the tool's input parameters.
     #[serde(rename = "inputSchema")]
     pub input_schema: Value,
+    /// Optional behavioral hints (e.g. `readOnlyHint`) reported by the server.
+    #[serde(default)]
+    pub annotations: Option<McpToolAnnotations>,
+}
+
+/// Optional behavioral hints attached to an MCP tool definition.
+#[derive(Debug, Deserialize, Default)]
+pub struct McpToolAnnotations {
+    /// `true` when the tool only reads state and has no side effects.
+    #[serde(rename = "readOnlyHint", default)]
+    pub read_only_hint: bool,
 }
 
 /// Result of a `tools/list` call.
@@ -180,6 +191,7 @@ mod tests {
         assert_eq!(def.name, "query_dashboards");
         assert_eq!(def.description.as_deref(), Some("Query Grafana dashboards"));
         assert_eq!(def.input_schema["type"], "object");
+        assert!(def.annotations.is_none());
     }
 
     #[test]
@@ -191,6 +203,31 @@ mod tests {
         let def: McpToolDef = serde_json::from_value(raw).expect("deserialization should succeed");
         assert_eq!(def.name, "minimal");
         assert!(def.description.is_none());
+        assert!(def.annotations.is_none());
+    }
+
+    #[test]
+    fn deserialize_tool_def_with_read_only_hint_true() {
+        let raw = json!({
+            "name": "lookup",
+            "inputSchema": {"type": "object", "properties": {}},
+            "annotations": {"readOnlyHint": true}
+        });
+        let def: McpToolDef = serde_json::from_value(raw).expect("deserialization should succeed");
+        let annotations = def.annotations.expect("annotations should be present");
+        assert!(annotations.read_only_hint);
+    }
+
+    #[test]
+    fn deserialize_tool_def_with_read_only_hint_false() {
+        let raw = json!({
+            "name": "write",
+            "inputSchema": {"type": "object", "properties": {}},
+            "annotations": {"readOnlyHint": false}
+        });
+        let def: McpToolDef = serde_json::from_value(raw).expect("deserialization should succeed");
+        let annotations = def.annotations.expect("annotations should be present");
+        assert!(!annotations.read_only_hint);
     }
 
     #[test]

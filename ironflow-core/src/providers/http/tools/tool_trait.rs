@@ -114,6 +114,37 @@ pub trait Tool: Send + Sync {
         &self,
         input: Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>>;
+
+    /// Whether this tool only reads state and can safely run in parallel with
+    /// other read-only tool calls of the same turn.
+    ///
+    /// Defaults to `false` (write/unknown by default, safe default).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::pin::Pin;
+    /// use std::future::Future;
+    /// use serde_json::{Value, json};
+    /// use ironflow_core::providers::http::tools::{Tool, ToolOutput, ToolError};
+    ///
+    /// struct LookupTool;
+    ///
+    /// impl Tool for LookupTool {
+    ///     fn name(&self) -> &str { "lookup" }
+    ///     fn description(&self) -> &str { "Looks up a value without side effects" }
+    ///     fn parameters_schema(&self) -> Value { json!({"type": "object"}) }
+    ///     fn execute(&self, _input: Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + '_>> {
+    ///         Box::pin(async { Ok(ToolOutput::success("value")) })
+    ///     }
+    ///     fn read_only(&self) -> bool { true }
+    /// }
+    ///
+    /// assert!(LookupTool.read_only());
+    /// ```
+    fn read_only(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +202,11 @@ mod tests {
             tool.parameters_schema(),
             json!({"type": "object", "properties": {}})
         );
+    }
+
+    #[test]
+    fn default_read_only_is_false() {
+        assert!(!FakeTool.read_only());
     }
 
     #[tokio::test]
