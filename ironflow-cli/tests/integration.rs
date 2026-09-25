@@ -523,6 +523,20 @@ async fn run_retry_not_found() {
     assert!(result.is_err());
 }
 
+// ── Run replay ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn run_replay_not_found() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Replay { id: Uuid::now_v7() },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+}
+
 // ── Unauthorized ──────────────────────────────────────────────
 
 #[tokio::test]

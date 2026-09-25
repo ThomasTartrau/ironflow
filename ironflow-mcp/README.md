@@ -15,6 +15,7 @@ MCP (Model Context Protocol) server for **ironflow**. Exposes workflow orchestra
 | `reject_run` | Reject a pending run |
 | `cancel_run` | Cancel a running workflow |
 | `retry_run` | Retry a failed run |
+| `replay_run` | Replay a finished run on the current handler version |
 | `get_stats` | Get aggregate statistics |
 
 ## Configuration

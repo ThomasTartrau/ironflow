@@ -9,6 +9,10 @@ export function retryRun(runId: string): Promise<RunResponse> {
 	return api.post<RunResponse>(`/runs/${runId}/retry`).then((res) => res.data);
 }
 
+export function replayRun(runId: string): Promise<RunResponse> {
+	return api.post<RunResponse>(`/runs/${runId}/replay`).then((res) => res.data);
+}
+
 export function approveRun(runId: string): Promise<RunResponse> {
 	return api
 		.post<RunResponse>(`/runs/${runId}/approve`)

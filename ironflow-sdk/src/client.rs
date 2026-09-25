@@ -561,6 +561,20 @@ impl IronflowClient {
         self.run_action(id, action).await
     }
 
+    /// `POST /api/v1/runs/:id/replay` -- Replay a finished run on the current
+    /// handler version (creates a new run).
+    ///
+    /// Unlike [`retry_run`](Self::retry_run), the new run always targets the
+    /// handler's current version; there is no compatibility check to force.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 404 (run not found or workflow no longer
+    /// registered) or 400 (run still in flight).
+    pub async fn replay_run(&self, id: Uuid) -> Result<ApiResponse<types::RunResponse>, Error> {
+        self.run_action(id, "replay").await
+    }
+
     // ── Workflows ──────────────────────────────────────────────────
 
     /// `GET /api/v1/workflows` -- List registered workflows.

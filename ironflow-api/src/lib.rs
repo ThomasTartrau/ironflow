@@ -23,6 +23,7 @@
 //! - `GET /api/v1/runs/:id` — Get run details and steps
 //! - `POST /api/v1/runs/:id/cancel` — Cancel a pending or running run
 //! - `POST /api/v1/runs/:id/retry` — Retry a failed run (creates new run)
+//! - `POST /api/v1/runs/:id/replay` -- Replay a finished run on the current handler version (creates new run)
 //!
 //! ## Workflows
 //! - `GET /api/v1/workflows` — List registered workflows

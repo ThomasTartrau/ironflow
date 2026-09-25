@@ -74,6 +74,11 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         Coverage::Command(&["run", "retry", UUID]),
     ),
     (
+        "POST",
+        "/api/v1/runs/{id}/replay",
+        Coverage::Command(&["run", "replay", UUID]),
+    ),
+    (
         "GET",
         "/api/v1/runs/{id}/events",
         Coverage::Exempt("SSE stream; long-lived connection unsuitable for a CLI command"),

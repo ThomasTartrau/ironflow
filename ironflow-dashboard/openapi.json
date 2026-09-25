@@ -1191,6 +1191,57 @@
         ]
       }
     },
+    "/api/v1/runs/{id}/replay": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Replay a finished run on the current handler version.",
+        "description": "Creates a new `Pending` run with `TriggerKind::Replay` pointing to the\noriginal, always on the current handler version. The original run is not modified.",
+        "operationId": "replay_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Run replay created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Run cannot be replayed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found or workflow not registered"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/runs/{id}/retry": {
       "post": {
         "tags": [
@@ -5826,6 +5877,27 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The original run that failed."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Replay of a previously finished run on the current handler version.",
+            "required": [
+              "original_run_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "replay"
+                ]
+              },
+              "original_run_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The original run that was replayed."
               }
             }
           },

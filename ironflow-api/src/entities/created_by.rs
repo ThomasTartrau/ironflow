@@ -68,6 +68,7 @@ fn trigger_label(trigger: &TriggerKind) -> String {
         TriggerKind::Api => "api".to_string(),
         TriggerKind::Workflow => "workflow".to_string(),
         TriggerKind::Retry { .. } => "retry".to_string(),
+        TriggerKind::Replay { .. } => "replay".to_string(),
         TriggerKind::Webhook { path } => path.clone(),
         TriggerKind::Cron { schedule } => schedule.clone(),
         TriggerKind::Nats { subject } => format!("nats:{subject}"),
@@ -247,6 +248,12 @@ mod tests {
                     parent_run_id: Uuid::now_v7(),
                 },
                 "retry",
+            ),
+            (
+                TriggerKind::Replay {
+                    original_run_id: Uuid::now_v7(),
+                },
+                "replay",
             ),
             (
                 TriggerKind::Webhook {

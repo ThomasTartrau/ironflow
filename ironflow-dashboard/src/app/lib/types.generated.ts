@@ -506,6 +506,27 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/runs/{id}/replay": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Replay a finished run on the current handler version.
+		 * @description Creates a new `Pending` run with `TriggerKind::Replay` pointing to the
+		 *     original, always on the current handler version. The original run is not modified.
+		 */
+		post: operations["replay_run"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/runs/{id}/retry": {
 		parameters: {
 			query?: never;
@@ -3296,6 +3317,15 @@ export interface components {
 			  }
 			| {
 					/** @enum {string} */
+					kind: "replay";
+					/**
+					 * Format: uuid
+					 * @description The original run that was replayed.
+					 */
+					original_run_id: string;
+			  }
+			| {
+					/** @enum {string} */
 					kind: "workflow";
 			  }
 			| {
@@ -4633,6 +4663,57 @@ export interface operations {
 				content?: never;
 			};
 			/** @description Run not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	replay_run: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Run replay created successfully */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["RunResponse"];
+				};
+			};
+			/** @description Run cannot be replayed */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run not found or workflow not registered */
 			404: {
 				headers: {
 					[name: string]: unknown;

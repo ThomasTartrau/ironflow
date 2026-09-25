@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import type { TriggerKind } from "@/app/lib/types";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -14,6 +15,7 @@ interface TriggerBadgeProps {
 interface TriggerMeta {
 	label: string;
 	tooltip: string | null;
+	href?: string | null;
 }
 
 function getTriggerMeta(t: TriggerKind): TriggerMeta {
@@ -28,6 +30,12 @@ function getTriggerMeta(t: TriggerKind): TriggerMeta {
 			return { label: "API", tooltip: null };
 		case "retry":
 			return { label: "Retry", tooltip: t.parent_run_id };
+		case "replay":
+			return {
+				label: "Replay",
+				tooltip: t.original_run_id,
+				href: `/runs/${t.original_run_id}`,
+			};
 		case "workflow":
 			return { label: "Workflow", tooltip: null };
 		case "nats":
@@ -47,7 +55,7 @@ function getTriggerMeta(t: TriggerKind): TriggerMeta {
 }
 
 export function TriggerBadge({ trigger }: TriggerBadgeProps) {
-	const { label, tooltip } = getTriggerMeta(trigger);
+	const { label, tooltip, href } = getTriggerMeta(trigger);
 
 	if (!tooltip) {
 		return (
@@ -68,7 +76,19 @@ export function TriggerBadge({ trigger }: TriggerBadgeProps) {
 					}
 				/>
 				<TooltipContent side="bottom">
-					<span className="font-mono text-xs">{tooltip}</span>
+					{href ? (
+						<Link
+							to={href}
+							// The badge sits inside clickable table rows: keep the click
+							// from also triggering the row navigation.
+							onClick={(e) => e.stopPropagation()}
+							className="font-mono text-xs underline"
+						>
+							{tooltip}
+						</Link>
+					) : (
+						<span className="font-mono text-xs">{tooltip}</span>
+					)}
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>

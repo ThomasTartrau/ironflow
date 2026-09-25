@@ -2920,6 +2920,27 @@
             "type": "object"
           },
           {
+            "description": "Replay of a previously finished run on the current handler version.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "replay"
+                ],
+                "type": "string"
+              },
+              "original_run_id": {
+                "description": "The original run that was replayed.",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "original_run_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "Triggered by a parent workflow as a sub-workflow step.",
             "properties": {
               "kind": {
@@ -4671,6 +4692,57 @@
           }
         ],
         "summary": "Reject a run that is awaiting human approval.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/replay": {
+      "post": {
+        "description": "Creates a new `Pending` run with `TriggerKind::Replay` pointing to the\noriginal, always on the current handler version. The original run is not modified.",
+        "operationId": "replay_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Run replay created successfully"
+          },
+          "400": {
+            "description": "Run cannot be replayed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found or workflow not registered"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Replay a finished run on the current handler version.",
         "tags": [
           "runs"
         ]

@@ -16,7 +16,7 @@ use ironflow_engine::notify::Event;
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ClientConfig;
 use ironflow_sdk::types::PlanWorkflowRequest;
-use ironflow_store::entities::NewUser;
+use ironflow_store::entities::{NewUser, RunStatus, TriggerKind};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
 use tokio::net::TcpListener;
@@ -76,7 +76,12 @@ fn jwt_config() -> Arc<JwtConfig> {
 ///
 /// Creates a test user in the in-memory store so that `/auth/me` works.
 async fn spawn_server() -> (String, String) {
-    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    spawn_server_from(Arc::new(InMemoryStore::new())).await
+}
+
+/// Same as [`spawn_server`], backed by the given store so a test can drive
+/// run state directly.
+async fn spawn_server_from(store: Arc<dyn Store>) -> (String, String) {
     let provider = Arc::new(ClaudeCodeProvider::new());
     let mut engine = Engine::new(store.clone(), provider);
     engine.register(DeployWorkflow).unwrap();
@@ -431,4 +436,68 @@ async fn create_run_without_a_key_still_duplicates() {
 
     assert_ne!(first.data.id, second.data.id);
     assert!(first.data.idempotency_key.is_none());
+}
+
+// ── Run replay ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn replay_completed_run_creates_new_run() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    let (base_url, token) = spawn_server_from(store.clone()).await;
+    let client = make_client(&base_url, &token);
+
+    let original = client.create_run(&deploy_request()).await.unwrap();
+    let original_id = original.data.id;
+    store
+        .update_run_status(original_id, RunStatus::Running)
+        .await
+        .unwrap();
+    store
+        .update_run_status(original_id, RunStatus::Completed)
+        .await
+        .unwrap();
+
+    let replayed = client.replay_run(original_id).await.unwrap();
+    let new_id = replayed.data.id;
+    assert_ne!(new_id, original_id);
+    assert_eq!(replayed.data.workflow_name, "deploy");
+
+    let stored = store.get_run(new_id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.trigger,
+        TriggerKind::Replay {
+            original_run_id: original_id,
+        }
+    );
+    assert_eq!(stored.status.state, RunStatus::Pending);
+
+    let fetched = client.get_run(new_id).await.unwrap();
+    assert_eq!(fetched.data.run.id, new_id);
+
+    // The original run is left untouched.
+    let original_after = store.get_run(original_id).await.unwrap().unwrap();
+    assert_eq!(original_after.status.state, RunStatus::Completed);
+}
+
+#[tokio::test]
+async fn replay_pending_run_returns_400() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    let (base_url, token) = spawn_server_from(store.clone()).await;
+    let client = make_client(&base_url, &token);
+
+    let original = client.create_run(&deploy_request()).await.unwrap();
+
+    let err = client.replay_run(original.data.id).await.unwrap_err();
+    assert!(err.is_api_error());
+    assert_eq!(err.status(), Some(400));
+}
+
+#[tokio::test]
+async fn replay_run_not_found() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let err = client.replay_run(Uuid::now_v7()).await.unwrap_err();
+    assert!(err.is_api_error());
+    assert_eq!(err.status(), Some(404));
 }
