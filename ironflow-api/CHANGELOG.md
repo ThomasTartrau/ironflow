@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.38.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.38.3...ironflow-api-v2.38.4) - 2026-09-25
+
+### Fixed
+
+- #102 complete and align dashboard stats across stores, API and charts
+
 ## [2.38.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.38.1...ironflow-api-v2.38.2) - 2026-09-23
 ## [2.38.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.37.1...ironflow-api-v2.38.0) - 2026-09-22
 

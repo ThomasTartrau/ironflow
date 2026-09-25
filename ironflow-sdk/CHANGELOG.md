@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.27](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.26...ironflow-sdk-v0.1.27) - 2026-09-25
+
+### Fixed
+
+- ironflow-sdk build script reads CARGO_MANIFEST_DIR at runtime
+
+- #102 complete and align dashboard stats across stores, API and charts
+
 ## [0.1.26](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.25...ironflow-sdk-v0.1.26) - 2026-09-23
 
 ### Added
