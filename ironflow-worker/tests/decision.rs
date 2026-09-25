@@ -22,6 +22,7 @@ use ironflow_core::providers::record_replay_decision::{
 };
 use ironflow_engine::config::{DecisionConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::decision::{DecisionAnswers, DecisionChoice};
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_worker::{Worker, WorkerBuilder};
 use rust_decimal::Decimal;
@@ -34,19 +35,28 @@ use helpers::{TestApiState, make_run_json, spawn_test_api};
 
 const WORKFLOW: &str = "triage";
 
-fn build_config() -> DecisionConfig {
-    DecisionConfig::new("Help! My payouts have been failing for 3 days.")
-        .noul("is_urgent", "Does this convey urgency?")
-        .choice(
-            "department",
-            "Which team?",
-            &["billing", "technical", "sales"],
-        )
-        .score(
-            "frustration",
-            "How frustrated?",
-            &["Calm", "Frustrated", "Very angry"],
-        )
+/// Options of the `department` question.
+#[derive(Debug, Clone, Copy, PartialEq, DecisionChoice)]
+enum Department {
+    Billing,
+    Technical,
+    Sales,
+}
+
+/// The questions of the recorded request, one per field.
+#[derive(Debug, DecisionAnswers)]
+#[allow(dead_code)]
+struct Triage {
+    #[noul("Does this convey urgency?")]
+    is_urgent: f64,
+    #[choice("Which team?")]
+    department: Department,
+    #[score("How frustrated?", levels = ["Calm", "Frustrated", "Very angry"])]
+    frustration: f64,
+}
+
+fn build_config() -> DecisionConfig<Triage> {
+    DecisionConfig::new("Help! My payouts have been failing for 3 days.").answers::<Triage>()
 }
 
 /// The real Jev response recorded for [`build_config`]: `department` is "billing".
@@ -100,9 +110,8 @@ impl WorkflowHandler for TriageWorkflow {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            let out = ctx.decision("triage", build_config()).await?;
-            let team = out.choice("department")?.choice.clone();
-            if team == "billing" {
+            let triage = ctx.decision("triage", build_config()).await?;
+            if triage.department == Department::Billing {
                 ctx.shell("route", ShellConfig::new("echo routed to billing"))
                     .await?;
             }

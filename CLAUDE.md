@@ -141,6 +141,13 @@ Use RFC 4231 test vectors for HMAC-SHA256 verification tests.
 
 **Zero tolerance for magic imports** -- always `use` imports, never inline qualified paths. Applies everywhere: function bodies, type annotations, return types, field types, static types, trait impls, and macro calls. No exceptions besides `crate::`/`self::`. Full rule with examples is auto-injected via `rust-imports.md` for all `.rs` files.
 
+### Typed author API
+
+The API a workflow author writes against is typed end to end: no expression in a string,
+no `Value` read by key, no step name copied by hand where a handle or a type exists.
+Examples, the mdBook and the plugin follow it too. Full rule, with the exceptions (data
+that stays a string), in `.claude/rules/typed-api.md`.
+
 ### Error Handling
 
 - No retry logic - a step fails, the workflow fails

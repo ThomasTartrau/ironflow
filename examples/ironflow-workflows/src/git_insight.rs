@@ -37,16 +37,8 @@ impl WorkflowHandler for GitInsight {
                 .await?;
 
             // Step 3: AI analysis of git activity
-            let log_out = log
-                .output
-                .get("stdout")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let contrib_out = contributors
-                .output
-                .get("stdout")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let log_out = log.stdout();
+            let contrib_out = contributors.stdout();
 
             ctx.agent(
                 "analysis",

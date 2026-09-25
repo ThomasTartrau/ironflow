@@ -2,11 +2,10 @@
 
 use std::time::Duration;
 
-use ironflow_store::entities::{ApprovalRequirement, ApprovalRuleEvaluation, Assignee};
+use ironflow_store::entities::Assignee;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use super::{ApprovalRule, EscalationPolicy};
+use super::{Approvers, EscalationPolicy};
 
 /// Configuration for a human approval step.
 ///
@@ -19,25 +18,25 @@ use super::{ApprovalRule, EscalationPolicy};
 /// happens when it fires. The timer lives in the database, so it survives an API
 /// or worker restart.
 ///
-/// A gate can also carry a dynamic approval matrix:
-/// [`with_rule`](Self::with_rule) appends an [`ApprovalRule`] whose condition is
-/// evaluated against the run context when the gate opens. The first matching
-/// rule decides how many distinct approvals the gate needs and which groups may
-/// vote; when no rule matches, one approval from anyone allowed to answer the
-/// gate resolves it. A config without rules behaves exactly as before.
+/// A gate can also require several approvers:
+/// [`requiring`](Self::requiring) takes the [`Approvers`] the handler computed
+/// in Rust, from its typed input and earlier step outputs. They decide how many
+/// distinct approvals the gate needs and which groups may vote. A config
+/// without approvers is resolved by one approval from anyone allowed to answer
+/// the gate.
 ///
 /// # Examples
 ///
 /// ```
-/// use ironflow_engine::config::{ApprovalConfig, ApprovalRule};
+/// use ironflow_engine::config::{ApprovalConfig, Approvers};
 ///
 /// let config = ApprovalConfig::new("Deploy to production?");
 /// assert_eq!(config.message(), "Deploy to production?");
 /// assert!(config.timeout_seconds().is_none());
 ///
-/// let rule = ApprovalRule::new("payload.amount > 10000", 2).with_approver_groups(["finance"]);
-/// let payment = ApprovalConfig::new("Release the payment?").with_rule(rule);
-/// assert_eq!(payment.rules().len(), 1);
+/// let payment = ApprovalConfig::new("Release the payment?")
+///     .requiring(Approvers::at_least(2).from_groups(["finance"]).because("amount > 10k"));
+/// assert_eq!(payment.approvers().map(Approvers::required), Some(2));
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalConfig {
@@ -50,8 +49,8 @@ pub struct ApprovalConfig {
     on_timeout: Option<EscalationPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     assignee: Option<Assignee>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    rules: Vec<ApprovalRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approvers: Option<Approvers>,
 }
 
 impl ApprovalConfig {
@@ -72,7 +71,7 @@ impl ApprovalConfig {
             deadline_secs: None,
             on_timeout: None,
             assignee: None,
-            rules: Vec::new(),
+            approvers: None,
         }
     }
 
@@ -186,88 +185,37 @@ impl ApprovalConfig {
         self
     }
 
-    /// Append an approval rule. Rules are evaluated in the order they were
-    /// added and the first match wins.
+    /// Require the given approvers. A later call replaces an earlier one.
+    ///
+    /// The engine records them on the gate when it opens, as an
+    /// [`ApprovalRequirement`](crate::config::ApprovalRequirement); that record
+    /// stays the source of truth on replay and resume.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ironflow_engine::config::{ApprovalConfig, ApprovalRule};
+    /// use ironflow_engine::config::{ApprovalConfig, Approvers};
     ///
     /// let config = ApprovalConfig::new("Approve?")
-    ///     .with_rule(ApprovalRule::new("payload.amount > 100000", 3))
-    ///     .with_rule(ApprovalRule::new("payload.amount > 10000", 2));
-    /// assert_eq!(config.rules()[0].required_approvers(), 3);
+    ///     .requiring(Approvers::at_least(3).from_groups(["finance", "board"]));
+    /// assert_eq!(config.approvers().map(Approvers::required), Some(3));
     /// ```
-    pub fn with_rule(mut self, rule: ApprovalRule) -> Self {
-        self.rules.push(rule);
+    pub fn requiring(mut self, approvers: Approvers) -> Self {
+        self.approvers = Some(approvers);
         self
     }
 
-    /// The approval rules, in evaluation order.
+    /// The approvers this gate requires, if any were set.
     ///
     /// # Examples
     ///
     /// ```
     /// use ironflow_engine::config::ApprovalConfig;
     ///
-    /// assert!(ApprovalConfig::new("Approve?").rules().is_empty());
+    /// assert!(ApprovalConfig::new("Approve?").approvers().is_none());
     /// ```
-    pub fn rules(&self) -> &[ApprovalRule] {
-        &self.rules
-    }
-
-    /// Evaluate the rules in order against `ctx`.
-    ///
-    /// Every evaluated rule is recorded in
-    /// [`ApprovalRequirement::evaluated`], up to and including the first match.
-    /// The first matching rule decides the requirement; when none matches, the
-    /// [default requirement](ApprovalRequirement::default) applies (one
-    /// approval, any approver).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ironflow_engine::config::{ApprovalConfig, ApprovalRule};
-    /// use serde_json::json;
-    ///
-    /// let rule = ApprovalRule::new("payload.amount > 10000", 2).with_approver_groups(["finance"]);
-    /// let config = ApprovalConfig::new("Approve?").with_rule(rule);
-    ///
-    /// let big = config.evaluate_rules(&json!({"payload": {"amount": 15000}}));
-    /// assert_eq!(big.rule_index, Some(0));
-    /// assert_eq!(big.required_approvers, 2);
-    ///
-    /// let small = config.evaluate_rules(&json!({"payload": {"amount": 10}}));
-    /// assert_eq!(small.rule_index, None);
-    /// assert_eq!(small.required_approvers, 1);
-    /// assert!(!small.evaluated[0].matched);
-    /// ```
-    pub fn evaluate_rules(&self, ctx: &Value) -> ApprovalRequirement {
-        let mut evaluated = Vec::new();
-        for (index, rule) in self.rules.iter().enumerate() {
-            let index = u32::try_from(index).unwrap_or(u32::MAX);
-            let matched = rule.matches(ctx);
-            evaluated.push(ApprovalRuleEvaluation {
-                index,
-                condition: rule.condition().source().to_string(),
-                matched,
-            });
-            if matched {
-                let required = u32::try_from(rule.required_approvers()).unwrap_or(u32::MAX);
-                return ApprovalRequirement {
-                    rule_index: Some(index),
-                    condition: Some(rule.condition().source().to_string()),
-                    required_approvers: required,
-                    approver_groups: rule.approver_groups().to_vec(),
-                    evaluated,
-                };
-            }
-        }
-        ApprovalRequirement {
-            evaluated,
-            ..ApprovalRequirement::default()
-        }
+    pub fn approvers(&self) -> Option<&Approvers> {
+        self.approvers.as_ref()
     }
 
     /// The approval message displayed to reviewers.
@@ -482,115 +430,67 @@ mod tests {
         assert!(!json.contains("deadline_secs"));
         assert!(!json.contains("on_timeout"));
         assert!(!json.contains("assignee"));
-        assert!(!json.contains("rules"));
-    }
-
-    fn matrix() -> ApprovalConfig {
-        ApprovalConfig::new("Release the payment?")
-            .with_rule(
-                ApprovalRule::new("payload.amount > 100000", 3)
-                    .with_approver_groups(["finance", "board"]),
-            )
-            .with_rule(
-                ApprovalRule::new("payload.amount > 10000", 2).with_approver_groups(["finance"]),
-            )
+        assert!(!json.contains("approvers"));
     }
 
     #[test]
-    fn with_rule_appends_in_order() {
-        let config = matrix();
-        assert_eq!(config.rules().len(), 2);
-        assert_eq!(config.rules()[0].required_approvers(), 3);
-        assert_eq!(config.rules()[1].required_approvers(), 2);
+    fn requiring_stores_the_approvers() {
+        let approvers = Approvers::at_least(2)
+            .from_groups(["finance"])
+            .because("amount > 10k");
+        let config = ApprovalConfig::new("Release the payment?").requiring(approvers.clone());
+        assert_eq!(config.approvers(), Some(&approvers));
     }
 
     #[test]
-    fn evaluate_rules_first_match_wins() {
-        let ctx = json!({"payload": {"amount": 500000}});
-        let requirement = matrix().evaluate_rules(&ctx);
+    fn requiring_twice_keeps_the_last_approvers() {
+        let config = ApprovalConfig::new("Approve?")
+            .requiring(Approvers::at_least(3))
+            .requiring(Approvers::any());
+        assert_eq!(config.approvers(), Some(&Approvers::any()));
+    }
 
-        assert_eq!(requirement.rule_index, Some(0));
-        assert_eq!(
-            requirement.condition.as_deref(),
-            Some("payload.amount > 100000")
+    #[test]
+    fn serde_roundtrip_with_approvers() {
+        let config = ApprovalConfig::new("Release the payment?").requiring(
+            Approvers::at_least(3)
+                .from_groups(["finance", "board"])
+                .because("amount > 100k"),
         );
-        assert_eq!(requirement.required_approvers, 3);
-        assert_eq!(requirement.approver_groups, vec!["finance", "board"]);
-        assert_eq!(
-            requirement.evaluated,
-            vec![ApprovalRuleEvaluation {
-                index: 0,
-                condition: "payload.amount > 100000".to_string(),
-                matched: true,
-            }]
-        );
-    }
-
-    #[test]
-    fn evaluate_rules_records_misses_before_the_match() {
-        let ctx = json!({"payload": {"amount": 15000}});
-        let requirement = matrix().evaluate_rules(&ctx);
-
-        assert_eq!(requirement.rule_index, Some(1));
-        assert_eq!(requirement.required_approvers, 2);
-        assert_eq!(requirement.approver_groups, vec!["finance"]);
-        let matched: Vec<bool> = requirement.evaluated.iter().map(|e| e.matched).collect();
-        assert_eq!(matched, vec![false, true]);
-        assert_eq!(requirement.evaluated[1].index, 1);
-    }
-
-    #[test]
-    fn evaluate_rules_falls_through_to_the_default() {
-        let ctx = json!({"payload": {"amount": 10}});
-        let requirement = matrix().evaluate_rules(&ctx);
-
-        assert_eq!(requirement.rule_index, None);
-        assert_eq!(requirement.condition, None);
-        assert_eq!(requirement.required_approvers, 1);
-        assert!(requirement.approver_groups.is_empty());
-        assert_eq!(requirement.evaluated.len(), 2);
-        assert!(requirement.evaluated.iter().all(|e| !e.matched));
-    }
-
-    #[test]
-    fn evaluate_rules_without_rules_is_the_default() {
-        let requirement = ApprovalConfig::new("Approve?").evaluate_rules(&json!({}));
-        assert_eq!(requirement, ApprovalRequirement::default());
-    }
-
-    #[test]
-    fn serde_roundtrip_with_rules() {
-        let config = matrix();
         let json = to_string(&config).expect("serialize");
         let back: ApprovalConfig = from_str(&json).expect("deserialize");
 
-        assert_eq!(back.rules(), config.rules());
+        assert_eq!(back.approvers(), config.approvers());
         assert_eq!(to_string(&back).expect("serialize"), json);
     }
 
     #[test]
-    fn serde_accepts_a_config_written_before_rules_existed() {
+    fn serde_accepts_a_config_written_before_approvers_existed() {
         let raw = r#"{"message":"Approve?","assignee":"user:alice"}"#;
         let config: ApprovalConfig = from_str(raw).expect("deserialize");
 
-        assert!(config.rules().is_empty());
+        assert!(config.approvers().is_none());
         assert_eq!(config.assignee(), Some(&Assignee::user("alice")));
     }
 
     #[test]
-    fn serde_rejects_a_rule_with_zero_approvers() {
-        let result = from_value::<ApprovalConfig>(json!({
+    fn serde_ignores_the_rules_of_a_config_written_by_approval_rules() {
+        // Step inputs recorded before approval rules were removed still load.
+        let config: ApprovalConfig = from_value(json!({
             "message": "Approve?",
-            "rules": [{"condition": "payload.urgent", "required_approvers": 0}],
-        }));
-        assert!(result.is_err());
+            "rules": [{"condition": "payload.amount > 10000", "required_approvers": 2}],
+        }))
+        .expect("deserialize");
+
+        assert_eq!(config.message(), "Approve?");
+        assert!(config.approvers().is_none());
     }
 
     #[test]
-    fn serde_rejects_a_rule_with_an_invalid_condition() {
+    fn serde_rejects_zero_approvers() {
         let result = from_value::<ApprovalConfig>(json!({
             "message": "Approve?",
-            "rules": [{"condition": "payload.amount >", "required_approvers": 1}],
+            "approvers": {"required_approvers": 0},
         }));
         assert!(result.is_err());
     }

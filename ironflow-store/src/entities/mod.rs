@@ -34,7 +34,7 @@ pub use approval_delegation::{
     ApprovalDelegation, DelegationFilter, NewApprovalDelegation, WorkflowFilterError,
     validate_workflow_filter,
 };
-pub use approval_requirement::{ApprovalRequirement, ApprovalRuleEvaluation, StepApproval};
+pub use approval_requirement::{ApprovalRequirement, StepApproval};
 pub use artifact::{Artifact, ArtifactLookup, NewArtifact};
 pub use assignee::{Assignee, AssigneeParseError};
 pub use audit_log::{AuditLogEntry, AuditLogFilter, NewAuditLogEntry};

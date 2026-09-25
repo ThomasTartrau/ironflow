@@ -67,7 +67,14 @@ use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use serde::Deserialize;
 use serde_json::{Value, json};
+
+/// The fields of the page the handler needs.
+#[derive(Deserialize)]
+struct Page {
+    title: String,
+}
 
 struct JsonGet {
     base_url: String,
@@ -99,8 +106,9 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
         path: "pages/1".to_string(),
         bearer,
     };
-    let out = ctx.operation("fetch-page", &op).await?;
-    let _title = out.output["title"].as_str().unwrap_or_default();
+    // A body that is not a `Page` fails the handler instead of reading as "".
+    let page: Page = ctx.operation("fetch-page", &op).await?.json()?;
+    let _title = page.title;
     Ok(())
 }
 ```

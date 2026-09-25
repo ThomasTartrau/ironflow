@@ -20,8 +20,9 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 
 use crate::config::DecisionConfig;
 use crate::context::WorkflowContext;
+use crate::decision::DecisionAnswers;
 use crate::error::EngineError;
-use crate::executor::{DecisionExecution, StepOutput, StepResult, execute_decision};
+use crate::executor::{DecisionExecution, StepArtifacts, StepOutput, StepResult, execute_decision};
 use crate::notify::{
     WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowStepCompletedEvent,
     WorkflowStepStartedEvent,
@@ -31,17 +32,69 @@ use crate::plan::lock_plan;
 impl WorkflowContext {
     /// Execute a typed machine-decision step (System One / Jev).
     ///
-    /// See [`DecisionConfig`]. Returns a
-    /// [`DecisionOutput`] whose answers are accessed by name. When
-    /// `escalate_below` is set and any answer falls below it, the run suspends
-    /// with [`EngineError::ApprovalRequired`] and replays the stored answers on
-    /// resume without re-calling the provider.
+    /// The questions come from `T`, set with
+    /// [`DecisionConfig::answers`], and the answers are returned as a `T`. See
+    /// [`crate::decision`]. When `escalate_below` is set and any answer falls
+    /// below it, the run suspends with [`EngineError::ApprovalRequired`] and
+    /// replays the stored answers on resume without re-calling the provider.
+    ///
+    /// While planning no provider is called and no answer exists, so reading
+    /// them fails with [`EngineError::Decision`] and the plan stops at this
+    /// step.
     ///
     /// # Errors
     ///
-    /// [`EngineError::NoDecisionProvider`], [`EngineError::ApprovalRequired`], or
-    /// [`EngineError::Operation`].
-    pub async fn decision(
+    /// [`EngineError::NoDecisionProvider`], [`EngineError::ApprovalRequired`],
+    /// [`EngineError::Operation`], or [`EngineError::Decision`] when an answer
+    /// does not fit `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::config::DecisionConfig;
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::decision::DecisionAnswers;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// #[derive(DecisionAnswers)]
+    /// struct Urgency {
+    ///     #[noul("Does this convey urgency?")]
+    ///     urgent: f64,
+    /// }
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let urgency = ctx
+    ///     .decision("urgency", DecisionConfig::new("Payouts fail since 3 days").answers::<Urgency>())
+    ///     .await?;
+    /// if urgency.urgent > 0.8 {
+    ///     // page someone
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// A config without questions is not a decision:
+    ///
+    /// ```compile_fail,E0277
+    /// # use ironflow_engine::config::DecisionConfig;
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// # use ironflow_engine::error::EngineError;
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// ctx.decision("urgency", DecisionConfig::new("state")).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn decision<T: DecisionAnswers>(
+        &mut self,
+        name: &str,
+        config: DecisionConfig<T>,
+    ) -> Result<T, EngineError> {
+        let output = self.decision_output(name, config.erase()).await?;
+        Ok(T::from_output(&output)?)
+    }
+
+    /// Run, replay or plan a decision step and return the raw answers.
+    async fn decision_output(
         &mut self,
         name: &str,
         config: DecisionConfig,
@@ -215,6 +268,7 @@ impl WorkflowContext {
             output_tokens: Some(execution.output_tokens),
             model: execution.output.model.as_ref().map(ToString::to_string),
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         };
 
         let completed_at = Utc::now();

@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -17,7 +18,7 @@ use ironflow_engine::config::{ApprovalConfig, ShellConfig, StepConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_engine::plan::{ConditionResult, PlanOptions};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunFilter, StepKind, TriggerKind};
@@ -85,6 +86,18 @@ impl WorkflowHandler for ParallelWorkflow {
     }
 }
 
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum Env {
+    Prod,
+    Dev,
+}
+
+#[derive(Deserialize)]
+struct DeployInput {
+    env: Env,
+}
+
 struct ConditionalWorkflow;
 
 impl WorkflowHandler for ConditionalWorkflow {
@@ -95,7 +108,7 @@ impl WorkflowHandler for ConditionalWorkflow {
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
             if ctx
-                .when("input.env == 'prod'", |p| p["env"] == "prod")
+                .when("production run", |i: &DeployInput| i.env == Env::Prod)
                 .await?
             {
                 ctx.shell("deploy-prod", ShellConfig::new("echo prod"))
@@ -103,6 +116,30 @@ impl WorkflowHandler for ConditionalWorkflow {
             } else {
                 ctx.skip("deploy-prod", "not prod").await?;
             }
+            Ok(())
+        })
+    }
+}
+
+/// Hands a declared artifact from one step to the next through its handle.
+struct ArtifactPipeline;
+
+impl WorkflowHandler for ArtifactPipeline {
+    fn name(&self) -> &str {
+        "artifact-pipeline"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let build = ctx
+                .shell(
+                    "build",
+                    ShellConfig::new("./gen").output("dist/report.html"),
+                )
+                .await?;
+            let report = build.artifact("report.html")?;
+            ctx.shell("publish", ShellConfig::new("./publish").input(&report))
+                .await?;
             Ok(())
         })
     }
@@ -127,6 +164,10 @@ impl WorkflowHandler for DynamicWorkflow {
 }
 
 struct GrandChildWorkflow;
+
+impl TypedWorkflow for GrandChildWorkflow {
+    type Input = ();
+}
 
 impl WorkflowHandler for GrandChildWorkflow {
     fn name(&self) -> &str {
@@ -153,10 +194,20 @@ impl WorkflowHandler for ChildWorkflow {
         Box::pin(async move {
             ctx.shell("child-step", ShellConfig::new("echo child"))
                 .await?;
-            ctx.workflow(&GrandChildWorkflow, json!({})).await?;
+            ctx.workflow(&GrandChildWorkflow, ()).await?;
             Ok(())
         })
     }
+}
+
+impl TypedWorkflow for ChildWorkflow {
+    type Input = NestedInput;
+}
+
+/// Input of [`ChildWorkflow`].
+#[derive(Serialize, Deserialize)]
+struct NestedInput {
+    nested: bool,
 }
 
 struct ParentWorkflow;
@@ -170,7 +221,7 @@ impl WorkflowHandler for ParentWorkflow {
         Box::pin(async move {
             ctx.shell("parent-step", ShellConfig::new("echo parent"))
                 .await?;
-            ctx.workflow(&ChildWorkflow, json!({"nested": true}))
+            ctx.workflow(&ChildWorkflow, NestedInput { nested: true })
                 .await?;
             Ok(())
         })
@@ -334,7 +385,7 @@ async fn plan_evaluates_a_condition_against_the_input() {
         assert_eq!(prod.steps[0].kind, StepKind::Shell);
         match prod.steps[0].condition.as_ref().expect("a condition") {
             ConditionResult::Evaluated { expression, value } => {
-                assert_eq!(expression, "input.env == 'prod'");
+                assert_eq!(expression, "production run");
                 assert!(*value);
             }
             other => panic!("expected an evaluated condition, got {other:?}"),
@@ -351,6 +402,74 @@ async fn plan_evaluates_a_condition_against_the_input() {
             ConditionResult::Skipped { reason } => assert_eq!(reason, "not prod"),
             other => panic!("expected a skipped condition, got {other:?}"),
         }
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn plan_stops_on_a_condition_whose_input_does_not_match_its_type() {
+    timeout(TEST_TIMEOUT, async {
+        let mut engine = engine_with(test_store());
+        engine.register(ConditionalWorkflow).unwrap();
+
+        // `staging` is not an `Env`: the typo surfaces instead of a silent false.
+        let plan = engine
+            .plan_handler(
+                "conditional",
+                json!({"env": "staging"}),
+                PlanOptions::default(),
+            )
+            .await
+            .expect("plan built");
+
+        assert!(plan.steps.is_empty());
+        assert!(plan.truncated);
+        let reason = plan.incomplete_reason.expect("a reason");
+        assert!(reason.contains("staging"), "unexpected reason: {reason}");
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn a_run_fails_when_a_condition_input_does_not_match_its_type() {
+    timeout(TEST_TIMEOUT, async {
+        let mut engine = engine_with(test_store());
+        engine.register(ConditionalWorkflow).unwrap();
+
+        let err = engine
+            .run_handler("conditional", TriggerKind::Manual, json!({"env": 42}))
+            .await
+            .expect_err("payload does not match DeployInput");
+
+        assert!(
+            matches!(err, EngineError::Serialization(_)),
+            "unexpected error: {err:?}"
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn plan_follows_artifact_handles_without_producing_anything() {
+    timeout(TEST_TIMEOUT, async {
+        let mut engine = engine_with(test_store());
+        engine.register(ArtifactPipeline).unwrap();
+
+        let plan = engine
+            .plan_handler("artifact-pipeline", json!({}), PlanOptions::default())
+            .await
+            .expect("plan built");
+
+        assert!(
+            !plan.truncated,
+            "plan stopped: {:?}",
+            plan.incomplete_reason
+        );
+        let names: Vec<&str> = plan.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["build", "publish"]);
     })
     .await
     .expect("test timed out");

@@ -24,7 +24,7 @@ use crate::state::AppState;
 /// API key votes as its owner, and an admin's vote counts as one vote like any
 /// other. Once the gate holds as many distinct approvals as its
 /// [`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)
-/// requires (one for a gate without approval rules), the run transitions from
+/// requires (one for a gate opened without approvers), the run transitions from
 /// `AwaitingApproval` back to `Running` and resumes. Until then the response
 /// returns the run still `AwaitingApproval`, and the gate keeps its SLA timer.
 ///
@@ -1230,11 +1230,9 @@ mod tests {
         let run_id = run_with_gate_assigned_to(store, "payments", None).await;
         let gate = store.list_steps(run_id).await.unwrap().remove(0);
         let requirement = ApprovalRequirement {
-            rule_index: Some(0),
-            condition: Some("payload.amount > 10000".to_string()),
+            reason: Some("amount > 10k".to_string()),
             required_approvers: required,
             approver_groups: groups.iter().map(|g| g.to_string()).collect(),
-            evaluated: Vec::new(),
         };
         store
             .update_step(
@@ -1490,11 +1488,12 @@ mod tests {
         assert_eq!(payload["step_id"], json!(gate_id));
         assert_eq!(payload["approvals_received"], json!(1));
         assert_eq!(payload["approvals_required"], json!(2));
-        assert_eq!(payload["requirement"]["rule_index"], json!(0));
+        assert_eq!(payload["requirement"]["reason"], json!("amount > 10k"));
+        assert!(payload["requirement"].get("rule_index").is_none());
     }
 
     #[tokio::test]
-    async fn a_rule_less_gate_is_resolved_by_one_approval() {
+    async fn a_gate_without_approvers_is_resolved_by_one_approval() {
         let store = Arc::new(InMemoryStore::new());
         let run_id = run_with_gate_assigned_to(&store, "deploy", None).await;
 

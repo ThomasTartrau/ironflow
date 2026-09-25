@@ -23,29 +23,40 @@ use ironflow_core::providers::record_replay_decision::{
 };
 use ironflow_engine::config::{DecisionConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::decision::{DecisionAnswers, DecisionChoice};
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
+use ironflow_engine::executor::StepOutput;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, StepKind, StepStatus, TriggerKind};
 
 const STATE: &str = "Help! My payouts have been failing for 3 days.";
 
-/// The questions under test. `escalate_below` does not affect the request hash,
-/// so the same fixture serves both the happy-path and the escalation config.
-fn build_config(escalate_below: Option<f64>) -> DecisionConfig {
-    let mut config = DecisionConfig::new(STATE)
-        .noul("is_urgent", "Does this convey urgency?")
-        .choice(
-            "department",
-            "Which team?",
-            &["billing", "technical", "sales"],
-        )
-        .score(
-            "frustration",
-            "How frustrated?",
-            &["Calm", "Frustrated", "Very angry"],
-        );
+/// Options of the `department` question.
+#[derive(Debug, Clone, Copy, PartialEq, DecisionChoice)]
+enum Department {
+    Billing,
+    Technical,
+    Sales,
+}
+
+/// The questions under test, one per field. They build the exact request the
+/// fixture was recorded for.
+#[derive(Debug, DecisionAnswers)]
+struct Triage {
+    #[noul("Does this convey urgency?")]
+    is_urgent: f64,
+    #[choice("Which team?")]
+    department: Department,
+    #[score("How frustrated?", levels = ["Calm", "Frustrated", "Very angry"])]
+    frustration: f64,
+}
+
+/// The decision config under test. `escalate_below` does not affect the request
+/// hash, so the same fixture serves both the happy-path and the escalation config.
+fn build_config(escalate_below: Option<f64>) -> DecisionConfig<Triage> {
+    let mut config = DecisionConfig::new(STATE).answers::<Triage>();
     if let Some(t) = escalate_below {
         config = config.escalate_below(t);
     }
@@ -85,7 +96,7 @@ fn temp_fixtures() -> (String, TempDir) {
     (dir.clone(), TempDir(dir))
 }
 
-fn write_fixture(dir: &str, config: &DecisionConfig, output: &DecisionOutput) {
+fn write_fixture<T>(dir: &str, config: &DecisionConfig<T>, output: &DecisionOutput) {
     let request = config.to_request();
     let hash = hash_request(&request);
     let fixture = json!({ "request": request, "output": output });
@@ -113,14 +124,23 @@ impl WorkflowHandler for TriageWorkflow {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            let out = ctx
+            let triage = ctx
                 .decision("triage", build_config(self.escalate_below))
                 .await?;
-            // Exercise the typed accessors inside the handler.
-            let _ = out.noul("is_urgent")?;
-            let team = out.choice("department")?.choice.clone();
-            let cmd = format!("echo routed to {team}");
-            ctx.shell("route", ShellConfig::new(&cmd)).await?;
+            // The typed answer drives the next step.
+            let urgency = if triage.is_urgent > 0.5 {
+                "urgent"
+            } else {
+                "normal"
+            };
+            ctx.shell(
+                "route",
+                ShellConfig::new("echo \"$URGENCY to $TEAM (mood $MOOD)\"")
+                    .env("URGENCY", urgency)
+                    .env("TEAM", triage.department.label())
+                    .env("MOOD", &format!("{:.1}", triage.frustration)),
+            )
+            .await?;
             Ok(())
         })
     }
@@ -155,8 +175,13 @@ async fn decision_happy_path_completes_and_exposes_typed_answers() {
     let stored: DecisionOutput = serde_json::from_value(decision.output.clone().unwrap()).unwrap();
     assert_eq!(stored.choice("department").unwrap().choice, "billing");
 
-    // The routing step ran, proving the decision returned Ok.
-    assert!(steps.iter().any(|s| s.name == "route"));
+    // The routing step ran with the typed answers: 0.95 is urgent, the
+    // department read back as `Department::Billing`, the score as 1.03.
+    let route = steps.iter().find(|s| s.name == "route").unwrap();
+    assert_eq!(
+        StepOutput::from(route).stdout(),
+        "urgent to billing (mood 1.0)"
+    );
 }
 
 #[tokio::test]
@@ -208,7 +233,12 @@ async fn decision_escalates_below_threshold_then_replays_on_resume() {
     assert_eq!(decision.status.state, StepStatus::Completed);
     let stored: DecisionOutput = serde_json::from_value(decision.output.clone().unwrap()).unwrap();
     assert_eq!(stored.choice("department").unwrap().choice, "billing");
-    assert!(steps.iter().any(|s| s.name == "route"));
+    // The replayed answers are read back into the same typed struct.
+    let route = steps.iter().find(|s| s.name == "route").unwrap();
+    assert_eq!(
+        StepOutput::from(route).stdout(),
+        "urgent to billing (mood 1.0)"
+    );
 }
 
 #[tokio::test]

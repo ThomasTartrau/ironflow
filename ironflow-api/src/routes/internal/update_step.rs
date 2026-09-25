@@ -300,11 +300,9 @@ mod tests {
             status: Some(StepStatus::AwaitingApproval),
             approval_stage: Some(0),
             approval_requirement: Some(ApprovalRequirement {
-                rule_index: Some(0),
-                condition: Some("payload.amount > 10000".to_string()),
+                reason: Some("amount > 10k".to_string()),
                 required_approvers: 2,
                 approver_groups: vec!["finance".to_string()],
-                evaluated: Vec::new(),
             }),
             ..StepUpdate::default()
         };

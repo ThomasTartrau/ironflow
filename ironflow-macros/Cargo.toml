@@ -1,0 +1,19 @@
+[package]
+name = "ironflow-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+authors = ["Thomas Tartrau"]
+license = "MIT"
+description = "Derive macros for Ironflow workflow authors (typed decision answers)"
+repository = "https://gitlab.com/ThomasTartrau/ironflow"
+keywords = ["workflow", "derive", "ironflow"]
+categories = ["development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

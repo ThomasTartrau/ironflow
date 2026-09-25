@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rust_decimal::Decimal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_str, json};
 use tempfile::tempdir;
 
@@ -24,7 +24,8 @@ use ironflow_engine::config::{
 };
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::executor::SubWorkflowOutput;
+use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_engine::testing::{
     ApprovalOutcome, MockAgentProvider, MockHttpResponse, MockShellOutput, TestEngine,
 };
@@ -172,6 +173,16 @@ impl WorkflowHandler for CleanUpOnFailure {
 /// The child of [`Parent`].
 struct Child;
 
+/// Input of [`Child`].
+#[derive(Serialize, Deserialize)]
+struct ChildInput {
+    from: String,
+}
+
+impl TypedWorkflow for Child {
+    type Input = ChildInput;
+}
+
 impl WorkflowHandler for Child {
     fn name(&self) -> &str {
         "child"
@@ -196,7 +207,13 @@ impl WorkflowHandler for Parent {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.workflow(&Child, json!({"from": "parent"})).await?;
+            ctx.workflow(
+                &Child,
+                ChildInput {
+                    from: "parent".to_string(),
+                },
+            )
+            .await?;
             Ok(())
         })
     }
@@ -561,12 +578,13 @@ async fn test_engine_mocks_steps_of_a_sub_workflow() {
     let child_step = result.step("child");
     assert_eq!(child_step.kind(), &StepKind::Workflow);
 
-    let child_run_id = child_step.output()["run_id"]
-        .as_str()
-        .expect("the child run id is recorded")
-        .parse()
-        .expect("a valid uuid");
-    let child_steps = store.list_steps(child_run_id).await.expect("list steps");
+    let child: SubWorkflowOutput = child_step
+        .step_output()
+        .json()
+        .expect("the child run is recorded");
+    assert_eq!(child.workflow_name(), "child");
+    assert_eq!(child.status(), RunStatus::Completed);
+    let child_steps = store.list_steps(child.run_id()).await.expect("list steps");
 
     assert_eq!(child_steps.len(), 1);
     assert_eq!(child_steps[0].name, "child-step");

@@ -3542,6 +3542,7 @@ dependencies = [
  "hmac 0.12.1",
  "ironflow-artifacts",
  "ironflow-core",
+ "ironflow-macros",
  "ironflow-store",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3599,6 +3600,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ironflow-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

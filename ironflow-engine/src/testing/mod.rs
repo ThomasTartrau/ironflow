@@ -35,7 +35,7 @@
 //!     .await?;
 //!
 //! assert_eq!(result.status(), RunStatus::Completed);
-//! assert_eq!(result.step("deploy").output()["stdout"], r#"{"version":"1.2.3"}"#);
+//! assert_eq!(result.step("deploy").step_output().stdout(), r#"{"version":"1.2.3"}"#);
 //! # Ok(())
 //! # }
 //! ```

@@ -394,7 +394,7 @@ export interface paths {
 		 *     API key votes as its owner, and an admin's vote counts as one vote like any
 		 *     other. Once the gate holds as many distinct approvals as its
 		 *     [`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)
-		 *     requires (one for a gate without approval rules), the run transitions from
+		 *     requires (one for a gate opened without approvers), the run transitions from
 		 *     `AwaitingApproval` back to `Running` and resumes. Until then the response
 		 *     returns the run still `AwaitingApproval`, and the gate keeps its SLA timer.
 		 *
@@ -1288,8 +1288,8 @@ export interface components {
 		/**
 		 * @description Payload of the `Event::ApprovalRequested` event.
 		 *
-		 *     Published when an approval gate opens. Carries the requirement evaluated
-		 *     from the gate's approval rules, if it has any.
+		 *     Published when an approval gate opens. Carries the approvers the handler
+		 *     required, if it set any.
 		 *
 		 *     # Examples
 		 *
@@ -1329,9 +1329,9 @@ export interface components {
 			step_id: string;
 		};
 		/**
-		 * @description The approval requirement evaluated when a gate opened.
+		 * @description The approval requirement recorded when a gate opened.
 		 *
-		 *     A step without approval rules carries no requirement at all; the default
+		 *     A gate opened without approvers carries no requirement at all; the default
 		 *     value (one approval from anyone allowed to answer the gate) applies.
 		 *
 		 *     # Examples
@@ -1340,11 +1340,9 @@ export interface components {
 		 *     use ironflow_store::entities::ApprovalRequirement;
 		 *
 		 *     let requirement = ApprovalRequirement {
-		 *         rule_index: Some(0),
-		 *         condition: Some("payload.amount > 10000".to_string()),
+		 *         reason: Some("amount > 10k".to_string()),
 		 *         required_approvers: 2,
 		 *         approver_groups: vec!["finance".to_string()],
-		 *         evaluated: Vec::new(),
 		 *     };
 		 *     assert!(!requirement.is_satisfied_by(1));
 		 *     assert!(requirement.is_satisfied_by(2));
@@ -1357,48 +1355,16 @@ export interface components {
 			 *     the gate may vote.
 			 */
 			approver_groups?: string[];
-			/** @description Source of the matched rule condition. */
-			condition?: string | null;
-			/** @description Rules evaluated in order, up to and including the matched one. */
-			evaluated?: components["schemas"]["ApprovalRuleEvaluation"][];
+			/**
+			 * @description Why the handler asked for these approvers, for the audit trail. Never
+			 *     evaluated.
+			 */
+			reason?: string | null;
 			/**
 			 * Format: int32
 			 * @description Number of distinct approvals needed to resolve the gate.
 			 */
 			required_approvers: number;
-			/**
-			 * Format: int32
-			 * @description Index of the matched rule. `None` means no rule matched and the default
-			 *     requirement applies.
-			 */
-			rule_index?: number | null;
-		};
-		/**
-		 * @description Outcome of evaluating one approval rule when a gate opens.
-		 *
-		 *     # Examples
-		 *
-		 *     ```
-		 *     use ironflow_store::entities::ApprovalRuleEvaluation;
-		 *
-		 *     let evaluation = ApprovalRuleEvaluation {
-		 *         index: 0,
-		 *         condition: "payload.amount > 10000".to_string(),
-		 *         matched: true,
-		 *     };
-		 *     assert!(evaluation.matched);
-		 *     ```
-		 */
-		ApprovalRuleEvaluation: {
-			/** @description Source of the rule condition. */
-			condition: string;
-			/**
-			 * Format: int32
-			 * @description Position of the rule in the step configuration (0-based).
-			 */
-			index: number;
-			/** @description Whether the condition evaluated to `true`. */
-			matched: boolean;
 		};
 		/**
 		 * @description An artifact as exposed by the REST API.

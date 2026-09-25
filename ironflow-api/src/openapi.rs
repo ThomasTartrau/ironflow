@@ -37,7 +37,7 @@ use ironflow_engine::notify::{
     WorkflowStepFailedEvent, WorkflowStepStartedEvent,
 };
 use ironflow_store::entities::{
-    ApprovalRequirement, ApprovalRuleEvaluation, AuditLogEntry, LogEntry, LogStream, StepApproval,
+    ApprovalRequirement, AuditLogEntry, LogEntry, LogStream, StepApproval,
 };
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -178,7 +178,6 @@ mod with_signup {
                 ApprovalGrantedEvent,
                 ApprovalRejectedEvent,
                 ApprovalRequirement,
-                ApprovalRuleEvaluation,
                 StepApproval,
                 ApprovalEscalatedEvent,
                 LogLineEvent,
@@ -339,7 +338,6 @@ mod without_signup {
                 ApprovalGrantedEvent,
                 ApprovalRejectedEvent,
                 ApprovalRequirement,
-                ApprovalRuleEvaluation,
                 StepApproval,
                 LogLineEvent,
                 UserSignedInEvent,

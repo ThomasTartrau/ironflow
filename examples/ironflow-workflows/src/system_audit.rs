@@ -28,21 +28,9 @@ impl WorkflowHandler for SystemAudit {
             let uptime = ctx.shell("uptime", ShellConfig::new("uptime")).await?;
 
             // Step 4: AI summary of all diagnostics
-            let disk_out = disk
-                .output
-                .get("stdout")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let mem_out = memory
-                .output
-                .get("stdout")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let up_out = uptime
-                .output
-                .get("stdout")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let disk_out = disk.stdout();
+            let mem_out = memory.stdout();
+            let up_out = uptime.stdout();
 
             ctx.agent(
                 "analysis",

@@ -1,9 +1,10 @@
 use ironflow_engine::config::AgentStepConfig;
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
-use serde_json::json;
+use ironflow_engine::executor::StepOutput;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler, sub_workflow_names};
 
 use super::Enrich;
+use super::enrich::{STRUCTURE_STEP, SystemMetrics};
 
 /// Workflow A: orchestrates the full pipeline.
 ///
@@ -31,36 +32,30 @@ impl WorkflowHandler for Report {
     }
 
     fn sub_workflows(&self) -> Vec<String> {
-        vec!["pipeline-enrich".to_string()]
+        sub_workflow_names(&[&Enrich])
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            let enrich_result = ctx.workflow(&Enrich, json!({})).await?;
+            let enrich = ctx.workflow(&Enrich, ()).await?;
 
-            let child_run_id = enrich_result
-                .output
-                .get("run_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-
-            let steps = ctx
-                .store()
-                .list_steps(child_run_id.parse().unwrap_or_default())
-                .await?;
-
-            let structured_data = steps
-                .iter()
-                .find(|s| s.name == "structure")
-                .and_then(|s| s.output.as_ref())
-                .and_then(|o| o.get("value"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
+            // While planning no child run exists, so there is nothing to read.
+            let steps = ctx.store().list_steps(enrich.run_id()).await?;
+            let summary = match steps.iter().find(|step| step.name == STRUCTURE_STEP) {
+                Some(step) => {
+                    let metrics: SystemMetrics = StepOutput::from(step).json()?;
+                    format!(
+                        "disk usage {:.0}%, {} free memory pages, uptime {:.1} days",
+                        metrics.disk_usage_percent, metrics.memory_free_pages, metrics.uptime_days
+                    )
+                }
+                None => "no metrics were collected".to_string(),
+            };
 
             ctx.agent(
                 "final-report",
                 AgentStepConfig::new(&format!(
-                    "Here is structured system data:\n\n{structured_data}\n\n\
+                    "Here is the system data: {summary}.\n\n\
                      Write a brief, friendly system health report (5 lines max). \
                      Mention disk usage, memory, and uptime. \
                      Add a recommendation if anything looks concerning."

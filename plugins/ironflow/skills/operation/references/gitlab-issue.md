@@ -67,6 +67,13 @@ use ironflow_ops_gitlab::GitLab;
 use ironflow_engine::config::ShellConfig;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
+use serde::Deserialize;
+
+/// The fields of the created issue the handler needs.
+#[derive(Deserialize)]
+struct Issue {
+    web_url: String,
+}
 
 async fn example(ctx: &mut WorkflowContext, failing_step: &str) -> Result<(), EngineError> {
     let token = ctx
@@ -89,12 +96,11 @@ async fn example(ctx: &mut WorkflowContext, failing_step: &str) -> Result<(), En
         .build()
         .map_err(|e| EngineError::StepConfig(e.to_string()))?;
 
-    let issue = ctx.operation("open-issue", &gitlab.op(endpoint)).await?;
+    let issue: Issue = ctx.operation("open-issue", &gitlab.op(endpoint)).await?.json()?;
 
-    let url = issue.output["web_url"].as_str().unwrap_or_default().to_string();
     ctx.shell(
         "announce",
-        ShellConfig::new("echo \"Issue opened: $ISSUE_URL\"").env("ISSUE_URL", &url),
+        ShellConfig::new("echo \"Issue opened: $ISSUE_URL\"").env("ISSUE_URL", &issue.web_url),
     )
     .await?;
     Ok(())

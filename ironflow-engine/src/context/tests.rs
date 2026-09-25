@@ -13,6 +13,7 @@ use ironflow_store::models::{
     TriggerKind, step_trace_id,
 };
 use ironflow_store::store::RunStore;
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +21,7 @@ use uuid::Uuid;
 
 use crate::config::{ApprovalConfig, ShellConfig};
 use crate::error::EngineError;
+use crate::handler::TypedWorkflow;
 use crate::testing::{MockInterceptor, MockShellOutput};
 
 /// Helper to create a test provider with fixtures
@@ -158,6 +160,10 @@ async fn context_skip_creates_skipped_step() {
 /// terminal state without touching the filesystem or the network.
 struct NoopSubWorkflow;
 
+impl TypedWorkflow for NoopSubWorkflow {
+    type Input = ();
+}
+
 impl WorkflowHandler for NoopSubWorkflow {
     fn name(&self) -> &str {
         "noop-sub"
@@ -203,7 +209,7 @@ async fn child_run_of_parent_authored_by(created_by: Option<RunActor>) -> Run {
         provider,
         resolver,
     );
-    ctx.workflow(&NoopSubWorkflow, json!({}))
+    ctx.workflow(&NoopSubWorkflow, ())
         .await
         .expect("sub-workflow failed");
 
@@ -758,15 +764,20 @@ async fn when_applies_the_predicate_to_the_payload() {
     );
 
     assert!(
-        ctx.when("env == prod", |p| p["env"] == "prod")
+        ctx.when("production run", |i: &EnvInput| i.env == "prod")
             .await
             .expect("condition evaluated")
     );
     assert!(
-        !ctx.when("env == dev", |p| p["env"] == "dev")
+        !ctx.when("development run", |i: &EnvInput| i.env == "dev")
             .await
             .expect("condition evaluated")
     );
+}
+
+#[derive(Deserialize)]
+struct EnvInput {
+    env: String,
 }
 
 #[test]

@@ -14,6 +14,7 @@ categories = ["asynchronous", "development-tools"]
 async-trait = "0.1"
 ironflow-artifacts = { version = "0.1.2", path = "../ironflow-artifacts" }
 ironflow-core = { version = "3.20.0", path = "../ironflow-core" }
+ironflow-macros = { version = "0.1.0", path = "../ironflow-macros" }
 ironflow-store = { version = "2.36.3", path = "../ironflow-store" }
 
 uuid = { version = "1", features = ["v5", "v7", "serde"] }

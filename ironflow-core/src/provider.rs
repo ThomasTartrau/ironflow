@@ -30,6 +30,10 @@ use crate::operations::agent::{Model, PermissionMode};
 use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
+mod tool;
+
+pub use tool::Tool;
+
 /// Boxed future returned by [`AgentProvider::invoke`].
 pub type InvokeFuture<'a> =
     Pin<Box<dyn Future<Output = Result<AgentOutput, AgentError>> + Send + 'a>>;
@@ -48,10 +52,30 @@ pub struct WithTools;
 #[derive(Debug, Clone, Copy)]
 pub struct NoSchema;
 
-/// Marker: a JSON schema has been set via [`AgentConfig::output`] or
-/// [`AgentConfig::output_schema_raw`].
+/// Marker: a JSON schema derived from `T` has been set via
+/// [`AgentConfig::output`]. The step answers with a `T`.
+pub struct WithSchema<T>(PhantomData<fn() -> T>);
+
+// Written by hand: a derive would require `T: Debug + Clone + Copy` for a
+// marker that never holds a `T`.
+impl<T> fmt::Debug for WithSchema<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WithSchema")
+    }
+}
+
+impl<T> Clone for WithSchema<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for WithSchema<T> {}
+
+/// Marker: a pre-serialized JSON schema has been set via
+/// [`AgentConfig::output_schema_raw`]. The answer is not typed.
 #[derive(Debug, Clone, Copy)]
-pub struct WithSchema;
+pub struct RawSchema;
 
 // ── AgentInput ─────────────────────────────────────────────────────
 
@@ -108,25 +132,25 @@ impl AgentInput {
 /// exclusive: using one removes the other from the available API.
 ///
 /// ```
-/// use ironflow_core::provider::AgentConfig;
+/// use ironflow_core::provider::{AgentConfig, Tool};
 ///
 /// // OK: tools only
-/// let _ = AgentConfig::new("search").allow_tool("WebSearch");
+/// let _ = AgentConfig::new("search").allow_tool(Tool::WebSearch);
 ///
 /// // OK: structured output only
 /// let _ = AgentConfig::new("classify").output_schema_raw(r#"{"type":"object"}"#);
 /// ```
 ///
-/// ```compile_fail
-/// use ironflow_core::provider::AgentConfig;
+/// ```compile_fail,E0599
+/// use ironflow_core::provider::{AgentConfig, Tool};
 /// // COMPILE ERROR: cannot add tools after setting structured output
-/// let _ = AgentConfig::new("x").output_schema_raw("{}").allow_tool("Read");
+/// let _ = AgentConfig::new("x").output_schema_raw("{}").allow_tool(Tool::Read);
 /// ```
 ///
-/// ```compile_fail
-/// use ironflow_core::provider::AgentConfig;
+/// ```compile_fail,E0599
+/// use ironflow_core::provider::{AgentConfig, Tool};
 /// // COMPILE ERROR: cannot set structured output after adding tools
-/// let _ = AgentConfig::new("x").allow_tool("Read").output_schema_raw("{}");
+/// let _ = AgentConfig::new("x").allow_tool(Tool::Read).output_schema_raw("{}");
 /// ```
 ///
 /// **Workaround**: split the work into two steps -- one agent with tools to
@@ -443,7 +467,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     ///
     /// Maps to `--disallowedTools` on the Claude CLI. This method is available
     /// on **every** typestate variant (including
-    /// [`AgentConfig<NoTools, WithSchema>`]) because, unlike
+    /// [`AgentConfig<NoTools, WithSchema<T>>`]) because, unlike
     /// [`allow_tool`](AgentConfig::allow_tool), `disallowed_tools` does not
     /// activate any tool -- it only filters out tools that would otherwise be
     /// loaded by default.
@@ -453,22 +477,22 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_core::provider::AgentConfig;
+    /// use ironflow_core::provider::{AgentConfig, Tool};
     /// use schemars::JsonSchema;
     ///
     /// #[derive(serde::Deserialize, JsonSchema)]
     /// struct Out { ok: bool }
     ///
     /// let config = AgentConfig::new("classify this")
-    ///     .disallowed_tools(["Write", "Edit"])
+    ///     .disallowed_tools([Tool::Write, Tool::Edit])
     ///     .output::<Out>();
+    /// assert_eq!(config.disallowed_tools, vec!["Write", "Edit"]);
     /// ```
-    pub fn disallowed_tools<I, S>(mut self, tools: I) -> Self
+    pub fn disallowed_tools<I>(mut self, tools: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator<Item = Tool>,
     {
-        self.disallowed_tools = tools.into_iter().map(Into::into).collect();
+        self.disallowed_tools = tools.into_iter().map(|tool| tool.to_string()).collect();
         self
     }
 
@@ -570,10 +594,10 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_core::provider::AgentConfig;
+    /// use ironflow_core::provider::{AgentConfig, Tool};
     ///
     /// let config = AgentConfig::new("Read /work/dossier.pdf and summarize")
-    ///     .allow_tool("Read")
+    ///     .allow_tool(Tool::Read)
     ///     .input_file("https://r2.example.com/dossier.pdf", "/work/dossier.pdf");
     /// ```
     pub fn input_file(mut self, url: &str, mount_path: &str) -> Self {
@@ -632,21 +656,22 @@ impl<Tools> AgentConfig<Tools, NoSchema> {
     /// # Examples
     ///
     /// ```
-    /// use ironflow_core::provider::AgentConfig;
+    /// use ironflow_core::provider::{AgentConfig, Tool};
     ///
     /// let config = AgentConfig::new("search the web")
-    ///     .allow_tool("WebSearch")
-    ///     .allow_tool("WebFetch");
+    ///     .allow_tool(Tool::WebSearch)
+    ///     .allow_tool(Tool::Custom("mcp__docs__lookup".to_string()));
+    /// assert_eq!(config.allowed_tools, vec!["WebSearch", "mcp__docs__lookup"]);
     /// ```
     ///
-    /// ```compile_fail
-    /// use ironflow_core::provider::AgentConfig;
+    /// ```compile_fail,E0599
+    /// use ironflow_core::provider::{AgentConfig, Tool};
     /// // ERROR: cannot set structured output after adding tools
     /// let _ = AgentConfig::new("x")
-    ///     .allow_tool("Read")
+    ///     .allow_tool(Tool::Read)
     ///     .output_schema_raw(r#"{"type":"object"}"#);
     /// ```
-    pub fn allow_tool(mut self, tool: &str) -> AgentConfig<WithTools, NoSchema> {
+    pub fn allow_tool(mut self, tool: Tool) -> AgentConfig<WithTools, NoSchema> {
         self.allowed_tools.push(tool.to_string());
         self.change_state()
     }
@@ -662,7 +687,8 @@ impl<Schema> AgentConfig<NoTools, Schema> {
     ///
     /// **Important:** structured output requires `max_turns >= 2`.
     ///
-    /// Returns an [`AgentConfig<NoTools, WithSchema>`], which **cannot**
+    /// Returns an [`AgentConfig<NoTools, WithSchema<T>>`], which remembers
+    /// `T` (a workflow step built from it answers with a `T`) and **cannot**
     /// call [`allow_tool`](AgentConfig::allow_tool).
     ///
     /// This restriction exists because Claude CLI has a
@@ -708,20 +734,20 @@ impl<Schema> AgentConfig<NoTools, Schema> {
     ///     .output::<Labels>();
     /// ```
     ///
-    /// ```compile_fail
-    /// use ironflow_core::provider::AgentConfig;
+    /// ```compile_fail,E0599
+    /// use ironflow_core::provider::{AgentConfig, Tool};
     /// use schemars::JsonSchema;
     /// #[derive(serde::Deserialize, JsonSchema)]
     /// struct Out { x: i32 }
     /// // ERROR: cannot add tools after setting structured output
-    /// let _ = AgentConfig::new("x").output::<Out>().allow_tool("Read");
+    /// let _ = AgentConfig::new("x").output::<Out>().allow_tool(Tool::Read);
     /// ```
     /// # Panics
     ///
     /// Panics if the schema generated by `schemars` cannot be serialized
     /// to JSON. This indicates a bug in the type's `JsonSchema` derive,
     /// not a recoverable runtime error.
-    pub fn output<T: JsonSchema>(mut self) -> AgentConfig<NoTools, WithSchema> {
+    pub fn output<T: JsonSchema>(mut self) -> AgentConfig<NoTools, WithSchema<T>> {
         let schema = schemars::schema_for!(T);
         let serialized = serde_json::to_string(&schema).unwrap_or_else(|e| {
             panic!(
@@ -735,10 +761,11 @@ impl<Schema> AgentConfig<NoTools, Schema> {
 
     /// Set structured output from a pre-serialized JSON Schema string.
     ///
-    /// Returns an [`AgentConfig<NoTools, WithSchema>`], which **cannot**
-    /// call [`allow_tool`](AgentConfig::allow_tool). See [`output`](Self::output)
-    /// for the rationale and workaround.
-    pub fn output_schema_raw(mut self, schema: &str) -> AgentConfig<NoTools, WithSchema> {
+    /// Returns an [`AgentConfig<NoTools, RawSchema>`], whose answer is not
+    /// typed, and which **cannot** call [`allow_tool`](AgentConfig::allow_tool).
+    /// Prefer [`output`](Self::output). See it for the rationale and
+    /// workaround.
+    pub fn output_schema_raw(mut self, schema: &str) -> AgentConfig<NoTools, RawSchema> {
         self.json_schema = Some(schema.to_string());
         self.change_state()
     }
@@ -752,8 +779,14 @@ impl From<AgentConfig<WithTools, NoSchema>> for AgentConfig {
     }
 }
 
-impl From<AgentConfig<NoTools, WithSchema>> for AgentConfig {
-    fn from(config: AgentConfig<NoTools, WithSchema>) -> Self {
+impl<T> From<AgentConfig<NoTools, WithSchema<T>>> for AgentConfig {
+    fn from(config: AgentConfig<NoTools, WithSchema<T>>) -> Self {
+        config.change_state()
+    }
+}
+
+impl From<AgentConfig<NoTools, RawSchema>> for AgentConfig {
+    fn from(config: AgentConfig<NoTools, RawSchema>) -> Self {
         config.change_state()
     }
 }
@@ -1228,12 +1261,35 @@ mod tests {
 
     #[test]
     fn allow_tool_transitions_to_with_tools() {
-        let config = AgentConfig::new("test").allow_tool("Read");
+        let config = AgentConfig::new("test").allow_tool(Tool::Read);
         assert_eq!(config.allowed_tools, vec!["Read"]);
 
-        // Can add more tools
-        let config = config.allow_tool("Write");
-        assert_eq!(config.allowed_tools, vec!["Read", "Write"]);
+        // Can add more tools, known or custom.
+        let config = config
+            .allow_tool(Tool::Write)
+            .allow_tool(Tool::Custom("mcp__github__search".to_string()));
+        assert_eq!(
+            config.allowed_tools,
+            vec!["Read", "Write", "mcp__github__search"]
+        );
+    }
+
+    #[test]
+    fn output_carries_the_output_type_in_the_typestate() {
+        #[derive(serde::Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct Verdict {
+            approved: bool,
+        }
+
+        let config: AgentConfig<NoTools, WithSchema<Verdict>> =
+            AgentConfig::new("review").output::<Verdict>();
+        assert!(
+            config
+                .json_schema
+                .as_deref()
+                .is_some_and(|s| s.contains("approved"))
+        );
     }
 
     #[test]
@@ -1244,7 +1300,7 @@ mod tests {
 
     #[test]
     fn with_tools_converts_to_base_type() {
-        let typed = AgentConfig::new("test").allow_tool("Read");
+        let typed = AgentConfig::new("test").allow_tool(Tool::Read);
         let base: AgentConfig = typed.into();
         assert_eq!(base.allowed_tools, vec!["Read"]);
     }
@@ -1258,7 +1314,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_ignores_marker() {
-        let config = AgentConfig::new("test").allow_tool("Read");
+        let config = AgentConfig::new("test").allow_tool(Tool::Read);
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("marker"));
 
@@ -1316,15 +1372,15 @@ mod tests {
 
     #[test]
     fn disallowed_tools_builder_replaces_list() {
-        let config = AgentConfig::new("hello").disallowed_tools(["Write", "Edit"]);
+        let config = AgentConfig::new("hello").disallowed_tools([Tool::Write, Tool::Edit]);
         assert_eq!(config.disallowed_tools, vec!["Write", "Edit"]);
 
         // Subsequent call fully replaces the list.
-        let config = config.disallowed_tools(["Bash"]);
+        let config = config.disallowed_tools([Tool::Bash]);
         assert_eq!(config.disallowed_tools, vec!["Bash"]);
 
         // Empty input clears the list.
-        let config = config.disallowed_tools(std::iter::empty::<String>());
+        let config = config.disallowed_tools([]);
         assert!(config.disallowed_tools.is_empty());
     }
 
@@ -1339,15 +1395,15 @@ mod tests {
         // Typestate compile check: .disallowed_tools(...) must be callable
         // before AND after .output::<T>() because it lives on
         // impl<Tools, Schema>, not impl<Tools, NoSchema>.
-        let before: AgentConfig<NoTools, WithSchema> = AgentConfig::new("classify")
-            .disallowed_tools(["Write", "Edit"])
+        let before: AgentConfig<NoTools, WithSchema<Out>> = AgentConfig::new("classify")
+            .disallowed_tools([Tool::Write, Tool::Edit])
             .output::<Out>();
         assert_eq!(before.disallowed_tools, vec!["Write", "Edit"]);
         assert!(before.json_schema.is_some());
 
-        let after: AgentConfig<NoTools, WithSchema> = AgentConfig::new("classify")
+        let after: AgentConfig<NoTools, WithSchema<Out>> = AgentConfig::new("classify")
             .output::<Out>()
-            .disallowed_tools(["Write"]);
+            .disallowed_tools([Tool::Write]);
         assert_eq!(after.disallowed_tools, vec!["Write"]);
         assert!(after.json_schema.is_some());
     }
@@ -1364,7 +1420,7 @@ mod tests {
 
     #[test]
     fn disallowed_tools_serde_roundtrip() {
-        let config = AgentConfig::new("hello").disallowed_tools(["Write", "Edit"]);
+        let config = AgentConfig::new("hello").disallowed_tools([Tool::Write, Tool::Edit]);
         let json = serde_json::to_string(&config).unwrap();
         assert!(
             json.contains("\"disallowed_tools\":[\"Write\",\"Edit\"]"),

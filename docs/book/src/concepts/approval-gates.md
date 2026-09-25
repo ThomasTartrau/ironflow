@@ -197,82 +197,55 @@ A delegated decision names both people. The `approval_granted` (or
 An admin, or the assignee resolving their own gate, is recorded under their own
 name alone.
 
-## Dynamic approval rules
+## Requiring several approvers
 
 A gate can require more than one approval, and restrict who may vote, depending
 on the run itself: a small payment needs one approver, a large one needs two
-people from finance. Add approval rules with `with_rule`:
+people from finance. The handler decides in plain Rust, from its typed input and
+the outputs of earlier steps, and passes the result to `requiring`:
 
 ```rust,ignore
-use ironflow_engine::config::{ApprovalConfig, ApprovalRule};
+use ironflow_engine::config::{ApprovalConfig, Approvers};
 
+let payment: Payment = ctx.input().await?;
+let approvers = match payment.amount {
+    a if a > 100_000 => Approvers::at_least(3)
+        .from_groups(["finance", "board"])
+        .because("amount > 100k"),
+    a if a > 10_000 => Approvers::at_least(2)
+        .from_groups(["finance"])
+        .because("amount > 10k"),
+    _ => Approvers::any(),
+};
 ctx.approval(
     "payment-gate",
-    ApprovalConfig::new("Release the payment?")
-        .with_rule(
-            ApprovalRule::new("payload.amount > 100000", 3)
-                .with_approver_groups(["finance", "board"]),
-        )
-        .with_rule(ApprovalRule::new("payload.amount > 10000", 2).with_approver_groups(["finance"]))
-        .with_rule(ApprovalRule::new("labels.env == 'production'", 2)),
+    ApprovalConfig::new("Release the payment?").requiring(approvers),
 ).await?;
 ```
 
-The rules are evaluated once, when the gate opens, in the order they were added.
-**The first matching rule wins** and sets the number of distinct approvals the
-gate needs (`required_approvers`) and, optionally, the groups whose members may
-vote (`approver_groups`). When no rule matches, the default applies: one
-approval, under the usual assignee rules. A gate without any rule behaves
-exactly as before.
+| Builder | Meaning |
+|---------|---------|
+| `Approvers::any()` | One approval, from anyone allowed to answer the gate |
+| `Approvers::at_least(n)` | `n` distinct approvals (`required_approvers`) |
+| `.from_groups([..])` | Only members of these groups may vote (`approver_groups`) |
+| `.because("..")` | Audit label shown on the dashboard and in the events (`reason`), never evaluated |
 
-The outcome is stored on the step as an `ApprovalRequirement` (matched rule
-index and condition, required count, groups, and every rule evaluated up to the
-match). It is the source of truth from then on: replaying or resuming the run
-never re-evaluates the rules. `GET /api/v1/runs/:id` exposes it on the step as
-`approval_requirement`, with the votes cast so far in `approvals` and the count
-needed in `approvals_required`; the dashboard shows it as an `n/m approvals`
-badge.
+A typo in a field name or a comparison does not compile, and the compiler checks
+every branch of the `match`. A gate without `requiring` behaves as a single
+approval gate.
 
-`ApprovalRule::new` panics on an invalid condition or on zero approvers, so a
-broken rule fails when the workflow is built, not when a gate opens. A JSON
-config with a bad condition or `required_approvers: 0` is rejected on
-deserialization.
+The approvers are stored on the step as an `ApprovalRequirement` (`reason`,
+`required_approvers`, `approver_groups`) when the gate opens. That record is the
+source of truth from then on: replaying or resuming the run never recomputes
+it, even if the handler would now compute other approvers. `GET
+/api/v1/runs/:id` exposes it on the step as `approval_requirement`, with the
+votes cast so far in `approvals` and the count needed in `approvals_required`;
+the dashboard shows it as an `n/m approvals` badge whose tooltip gives the
+reason.
 
-### Condition syntax
-
-A condition is a small boolean expression:
-
-| Syntax | Example |
-|--------|---------|
-| Dotted path | `payload.customer.tier` |
-| Bracket path | `steps["risk-assessment"].output.level`, `payload.items[0]` |
-| Literals | `10000`, `-2.5`, `"high"`, `'high'`, `true`, `false`, `null` |
-| Comparisons | `==`, `!=`, `>`, `>=`, `<`, `<=` |
-| Boolean | `&&`, `||`, `!`, parentheses |
-
-Every path starts from one of these roots:
-
-| Root | Content |
-|------|---------|
-| `output` | Output of the previous step (the last one of a parallel batch) |
-| `payload` | The run payload |
-| `labels` | The run labels |
-| `metadata` | `run_id`, `workflow_name`, `trigger`, `attempt`, `handler_version` |
-| `steps.<name>` | `output`, `kind` and `status` of every step completed earlier in the same attempt, including every step of a parallel batch |
-
-Evaluation never fails:
-
-- a missing path is `null`, so `payload.missing > 1` is false and
-  `payload.missing != 'x'` is true;
-- numbers compare numerically, and a string holding a number is coerced when
-  compared to a number -- labels are always strings, yet `labels.priority > 3`
-  works;
-- strings compare lexicographically; any other type mismatch is false;
-- a bare path is tested for truthiness: `null`, `false`, `0`, `""`, `[]` and
-  `{}` are false.
-
-An unknown root (`foo.bar`), a source longer than 4096 bytes or nested deeper
-than 64 levels is rejected when the rule is built.
+`Approvers::at_least(0)` and a blank group name panic, so a broken gate fails
+when the workflow runs the builder, not when a human votes. A JSON config with
+`required_approvers: 0` is rejected on deserialization.
 
 ### Voting
 
@@ -291,7 +264,7 @@ the required count.
 
 ### Approver groups
 
-When the matched rule lists `approver_groups`, only members of at least one of
+When the approvers list `approver_groups`, only members of at least one of
 those groups (and admins) may vote. The gate's assignee and approval
 delegations are not consulted. A listed group without members leaves the gate
 to admins.
@@ -315,7 +288,7 @@ Group names are 1 to 64 characters from `[A-Za-z0-9_.-]`, at most 50 per user.
 ### Audit events
 
 - `approval_requested` is published when the gate opens and carries the
-  evaluated `requirement`.
+  recorded `requirement`.
 - `approval_granted` is published for **every** vote, with the `step_id`,
   `approvals_received`, `approvals_required` and the `requirement`. The gate
   resolves when `approvals_received >= approvals_required`.
@@ -330,14 +303,9 @@ Group names are 1 to 64 characters from `[A-Za-z0-9_.-]`, at most 50 per user.
   "approvals_received": 1,
   "approvals_required": 2,
   "requirement": {
-    "rule_index": 1,
-    "condition": "payload.amount > 10000",
+    "reason": "amount > 10k",
     "required_approvers": 2,
-    "approver_groups": ["finance"],
-    "evaluated": [
-      { "index": 0, "condition": "payload.amount > 100000", "matched": false },
-      { "index": 1, "condition": "payload.amount > 10000", "matched": true }
-    ]
+    "approver_groups": ["finance"]
   },
   "at": "2026-09-24T10:15:00Z"
 }

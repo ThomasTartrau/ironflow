@@ -43,7 +43,7 @@ use ironflow_store::store::Store;
 
 use crate::config::StepConfig;
 use crate::error::EngineError;
-use crate::executor::StepOutput;
+use crate::executor::{StepArtifacts, StepOutput};
 
 /// How deep sub-workflows are expanded when the caller does not say.
 pub const DEFAULT_PLAN_MAX_DEPTH: u32 = 3;
@@ -68,7 +68,7 @@ pub const DEFAULT_ESTIMATE_SAMPLE_RUNS: u32 = 20;
 ///
 /// # fn example() -> Result<(), Error> {
 /// let condition = ConditionResult::Evaluated {
-///     expression: "input.env == prod".to_string(),
+///     expression: "production run".to_string(),
 ///     value: true,
 /// };
 /// assert_eq!(to_value(&condition)?["state"], "evaluated");
@@ -80,9 +80,10 @@ pub const DEFAULT_ESTIMATE_SAMPLE_RUNS: u32 = 20;
 pub enum ConditionResult {
     /// Resolved against the run input.
     Evaluated {
-        /// Human-readable expression the handler declared.
+        /// Label the handler gave the branch. A name for the operator, never
+        /// parsed nor evaluated.
         expression: String,
-        /// What the expression evaluated to for this input.
+        /// What the predicate returned for this input.
         value: bool,
     },
     /// The step is explicitly skipped (recorded by
@@ -93,7 +94,7 @@ pub enum ConditionResult {
     },
     /// Depends on a previous step's output; unknown before the run.
     Unevaluable {
-        /// Human-readable expression the handler declared.
+        /// Label the handler gave the branch.
         expression: String,
         /// Why the planner cannot resolve it.
         reason: String,
@@ -493,6 +494,7 @@ pub(crate) fn planned_output(config: &StepConfig, estimate: Option<Duration>) ->
         output_tokens: None,
         model: None,
         debug_messages: None,
+        artifacts: StepArtifacts::default(),
     }
 }
 
@@ -506,6 +508,7 @@ pub(crate) fn planned_custom_output(estimate: Option<Duration>) -> StepOutput {
         output_tokens: None,
         model: None,
         debug_messages: None,
+        artifacts: StepArtifacts::default(),
     }
 }
 

@@ -31,10 +31,10 @@
 //!
 //!             let review = ctx.agent("review", AgentStepConfig::new(
 //!                 &format!("Build:\n{}\nTests:\n{}\nReview.",
-//!                     build.output["stdout"], tests.output["stdout"])
+//!                     build.stdout(), tests.stdout())
 //!             )).await?;
 //!
-//!             if review.output.as_str().unwrap_or("").contains("LGTM") {
+//!             if review.text().contains("LGTM") {
 //!                 ctx.shell("deploy", ShellConfig::new("./deploy.sh")).await?;
 //!             }
 //!
@@ -58,6 +58,10 @@ use crate::error::EngineError;
 use crate::guard::WorkflowGuardConfig;
 use crate::run_creator::{CreateRunOpts, RunCreator, RunCreatorFuture};
 use crate::schedule::CronSchedule;
+
+mod typed;
+
+pub use typed::{TypedWorkflow, sub_workflow_names};
 
 /// Generate a JSON Schema [`Value`] from a type that derives [`JsonSchema`].
 ///
@@ -441,18 +445,28 @@ pub trait WorkflowHandler: Send + Sync {
     /// [`WorkflowContext::workflow`](crate::context::WorkflowContext::workflow).
     ///
     /// Purely informational: the dashboard uses it to draw the call graph.
-    /// The default is empty.
+    /// The default is empty. Build it with [`sub_workflow_names`] from the
+    /// child handlers themselves, never from hand-written names.
     ///
     /// # Examples
     ///
     /// ```
-    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture, sub_workflow_names};
     /// # use ironflow_engine::context::WorkflowContext;
+    /// struct Collect;
+    ///
+    /// impl WorkflowHandler for Collect {
+    ///     fn name(&self) -> &str { "collect" }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
     /// struct Report;
     ///
     /// impl WorkflowHandler for Report {
     ///     fn name(&self) -> &str { "report" }
-    ///     fn sub_workflows(&self) -> Vec<String> { vec!["collect".to_string()] }
+    ///     fn sub_workflows(&self) -> Vec<String> { sub_workflow_names(&[&Collect]) }
     ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
     ///         Box::pin(async move { Ok(()) })
     ///     }
@@ -480,7 +494,9 @@ pub trait WorkflowHandler: Send + Sync {
     ///
     /// When present, the dashboard renders a dynamic form from this schema
     /// and the engine validates the payload before creating a run.
-    /// The default is `None` (no schema, free-form payload).
+    /// The default is `None` (no schema, free-form payload). A handler that
+    /// implements [`TypedWorkflow`] returns
+    /// [`TypedWorkflow::typed_input_schema`].
     fn input_schema(&self) -> Option<Value> {
         None
     }

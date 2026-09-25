@@ -285,6 +285,11 @@ mod tests {
         }
     }
 
+    #[derive(Deserialize)]
+    struct DeployInput {
+        env: String,
+    }
+
     struct ConditionalWorkflow;
 
     impl WorkflowHandler for ConditionalWorkflow {
@@ -294,7 +299,10 @@ mod tests {
 
         fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
             Box::pin(async move {
-                if ctx.when("env == prod", |p| p["env"] == "prod").await? {
+                if ctx
+                    .when("production run", |i: &DeployInput| i.env == "prod")
+                    .await?
+                {
                     ctx.shell("deploy", ShellConfig::new("echo deploy")).await?;
                 } else {
                     ctx.skip("deploy", "not prod").await?;
@@ -411,6 +419,7 @@ mod tests {
         let step = &body["data"]["steps"][0];
         assert_eq!(step["kind"], "shell");
         assert_eq!(step["condition"]["state"], "evaluated");
+        assert_eq!(step["condition"]["expression"], "production run");
         assert_eq!(step["condition"]["value"], true);
 
         let response = router

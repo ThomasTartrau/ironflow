@@ -39,7 +39,7 @@ workflow deploy  estimated ~2m 14s
   ├─ test-unit [shell] ~41s
   ├─ test-integration [shell] ~58s
   ├─ lint [shell] ~12s
-└─ deploy-prod [shell] ~14s (when input.env == 'prod' = true)
+└─ deploy-prod [shell] ~14s (when production run = true)
 ```
 
 Useful flags:
@@ -92,7 +92,7 @@ The response is the usual envelope around an execution plan:
         "depends_on": ["build"],
         "condition": {
           "state": "evaluated",
-          "expression": "input.env == 'prod'",
+          "expression": "production run",
           "value": true
         }
       }

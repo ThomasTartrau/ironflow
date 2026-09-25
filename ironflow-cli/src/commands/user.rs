@@ -66,8 +66,8 @@ pub enum UserCommands {
     },
     /// Replace the groups a user belongs to.
     ///
-    /// Group membership restricts who may vote on an approval gate whose rule
-    /// lists approver groups. Without any `--group`, the user leaves every
+    /// Group membership restricts who may vote on an approval gate whose
+    /// approvers list groups. Without any `--group`, the user leaves every
     /// group.
     SetGroups {
         /// User UUID.

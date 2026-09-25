@@ -22,7 +22,7 @@ use crate::error::EngineError;
 use crate::log_sender::StepLogSender;
 use crate::notify::LogStream;
 
-use super::{StepExecutor, StepOutput};
+use super::{StepArtifacts, StepExecutor, StepOutput};
 
 const DEFAULT_SHELL_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -128,6 +128,7 @@ impl ShellExecutor<'_> {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         })
     }
 
@@ -231,6 +232,7 @@ impl ShellExecutor<'_> {
             output_tokens: None,
             model: None,
             debug_messages: None,
+            artifacts: StepArtifacts::default(),
         })
     }
 

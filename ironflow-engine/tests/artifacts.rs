@@ -16,7 +16,7 @@ use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_engine::artifact::{ArtifactSink, DirectArtifactSink};
-use ironflow_engine::config::ShellConfig;
+use ironflow_engine::config::{ArtifactInput, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use ironflow_store::memory::InMemoryStore;
@@ -129,7 +129,7 @@ async fn a_declared_output_is_stored_with_its_size_type_and_hash() {
 async fn a_later_step_reads_an_artifact_produced_earlier() {
     let mut fixture = Fixture::new().await;
 
-    fixture
+    let build = fixture
         .ctx
         .shell(
             "build",
@@ -139,13 +139,16 @@ async fn a_later_step_reads_an_artifact_produced_earlier() {
         )
         .await
         .expect("producer");
+    let report = build.artifact("report.txt").expect("declared by build");
+    assert_eq!(report.step(), "build");
+    assert_eq!(report.name(), "report.txt");
 
     // The consumer runs in a different directory: the only way it can see the
     // file is through the declared input.
     let consumer_dir = TempDir::new().expect("consumer dir");
     let consumer = ShellConfig::new("cat report.txt")
         .dir(consumer_dir.path().to_str().expect("utf-8 path"))
-        .input("build", "report.txt");
+        .input(&report);
 
     let output = fixture
         .ctx
@@ -153,14 +156,44 @@ async fn a_later_step_reads_an_artifact_produced_earlier() {
         .await
         .expect("consumer");
 
-    assert_eq!(output.output["stdout"], "payload");
+    assert_eq!(output.stdout(), "payload");
 }
 
 #[tokio::test]
 async fn an_input_can_be_written_to_another_path() {
     let mut fixture = Fixture::new().await;
 
-    fixture
+    let build = fixture
+        .ctx
+        .shell(
+            "build",
+            fixture
+                .shell("printf 'x' > report.txt")
+                .output("report.txt"),
+        )
+        .await
+        .expect("producer");
+    let report = build.artifact("report.txt").expect("declared by build");
+
+    let consumer_dir = TempDir::new().expect("consumer dir");
+    let consumer = ShellConfig::new("cat nested/renamed.txt")
+        .dir(consumer_dir.path().to_str().expect("utf-8 path"))
+        .input_at(&report, "nested/renamed.txt");
+
+    let output = fixture
+        .ctx
+        .shell("publish", consumer)
+        .await
+        .expect("consumer");
+
+    assert_eq!(output.stdout(), "x");
+}
+
+#[tokio::test]
+async fn a_name_the_step_did_not_declare_is_refused() {
+    let mut fixture = Fixture::new().await;
+
+    let build = fixture
         .ctx
         .shell(
             "build",
@@ -171,18 +204,79 @@ async fn an_input_can_be_written_to_another_path() {
         .await
         .expect("producer");
 
-    let consumer_dir = TempDir::new().expect("consumer dir");
-    let consumer = ShellConfig::new("cat nested/renamed.txt")
-        .dir(consumer_dir.path().to_str().expect("utf-8 path"))
-        .input_at("build", "report.txt", "nested/renamed.txt");
+    // The typo is caught where the handle is taken, not in a later step.
+    let err = build
+        .artifact("report.html")
+        .expect_err("report.html was never declared");
 
-    let output = fixture
+    assert!(matches!(
+        err,
+        EngineError::ArtifactNotDeclared { ref step, ref name }
+            if step == "build" && name == "report.html"
+    ));
+}
+
+#[tokio::test]
+async fn a_step_without_declared_outputs_hands_out_no_artifact() {
+    let mut fixture = Fixture::new().await;
+
+    let greet = fixture
         .ctx
-        .shell("publish", consumer)
+        .shell("greet", fixture.shell("echo hello"))
         .await
-        .expect("consumer");
+        .expect("step");
 
-    assert_eq!(output.output["stdout"], "x");
+    assert!(matches!(
+        greet.artifact("hello.txt"),
+        Err(EngineError::ArtifactNotDeclared { .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_glob_declaration_hands_out_the_files_it_matches() {
+    let mut fixture = Fixture::new().await;
+
+    let build = fixture
+        .ctx
+        .shell(
+            "build",
+            fixture
+                .shell("printf 'first' > a.log; touch notes.txt")
+                .output("*.log"),
+        )
+        .await
+        .expect("producer");
+
+    let a_log = build.artifact("a.log").expect("matches *.log");
+    assert!(matches!(
+        build.artifact("notes.txt"),
+        Err(EngineError::ArtifactNotDeclared { .. })
+    ));
+
+    let bytes = fixture.ctx.get_artifact(&a_log).await.expect("stored");
+    assert_eq!(bytes, b"first");
+}
+
+#[tokio::test]
+async fn an_artifact_is_named_after_the_file_not_the_declared_path() {
+    let mut fixture = Fixture::new().await;
+
+    let build = fixture
+        .ctx
+        .shell(
+            "build",
+            fixture
+                .shell("mkdir -p target && printf 'x' > target/report.html")
+                .output("target/report.html"),
+        )
+        .await
+        .expect("producer");
+
+    assert!(build.artifact("report.html").is_ok());
+    assert!(matches!(
+        build.artifact("target/report.html"),
+        Err(EngineError::ArtifactNotDeclared { .. })
+    ));
 }
 
 #[tokio::test]
@@ -285,6 +379,13 @@ async fn a_failed_step_tolerates_an_output_that_matched_nothing() {
     );
 }
 
+/// A consumer config holding a raw input, as a config stored by an older
+/// version or built by hand would. Handles cannot express these cases.
+fn with_raw_input(mut config: ShellConfig, step: &str, name: &str) -> ShellConfig {
+    config.inputs.push(ArtifactInput::new(step, name));
+    config
+}
+
 #[tokio::test]
 async fn an_unresolvable_input_fails_the_step_before_the_command_runs() {
     let mut fixture = Fixture::new().await;
@@ -293,9 +394,11 @@ async fn an_unresolvable_input_fails_the_step_before_the_command_runs() {
         .ctx
         .shell(
             "publish",
-            fixture
-                .shell("printf 'ran' > marker.txt")
-                .input("build", "report.txt"),
+            with_raw_input(
+                fixture.shell("printf 'ran' > marker.txt"),
+                "build",
+                "report.txt",
+            ),
         )
         .await
         .expect_err("input does not exist");
@@ -321,7 +424,7 @@ async fn an_input_produced_by_a_later_step_is_not_visible() {
         .ctx
         .shell(
             "publish",
-            fixture.shell("true").input("build", "report.txt"),
+            with_raw_input(fixture.shell("true"), "build", "report.txt"),
         )
         .await
         .expect_err("nothing produced yet");
@@ -422,7 +525,7 @@ async fn a_step_without_artifacts_runs_without_a_backend() {
         .await
         .expect("step");
 
-    assert_eq!(output.output["stdout"], "hello");
+    assert_eq!(output.stdout(), "hello");
 }
 
 #[tokio::test]
@@ -448,80 +551,89 @@ async fn put_and_get_artifact_roundtrip_for_custom_operations() {
     let mut fixture = Fixture::new().await;
 
     // A shell step gives us a persisted step to hang the artifact on.
-    fixture
+    let generate = fixture
         .ctx
         .shell("generate", fixture.shell("true"))
         .await
         .expect("step");
 
-    let step_id = fixture
+    let summary = fixture
+        .ctx
+        .put_artifact(&generate, "summary.json", None, br#"{"ok":true}"#.to_vec())
+        .await
+        .expect("put");
+    assert_eq!(summary.step(), "generate");
+    assert_eq!(summary.name(), "summary.json");
+
+    let stored = fixture
+        .store
+        .list_artifacts_for_run(fixture.run_id)
+        .await
+        .expect("list");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].content_type, "application/json");
+    let steps = fixture
         .store
         .list_steps(fixture.run_id)
         .await
-        .expect("steps")[0]
-        .id;
+        .expect("steps");
+    assert_eq!(stored[0].step_id, steps[0].id);
 
-    let artifact = fixture
-        .ctx
-        .put_artifact(step_id, "summary.json", None, br#"{"ok":true}"#.to_vec())
-        .await
-        .expect("put");
-
-    assert_eq!(artifact.content_type, "application/json");
-
-    let bytes = fixture
-        .ctx
-        .get_artifact("generate", "summary.json")
-        .await
-        .expect("get");
+    let bytes = fixture.ctx.get_artifact(&summary).await.expect("get");
 
     assert_eq!(bytes, br#"{"ok":true}"#);
 }
 
 #[tokio::test]
-async fn get_artifact_on_an_unknown_name_reports_not_found() {
+async fn get_artifact_on_a_declared_but_missing_file_reports_not_found() {
     let mut fixture = Fixture::new().await;
 
-    fixture
+    // `*.json` is declared and matches `a.json`; `missing.json` fits the
+    // declaration but was never produced.
+    let build = fixture
         .ctx
-        .shell("generate", fixture.shell("true"))
+        .shell(
+            "build",
+            fixture.shell("printf '{}' > a.json").output("*.json"),
+        )
         .await
         .expect("step");
+    let missing = build
+        .artifact("missing.json")
+        .expect("fits the declaration");
 
     let err = fixture
         .ctx
-        .get_artifact("generate", "missing.json")
+        .get_artifact(&missing)
         .await
         .expect_err("unknown artifact");
 
-    assert!(matches!(err, EngineError::ArtifactNotFound { .. }));
+    assert!(matches!(
+        err,
+        EngineError::ArtifactNotFound { ref step, ref name }
+            if step == "build" && name == "missing.json"
+    ));
 }
 
 #[tokio::test]
 async fn put_artifact_refuses_a_duplicate_name_on_the_same_step() {
     let mut fixture = Fixture::new().await;
 
-    fixture
+    let generate = fixture
         .ctx
         .shell("generate", fixture.shell("true"))
         .await
         .expect("step");
-    let step_id = fixture
-        .store
-        .list_steps(fixture.run_id)
-        .await
-        .expect("steps")[0]
-        .id;
 
     fixture
         .ctx
-        .put_artifact(step_id, "a.json", None, b"{}".to_vec())
+        .put_artifact(&generate, "a.json", None, b"{}".to_vec())
         .await
         .expect("first");
 
     let err = fixture
         .ctx
-        .put_artifact(step_id, "a.json", None, b"{}".to_vec())
+        .put_artifact(&generate, "a.json", None, b"{}".to_vec())
         .await
         .expect_err("duplicate");
 
@@ -532,21 +644,15 @@ async fn put_artifact_refuses_a_duplicate_name_on_the_same_step() {
 async fn put_artifact_without_a_backend_fails_explicitly() {
     let mut fixture = Fixture::without_artifact_storage().await;
 
-    fixture
+    let generate = fixture
         .ctx
         .shell("generate", fixture.shell("true"))
         .await
         .expect("step");
-    let step_id = fixture
-        .store
-        .list_steps(fixture.run_id)
-        .await
-        .expect("steps")[0]
-        .id;
 
     let err = fixture
         .ctx
-        .put_artifact(step_id, "a.json", None, b"{}".to_vec())
+        .put_artifact(&generate, "a.json", None, b"{}".to_vec())
         .await
         .expect_err("no artifact storage");
 

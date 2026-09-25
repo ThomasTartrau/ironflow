@@ -6,7 +6,7 @@
 
 mod agent;
 mod approval;
-mod approval_rule;
+mod approvers;
 mod artifact;
 mod decision;
 pub mod delay;
@@ -15,11 +15,11 @@ mod http;
 mod shell;
 mod workflow;
 
-pub use agent::AgentStepConfig;
+pub use agent::{AgentStep, AgentStepConfig, Tool};
 pub use approval::ApprovalConfig;
-pub use approval_rule::ApprovalRule;
-pub use artifact::{ArtifactInput, ArtifactOutput};
-pub use decision::{DEFAULT_DECISION_MODEL, DecisionConfig};
+pub use approvers::Approvers;
+pub use artifact::{ArtifactInput, ArtifactOutput, ArtifactRef};
+pub use decision::{DEFAULT_DECISION_MODEL, DecisionConfig, NoAnswers};
 pub use delay::DelayConfig;
 pub use escalation::{EscalationPolicy, NotificationTarget};
 pub use http::HttpConfig;
@@ -28,8 +28,6 @@ pub use http::HttpConfig;
 pub use ironflow_store::entities::{ApprovalRequirement, Assignee};
 pub use shell::ShellConfig;
 pub use workflow::WorkflowStepConfig;
-
-pub use crate::expression::{Expression, ExpressionError};
 
 use ironflow_core::retry::RetryPolicy;
 use ironflow_store::entities::StepKind;
@@ -91,6 +89,26 @@ impl StepConfig {
             | StepConfig::Approval(_)
             | StepConfig::Decision(_)
             | StepConfig::Delay(_) => false,
+        }
+    }
+
+    /// The files this step declared it produces. Only shell steps declare any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::{HttpConfig, ShellConfig, StepConfig};
+    ///
+    /// let config = StepConfig::Shell(ShellConfig::new("./gen").output("report.html"));
+    /// assert_eq!(config.declared_outputs()[0].pattern, "report.html");
+    ///
+    /// let config = StepConfig::Http(HttpConfig::get("https://example.com"));
+    /// assert!(config.declared_outputs().is_empty());
+    /// ```
+    pub fn declared_outputs(&self) -> &[ArtifactOutput] {
+        match self {
+            StepConfig::Shell(c) => &c.outputs,
+            _ => &[],
         }
     }
 
