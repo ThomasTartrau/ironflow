@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import {
 	BarChart,
 	Bar,
@@ -41,6 +42,56 @@ function chartColor(index: number): string {
 		"var(--chart-5)",
 	];
 	return colors[index % colors.length];
+}
+
+/** Shared look for every chart tooltip: opaque in both light and dark theme. */
+const CHART_TOOLTIP_CONTENT_STYLE: CSSProperties = {
+	background: "var(--popover)",
+	border: "1px solid var(--border)",
+	borderRadius: 6,
+	fontSize: 12,
+};
+
+// Recharts renders the legend wrapper after the tooltip wrapper in the DOM,
+// so without an explicit z-index the legend paints over the tooltip's last
+// rows on hover. Keep the tooltip strictly above the legend on every chart
+// that has one.
+const CHART_LEGEND_WRAPPER_STYLE: CSSProperties = { fontSize: 12, zIndex: 10 };
+const CHART_TOOLTIP_WRAPPER_STYLE: CSSProperties = { zIndex: 20 };
+
+interface VolumeStatusTooltipEntry {
+	dataKey?: string | number;
+	name?: string;
+	value?: number;
+	color?: string;
+}
+
+interface VolumeStatusTooltipContentProps {
+	active?: boolean;
+	label?: string;
+	payload?: VolumeStatusTooltipEntry[];
+}
+
+/** Only lists statuses with a non-zero count for the hovered bucket; an
+ * all-zero bucket shows just the date, keeping the tooltip short enough to
+ * never reach the legend. */
+function VolumeStatusTooltipContent({
+	active,
+	label,
+	payload,
+}: VolumeStatusTooltipContentProps) {
+	if (!active) return null;
+	const entries = (payload ?? []).filter((entry) => (entry.value ?? 0) > 0);
+	return (
+		<div style={CHART_TOOLTIP_CONTENT_STYLE} className="px-3 py-2">
+			<p className="font-medium">{label}</p>
+			{entries.map((entry) => (
+				<p key={String(entry.dataKey)} style={{ color: entry.color }}>
+					{entry.name}: {entry.value}
+				</p>
+			))}
+		</div>
+	);
 }
 
 export function StatsCharts({ filters, period, refreshKey }: StatsChartsProps) {
@@ -114,14 +165,10 @@ export function StatsCharts({ filters, period, refreshKey }: StatsChartsProps) {
 									allowDecimals={false}
 								/>
 								<Tooltip
-									contentStyle={{
-										background: "var(--popover)",
-										border: "1px solid var(--border)",
-										borderRadius: 6,
-										fontSize: 12,
-									}}
+									wrapperStyle={CHART_TOOLTIP_WRAPPER_STYLE}
+									content={<VolumeStatusTooltipContent />}
 								/>
-								<Legend wrapperStyle={{ fontSize: 12 }} />
+								<Legend wrapperStyle={CHART_LEGEND_WRAPPER_STYLE} />
 								{STATUS_SERIES.map((series) => (
 									<Bar
 										key={series.key}
@@ -150,15 +197,11 @@ export function StatsCharts({ filters, period, refreshKey }: StatsChartsProps) {
 									tickFormatter={(v: number) => formatDuration(v)}
 								/>
 								<Tooltip
-									contentStyle={{
-										background: "var(--popover)",
-										border: "1px solid var(--border)",
-										borderRadius: 6,
-										fontSize: 12,
-									}}
+									wrapperStyle={CHART_TOOLTIP_WRAPPER_STYLE}
+									contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
 									formatter={(v) => formatDuration(Number(v ?? 0))}
 								/>
-								<Legend wrapperStyle={{ fontSize: 12 }} />
+								<Legend wrapperStyle={CHART_LEGEND_WRAPPER_STYLE} />
 								<Line
 									type="monotone"
 									dataKey="avg_duration_ms"
@@ -195,12 +238,7 @@ export function StatsCharts({ filters, period, refreshKey }: StatsChartsProps) {
 									tickFormatter={(v: number) => formatCost(v)}
 								/>
 								<Tooltip
-									contentStyle={{
-										background: "var(--popover)",
-										border: "1px solid var(--border)",
-										borderRadius: 6,
-										fontSize: 12,
-									}}
+									contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
 									formatter={(v) => formatCost(Number(v ?? 0))}
 								/>
 								<Area
@@ -232,12 +270,7 @@ export function StatsCharts({ filters, period, refreshKey }: StatsChartsProps) {
 									tickFormatter={(v: number) => `${v}%`}
 								/>
 								<Tooltip
-									contentStyle={{
-										background: "var(--popover)",
-										border: "1px solid var(--border)",
-										borderRadius: 6,
-										fontSize: 12,
-									}}
+									contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
 									formatter={(v) => (v == null ? "-" : `${v}%`)}
 								/>
 								<Line
