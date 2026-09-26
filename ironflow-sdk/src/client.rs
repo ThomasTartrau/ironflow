@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 pub use ironflow_types::{ApiMeta, ApiResponse};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use reqwest::{Client, RequestBuilder, Response};
-use serde_json::from_str;
+use serde::Serialize;
+use serde_json::{from_str, json};
 use uuid::Uuid;
 
 pub use crate::builder::{ArtifactDownload, ClientBuilder};
@@ -542,6 +543,52 @@ impl IronflowClient {
     /// Returns [`Error::Api`] on 404 or 400.
     pub async fn reject_run(&self, id: Uuid) -> Result<ApiResponse<types::RunResponse>, Error> {
         self.run_action(id, "reject").await
+    }
+
+    /// `POST /api/v1/runs/:id/steps/:step_id/input` -- Answer a human input step.
+    ///
+    /// `value` is serialized as the JSON body and validated by the server
+    /// against the schema stored on the step. On success the run resumes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 400 (the step does not wait for input), 403
+    /// (the caller may not answer), 404 (unknown run or step), 409 (already
+    /// answered or rejected) or 422 (the value does not match the schema).
+    pub async fn submit_input<T: Serialize + ?Sized>(
+        &self,
+        run_id: Uuid,
+        step_id: Uuid,
+        value: &T,
+    ) -> Result<ApiResponse<types::RunResponse>, Error> {
+        self.send_envelope(
+            self.post(&format!("/api/v1/runs/{run_id}/steps/{step_id}/input"))
+                .json(value),
+        )
+        .await
+    }
+
+    /// `POST /api/v1/runs/:id/steps/:step_id/reject` -- Reject a human input step.
+    ///
+    /// The run resumes and the handler receives the rejection with `reason`
+    /// (or a default reason naming the caller).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 400 (the step does not wait for input), 403
+    /// (the caller may not reject it), 404 (unknown run or step) or 409
+    /// (already answered or rejected).
+    pub async fn reject_input(
+        &self,
+        run_id: Uuid,
+        step_id: Uuid,
+        reason: Option<&str>,
+    ) -> Result<ApiResponse<types::RunResponse>, Error> {
+        self.send_envelope(
+            self.post(&format!("/api/v1/runs/{run_id}/steps/{step_id}/reject"))
+                .json(&json!({ "reason": reason })),
+        )
+        .await
     }
 
     /// `POST /api/v1/runs/:id/retry` -- Retry a failed run (creates a new run).

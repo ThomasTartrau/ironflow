@@ -55,6 +55,8 @@ semver = "1"
 tracing = "0.1"
 thiserror = "2"
 validator = { version = "0.20", features = ["derive"] }
+# Only local `$ref`s are needed: the default HTTP and file resolvers are left out.
+jsonschema = { version = "0.30", default-features = false }
 metrics = { version = "0.24", optional = true }
 metrics-exporter-prometheus = { version = "0.18", optional = true, default-features = false }
 
@@ -62,6 +64,7 @@ metrics-exporter-prometheus = { version = "0.18", optional = true, default-featu
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+schemars = "1"
 tempfile = "3"
 ironflow-store = { version = "2.37.0", path = "../ironflow-store", features = ["store-memory", "secret-store", "store-postgres"] }
 metrics = "0.24"

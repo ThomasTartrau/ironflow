@@ -21,6 +21,7 @@ import { CreatedByBadge } from "@/app/components/CreatedByBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { CollapsibleSection } from "@/app/components/CollapsibleSection";
 import { RunActions } from "./_components/RunActions";
+import { HumanInputForm } from "./_components/HumanInputForm";
 import { StepList } from "./_components/StepList";
 import { StepFlow } from "./_components/StepFlow";
 import { StepTimeline } from "./_components/StepTimeline";
@@ -77,6 +78,10 @@ function computeLiveCost(run: RunResponse, steps: StepResponse[]): number {
 	return Math.max(run.cost_usd, stepsCost);
 }
 
+function isPendingInput(step: StepResponse): boolean {
+	return step.kind === "human_input" && step.status === "awaiting_approval";
+}
+
 function isEmptyPayload(payload: unknown): boolean {
 	if (payload === null || payload === undefined) return true;
 	if (
@@ -108,6 +113,8 @@ export function Component() {
 		() => steps.filter((s) => s.attempt === shownAttempt),
 		[steps, shownAttempt],
 	);
+	const pendingInputs = shownSteps.filter(isPendingInput);
+	const awaitingInput = steps.some(isPendingInput);
 
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
@@ -126,7 +133,7 @@ export function Component() {
 				<div className="flex items-center gap-2">
 					<StatusBadge status={run.status} />
 					<TriggerBadge trigger={run.trigger} />
-					<RunActions run={run} />
+					<RunActions run={run} awaitingInput={awaitingInput} />
 				</div>
 			}
 		>
@@ -221,6 +228,17 @@ export function Component() {
 						<div className="text-sm text-destructive/90 whitespace-pre-wrap break-words">
 							{run.error}
 						</div>
+					</div>
+				)}
+
+				{pendingInputs.length > 0 && (
+					<div className="space-y-3">
+						<h2 className="text-base font-semibold tracking-tight">
+							Waiting for input
+						</h2>
+						{pendingInputs.map((step) => (
+							<HumanInputForm key={step.id} step={step} />
+						))}
 					</div>
 				)}
 

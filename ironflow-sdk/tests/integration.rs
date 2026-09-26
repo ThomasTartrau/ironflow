@@ -16,9 +16,12 @@ use ironflow_engine::notify::Event;
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ClientConfig;
 use ironflow_sdk::types::PlanWorkflowRequest;
-use ironflow_store::entities::{NewUser, RunStatus, TriggerKind};
+use ironflow_store::entities::{
+    NewStep, NewUser, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind, step_trace_id,
+};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
+use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -500,4 +503,108 @@ async fn replay_run_not_found() {
     let err = client.replay_run(Uuid::now_v7()).await.unwrap_err();
     assert!(err.is_api_error());
     assert_eq!(err.status(), Some(404));
+}
+
+// ── Human input ───────────────────────────────────────────────
+
+/// A `deploy` run suspended on a human input step asking for `answers`.
+async fn run_awaiting_input(store: &Arc<dyn Store>, client: &IronflowClient) -> (Uuid, Uuid) {
+    let run = client.create_run(&deploy_request()).await.unwrap();
+    let run_id = run.data.id;
+    store
+        .update_run_status(run_id, RunStatus::Running)
+        .await
+        .unwrap();
+    store
+        .update_run_status(run_id, RunStatus::AwaitingApproval)
+        .await
+        .unwrap();
+
+    let step = store
+        .create_step(NewStep {
+            run_id,
+            trace_id: step_trace_id(run_id, "clarify", 0),
+            name: "clarify".to_string(),
+            kind: StepKind::HumanInput,
+            position: 0,
+            input: Some(json!({
+                "message": "Answer the questions",
+                "schema": {
+                    "type": "object",
+                    "required": ["answers"],
+                    "properties": {"answers": {"type": "array", "items": {"type": "string"}}},
+                },
+            })),
+            is_error_handler: false,
+        })
+        .await
+        .unwrap();
+    for status in [StepStatus::Running, StepStatus::AwaitingApproval] {
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(status),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    (run_id, step.id)
+}
+
+#[tokio::test]
+async fn submit_input_posts_the_answer_to_the_step() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    let (base_url, token) = spawn_server_from(store.clone()).await;
+    let client = make_client(&base_url, &token);
+    let (run_id, step_id) = run_awaiting_input(&store, &client).await;
+
+    let answer = json!({"answers": ["staging"]});
+    let resp = client.submit_input(run_id, step_id, &answer).await.unwrap();
+    assert_eq!(resp.data.id, run_id);
+
+    let step = store.get_step(step_id).await.unwrap().unwrap();
+    assert_eq!(step.status.state, StepStatus::Completed);
+    assert_eq!(step.output, Some(answer.clone()));
+
+    let err = client
+        .submit_input(run_id, step_id, &answer)
+        .await
+        .unwrap_err();
+    assert_eq!(err.status(), Some(409));
+}
+
+#[tokio::test]
+async fn submit_input_with_an_invalid_answer_returns_422() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    let (base_url, token) = spawn_server_from(store.clone()).await;
+    let client = make_client(&base_url, &token);
+    let (run_id, step_id) = run_awaiting_input(&store, &client).await;
+
+    let err = client
+        .submit_input(run_id, step_id, &json!({"answers": 3}))
+        .await
+        .unwrap_err();
+    assert!(err.is_api_error());
+    assert_eq!(err.status(), Some(422));
+    assert_eq!(err.code(), Some("INVALID_INPUT"));
+}
+
+#[tokio::test]
+async fn reject_input_records_the_reason() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+    let (base_url, token) = spawn_server_from(store.clone()).await;
+    let client = make_client(&base_url, &token);
+    let (run_id, step_id) = run_awaiting_input(&store, &client).await;
+
+    client
+        .reject_input(run_id, step_id, Some("out of scope"))
+        .await
+        .unwrap();
+
+    let step = store.get_step(step_id).await.unwrap().unwrap();
+    assert_eq!(step.status.state, StepStatus::Rejected);
+    assert_eq!(step.error.as_deref(), Some("out of scope"));
 }

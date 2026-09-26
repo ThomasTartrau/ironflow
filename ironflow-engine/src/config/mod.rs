@@ -12,6 +12,7 @@ mod decision;
 pub mod delay;
 mod escalation;
 mod http;
+mod human_input;
 mod shell;
 mod workflow;
 
@@ -23,6 +24,7 @@ pub use decision::{DEFAULT_DECISION_MODEL, DecisionConfig, NoAnswers};
 pub use delay::DelayConfig;
 pub use escalation::{EscalationPolicy, NotificationTarget};
 pub use http::HttpConfig;
+pub use human_input::{HUMAN_INPUT_SCHEMA_KEY, HumanInputConfig};
 // Re-exported so workflow authors can name approval assignees and read approval
 // requirements without depending on `ironflow-store` directly.
 pub use ironflow_store::entities::{ApprovalRequirement, Assignee};

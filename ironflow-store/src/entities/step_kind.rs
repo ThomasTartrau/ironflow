@@ -39,6 +39,8 @@ pub enum StepKind {
     Approval,
     /// A typed machine decision (System One / Jev).
     Decision,
+    /// A typed human input request.
+    HumanInput,
     /// A user-defined operation (e.g. `"gitlab"`, `"gmail"`, `"slack"`).
     Custom(String),
 }
@@ -52,6 +54,7 @@ impl Serialize for StepKind {
             StepKind::Workflow => "workflow",
             StepKind::Approval => "approval",
             StepKind::Decision => "decision",
+            StepKind::HumanInput => "human_input",
             StepKind::Custom(name) => name.as_str(),
         };
         serializer.serialize_str(s)
@@ -68,6 +71,7 @@ impl<'de> Deserialize<'de> for StepKind {
             "workflow" => StepKind::Workflow,
             "approval" => StepKind::Approval,
             "decision" => StepKind::Decision,
+            "human_input" => StepKind::HumanInput,
             _ => StepKind::Custom(s),
         })
     }
@@ -82,6 +86,7 @@ impl std::fmt::Display for StepKind {
             StepKind::Workflow => f.write_str("Workflow"),
             StepKind::Approval => f.write_str("Approval"),
             StepKind::Decision => f.write_str("Decision"),
+            StepKind::HumanInput => f.write_str("HumanInput"),
             StepKind::Custom(name) => write!(f, "Custom({name})"),
         }
     }
@@ -97,6 +102,7 @@ mod tests {
         assert_eq!(StepKind::Http.to_string(), "Http");
         assert_eq!(StepKind::Agent.to_string(), "Agent");
         assert_eq!(StepKind::Workflow.to_string(), "Workflow");
+        assert_eq!(StepKind::HumanInput.to_string(), "HumanInput");
         assert_eq!(
             StepKind::Custom("gitlab".to_string()).to_string(),
             "Custom(gitlab)"
@@ -110,6 +116,15 @@ mod tests {
         assert_eq!(json, "\"workflow\"");
         let back: StepKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, StepKind::Workflow);
+    }
+
+    #[test]
+    fn serde_roundtrip_human_input() {
+        let kind = StepKind::HumanInput;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"human_input\"");
+        let back: StepKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, StepKind::HumanInput);
     }
 
     #[test]

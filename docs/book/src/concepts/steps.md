@@ -10,6 +10,7 @@ A Step is an atomic unit of work within a Run. Each step is persisted in the dat
 | Http | `ctx.http()` | Make an HTTP request |
 | Agent | `ctx.agent()` | Call an AI agent (Claude, OpenAI, etc.) |
 | Approval | `ctx.approval()` | Pause for human approval |
+| HumanInput | `ctx.human_input()` | Pause until a human submits a typed answer ([Human Input](human-input.md)) |
 | Decision | `ctx.decision()` | Make a typed machine decision ([System One / Jev](decision.md)) |
 | Workflow | `ctx.workflow()` | Start a sub-workflow |
 | Custom | `ctx.operation()` | Run a custom [Operation](operations.md) |
@@ -98,6 +99,25 @@ ctx.approval(
 See [Approval Gates](approval-gates.md) for the full list of escalation policies,
 where the remaining time surfaces, and how to
 [require several approvers](approval-gates.md#requiring-several-approvers).
+
+## Human input steps
+
+```rust,ignore
+#[derive(Deserialize, JsonSchema)]
+struct Answers {
+    answers: Vec<String>,
+}
+
+let answers: Answers = ctx
+    .human_input("clarify", HumanInputConfig::new("Answer the clarification questions"))
+    .await?;
+```
+
+The run suspends on `AwaitingApproval` until a person posts an answer matching
+the JSON schema of `Answers` to `POST /api/v1/runs/:id/steps/:step_id/input`.
+The config takes the same deadline, escalation, assignee and approvers options
+as an approval gate. A rejected input reaches the handler as
+`EngineError::HumanInputRejected`. See [Human Input](human-input.md).
 
 ## Decision steps
 

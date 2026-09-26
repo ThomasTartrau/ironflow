@@ -8,7 +8,7 @@ use chrono::Utc;
 use ironflow_auth::extractor::{AuthMethod, Authenticated};
 use ironflow_engine::notify::{ApprovalGrantedEvent, ApprovalRejectedEvent, Event};
 use ironflow_store::models::{
-    Assignee, Run, RunStatus, Step, StepApproval, StepStatus, StepUpdate,
+    Assignee, Run, RunStatus, Step, StepApproval, StepKind, StepStatus, StepUpdate,
 };
 use tokio::spawn;
 use uuid::Uuid;
@@ -87,6 +87,27 @@ pub async fn reject_run(
     resolve_approval(auth, state, path, RunStatus::Failed, "reject").await
 }
 
+/// Decide whether the caller may resolve the open gate of `run`, and under
+/// which name the decision is recorded.
+///
+/// Finds the step awaiting approval and delegates to [`authorize_gate`]. An
+/// admin may resolve a run even when no gate step is open.
+async fn authorize_approver(
+    auth: &Authenticated,
+    state: &AppState,
+    run: &Run,
+    steps: &[Step],
+) -> Result<String, ApiError> {
+    match steps
+        .iter()
+        .find(|s| s.status.state == StepStatus::AwaitingApproval)
+    {
+        Some(gate) => authorize_gate(auth, state, run, gate).await,
+        None if auth.is_admin() => Ok(caller_name(auth)),
+        None => Err(ApiError::Forbidden),
+    }
+}
+
 /// Decide whether the caller may resolve this gate, and under which name the
 /// decision is recorded.
 ///
@@ -108,26 +129,23 @@ pub async fn reject_run(
 ///
 /// The check lives here rather than in `ironflow-engine` because gate
 /// authorization has always been an API-layer concern: the engine never knows
-/// who is calling.
-async fn authorize_approver(
+/// who is calling. Human input steps reuse it: the same people may answer.
+///
+/// # Errors
+///
+/// Returns [`ApiError::Forbidden`] when the caller may not resolve the gate,
+/// and [`ApiError::Store`] when a lookup fails.
+pub(crate) async fn authorize_gate(
     auth: &Authenticated,
     state: &AppState,
     run: &Run,
-    steps: &[Step],
+    gate: &Step,
 ) -> Result<String, ApiError> {
-    let caller = match &auth.method {
-        AuthMethod::Jwt { username, .. } => username.clone(),
-        AuthMethod::ApiKey { key_name, .. } => key_name.clone(),
-    };
+    let caller = caller_name(auth);
 
     if auth.is_admin() {
         return Ok(caller);
     }
-
-    let gate = steps
-        .iter()
-        .find(|s| s.status.state == StepStatus::AwaitingApproval)
-        .ok_or(ApiError::Forbidden)?;
 
     // Groups restrict who may vote. A listed group without members leaves the
     // gate to admins.
@@ -174,6 +192,15 @@ async fn authorize_approver(
     }
 }
 
+/// The name a decision is recorded under: the username of a session, the key
+/// name of an API key.
+fn caller_name(auth: &Authenticated) -> String {
+    match &auth.method {
+        AuthMethod::Jwt { username, .. } => username.clone(),
+        AuthMethod::ApiKey { key_name, .. } => key_name.clone(),
+    }
+}
+
 async fn resolve_approval(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -201,6 +228,14 @@ async fn resolve_approval(
     let gate = steps
         .iter()
         .find(|s| s.status.state == StepStatus::AwaitingApproval);
+
+    // Approving a human input would resume the handler without an answer.
+    if target_status == RunStatus::Running && gate.is_some_and(|g| g.kind == StepKind::HumanInput) {
+        return Err(ApiError::BadRequest(
+            "run is waiting for a human input; use POST /api/v1/runs/{id}/steps/{step_id}/input"
+                .to_string(),
+        ));
+    }
     let publisher = state.engine.event_publisher();
 
     let mut granted = None;
@@ -749,6 +784,55 @@ mod tests {
         let step = store.get_step(step_id).await.unwrap().unwrap();
         assert_eq!(step.status.state, StepStatus::Rejected);
         assert!(step.approval_deadline_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn approve_returns_400_when_the_gate_is_a_human_input() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "clarify", 0),
+                name: "clarify".to_string(),
+                kind: StepKind::HumanInput,
+                position: 0,
+                input: Some(json!({"message": "Answer?", "schema": {"type": "object"}})),
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::AwaitingApproval),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolve(store.clone(), run.id, "approve").await,
+            HttpStatusCode::BAD_REQUEST
+        );
+
+        let unchanged = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.status.state, RunStatus::AwaitingApproval);
+        let gate = store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(gate.status.state, StepStatus::AwaitingApproval);
+        assert!(gate.approvals.is_empty());
     }
 
     // -- delegation --

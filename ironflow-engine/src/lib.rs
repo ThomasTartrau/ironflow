@@ -81,7 +81,7 @@ pub mod prelude {
     pub use crate::budget::BudgetConfig;
     pub use crate::config::{
         AgentStepConfig, ApprovalConfig, Approvers, DelayConfig, EscalationPolicy, HttpConfig,
-        NotificationTarget, ShellConfig, StepConfig,
+        HumanInputConfig, NotificationTarget, ShellConfig, StepConfig,
     };
     pub use crate::context::WorkflowContext;
     pub use crate::engine::{Engine, EnqueueOptions, WorkflowResult};

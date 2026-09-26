@@ -15,6 +15,7 @@ pub mod get_stats;
 pub mod get_stats_history;
 pub mod get_workflow;
 pub mod health_check;
+pub mod human_input;
 mod internal;
 pub mod list_runs;
 pub mod list_workflows;
@@ -234,6 +235,14 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route(
             "/runs/{id}/steps/{step_id}/artifacts/{name}",
             get(download_artifact::download_artifact),
+        )
+        .route(
+            "/runs/{id}/steps/{step_id}/input",
+            post(human_input::submit_human_input),
+        )
+        .route(
+            "/runs/{id}/steps/{step_id}/reject",
+            post(human_input::reject_human_input),
         )
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))

@@ -156,6 +156,37 @@ pub enum EngineError {
         reason: String,
     },
 
+    /// The run waits for a typed human input before continuing.
+    ///
+    /// Raised by [`WorkflowContext::human_input`](crate::context::WorkflowContext::human_input)
+    /// when no answer has been given yet. The engine transitions the run to
+    /// [`AwaitingApproval`](ironflow_store::entities::RunStatus::AwaitingApproval).
+    #[error("human input required for run {run_id}, step {step_id}: {message}")]
+    HumanInputRequired {
+        /// The run that is awaiting input.
+        run_id: uuid::Uuid,
+        /// The human input step that triggered the pause.
+        step_id: uuid::Uuid,
+        /// The message displayed to the person answering.
+        message: String,
+    },
+
+    /// A human input request was rejected instead of answered.
+    ///
+    /// Returned to the handler by
+    /// [`WorkflowContext::human_input`](crate::context::WorkflowContext::human_input),
+    /// which decides what happens next. A propagated rejection fails the run,
+    /// and the run is never retried.
+    #[error("human input rejected for run {run_id}, step {step_id}: {reason}")]
+    HumanInputRejected {
+        /// The run the input belongs to.
+        run_id: uuid::Uuid,
+        /// The human input step that was rejected.
+        step_id: uuid::Uuid,
+        /// Why the input was refused.
+        reason: String,
+    },
+
     /// A delay step suspended the run until the given time.
     ///
     /// The engine transitions the run to
@@ -196,6 +227,30 @@ mod tests {
         let err = EngineError::StepConfig("bad shell config".to_string());
         assert!(err.to_string().contains("step config error"));
         assert!(err.to_string().contains("bad shell config"));
+    }
+
+    #[test]
+    fn human_input_required_display() {
+        let err = EngineError::HumanInputRequired {
+            run_id: uuid::Uuid::nil(),
+            step_id: uuid::Uuid::nil(),
+            message: "Answer the questions".to_string(),
+        };
+        let text = err.to_string();
+        assert!(text.contains("human input required"));
+        assert!(text.contains("Answer the questions"));
+    }
+
+    #[test]
+    fn human_input_rejected_display() {
+        let err = EngineError::HumanInputRejected {
+            run_id: uuid::Uuid::nil(),
+            step_id: uuid::Uuid::nil(),
+            reason: "not relevant".to_string(),
+        };
+        let text = err.to_string();
+        assert!(text.contains("human input rejected"));
+        assert!(text.contains("not relevant"));
     }
 
     #[test]

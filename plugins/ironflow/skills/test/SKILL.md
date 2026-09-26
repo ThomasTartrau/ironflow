@@ -55,9 +55,9 @@ async fn deploy_builds_then_ships() {
 }
 ```
 
-Builders: `with_handler`, `with_mock_shell`, `with_mock_http`, `with_mock_agent`, `with_recorded_agent(dir)`, `with_mock_approval`, `with_agent_provider`, `with_decision_provider`. Then `run(payload)`, `run_workflow(name, payload)` or `resume(run_id)`.
+Builders: `with_handler`, `with_mock_shell`, `with_mock_http`, `with_mock_agent`, `with_recorded_agent(dir)`, `with_mock_approval`, `with_mock_human_input`, `with_agent_provider`, `with_decision_provider`. Then `run(payload)`, `run_workflow(name, payload)` or `resume(run_id)`.
 
-A handler that fails is not an `Err`: `result.status()` is `RunStatus::Failed` and `result.error()` carries the message. A non-zero `MockShellOutput::failed(1, "boom")` fails the step like a real non-zero exit; a non-2xx `MockHttpResponse` is a normal output, like a real 500. Without `with_mock_approval`, a gate suspends the run (`RunStatus::AwaitingApproval`) and `resume(run_id)` continues it.
+A handler that fails is not an `Err`: `result.status()` is `RunStatus::Failed` and `result.error()` carries the message. A non-zero `MockShellOutput::failed(1, "boom")` fails the step like a real non-zero exit; a non-2xx `MockHttpResponse` is a normal output, like a real 500. Without `with_mock_approval`, a gate suspends the run (`RunStatus::AwaitingApproval`) and `resume(run_id)` continues it. `with_mock_human_input(|name, cfg| HumanInputOutcome::Provided(json!({..})))` answers every `ctx.human_input` step with a value that must deserialize into the handler's type; `HumanInputOutcome::reject("reason")` makes the handler receive `EngineError::HumanInputRejected`.
 
 Not covered: `ctx.operation(...)` (pass a test-double `Operation` to the handler), `ctx.delay(...)` (still sleeps the run) and `ctx.decision(...)` (needs a real `DecisionProvider`).
 

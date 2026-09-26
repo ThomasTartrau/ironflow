@@ -15,10 +15,10 @@ use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, TriggerKind};
 use ironflow_store::store::{RunStore, Store};
 
-use crate::config::{HttpConfig, ShellConfig};
+use crate::config::{HttpConfig, HumanInputConfig, ShellConfig};
 use crate::engine::{Engine, WorkflowResult};
 use crate::error::EngineError;
-use crate::executor::{ApprovalOutcome, StepInterceptor};
+use crate::executor::{ApprovalOutcome, HumanInputOutcome, StepInterceptor};
 use crate::handler::WorkflowHandler;
 use crate::testing::mocks::{
     MissingAgentProvider, MockAgentProvider, MockHttpResponse, MockInterceptor, MockShellOutput,
@@ -222,6 +222,37 @@ impl TestEngine {
     pub fn with_mock_approval(mut self, outcome: ApprovalOutcome) -> Self {
         assert!(self.engine.is_none(), "{CONFIGURE_BEFORE_RUN}");
         self.mocks = self.mocks.approval(outcome);
+        self
+    }
+
+    /// Answer every human input step with `f` instead of suspending.
+    ///
+    /// `f` receives the step name and its config. Without this, a handler that
+    /// asks for a human input ends the run in [`RunStatus::AwaitingApproval`];
+    /// write the answer on the step through the store, then call
+    /// [`resume`](Self::resume).
+    ///
+    /// # Panics
+    ///
+    /// Panics when called after the first run.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::testing::{HumanInputOutcome, TestEngine};
+    /// use serde_json::json;
+    ///
+    /// let harness = TestEngine::new().with_mock_human_input(|_name, _cfg| {
+    ///     HumanInputOutcome::Provided(json!({"answers": ["staging"]}))
+    /// });
+    /// # let _ = harness;
+    /// ```
+    pub fn with_mock_human_input(
+        mut self,
+        f: impl Fn(&str, &HumanInputConfig) -> HumanInputOutcome + Send + Sync + 'static,
+    ) -> Self {
+        assert!(self.engine.is_none(), "{CONFIGURE_BEFORE_RUN}");
+        self.mocks = self.mocks.human_input(f);
         self
     }
 

@@ -4,14 +4,18 @@
 //! [`execute_step_config_intercepted`](crate::executor::execute_step_config_intercepted)
 //! before the dispatcher picks an executor, and by
 //! [`WorkflowContext::approval`](crate::context::WorkflowContext::approval)
-//! before the gate suspends the run. Returning `Some(..)` short-circuits the
+//! before the gate suspends the run, and by
+//! [`WorkflowContext::human_input`](crate::context::WorkflowContext::human_input)
+//! before the input request suspends the run. Returning `Some(..)` short-circuits the
 //! step: no process is spawned, no request is sent, no human is asked.
 //!
 //! Production wiring leaves the hook unset. In practice the only implementor is
 //! [`crate::testing`], which uses it to run a handler's real logic against
 //! canned step results.
 
-use crate::config::{ApprovalConfig, StepConfig};
+use serde_json::Value;
+
+use crate::config::{ApprovalConfig, HumanInputConfig, StepConfig};
 use crate::error::EngineError;
 use crate::executor::StepOutput;
 
@@ -51,6 +55,51 @@ impl ApprovalOutcome {
     /// assert_eq!(
     ///     outcome,
     ///     ApprovalOutcome::Rejected { reason: "budget freeze".to_string() }
+    /// );
+    /// ```
+    pub fn reject(reason: &str) -> Self {
+        Self::Rejected {
+            reason: reason.to_string(),
+        }
+    }
+}
+
+/// Answer applied to a human input step by a [`StepInterceptor`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::executor::HumanInputOutcome;
+/// use serde_json::json;
+///
+/// let answered = HumanInputOutcome::Provided(json!({"answers": ["yes"]}));
+/// let refused = HumanInputOutcome::reject("out of scope");
+/// assert_ne!(answered, refused);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub enum HumanInputOutcome {
+    /// The input is answered with this value; it must match the expected type.
+    Provided(Value),
+    /// The input is refused; the handler receives
+    /// [`EngineError::HumanInputRejected`].
+    Rejected {
+        /// Human-readable reason recorded on the step.
+        reason: String,
+    },
+}
+
+impl HumanInputOutcome {
+    /// Build a [`HumanInputOutcome::Rejected`] with the given reason.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::HumanInputOutcome;
+    ///
+    /// let outcome = HumanInputOutcome::reject("out of scope");
+    /// assert_eq!(
+    ///     outcome,
+    ///     HumanInputOutcome::Rejected { reason: "out of scope".to_string() }
     /// );
     /// ```
     pub fn reject(reason: &str) -> Self {
@@ -107,6 +156,20 @@ pub trait StepInterceptor: Send + Sync {
     /// The default implementation returns `None`: the gate suspends the run.
     fn intercept_approval(&self, name: &str, config: &ApprovalConfig) -> Option<ApprovalOutcome> {
         let _ = (name, config);
+        None
+    }
+
+    /// Answer a human input step instead of suspending the run.
+    ///
+    /// `schema` is the JSON schema of the expected answer. The default
+    /// implementation returns `None`: the input suspends the run.
+    fn intercept_human_input(
+        &self,
+        name: &str,
+        config: &HumanInputConfig,
+        schema: &Value,
+    ) -> Option<HumanInputOutcome> {
+        let _ = (name, config, schema);
         None
     }
 }

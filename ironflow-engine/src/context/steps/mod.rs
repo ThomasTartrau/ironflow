@@ -10,6 +10,7 @@ mod conditions;
 mod decision;
 mod delay;
 mod http;
+mod human_input;
 mod operation;
 mod parallel;
 mod shell;

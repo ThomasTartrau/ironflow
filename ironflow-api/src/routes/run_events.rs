@@ -31,6 +31,7 @@ where
                 WorkflowEvent::STEP_COMPLETED,
                 WorkflowEvent::STEP_FAILED,
                 WorkflowEvent::APPROVAL_REQUIRED,
+                WorkflowEvent::INPUT_REQUIRED,
                 WorkflowEvent::AGENT_STEP_TOKENS_USED,
             ];
 

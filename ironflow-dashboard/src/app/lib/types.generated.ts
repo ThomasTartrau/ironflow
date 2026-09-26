@@ -574,6 +574,68 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/runs/{id}/steps/{step_id}/input": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Answer a human input step with a value matching its JSON schema.
+		 * @description The answer is validated against the schema stored on the step. The caller
+		 *     must be allowed to resolve the step like an approval gate (admin, approver
+		 *     groups, assignee or delegation). The first valid answer wins: the step
+		 *     completes, the run moves from `AwaitingApproval` back to `Running` and
+		 *     resumes, and the handler receives the typed answer.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if the step is not a human input or is not awaiting input
+		 *     - 403 if the caller may not answer the step
+		 *     - 404 if the run or the step does not exist
+		 *     - 409 if the input was already answered or rejected
+		 *     - 422 if the answer does not match the schema
+		 */
+		post: operations["submit_human_input"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/runs/{id}/steps/{step_id}/reject": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Reject a human input step.
+		 * @description The step is marked `Rejected` with the reason, the run moves from
+		 *     `AwaitingApproval` back to `Running` and resumes: the handler receives a
+		 *     `HumanInputRejected` error and decides what happens next. The body is
+		 *     optional; without a reason, one naming the caller is recorded.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if the step is not a human input or is not awaiting input
+		 *     - 403 if the caller may not resolve the step
+		 *     - 404 if the run or the step does not exist
+		 *     - 409 if the input was already answered or rejected
+		 */
+		post: operations["reject_human_input"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/schedules": {
 		parameters: {
 			query?: never;
@@ -2240,6 +2302,11 @@ export interface components {
 			/** @description Workflow that owns this step. */
 			workflow: string;
 		};
+		/** @description Request body for rejecting a human input step. */
+		RejectHumanInputRequest: {
+			/** @description Why the input is refused. Passed to the handler. */
+			reason?: string | null;
+		};
 		/**
 		 * @description Payload of the `Event::RetryForced` event.
 		 *
@@ -3648,10 +3715,58 @@ export interface components {
 					/** @enum {string} */
 					type: "approval_required";
 			  })
+			| (components["schemas"]["WorkflowInputRequiredEvent"] & {
+					/** @enum {string} */
+					type: "input_required";
+			  })
 			| (components["schemas"]["WorkflowAgentStepTokensUsedEvent"] & {
 					/** @enum {string} */
 					type: "agent_step_tokens_used";
 			  });
+		/**
+		 * @description Payload of the `WorkflowEvent::InputRequired` workflow event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::WorkflowInputRequiredEvent;
+		 *     use serde_json::json;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = WorkflowInputRequiredEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         step_name: "clarify".to_string(),
+		 *         step_index: 2,
+		 *         message: "Answer the questions".to_string(),
+		 *         schema: json!({"type": "object"}),
+		 *     };
+		 *     assert_eq!(payload.step_name, "clarify");
+		 *     ```
+		 */
+		WorkflowInputRequiredEvent: {
+			/** @description Message displayed to the person answering. */
+			message: string;
+			/**
+			 * Format: uuid
+			 * @description The run waiting for the input.
+			 */
+			run_id: string;
+			/** @description JSON schema the answer must match. */
+			schema: Record<string, never>;
+			/**
+			 * Format: uuid
+			 * @description Identifier of the human input step; the answer is posted to it.
+			 */
+			step_id: string;
+			/**
+			 * Format: int32
+			 * @description Zero-based position in the workflow.
+			 */
+			step_index: number;
+			/** @description Human-readable step name. */
+			step_name: string;
+		};
 		/**
 		 * @description Payload of the `WorkflowEvent::StepCompleted` workflow event.
 		 *
@@ -4824,6 +4939,143 @@ export interface operations {
 			};
 			/** @description Artifact storage is not configured */
 			501: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	submit_human_input: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+				/** @description Step ID */
+				step_id: string;
+			};
+			cookie?: never;
+		};
+		/** @description Answer matching the JSON schema stored on the step */
+		requestBody: {
+			content: {
+				"application/json": unknown;
+			};
+		};
+		responses: {
+			/** @description Answer recorded, the run resumes */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["RunResponse"];
+				};
+			};
+			/** @description Step is not a human input awaiting input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run or step not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Input already answered or rejected */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Answer does not match the schema */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	reject_human_input: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+				/** @description Step ID */
+				step_id: string;
+			};
+			cookie?: never;
+		};
+		/** @description Optional rejection reason */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["RejectHumanInputRequest"];
+			};
+		};
+		responses: {
+			/** @description Input rejected, the run resumes */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["RunResponse"];
+				};
+			};
+			/** @description Step is not a human input awaiting input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run or step not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Input already answered or rejected */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

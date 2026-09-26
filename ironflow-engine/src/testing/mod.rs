@@ -4,7 +4,7 @@
 //! [`InMemoryStore`](ironflow_store::memory::InMemoryStore): the run, the steps,
 //! the FSM transitions and the persistence are the production ones. Only the
 //! outside world is swapped out -- shell commands, HTTP requests, agent
-//! invocations and approval gates are answered from closures instead of
+//! invocations, approval gates and human inputs are answered from closures instead of
 //! spawning processes, opening sockets or waiting for a human.
 //!
 //! What it does *not* start: no HTTP server, no background worker, no Postgres.
@@ -48,6 +48,7 @@
 //! | `ctx.http` | [`TestEngine::with_mock_http`] |
 //! | `ctx.agent` | [`TestEngine::with_mock_agent`] or [`TestEngine::with_recorded_agent`] |
 //! | `ctx.approval` | [`TestEngine::with_mock_approval`], or [`TestEngine::resume`] |
+//! | `ctx.human_input` | [`TestEngine::with_mock_human_input`], or [`TestEngine::resume`] after writing the answer on the step |
 //! | `ctx.parallel`, `ctx.workflow`, `on_error` | the mocks above apply to the steps inside them |
 //!
 //! # Limitations
@@ -68,11 +69,11 @@ mod result;
 
 pub use engine::TestEngine;
 pub use mocks::{
-    AgentMock, HttpMock, MissingAgentProvider, MockAgentProvider, MockHttpResponse,
+    AgentMock, HttpMock, HumanInputMock, MissingAgentProvider, MockAgentProvider, MockHttpResponse,
     MockInterceptor, MockShellOutput, ShellMock,
 };
 pub use result::{TestResult, TestStep};
 
 // Re-exported so test code has a single import path for everything the harness
 // needs.
-pub use crate::executor::ApprovalOutcome;
+pub use crate::executor::{ApprovalOutcome, HumanInputOutcome};

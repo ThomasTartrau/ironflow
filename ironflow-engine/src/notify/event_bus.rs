@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! - [`WorkflowEvent`] -- granular step-level events (started, completed,
-//!   failed, approval, token usage).
+//!   failed, approval, human input, token usage).
 //! - [`WorkflowEventBus`] -- per-run broadcast channels with subscribe /
 //!   publish / remove lifecycle.
 //!
@@ -36,6 +36,7 @@ use std::sync::RwLock;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -150,6 +151,43 @@ pub struct WorkflowApprovalRequiredEvent {
     pub approval_id: Uuid,
 }
 
+/// Payload of the `WorkflowEvent::InputRequired` workflow event.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::notify::WorkflowInputRequiredEvent;
+/// use serde_json::json;
+/// use uuid::Uuid;
+///
+/// let payload = WorkflowInputRequiredEvent {
+///     run_id: Uuid::now_v7(),
+///     step_id: Uuid::now_v7(),
+///     step_name: "clarify".to_string(),
+///     step_index: 2,
+///     message: "Answer the questions".to_string(),
+///     schema: json!({"type": "object"}),
+/// };
+/// assert_eq!(payload.step_name, "clarify");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WorkflowInputRequiredEvent {
+    /// The run waiting for the input.
+    pub run_id: Uuid,
+    /// Identifier of the human input step; the answer is posted to it.
+    pub step_id: Uuid,
+    /// Human-readable step name.
+    pub step_name: String,
+    /// Zero-based position in the workflow.
+    pub step_index: u32,
+    /// Message displayed to the person answering.
+    pub message: String,
+    /// JSON schema the answer must match.
+    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    pub schema: Value,
+}
+
 /// Payload of the `WorkflowEvent::AgentStepTokensUsed` workflow event.
 ///
 /// # Examples
@@ -219,6 +257,9 @@ pub enum WorkflowEvent {
     /// A step requires human approval before the run can continue.
     ApprovalRequired(WorkflowApprovalRequiredEvent),
 
+    /// A step waits for a typed human input before the run can continue.
+    InputRequired(WorkflowInputRequiredEvent),
+
     /// Token usage report for an agent step.
     AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent),
 }
@@ -232,6 +273,8 @@ impl WorkflowEvent {
     pub const STEP_FAILED: &'static str = "step_failed";
     /// Event type constant for [`ApprovalRequired`](WorkflowEvent::ApprovalRequired).
     pub const APPROVAL_REQUIRED: &'static str = "approval_required";
+    /// Event type constant for [`InputRequired`](WorkflowEvent::InputRequired).
+    pub const INPUT_REQUIRED: &'static str = "input_required";
     /// Event type constant for [`AgentStepTokensUsed`](WorkflowEvent::AgentStepTokensUsed).
     pub const AGENT_STEP_TOKENS_USED: &'static str = "agent_step_tokens_used";
 
@@ -257,6 +300,7 @@ impl WorkflowEvent {
             WorkflowEvent::StepCompleted(_) => Self::STEP_COMPLETED,
             WorkflowEvent::StepFailed(_) => Self::STEP_FAILED,
             WorkflowEvent::ApprovalRequired(_) => Self::APPROVAL_REQUIRED,
+            WorkflowEvent::InputRequired(_) => Self::INPUT_REQUIRED,
             WorkflowEvent::AgentStepTokensUsed(_) => Self::AGENT_STEP_TOKENS_USED,
         }
     }
@@ -403,6 +447,8 @@ impl std::fmt::Debug for WorkflowEventBus {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn step_started(step_name: &str) -> WorkflowEvent {
@@ -497,6 +543,14 @@ mod tests {
                 step_name: "prod-gate".to_string(),
                 step_index: 3,
                 approval_id: Uuid::now_v7(),
+            }),
+            WorkflowEvent::InputRequired(WorkflowInputRequiredEvent {
+                run_id: Uuid::now_v7(),
+                step_id: Uuid::now_v7(),
+                step_name: "clarify".to_string(),
+                step_index: 4,
+                message: "Answer the questions".to_string(),
+                schema: json!({"type": "object"}),
             }),
             WorkflowEvent::AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent {
                 step_name: "review".to_string(),
@@ -603,6 +657,26 @@ mod tests {
     }
 
     #[test]
+    fn input_required_event_serializes_flat_with_its_schema() {
+        let step_id = Uuid::now_v7();
+        let event = WorkflowEvent::InputRequired(WorkflowInputRequiredEvent {
+            run_id: Uuid::now_v7(),
+            step_id,
+            step_name: "clarify".to_string(),
+            step_index: 1,
+            message: "Answer the questions".to_string(),
+            schema: json!({"type": "object", "required": ["answers"]}),
+        });
+
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["type"], "input_required");
+        assert_eq!(value["step_id"], step_id.to_string());
+        assert_eq!(value["message"], "Answer the questions");
+        assert_eq!(value["schema"]["required"][0], "answers");
+        assert_eq!(event.event_type(), WorkflowEvent::INPUT_REQUIRED);
+    }
+
+    #[test]
     fn event_type_all_variants() {
         let cases: Vec<(WorkflowEvent, &str)> = vec![
             (
@@ -638,6 +712,17 @@ mod tests {
                     approval_id: Uuid::now_v7(),
                 }),
                 "approval_required",
+            ),
+            (
+                WorkflowEvent::InputRequired(WorkflowInputRequiredEvent {
+                    run_id: Uuid::now_v7(),
+                    step_id: Uuid::now_v7(),
+                    step_name: "s".to_string(),
+                    step_index: 0,
+                    message: "m".to_string(),
+                    schema: Value::Null,
+                }),
+                "input_required",
             ),
             (
                 WorkflowEvent::AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent {

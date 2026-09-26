@@ -1636,6 +1636,17 @@
         ],
         "type": "object"
       },
+      "RejectHumanInputRequest": {
+        "description": "Request body for rejecting a human input step.",
+        "properties": {
+          "reason": {
+            "description": "Why the input is refused. Passed to the handler.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "RetryForcedEvent": {
         "description": "Payload of the `Event::RetryForced` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::RetryForcedEvent;\nuse uuid::Uuid;\n\nlet payload = RetryForcedEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    original_version: \"1\".to_string(),\n    current_version: \"2\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(payload.current_version, \"2\");\n```",
         "properties": {
@@ -3434,6 +3445,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/WorkflowInputRequiredEvent",
+                "description": "A step waits for a typed human input before the run can continue."
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "input_required"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A step waits for a typed human input before the run can continue."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/WorkflowAgentStepTokensUsedEvent",
                 "description": "Token usage report for an agent step."
               },
@@ -3455,6 +3489,48 @@
             "description": "Token usage report for an agent step."
           }
         ]
+      },
+      "WorkflowInputRequiredEvent": {
+        "description": "Payload of the `WorkflowEvent::InputRequired` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowInputRequiredEvent;\nuse serde_json::json;\nuse uuid::Uuid;\n\nlet payload = WorkflowInputRequiredEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"clarify\".to_string(),\n    step_index: 2,\n    message: \"Answer the questions\".to_string(),\n    schema: json!({\"type\": \"object\"}),\n};\nassert_eq!(payload.step_name, \"clarify\");\n```",
+        "properties": {
+          "message": {
+            "description": "Message displayed to the person answering.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "The run waiting for the input.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema": {
+            "description": "JSON schema the answer must match.",
+            "type": "object"
+          },
+          "step_id": {
+            "description": "Identifier of the human input step; the answer is posted to it.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_index": {
+            "description": "Zero-based position in the workflow.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id",
+          "step_name",
+          "step_index",
+          "message",
+          "schema"
+        ],
+        "type": "object"
       },
       "WorkflowStepCompletedEvent": {
         "description": "Payload of the `WorkflowEvent::StepCompleted` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowStepCompletedEvent;\n\nlet payload = WorkflowStepCompletedEvent {\n    step_name: \"deploy\".to_string(),\n    step_index: 1,\n    duration_ms: 5000,\n    output_summary: Some(\"deployed v1.2.3\".to_string()),\n};\nassert_eq!(payload.duration_ms, 5000);\n```",
@@ -4869,6 +4945,157 @@
           }
         ],
         "summary": "Download one artifact produced by a step.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/steps/{step_id}/input": {
+      "post": {
+        "description": "The answer is validated against the schema stored on the step. The caller\nmust be allowed to resolve the step like an approval gate (admin, approver\ngroups, assignee or delegation). The first valid answer wins: the step\ncompletes, the run moves from `AwaitingApproval` back to `Running` and\nresumes, and the handler receives the typed answer.\n\n# Errors\n\n- 400 if the step is not a human input or is not awaiting input\n- 403 if the caller may not answer the step\n- 404 if the run or the step does not exist\n- 409 if the input was already answered or rejected\n- 422 if the answer does not match the schema",
+        "operationId": "submit_human_input",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Step ID",
+            "in": "path",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "description": "Answer matching the JSON schema stored on the step",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Answer recorded, the run resumes"
+          },
+          "400": {
+            "description": "Step is not a human input awaiting input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run or step not found"
+          },
+          "409": {
+            "description": "Input already answered or rejected"
+          },
+          "422": {
+            "description": "Answer does not match the schema"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Answer a human input step with a value matching its JSON schema.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/steps/{step_id}/reject": {
+      "post": {
+        "description": "The step is marked `Rejected` with the reason, the run moves from\n`AwaitingApproval` back to `Running` and resumes: the handler receives a\n`HumanInputRejected` error and decides what happens next. The body is\noptional; without a reason, one naming the caller is recorded.\n\n# Errors\n\n- 400 if the step is not a human input or is not awaiting input\n- 403 if the caller may not resolve the step\n- 404 if the run or the step does not exist\n- 409 if the input was already answered or rejected",
+        "operationId": "reject_human_input",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Step ID",
+            "in": "path",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectHumanInputRequest"
+              }
+            }
+          },
+          "description": "Optional rejection reason",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            },
+            "description": "Input rejected, the run resumes"
+          },
+          "400": {
+            "description": "Step is not a human input awaiting input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run or step not found"
+          },
+          "409": {
+            "description": "Input already answered or rejected"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Reject a human input step.",
         "tags": [
           "runs"
         ]

@@ -38,7 +38,7 @@ use crate::log_sender::StepLogSender;
 pub use agent::AgentExecutor;
 pub use decision::{DecisionExecution, execute_decision};
 pub use http::HttpExecutor;
-pub use interceptor::{ApprovalOutcome, StepInterceptor};
+pub use interceptor::{ApprovalOutcome, HumanInputOutcome, StepInterceptor};
 pub use shell::ShellExecutor;
 pub use step_artifacts::StepArtifacts;
 pub use workflow_output::SubWorkflowOutput;
@@ -527,6 +527,7 @@ pub(crate) fn step_kind_label(kind: &StepKind) -> Cow<'static, str> {
         StepKind::Workflow => Cow::Borrowed("workflow"),
         StepKind::Approval => Cow::Borrowed("approval"),
         StepKind::Decision => Cow::Borrowed("decision"),
+        StepKind::HumanInput => Cow::Borrowed("human_input"),
         StepKind::Custom(name) => Cow::Owned(name.clone()),
     }
 }
