@@ -40,9 +40,9 @@ fi
 export SQLX_OFFLINE=true
 
 if [ "$#" -gt 0 ]; then
-  exec cargo test "$@"
+  cargo test "$@"
+else
+  cargo test -p ironflow-store --features store-postgres,secret-store -- --ignored
+  cargo test -p ironflow-api --features store-postgres --test postgres_schedule_sync \
+    -- --ignored
 fi
-
-cargo test -p ironflow-store --features store-postgres,secret-store -- --ignored
-cargo test -p ironflow-api --features store-postgres --test postgres_schedule_sync \
-  -- --ignored
