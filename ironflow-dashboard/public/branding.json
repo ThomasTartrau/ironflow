@@ -1,6 +1,7 @@
 {
 	"name": "ironflow",
 	"logoUrl": "/logo.svg",
+	"logoDarkUrl": "/logo-dark.svg",
 	"faviconUrl": "/favicon.svg",
 	"copyright": "ironflow",
 	"storagePrefix": "ironflow",

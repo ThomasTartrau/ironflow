@@ -5,10 +5,13 @@ import {
 	useState,
 	type ReactNode,
 } from "react";
+import { useTheme } from "@/app/lib/theme";
 
 interface BrandingConfig {
 	name: string;
 	logoUrl: string;
+	/** Logo shown when the dark theme is active. Falls back to `logoUrl`. */
+	logoDarkUrl: string;
 	faviconUrl: string;
 	copyright: string;
 	storagePrefix: string;
@@ -20,6 +23,7 @@ interface BrandingConfig {
 const DEFAULT_BRANDING: BrandingConfig = {
 	name: "ironflow",
 	logoUrl: "/logo.svg",
+	logoDarkUrl: "/logo-dark.svg",
 	faviconUrl: "/favicon.svg",
 	copyright: "ironflow",
 	storagePrefix: "ironflow",
@@ -32,6 +36,31 @@ const BrandingContext = createContext<BrandingConfig>(DEFAULT_BRANDING);
 
 export function useBranding(): BrandingConfig {
 	return useContext(BrandingContext);
+}
+
+/**
+ * Logo URL for the theme currently applied to the document.
+ */
+export function useBrandLogo(): string {
+	const { logoUrl, logoDarkUrl } = useBranding();
+	const { resolvedTheme } = useTheme();
+	return resolvedTheme === "dark" ? logoDarkUrl : logoUrl;
+}
+
+/**
+ * Merge a `branding.json` payload over the defaults. A custom `logoUrl` without
+ * `logoDarkUrl` is used in both themes, so a custom logo never falls back to the
+ * default dark one.
+ */
+export function mergeBranding(data: Partial<BrandingConfig>): BrandingConfig {
+	return {
+		...DEFAULT_BRANDING,
+		...data,
+		logoDarkUrl:
+			data.logoDarkUrl ?? data.logoUrl ?? DEFAULT_BRANDING.logoDarkUrl,
+		theme: { ...DEFAULT_BRANDING.theme, ...data.theme },
+		darkTheme: { ...DEFAULT_BRANDING.darkTheme, ...data.darkTheme },
+	};
 }
 
 function applyThemeOverrides(
@@ -94,12 +123,7 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
 				return response.json() as Promise<Partial<BrandingConfig>>;
 			})
 			.then((data) => {
-				const merged: BrandingConfig = {
-					...DEFAULT_BRANDING,
-					...data,
-					theme: { ...DEFAULT_BRANDING.theme, ...data.theme },
-					darkTheme: { ...DEFAULT_BRANDING.darkTheme, ...data.darkTheme },
-				};
+				const merged = mergeBranding(data);
 				setConfig(merged);
 				applyThemeOverrides(merged.theme, merged.darkTheme);
 				applyHeadMeta(merged);
