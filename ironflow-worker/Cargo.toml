@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.22.1"
+version = "2.22.2"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -12,8 +12,8 @@ categories = ["asynchronous"]
 
 [dependencies]
 ironflow-core = { version = "3.22.0", path = "../ironflow-core" }
-ironflow-store = { version = "2.38.0", path = "../ironflow-store", default-features = false }
-ironflow-engine = { version = "2.40.0", path = "../ironflow-engine" }
+ironflow-store = { version = "2.38.1", path = "../ironflow-store", default-features = false }
+ironflow-engine = { version = "2.40.1", path = "../ironflow-engine" }
 ironflow-artifacts = { version = "0.1.2", path = "../ironflow-artifacts" }
 
 bytes = "1"
@@ -39,7 +39,7 @@ heartbeat = []
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 rust_decimal = "1"
-ironflow-api = { version = "2.40.0", path = "../ironflow-api" }
-ironflow-auth = { version = "2.4.30", path = "../ironflow-auth" }
-ironflow-store = { version = "2.38.0", path = "../ironflow-store", features = ["store-memory"] }
+ironflow-api = { version = "2.40.1", path = "../ironflow-api" }
+ironflow-auth = { version = "2.4.31", path = "../ironflow-auth" }
+ironflow-store = { version = "2.38.1", path = "../ironflow-store", features = ["store-memory"] }
 schemars = "1"
