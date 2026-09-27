@@ -207,9 +207,7 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/api/v4/projects/42"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string(r#"{"id":42,"name":"demo"}"#),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"id":42,"name":"demo"}"#))
             .mount(&server)
             .await;
 
