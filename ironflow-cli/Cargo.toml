@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-cli"
-version = "0.1.37"
+version = "0.1.38"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -41,6 +41,7 @@ humantime = "2"
 
 [dev-dependencies]
 tempfile = "3"
+serial_test = "3"
 ironflow-api = { path = "../ironflow-api" }
 ironflow-auth = { path = "../ironflow-auth" }
 ironflow-store = { path = "../ironflow-store", features = ["store-memory", "secret-store"] }

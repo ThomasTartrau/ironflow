@@ -289,24 +289,16 @@ volumes:
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
-
+    use serial_test::serial;
     use tempfile::TempDir;
 
     use super::*;
 
-    /// `execute` reads the process-wide current directory, which every test
-    /// in this module mutates via `set_current_dir`. Serialize them so a test
-    /// never observes another test's directory change mid-run.
-    fn current_dir_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
+    // `execute` reads and the tests below set the process-wide current directory,
+    // so these tests must not run concurrently with each other.
     #[test]
+    #[serial]
     fn init_non_interactive_creates_project_structure() {
-        let _guard = current_dir_lock().lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path().join("test-project");
         fs::create_dir_all(&project_dir).unwrap();
@@ -334,8 +326,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn init_refuses_non_empty_dir_without_force() {
-        let _guard = current_dir_lock().lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path().join("existing");
         fs::create_dir_all(&project_dir).unwrap();
