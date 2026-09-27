@@ -1,12 +1,15 @@
 //! [`JobRun`] -- run a command to completion via an ephemeral `batch/v1` Job.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
-use k8s_openapi::api::core::v1::{Container, Pod, PodSpec, PodTemplateSpec, SecurityContext};
+use k8s_openapi::api::core::v1::{
+    Container, Pod, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount,
+};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{Api, DeleteParams, ListParams, LogParams, PostParams, PropagationPolicy};
 use serde::{Deserialize, Serialize};
@@ -15,7 +18,9 @@ use tokio::time::{sleep, timeout};
 
 use crate::KubeClient;
 use crate::error::k8s_external;
-use crate::pod_run::{PvcMount, active_deadline_secs, build_pvc_volumes};
+use crate::pod_run::{
+    PvcMount, active_deadline_secs, build_env_vars, build_pvc_volumes, push_volume,
+};
 
 #[cfg(test)]
 mod tests;
@@ -84,6 +89,8 @@ pub struct JobRun {
     command: String,
     backoff_limit: i32,
     pvcs: Vec<PvcMount>,
+    volumes: Vec<(Volume, VolumeMount)>,
+    envs: BTreeMap<String, String>,
     automount_service_account_token: Option<bool>,
     allow_privilege_escalation: Option<bool>,
     active_deadline_seconds: Option<Duration>,
@@ -105,6 +112,8 @@ impl JobRun {
             command: command.to_string(),
             backoff_limit: 0,
             pvcs: Vec::new(),
+            volumes: Vec::new(),
+            envs: BTreeMap::new(),
             automount_service_account_token: None,
             allow_privilege_escalation: None,
             active_deadline_seconds: None,
@@ -140,6 +149,26 @@ impl JobRun {
             claim: claim.to_string(),
             mount_path: mount_path.to_string(),
         });
+        self
+    }
+
+    /// Add an arbitrary volume and its mount to the Job's container, matching
+    /// [`PodRun::volume`](crate::pod_run::PodRun::volume).
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`PodRun::volume`](crate::pod_run::PodRun::volume).
+    #[must_use]
+    pub fn volume(mut self, volume: Volume, mount: VolumeMount) -> Self {
+        push_volume(&mut self.volumes, volume, mount);
+        self
+    }
+
+    /// Add an environment variable to the Job's container, matching
+    /// [`PodRun::env`](crate::pod_run::PodRun::env).
+    #[must_use]
+    pub fn env(mut self, name: &str, value: &str) -> Self {
+        self.envs.insert(name.to_string(), value.to_string());
         self
     }
 
@@ -247,10 +276,15 @@ impl JobRun {
             });
         }
 
-        let (volumes, volume_mounts) = build_pvc_volumes(&self.pvcs);
+        let (mut volumes, mut volume_mounts) = build_pvc_volumes(&self.pvcs);
+        for (vol, mount) in &self.volumes {
+            volumes.push(vol.clone());
+            volume_mounts.push(mount.clone());
+        }
         if !volume_mounts.is_empty() {
             container.volume_mounts = Some(volume_mounts);
         }
+        container.env = build_env_vars(&self.envs);
 
         // Set on both the JobSpec (bounds the whole Job, retries included) and
         // the pod template (caps each individual pod attempt).
