@@ -1,6 +1,7 @@
 //! [`RunStatus`] FSM — lifecycle states for a workflow run.
 
 use serde::{Deserialize, Serialize};
+use strum::EnumIter;
 
 /// Status of a workflow run, forming a finite state machine.
 ///
@@ -38,7 +39,7 @@ use serde::{Deserialize, Serialize};
 /// assert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));
 /// ```
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     /// Waiting to be picked up by a worker or inline executor.

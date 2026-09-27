@@ -22,8 +22,14 @@ use ironflow_store::postgres::PostgresStore;
 use ironflow_store::store::{LEASE_EXPIRED_ERROR, RunStore};
 use serde_json::json;
 use sqlx::{PgPool, query};
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
+
+/// Serialises the tests of this file. They claim rows globally (every pending run, every expired lease),
+/// so two of them running at once steal each other's rows, and the test
+/// harness runs tests in parallel.
+static SERIAL: Mutex<()> = Mutex::const_new(());
 
 async fn get_store() -> PostgresStore {
     let url = var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -79,6 +85,7 @@ async fn expire_lease(run_id: Uuid) {
 #[tokio::test]
 #[ignore]
 async fn pick_next_pending_attaches_lease() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
     store.create_run(new_run("lease-attach", 3)).await.unwrap();
@@ -97,6 +104,7 @@ async fn pick_next_pending_attaches_lease() {
 #[tokio::test]
 #[ignore]
 async fn concurrent_workers_never_share_a_lease() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
 
@@ -143,6 +151,7 @@ async fn concurrent_workers_never_share_a_lease() {
 #[tokio::test]
 #[ignore]
 async fn concurrent_renew_only_succeeds_for_the_owner() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
     store.create_run(new_run("lease-renew", 3)).await.unwrap();
@@ -178,6 +187,7 @@ async fn concurrent_renew_only_succeeds_for_the_owner() {
 #[tokio::test]
 #[ignore]
 async fn renew_lease_on_unknown_run_is_not_found() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
 
     let err = store
@@ -191,6 +201,7 @@ async fn renew_lease_on_unknown_run_is_not_found() {
 #[tokio::test]
 #[ignore]
 async fn expired_lease_is_requeued_and_picked_by_another_worker() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
     store
@@ -230,6 +241,7 @@ async fn expired_lease_is_requeued_and_picked_by_another_worker() {
 #[tokio::test]
 #[ignore]
 async fn reaper_leaves_valid_lease_alone() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
     store.create_run(new_run("lease-valid", 3)).await.unwrap();
@@ -250,6 +262,7 @@ async fn reaper_leaves_valid_lease_alone() {
 #[tokio::test]
 #[ignore]
 async fn reaper_fails_run_once_retries_are_exhausted() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
     store
@@ -275,6 +288,7 @@ async fn reaper_fails_run_once_retries_are_exhausted() {
 #[tokio::test]
 #[ignore]
 async fn concurrent_reapers_never_recover_the_same_run_twice() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
 
@@ -322,6 +336,7 @@ async fn concurrent_reapers_never_recover_the_same_run_twice() {
 #[tokio::test]
 #[ignore]
 async fn reap_expired_leases_respects_limit() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
 
@@ -342,6 +357,7 @@ async fn reap_expired_leases_respects_limit() {
 #[tokio::test]
 #[ignore]
 async fn terminal_transition_clears_the_lease() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain_pending(&store).await;
     store.create_run(new_run("lease-clear", 3)).await.unwrap();

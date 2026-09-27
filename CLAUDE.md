@@ -35,11 +35,14 @@ cargo doc --no-deps                # Build docs, check for warnings
 cargo doc --no-deps --open         # Build and open in browser
 cargo test -p ironflow-plugin-tests --doc   # Compile every Rust snippet of the Claude Code plugin
 scripts/check-plugin-template.sh            # Scaffold and build the plugin's project template
+scripts/test-postgres.sh                    # PostgreSQL suites (DATABASE_URL, or a throwaway container)
 ```
 
 CI runs `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and
 `cargo test --workspace` with `--exclude ironflow-example-server` and the feature set listed
-in `.claude/rules/openapi-snapshots.md`. Match it before pushing.
+in `.claude/rules/openapi-snapshots.md`, plus `scripts/test-postgres.sh` against a postgres
+service. Match it before pushing. A change to migrations or to the run/step state machines
+is not tested until `scripts/test-postgres.sh` passes: see `.claude/rules/postgres-fsm.md`.
 
 ## Documentation Rules
 
