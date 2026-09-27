@@ -1,14 +1,10 @@
 <div align="center">
 
-```text
-  ___                  __ _
- |_ _|_ __ ___  _ __ / _| | _____      __
-  | || '__/ _ \| '_ \| |_| |/ _ \ \ /\ / /
-  | || | | (_) | | | |  _| | (_) \ V  V /
- |___|_|  \___/|_| |_|_| |_|\___/ \_/\_/
-```
-
-# Ironflow
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/logo/ironflow-logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="design/logo/ironflow-logo-light.svg">
+  <img alt="Ironflow" src="design/logo/ironflow-banner.png" width="560">
+</picture>
 
 [![pipeline status](https://img.shields.io/gitlab/pipeline-status/ThomasTartrau%2Fironflow?branch=main&style=for-the-badge&logo=gitlab&logoColor=white)](https://gitlab.com/ThomasTartrau/ironflow/-/pipelines)
 [![ironflow-core](https://img.shields.io/crates/v/ironflow-core.svg?style=for-the-badge&logo=rust&logoColor=white&label=core)](https://crates.io/crates/ironflow-core)

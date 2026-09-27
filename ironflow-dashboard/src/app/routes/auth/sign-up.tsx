@@ -11,7 +11,7 @@ import { withToast } from "@/app/lib/api-toast";
 import { useAppDispatch } from "@/app/store";
 import { fetchCurrentUser } from "@/app/store/auth-slice";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
-import { useBranding } from "@/app/lib/branding";
+import { useBranding, useBrandLogo } from "@/app/lib/branding";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 
 type FormState =
@@ -28,6 +28,7 @@ export function Component() {
 	const navigate = useNavigate();
 	const dispatch = useAppDispatch();
 	const branding = useBranding();
+	const logoUrl = useBrandLogo();
 	useDocumentMeta({
 		title: "Sign up",
 		description: `Create your ${branding.name} account.`,
@@ -70,7 +71,7 @@ export function Component() {
 			<div className="relative hidden lg:flex flex-col justify-between bg-sidebar border-r border-sidebar-border p-10 overflow-hidden">
 				<div className="relative flex items-center gap-3">
 					<img
-						src={branding.logoUrl}
+						src={logoUrl}
 						alt={branding.name}
 						className="size-9 rounded-[var(--radius-sm)]"
 						width={36}
@@ -101,7 +102,7 @@ export function Component() {
 			<div className="relative flex flex-col p-6 sm:p-10 overflow-hidden">
 				<div className="relative flex items-center gap-3 lg:hidden mb-auto">
 					<img
-						src={branding.logoUrl}
+						src={logoUrl}
 						alt={branding.name}
 						className="size-9 rounded-[var(--radius-sm)]"
 						width={36}

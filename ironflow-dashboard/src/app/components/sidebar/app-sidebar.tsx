@@ -22,7 +22,7 @@ import {
 import { NavMain, type NavItem } from "./nav-main";
 import { NavUser } from "./nav-user";
 import { useAppSelector } from "@/app/store";
-import { useBranding } from "@/app/lib/branding";
+import { useBranding, useBrandLogo } from "@/app/lib/branding";
 
 const baseNavItems: NavItem[] = [
 	{
@@ -106,6 +106,7 @@ const adminNavItem: NavItem = {
 export function AppSidebar() {
 	const auth = useAppSelector((state) => state.auth);
 	const branding = useBranding();
+	const logoUrl = useBrandLogo();
 	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
 
 	const navItems = isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
@@ -115,7 +116,7 @@ export function AppSidebar() {
 			<SidebarHeader className="px-3 py-4">
 				<div className="flex items-center gap-2">
 					<img
-						src={branding.logoUrl}
+						src={logoUrl}
 						alt={branding.name}
 						className="w-7 h-7 rounded-[var(--radius-sm)] shrink-0"
 						width={28}
