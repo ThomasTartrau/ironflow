@@ -60,6 +60,8 @@ impl ServerHandler for IronflowHandler {
             IronflowTools::RejectRunTool(t) => t.run(&self.client).await,
             IronflowTools::RetryRunTool(t) => t.run(&self.client).await,
             IronflowTools::ReplayRunTool(t) => t.run(&self.client).await,
+            IronflowTools::SubmitInputTool(t) => t.run(&self.client).await,
+            IronflowTools::RejectInputTool(t) => t.run(&self.client).await,
             IronflowTools::GetStatsTool(t) => t.run(&self.client).await,
             IronflowTools::GetStatsHistoryTool(t) => t.run(&self.client).await,
             IronflowTools::ListSecretsTool(t) => t.run(&self.client).await,

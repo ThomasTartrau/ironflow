@@ -16,6 +16,7 @@ use crate::routes::audit_logs::ListAuditLogsQuery;
 use crate::routes::events::EventKind;
 use crate::routes::get_run_logs::{GetRunLogsQuery, LogCursorMeta};
 use crate::routes::get_workflow::{SubWorkflowDetail, WorkflowDetailResponse};
+use crate::routes::human_input::RejectHumanInputRequest;
 use crate::routes::list_workflows::{ListWorkflowsQuery, WorkflowSummary};
 use crate::routes::plan_workflow::{
     ConditionResponse, ExecutionPlanResponse, PlanWorkflowRequest, PlannedStepResponse,
@@ -25,16 +26,16 @@ use crate::routes::users::list::ListUsersQuery;
 use crate::routes::{
     api_keys, approval_delegations, approve_run, audit_logs, auth, cancel_run, create_run,
     download_artifact, get_run, get_run_logs, get_stats, get_stats_history, get_workflow,
-    health_check, list_runs, list_workflows, plan_workflow, replay_run, retry_run, run_events,
-    schedules, secrets, users,
+    health_check, human_input, list_runs, list_workflows, plan_workflow, replay_run, retry_run,
+    run_events, schedules, secrets, users,
 };
 use ironflow_engine::notify::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
     Event, LogLineEvent, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent, RunFailedEvent,
     RunStatusChangedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
     UserSignedOutEvent, UserSignedUpEvent, WorkflowAgentStepTokensUsedEvent,
-    WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowStepCompletedEvent,
-    WorkflowStepFailedEvent, WorkflowStepStartedEvent,
+    WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowInputRequiredEvent,
+    WorkflowStepCompletedEvent, WorkflowStepFailedEvent, WorkflowStepStartedEvent,
 };
 use ironflow_store::entities::{
     ApprovalRequirement, AuditLogEntry, LogEntry, LogStream, StepApproval,
@@ -82,6 +83,8 @@ mod with_signup {
             cancel_run::cancel_run,
             approve_run::approve_run,
             approve_run::reject_run,
+            human_input::submit_human_input,
+            human_input::reject_human_input,
             retry_run::retry_run,
             replay_run::replay_run,
             download_artifact::download_artifact,
@@ -151,6 +154,7 @@ mod with_signup {
                 WorkflowDetailResponse,
                 SubWorkflowDetail,
                 PlanWorkflowRequest,
+                RejectHumanInputRequest,
                 ExecutionPlanResponse,
                 PlannedStepResponse,
                 ConditionResponse,
@@ -190,6 +194,7 @@ mod with_signup {
                 WorkflowStepCompletedEvent,
                 WorkflowStepFailedEvent,
                 WorkflowApprovalRequiredEvent,
+                WorkflowInputRequiredEvent,
                 WorkflowAgentStepTokensUsedEvent,
                 AuditLogEntry,
                 ListAuditLogsQuery,
@@ -245,6 +250,8 @@ mod without_signup {
             cancel_run::cancel_run,
             approve_run::approve_run,
             approve_run::reject_run,
+            human_input::submit_human_input,
+            human_input::reject_human_input,
             retry_run::retry_run,
             replay_run::replay_run,
             download_artifact::download_artifact,
@@ -312,6 +319,7 @@ mod without_signup {
                 WorkflowDetailResponse,
                 SubWorkflowDetail,
                 PlanWorkflowRequest,
+                RejectHumanInputRequest,
                 ExecutionPlanResponse,
                 PlannedStepResponse,
                 ConditionResponse,
@@ -350,6 +358,7 @@ mod without_signup {
                 WorkflowStepCompletedEvent,
                 WorkflowStepFailedEvent,
                 WorkflowApprovalRequiredEvent,
+                WorkflowInputRequiredEvent,
                 WorkflowAgentStepTokensUsedEvent,
                 AuditLogEntry,
                 ListAuditLogsQuery,

@@ -20,9 +20,11 @@ use serde_json::{Value, json, to_string};
 use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture};
 
-use crate::config::{ApprovalConfig, HttpConfig, ShellConfig, StepConfig};
+use crate::config::{ApprovalConfig, HttpConfig, HumanInputConfig, ShellConfig, StepConfig};
 use crate::error::EngineError;
-use crate::executor::{ApprovalOutcome, StepArtifacts, StepInterceptor, StepOutput};
+use crate::executor::{
+    ApprovalOutcome, HumanInputOutcome, StepArtifacts, StepInterceptor, StepOutput,
+};
 
 /// Message carried by [`MissingAgentProvider`] failures.
 const MISSING_AGENT_PROVIDER: &str = "TestEngine has no agent provider: call with_mock_agent(...), with_recorded_agent(...) or \
@@ -259,6 +261,9 @@ pub type ShellMock =
 pub type HttpMock =
     Arc<dyn Fn(&HttpConfig) -> Result<MockHttpResponse, OperationError> + Send + Sync>;
 
+/// Closure answering a human input step from its name and config.
+pub type HumanInputMock = Arc<dyn Fn(&str, &HumanInputConfig) -> HumanInputOutcome + Send + Sync>;
+
 /// Closure answering an agent invocation from its config.
 pub type AgentMock = Arc<dyn Fn(&AgentConfig) -> Result<AgentOutput, AgentError> + Send + Sync>;
 
@@ -288,6 +293,7 @@ pub struct MockInterceptor {
     shell: Option<ShellMock>,
     http: Option<HttpMock>,
     approval: Option<ApprovalOutcome>,
+    human_input: Option<HumanInputMock>,
 }
 
 impl MockInterceptor {
@@ -361,6 +367,26 @@ impl MockInterceptor {
         self.approval = Some(outcome);
         self
     }
+
+    /// Answer every human input step with `f`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::testing::{HumanInputOutcome, MockInterceptor};
+    /// use serde_json::json;
+    ///
+    /// let interceptor = MockInterceptor::new()
+    ///     .human_input(|_name, _cfg| HumanInputOutcome::Provided(json!({"answers": ["yes"]})));
+    /// # let _ = interceptor;
+    /// ```
+    pub fn human_input(
+        mut self,
+        f: impl Fn(&str, &HumanInputConfig) -> HumanInputOutcome + Send + Sync + 'static,
+    ) -> Self {
+        self.human_input = Some(Arc::new(f));
+        self
+    }
 }
 
 impl fmt::Debug for MockInterceptor {
@@ -370,6 +396,7 @@ impl fmt::Debug for MockInterceptor {
             .field("shell", &self.shell.is_some())
             .field("http", &self.http.is_some())
             .field("approval", &self.approval)
+            .field("human_input", &self.human_input.is_some())
             .finish()
     }
 }
@@ -398,6 +425,15 @@ impl StepInterceptor for MockInterceptor {
 
     fn intercept_approval(&self, _name: &str, _config: &ApprovalConfig) -> Option<ApprovalOutcome> {
         self.approval.clone()
+    }
+
+    fn intercept_human_input(
+        &self,
+        name: &str,
+        config: &HumanInputConfig,
+        _schema: &Value,
+    ) -> Option<HumanInputOutcome> {
+        self.human_input.as_ref().map(|f| f(name, config))
     }
 }
 
@@ -578,6 +614,30 @@ mod tests {
         );
         assert_eq!(
             MockInterceptor::new().intercept_approval("gate", &config),
+            None
+        );
+    }
+
+    #[test]
+    fn intercept_human_input_returns_the_mocked_answer() {
+        let interceptor = MockInterceptor::new().human_input(|name, cfg| {
+            HumanInputOutcome::Provided(json!({"step": name, "message": cfg.message()}))
+        });
+        let config = HumanInputConfig::new("Answer?");
+        let answer = json!({"step": "clarify", "message": "Answer?"});
+
+        assert_eq!(
+            interceptor.intercept_human_input("clarify", &config, &json!({})),
+            Some(HumanInputOutcome::Provided(answer))
+        );
+    }
+
+    #[test]
+    fn intercept_human_input_declines_without_a_mock() {
+        let config = HumanInputConfig::new("Answer?");
+
+        assert_eq!(
+            MockInterceptor::new().intercept_human_input("clarify", &config, &json!({})),
             None
         );
     }

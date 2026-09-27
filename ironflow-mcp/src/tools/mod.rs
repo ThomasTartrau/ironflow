@@ -3,7 +3,7 @@
 //! Each tool lives in its own file, grouped by domain:
 //! - `workflows/` - list and inspect workflows
 //! - `runs/` - create, list, search, and inspect runs
-//! - `actions/` - cancel, approve, reject, retry, replay runs
+//! - `actions/` - cancel, approve, reject, retry, replay runs; submit and reject human input
 //! - `secrets/` - list, create, update, delete, rotate secrets
 //! - `api_keys/` - list, create, delete API keys
 //! - `users/` - list, create, update role, delete users
@@ -24,7 +24,10 @@ pub mod stats;
 pub mod users;
 pub mod workflows;
 
-pub use actions::{ApproveRunTool, CancelRunTool, RejectRunTool, ReplayRunTool, RetryRunTool};
+pub use actions::{
+    ApproveRunTool, CancelRunTool, RejectInputTool, RejectRunTool, ReplayRunTool, RetryRunTool,
+    SubmitInputTool,
+};
 pub use api_keys::{CreateApiKeyTool, DeleteApiKeyTool, ListApiKeysTool};
 pub use artifacts::DownloadArtifactTool;
 pub use audit_logs::ListAuditLogsTool;
@@ -59,6 +62,8 @@ rust_mcp_sdk::tool_box!(
         RejectRunTool,
         RetryRunTool,
         ReplayRunTool,
+        SubmitInputTool,
+        RejectInputTool,
         GetStatsTool,
         GetStatsHistoryTool,
         ListSecretsTool,
@@ -124,6 +129,24 @@ mod tests {
 
     fn extract_json(result: &CallToolResult) -> Value {
         serde_json::from_str(&extract_text(result)).unwrap()
+    }
+
+    async fn echo_input(
+        Path((id, step_id)): Path<(String, String)>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        Json(json!({
+            "data": { "id": id, "step_id": step_id, "status": "running", "answer": body }
+        }))
+    }
+
+    async fn echo_input_rejection(
+        Path((id, step_id)): Path<(String, String)>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        Json(json!({
+            "data": { "id": id, "step_id": step_id, "status": "running", "reason": body["reason"] }
+        }))
     }
 
     fn api_router() -> Router {
@@ -240,6 +263,11 @@ mod tests {
                 post(|Path(id): Path<String>| async move {
                     Json(json!({ "data": { "id": id, "status": "failed" } }))
                 }),
+            )
+            .route("/api/v1/runs/{id}/steps/{step_id}/input", post(echo_input))
+            .route(
+                "/api/v1/runs/{id}/steps/{step_id}/reject",
+                post(echo_input_rejection),
             )
             .route(
                 "/api/v1/runs/{id}/retry",
@@ -789,6 +817,103 @@ mod tests {
 
         assert_eq!(parsed["id"], "r2");
         assert_eq!(parsed["status"], "running");
+    }
+
+    // ---------------------------------------------------------------
+    // SubmitInputTool / RejectInputTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn submit_input_posts_the_answer_to_the_step() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = SubmitInputTool {
+            run_id: "r2".to_string(),
+            step_id: "s1".to_string(),
+            value: r#"{"answers": ["staging"]}"#.to_string(),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["id"], "r2");
+        assert_eq!(parsed["step_id"], "s1");
+        assert_eq!(parsed["status"], "running");
+        assert_eq!(parsed["answer"], json!({"answers": ["staging"]}));
+    }
+
+    #[tokio::test]
+    async fn submit_input_refuses_an_invalid_json_value() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = SubmitInputTool {
+            run_id: "r2".to_string(),
+            step_id: "s1".to_string(),
+            value: "not json".to_string(),
+        };
+
+        assert!(tool.run(&client).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn submit_input_propagates_api_error() {
+        let app = Router::new().route(
+            "/api/v1/runs/{id}/steps/{step_id}/input",
+            post(|| async {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({
+                        "error": { "code": "INVALID_INPUT", "message": "schema mismatch" }
+                    })),
+                )
+                    .into_response()
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+        let tool = SubmitInputTool {
+            run_id: "r1".to_string(),
+            step_id: "s1".to_string(),
+            value: "{}".to_string(),
+        };
+
+        let err = tool.run(&client).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("schema mismatch"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn reject_input_posts_the_reason() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = RejectInputTool {
+            run_id: "r2".to_string(),
+            step_id: "s1".to_string(),
+            reason: Some("out of scope".to_string()),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["id"], "r2");
+        assert_eq!(parsed["step_id"], "s1");
+        assert_eq!(parsed["reason"], "out of scope");
+    }
+
+    #[tokio::test]
+    async fn reject_input_without_reason_posts_null() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = RejectInputTool {
+            run_id: "r2".to_string(),
+            step_id: "s1".to_string(),
+            reason: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["reason"], Value::Null);
     }
 
     // ---------------------------------------------------------------

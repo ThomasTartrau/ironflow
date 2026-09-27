@@ -252,6 +252,69 @@ Each user votes once (an admin's vote counts as one); a single rejection fails t
 Group membership is managed by admins with `ironflow user set-groups <id> --group
 finance`.
 
+## Human input
+
+`ctx.human_input::<T>()` suspends the run until a human submits an answer matching the
+JSON schema of `T`, then returns the typed `T`. Use it when the handler needs data from a
+person (clarification answers, a choice, a value), not just a yes/no.
+
+```rust,no_run
+use std::time::Duration;
+
+use ironflow_engine::config::{Assignee, EscalationPolicy, HumanInputConfig, ShellConfig};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+struct Answers {
+    answers: Vec<String>,
+}
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let config = HumanInputConfig::new("Answer the clarification questions")
+        .assigned_to(Assignee::user("alice"))
+        .with_deadline(Duration::from_secs(3600))
+        .on_timeout(EscalationPolicy::AutoReject);
+
+    match ctx.human_input::<Answers>("clarify", config).await {
+        Ok(answers) => {
+            let joined = answers.answers.join(", ");
+            ctx.shell("record", ShellConfig::new(&format!("echo '{joined}'")))
+                .await?;
+        }
+        // The person refused: decide here, or propagate to fail the run.
+        Err(EngineError::HumanInputRejected { reason, .. }) => {
+            ctx.shell("notify", ShellConfig::new(&format!("echo '{reason}'")))
+                .await?;
+        }
+        Err(err) => return Err(err),
+    }
+    Ok(())
+}
+```
+
+The step is stored with kind `human_input` and the JSON schema of `T` in its input; the
+run moves to `AwaitingApproval` (the same status as an approval gate). Answer or refuse
+it through the API, the dashboard (a form on the run page), `ironflow run input <run>
+<step> --value '{..}'` / `ironflow run reject-input <run> <step> --reason ..`, or the
+MCP tools `submit_input` / `reject_input`:
+
+| Route | Effect |
+|-------|--------|
+| `POST /api/v1/runs/{id}/steps/{step_id}/input` | Body = the answer. 422 `INVALID_INPUT` if it does not match the schema, 409 if already answered or rejected. The run resumes and `human_input` returns `T` |
+| `POST /api/v1/runs/{id}/steps/{step_id}/reject` | Optional `{"reason": ".."}`. The run resumes and `human_input` returns `EngineError::HumanInputRejected` |
+
+- `POST /api/v1/runs/{id}/approve` refuses (400) a run waiting on a human input.
+- Who may answer follows the approval rules (admin, `requiring` groups, assignee,
+  delegation); the first valid answer wins.
+- `on_timeout(EscalationPolicy::AutoApprove)` panics: there is no value to fill in.
+- An answer is carried over to an automatic retry: the person is not asked twice.
+- While planning, the step is recorded and `T` is built from `{}` (works with
+  `#[serde(default)]`); otherwise the plan stops there with a reason.
+- In tests: `TestEngine::with_mock_human_input(|name, cfg| HumanInputOutcome::Provided(json!(..)))`.
+
 ## Decision
 
 A typed machine decision (System One / Jev): classify, route, score, or yes/no, with a

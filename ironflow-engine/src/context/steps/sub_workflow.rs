@@ -376,6 +376,7 @@ impl WorkflowContext {
             inherited_cost_usd: self.charged_cost_usd(),
             replay_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
+            answered_inputs: HashMap::new(),
             // A child run is created fresh here; it is never itself retried.
             attempt: 1,
             carried_duration_ms: 0,

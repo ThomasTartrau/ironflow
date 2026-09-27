@@ -107,6 +107,7 @@ fn kind_label(kind: &StepKind) -> String {
         StepKind::Workflow => "workflow".to_string(),
         StepKind::Approval => "approval".to_string(),
         StepKind::Decision => "decision".to_string(),
+        StepKind::HumanInput => "human_input".to_string(),
         StepKind::Custom(name) => name.clone(),
     }
 }

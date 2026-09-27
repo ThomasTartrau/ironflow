@@ -43,10 +43,35 @@ impl WorkflowContext {
     /// attempts, so replaying an earlier attempt's steps would skip the whole
     /// workflow. The one exception is an approval already granted in an earlier
     /// attempt -- approval is carried by the run, not by the attempt, so a human
-    /// is never asked to approve the same gate twice.
+    /// is never asked to approve the same gate twice. A human input answered in
+    /// an earlier attempt is carried over the same way, with its answer.
+    ///
+    /// A human input of the current attempt that was rejected is replayed too,
+    /// so the rejection reaches the handler instead of asking again.
     pub(crate) async fn load_replay_steps(&mut self) -> Result<(), EngineError> {
         let steps = self.store.list_steps(self.run_id).await?;
         for step in steps {
+            if step.kind == StepKind::HumanInput {
+                if step.attempt == self.attempt && step.status.state == StepStatus::Rejected {
+                    self.replay_steps.insert(step.position, step);
+                    continue;
+                }
+                if step.attempt != self.attempt
+                    && step.status.state == StepStatus::Completed
+                    && let Some(answer) = step.output.clone()
+                {
+                    let newer = self
+                        .answered_inputs
+                        .get(&step.position)
+                        .is_none_or(|(attempt, _)| *attempt < step.attempt);
+                    if newer {
+                        self.answered_inputs
+                            .insert(step.position, (step.attempt, answer));
+                    }
+                    continue;
+                }
+            }
+
             let dominated = matches!(
                 step.status.state,
                 StepStatus::Completed | StepStatus::Running | StepStatus::AwaitingApproval
@@ -162,6 +187,7 @@ impl WorkflowContext {
             StepKind::Workflow => "workflow",
             StepKind::Approval => "approval",
             StepKind::Decision => "decision",
+            StepKind::HumanInput => "human_input",
             StepKind::Custom(_) => "custom",
         };
         Span::current().record("step.kind", kind_str);

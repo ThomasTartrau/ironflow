@@ -67,6 +67,8 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::MonthlyBudgetExceeded`] | the monthly quota is exhausted for every run |
 /// | [`EngineError::ApprovalRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::ApprovalRejected`] | a human decision, replaying cannot change it |
+/// | [`EngineError::HumanInputRequired`] | not a failure; the run is suspended, not failed |
+/// | [`EngineError::HumanInputRejected`] | a human decision, replaying cannot change it |
 ///
 /// [`EngineError::Operation`] delegates to
 /// [`ironflow_core::retry::is_retryable`], so a 5xx or an agent timeout is
@@ -95,6 +97,8 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::MonthlyBudgetExceeded { .. }
         | EngineError::ApprovalRequired { .. }
         | EngineError::ApprovalRejected { .. }
+        | EngineError::HumanInputRequired { .. }
+        | EngineError::HumanInputRejected { .. }
         // A missing output, an undeclared or unresolvable input or an
         // unconfigured backend are deterministic: replaying the run reproduces
         // them exactly.
@@ -215,6 +219,26 @@ mod tests {
             run_id: Uuid::nil(),
             step_id: Uuid::nil(),
             reason: "not on a Friday".to_string(),
+        };
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn human_input_required_is_not_retryable() {
+        let err = EngineError::HumanInputRequired {
+            run_id: Uuid::nil(),
+            step_id: Uuid::nil(),
+            message: "answer?".to_string(),
+        };
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn human_input_rejected_is_not_retryable() {
+        let err = EngineError::HumanInputRejected {
+            run_id: Uuid::nil(),
+            step_id: Uuid::nil(),
+            reason: "out of scope".to_string(),
         };
         assert!(!is_run_retryable(&err));
     }

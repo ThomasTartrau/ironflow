@@ -1412,6 +1412,33 @@ impl Engine {
                         at: Utc::now(),
                     }));
             }
+            Err(EngineError::HumanInputRequired {
+                run_id: input_run_id,
+                step_id,
+                ref message,
+            }) => {
+                final_status = RunStatus::AwaitingApproval;
+                final_run = self
+                    .store
+                    .update_run_returning(
+                        run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::AwaitingApproval),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                // No `ApprovalRequested` event: a human input is not an approval.
+                info!(
+                    run_id = %input_run_id,
+                    step_id = %step_id,
+                    message = %message,
+                    "run awaiting human input"
+                );
+            }
             Err(EngineError::DelaySleeping {
                 run_id: delay_run_id,
                 step_id,

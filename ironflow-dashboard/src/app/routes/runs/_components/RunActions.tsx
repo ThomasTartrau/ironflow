@@ -14,6 +14,8 @@ import { useAppSelector } from "@/app/store";
 
 interface RunActionsProps {
 	run: RunResponse;
+	/** A human input step is open: it is answered there, not approved. */
+	awaitingInput: boolean;
 }
 
 type PendingAction =
@@ -24,7 +26,7 @@ type PendingAction =
 	| "approving"
 	| "rejecting";
 
-export function RunActions({ run }: RunActionsProps) {
+export function RunActions({ run, awaitingInput }: RunActionsProps) {
 	const revalidator = useRevalidator();
 	const navigate = useNavigate();
 	const [pendingAction, setPendingAction] = useState<PendingAction>("idle");
@@ -40,7 +42,7 @@ export function RunActions({ run }: RunActionsProps) {
 		run.status === "sleeping";
 	const canRetry = run.status === "failed" || run.status === "cancelled";
 	const canReplay = run.status === "completed" || run.status === "failed";
-	const canApprove = run.status === "awaiting_approval";
+	const canApprove = run.status === "awaiting_approval" && !awaitingInput;
 	const isLoading = pendingAction !== "idle";
 
 	const handleAction = (

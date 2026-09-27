@@ -25,7 +25,9 @@ use serde_json::json;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use ironflow_store::models::{Assignee, RunStatus, RunUpdate, Step, StepStatus, StepUpdate};
+use ironflow_store::models::{
+    Assignee, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
+};
 use strum::IntoStaticStr;
 
 use crate::config::{ApprovalConfig, EscalationPolicy, NotificationTarget};
@@ -320,6 +322,13 @@ impl ApprovalEscalator {
         };
 
         let action = match current {
+            // A human input has no value to auto-fill: approving it would resume
+            // the handler without an answer. `HumanInputConfig::on_timeout`
+            // refuses this policy; a stored config that still carries it is
+            // treated as a rejection.
+            EscalationPolicy::AutoApprove if step.kind == StepKind::HumanInput => {
+                self.auto_reject(step).await?
+            }
             EscalationPolicy::AutoApprove => self.auto_approve(step, &reason).await?,
             EscalationPolicy::AutoReject => self.auto_reject(step).await?,
             EscalationPolicy::Notify(targets) => {

@@ -131,6 +131,13 @@ pub enum ApiError {
     /// An upstream service is unreachable or returned an error (502).
     #[error("upstream service unavailable")]
     BadGateway(String),
+
+    /// A submitted value does not match the expected JSON schema (422).
+    ///
+    /// Carries one human-readable message per violation, returned to the
+    /// caller under `details.errors`.
+    #[error("input does not match the expected schema")]
+    InvalidInput(Vec<String>),
 }
 
 impl From<StoreError> for ApiError {
@@ -174,6 +181,7 @@ impl ApiError {
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
             ApiError::BadGateway(_) => "BAD_GATEWAY",
+            ApiError::InvalidInput(_) => "INVALID_INPUT",
         }
     }
 
@@ -207,6 +215,7 @@ impl ApiError {
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::BadGateway(_) => StatusCode::BAD_GATEWAY,
+            ApiError::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
 
@@ -217,6 +226,7 @@ impl ApiError {
     fn details(&self) -> Option<Value> {
         match self {
             ApiError::IdempotencyKeyConflict(run_id) => Some(json!({ "run_id": run_id })),
+            ApiError::InvalidInput(errors) => Some(json!({ "errors": errors })),
             _ => None,
         }
     }
@@ -289,6 +299,17 @@ mod tests {
         let err = ApiError::Conflict("run is already waiting for a retry".to_string());
         assert_eq!(err.status(), StatusCode::CONFLICT);
         assert_eq!(err.code(), "CONFLICT");
+    }
+
+    #[test]
+    fn invalid_input_status_and_details() {
+        let err = ApiError::InvalidInput(vec!["\"answers\" is a required property".to_string()]);
+        assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(err.code(), "INVALID_INPUT");
+        assert_eq!(
+            err.details(),
+            Some(json!({ "errors": ["\"answers\" is a required property"] }))
+        );
     }
 
     #[test]

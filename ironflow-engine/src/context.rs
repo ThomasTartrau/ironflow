@@ -40,6 +40,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use rust_decimal::Decimal;
+use serde_json::Value;
 use uuid::Uuid;
 
 use ironflow_core::decision::DecisionProvider;
@@ -109,6 +110,10 @@ pub struct WorkflowContext {
     /// attempt that granted them. An approval is carried by the run, not by the
     /// attempt, so a retry never asks a human to approve the same gate twice.
     granted_approvals: HashMap<u32, u32>,
+    /// Human inputs answered in an *earlier* attempt, keyed by position:
+    /// (attempt, answer). Like an approval, an answer is carried by the run, so
+    /// a retry never asks a human to answer the same input twice.
+    answered_inputs: HashMap<u32, (u32, Value)>,
     /// Which run attempt this context is executing (1-based).
     attempt: u32,
     /// Wall-clock duration already recorded on the run by previous attempts.

@@ -70,6 +70,16 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
     ),
     (
         "POST",
+        "/api/v1/runs/{id}/steps/{step_id}/input",
+        Coverage::Command(&["run", "input", UUID, UUID, "--value", "{}"]),
+    ),
+    (
+        "POST",
+        "/api/v1/runs/{id}/steps/{step_id}/reject",
+        Coverage::Command(&["run", "reject-input", UUID, UUID]),
+    ),
+    (
+        "POST",
         "/api/v1/runs/{id}/retry",
         Coverage::Command(&["run", "retry", UUID]),
     ),

@@ -127,6 +127,9 @@ impl StepResponse {
             .approval_deadline_at
             .map(|at| (at - Utc::now()).num_seconds().max(0));
         let approvals_required = match (&step.kind, &step.approval_requirement) {
+            // The first valid answer resolves a human input: its requirement
+            // only restricts who may answer.
+            (StepKind::HumanInput, _) => None,
             (_, Some(requirement)) => Some(requirement.required_approvers),
             (StepKind::Approval, None) => Some(1),
             _ => None,
@@ -355,6 +358,22 @@ mod tests {
         assert_eq!(response.approval_requirement, Some(requirement));
         assert_eq!(response.approvals.len(), 1);
         assert_eq!(response.approvals[0].approved_by, "alice");
+    }
+
+    #[tokio::test]
+    async fn a_human_input_step_requires_no_approval_count() {
+        let mut step = gate_with_deadline(3600).await;
+        step.kind = StepKind::HumanInput;
+        step.approval_requirement = Some(ApprovalRequirement {
+            reason: None,
+            required_approvers: 2,
+            approver_groups: vec!["product".to_string()],
+        });
+
+        let response = StepResponse::from(step);
+
+        assert_eq!(response.approvals_required, None);
+        assert!(response.approval_requirement.is_some());
     }
 
     #[tokio::test]

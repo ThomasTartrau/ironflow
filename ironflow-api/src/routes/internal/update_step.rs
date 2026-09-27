@@ -9,7 +9,7 @@ use uuid::Uuid;
 use serde_json::{Value, json};
 
 use ironflow_engine::notify::{ApprovalRequestedEvent, Event, StepCompletedEvent, StepFailedEvent};
-use ironflow_store::entities::{StepStatus, StepUpdate};
+use ironflow_store::entities::{StepKind, StepStatus, StepUpdate};
 
 use crate::error::ApiError;
 use crate::response::ok;
@@ -23,7 +23,9 @@ use crate::state::AppState;
 ///
 /// An update moving the step to `AwaitingApproval` means a gate just opened
 /// on the worker: an [`Event::ApprovalRequested`] carrying the stored approval
-/// requirement is published here, where the audit log subscriber lives.
+/// requirement is published here, where the audit log subscriber lives. A
+/// human input step opens the same way but is not an approval: no event is
+/// published for it.
 pub async fn update_step(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -37,7 +39,10 @@ pub async fn update_step(
 
     state.store.update_step(id, update).await?;
 
-    if opens_gate && let Some(step) = state.store.get_step(id).await? {
+    if opens_gate
+        && let Some(step) = state.store.get_step(id).await?
+        && step.kind != StepKind::HumanInput
+    {
         let message = step
             .input
             .as_ref()
@@ -354,6 +359,104 @@ mod tests {
             payload["requirement"]["approver_groups"],
             json!(["finance"])
         );
+    }
+
+    #[tokio::test]
+    async fn awaiting_approval_update_of_a_human_input_publishes_nothing() {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+        let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        let state = AppState::new(
+            store.clone(),
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        );
+
+        let run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "clarify".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "clarify", 0),
+                name: "clarify".to_string(),
+                kind: StepKind::HumanInput,
+                position: 0,
+                input: Some(json!({"message": "Answer?", "schema": {"type": "object"}})),
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let update = StepUpdate {
+            status: Some(StepStatus::AwaitingApproval),
+            approval_stage: Some(0),
+            ..StepUpdate::default()
+        };
+        let app = create_router(state, RouterConfig::default());
+        let req = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/v1/internal/steps/{}", step.id))
+            .header("authorization", "Bearer test-worker-token")
+            .header("content-type", "application/json")
+            .body(Body::from(to_string(&update).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let stored = store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, StepStatus::AwaitingApproval);
+
+        // Leave the publisher's spawned task time to deliver anything it got.
+        sleep(Duration::from_millis(200)).await;
+        let entries = store
+            .list_audit_logs(
+                AuditLogFilter {
+                    event_type: Some(EventKind::ApprovalRequested),
+                    run_id: Some(run.id),
+                    ..AuditLogFilter::default()
+                },
+                1,
+                10,
+            )
+            .await
+            .unwrap()
+            .items;
+        assert!(entries.is_empty(), "got {entries:?}");
     }
 
     #[tokio::test]

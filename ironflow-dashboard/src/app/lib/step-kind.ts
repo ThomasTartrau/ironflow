@@ -9,6 +9,7 @@ import {
 	GitBranch,
 	ShieldCheck,
 	SkipForward,
+	MessageSquare,
 	type LucideIcon,
 } from "lucide-react";
 
@@ -30,6 +31,8 @@ export function getKindMeta(kind: string): KindMeta {
 			return { icon: GitBranch, color: "indigo", label: "workflow" };
 		case "approval":
 			return { icon: ShieldCheck, color: "rose", label: "approval" };
+		case "human_input":
+			return { icon: MessageSquare, color: "blue", label: "input" };
 		case "skip":
 			return { icon: SkipForward, color: "slate", label: "skipped" };
 		default:

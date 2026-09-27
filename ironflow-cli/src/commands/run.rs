@@ -1,4 +1,5 @@
-//! Run subcommands: create, list, get, cancel, approve, retry, replay, watch, diff.
+//! Run subcommands: create, list, get, cancel, approve, reject, input, reject-input, retry,
+//! replay, watch, plan, diff.
 
 use std::fs;
 use std::io::{Write as _, stdout};
@@ -95,6 +96,29 @@ pub enum RunCommands {
     Reject {
         /// Run UUID.
         id: Uuid,
+    },
+    /// Answer a human input step; the value must match the step's JSON schema.
+    Input {
+        /// Run UUID.
+        id: Uuid,
+        /// Human input step UUID.
+        step_id: Uuid,
+        /// JSON answer (inline string).
+        #[arg(long, group = "value_source")]
+        value: Option<String>,
+        /// Path to a JSON file containing the answer.
+        #[arg(long, group = "value_source")]
+        value_file: Option<PathBuf>,
+    },
+    /// Reject a human input step; the handler receives the rejection.
+    RejectInput {
+        /// Run UUID.
+        id: Uuid,
+        /// Human input step UUID.
+        step_id: Uuid,
+        /// Why the input is refused.
+        #[arg(long)]
+        reason: Option<String>,
     },
     /// Retry a failed run.
     Retry {
@@ -281,6 +305,30 @@ pub async fn execute(
         }
         RunCommands::Reject { id } => {
             let response = client.reject_run(*id).await?;
+            output::print_output(json_mode, &response, || {
+                output::runs_table(slice::from_ref(&response.data))
+            })?;
+        }
+        RunCommands::Input {
+            id,
+            step_id,
+            value,
+            value_file,
+        } => {
+            let answer = resolve_payload(value.as_deref(), value_file.as_ref())?;
+            let response = client.submit_input(*id, *step_id, &answer).await?;
+            output::print_output(json_mode, &response, || {
+                output::runs_table(slice::from_ref(&response.data))
+            })?;
+        }
+        RunCommands::RejectInput {
+            id,
+            step_id,
+            reason,
+        } => {
+            let response = client
+                .reject_input(*id, *step_id, reason.as_deref())
+                .await?;
             output::print_output(json_mode, &response, || {
                 output::runs_table(slice::from_ref(&response.data))
             })?;

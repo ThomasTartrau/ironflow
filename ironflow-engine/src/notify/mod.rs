@@ -51,8 +51,8 @@ pub use event::{
 };
 pub use event_bus::{
     WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
-    WorkflowEventBus, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
-    WorkflowStepStartedEvent,
+    WorkflowEventBus, WorkflowInputRequiredEvent, WorkflowStepCompletedEvent,
+    WorkflowStepFailedEvent, WorkflowStepStartedEvent,
 };
 pub use formatter::{FormattedMessage, MessageFormatter};
 pub use publisher::EventPublisher;
