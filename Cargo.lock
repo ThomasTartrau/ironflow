@@ -3743,7 +3743,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-gitlab"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "async-trait",
  "gitlab",
