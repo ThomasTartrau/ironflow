@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.23](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-mcp-v0.1.22...ironflow-mcp-v0.1.23) - 2026-09-27
+
+### Added
+
+- #109 add HumanInput step to suspend a run and resume it with a typed payload
+
 ## [0.1.22](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-mcp-v0.1.21...ironflow-mcp-v0.1.22) - 2026-09-25
 
 ### Added
