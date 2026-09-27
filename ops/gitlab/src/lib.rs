@@ -62,10 +62,63 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Missing endpoints
+//!
+//! Some GitLab REST routes are not implemented by the `gitlab` crate. This crate fills
+//! those gaps under [`endpoints`], wired the same way as any other endpoint:
+//!
+//! ```no_run
+//! use ironflow_ops_gitlab::GitLab;
+//! use ironflow_ops_gitlab::endpoints::merge_requests::CreateMergeRequestDiscussionNote;
+//! use gitlab::api::common::NameOrId;
+//! use ironflow_core::operation::{OperationContext, NoopSecretResolver};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+//! let gitlab = GitLab::from_context(&ctx).await?;
+//!
+//! let endpoint = CreateMergeRequestDiscussionNote {
+//!     project: NameOrId::from(42),
+//!     merge_request: 7,
+//!     discussion_id: "abcd1234".to_string(),
+//!     body: "Looks good, thanks!".to_string(),
+//! };
+//! let op = gitlab.op(endpoint);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Paginated operations
+//!
+//! Use [`GitLab::paged_op`] to drive a pageable "list ..." endpoint across every page and
+//! get back a single JSON array concatenating every page's results:
+//!
+//! ```no_run
+//! use ironflow_ops_gitlab::GitLab;
+//! use gitlab::api::projects::merge_requests::MergeRequests;
+//! use gitlab::api::Pagination;
+//! use ironflow_core::operation::{OperationContext, NoopSecretResolver};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+//! let gitlab = GitLab::from_context(&ctx).await?;
+//!
+//! let endpoint = MergeRequests::builder().project(42).build()?;
+//! let op = gitlab.paged_op(endpoint, Pagination::All);
+//! // op.execute(..) returns a Value::Array concatenating every page
+//! # Ok(())
+//! # }
+//! ```
 
 mod client;
+pub mod endpoints;
 mod operation;
+mod paged_operation;
 
 pub use client::GitLab;
 pub use gitlab;
 pub use operation::GitLabOp;
+pub use paged_operation::GitLabPagedOp;

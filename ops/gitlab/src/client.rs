@@ -1,10 +1,12 @@
 //! [`GitLab`] client built from an [`OperationContext`]'s secret store.
 
+use gitlab::api::{Endpoint, Pageable, Pagination};
 use gitlab::{AsyncGitlab, GitlabBuilder};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::OperationContext;
 
 use crate::operation::GitLabOp;
+use crate::paged_operation::GitLabPagedOp;
 
 /// A GitLab client that resolves credentials from the workflow's secret store.
 ///
@@ -122,6 +124,36 @@ impl GitLab {
     pub fn op<E>(&self, endpoint: E) -> GitLabOp<E> {
         GitLabOp::new(self.inner.clone(), endpoint)
     }
+
+    /// Wrap a pageable endpoint as a tracked [`Operation`](ironflow_core::operation::Operation)
+    /// that fetches every page requested by `pagination` and concatenates the results.
+    ///
+    /// Unlike [`GitLab::op`], this accepts endpoints that implement
+    /// [`Pageable`](gitlab::api::Pageable) (e.g. any "list ..." endpoint) and drives
+    /// pagination itself, so a single tracked step can retrieve more than one page
+    /// (`GitLabOp` only ever issues a single request and therefore only ever returns
+    /// the first page).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_gitlab::GitLab;
+    /// use gitlab::api::projects::merge_requests::MergeRequests;
+    /// use gitlab::api::Pagination;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+    /// let gitlab = GitLab::new("glpat-xxxx", "gitlab.com").await?;
+    /// let endpoint = MergeRequests::builder().project(42).build().unwrap();
+    /// let op = gitlab.paged_op(endpoint, Pagination::All);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn paged_op<E>(&self, endpoint: E, pagination: Pagination) -> GitLabPagedOp<E>
+    where
+        E: Pageable + Endpoint + Send + Sync,
+    {
+        GitLabPagedOp::new(self.inner.clone(), endpoint, pagination)
+    }
 }
 
 impl std::fmt::Debug for GitLab {
@@ -136,9 +168,31 @@ impl std::fmt::Debug for GitLab {
 mod tests {
     use std::sync::Arc;
 
-    use ironflow_core::operation::{NoopSecretResolver, OperationContext};
+    use gitlab::api::projects::merge_requests::MergeRequests;
+    use ironflow_core::operation::{NoopSecretResolver, Operation, OperationContext};
+    use serde_json::{Value, json};
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    fn ctx() -> OperationContext {
+        OperationContext::new(Arc::new(NoopSecretResolver))
+    }
+
+    async fn insecure_client(server: &MockServer) -> AsyncGitlab {
+        Mock::given(method("GET"))
+            .and(path("/api/v4/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 1})))
+            .mount(server)
+            .await;
+
+        GitlabBuilder::new(server.address().to_string(), "token")
+            .insecure()
+            .build_async()
+            .await
+            .unwrap()
+    }
 
     #[tokio::test]
     #[ignore]
@@ -160,5 +214,80 @@ mod tests {
         let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
         let err = GitLab::from_context(&ctx).await.unwrap_err();
         assert!(err.to_string().contains("gitlab_token"));
+    }
+
+    #[tokio::test]
+    async fn paged_op_all_pagination_concatenates_every_page() {
+        let server = MockServer::start().await;
+        let page1: Vec<Value> = (0..100).map(|i| json!({"iid": i})).collect();
+        let page2: Vec<Value> = vec![
+            json!({"iid": 100}),
+            json!({"iid": 101}),
+            json!({"iid": 102}),
+        ];
+
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42/merge_requests"))
+            .and(query_param("page", "1"))
+            .and(query_param("per_page", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page1))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42/merge_requests"))
+            .and(query_param("page", "2"))
+            .and(query_param("per_page", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page2))
+            .mount(&server)
+            .await;
+
+        let client = insecure_client(&server).await;
+        let gitlab = GitLab { inner: client };
+        let endpoint = MergeRequests::builder().project(42).build().unwrap();
+        let op = gitlab.paged_op(endpoint, Pagination::All);
+
+        let result = op.execute(&ctx()).await.unwrap();
+        let items = result.as_array().unwrap();
+        assert_eq!(items.len(), 103);
+        assert_eq!(items[0]["iid"], 0);
+        assert_eq!(items[100]["iid"], 100);
+        assert_eq!(items[102]["iid"], 102);
+    }
+
+    #[tokio::test]
+    async fn paged_op_limit_truncates_output() {
+        let server = MockServer::start().await;
+        let page: Vec<Value> = vec![json!({"iid": 0})];
+
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42/merge_requests"))
+            .and(query_param("page", "1"))
+            .and(query_param("per_page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page))
+            .mount(&server)
+            .await;
+
+        let client = insecure_client(&server).await;
+        let gitlab = GitLab { inner: client };
+        let endpoint = MergeRequests::builder().project(42).build().unwrap();
+        let op = gitlab.paged_op(endpoint, Pagination::Limit(1));
+
+        let result = op.execute(&ctx()).await.unwrap();
+        let items = result.as_array().unwrap();
+        assert_eq!(items.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn paged_op_kind_and_input() {
+        let server = MockServer::start().await;
+        let client = insecure_client(&server).await;
+        let gitlab = GitLab { inner: client };
+        let endpoint = MergeRequests::builder().project(42).build().unwrap();
+        let op = gitlab.paged_op(endpoint, Pagination::Limit(5));
+
+        assert_eq!(op.kind(), "gitlab");
+        let input = op.input().unwrap();
+        assert_eq!(input["endpoint"], "projects/42/merge_requests");
+        assert_eq!(input["pagination"], "limit(5)");
     }
 }

@@ -3743,13 +3743,14 @@ dependencies = [
 
 [[package]]
 name = "ironflow-ops-gitlab"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "async-trait",
  "gitlab",
  "ironflow-core",
  "serde_json",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
