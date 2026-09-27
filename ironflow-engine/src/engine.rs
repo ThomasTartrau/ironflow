@@ -118,6 +118,28 @@ pub struct EnqueueOptions {
     pub idempotency_key: Option<String>,
 }
 
+/// Where a run resumes once an approval, a human input or an escalation
+/// resolves the gate it was suspended on.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::engine::ExecutionMode;
+///
+/// assert_eq!(ExecutionMode::default(), ExecutionMode::Local);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionMode {
+    /// Resume in-process via [`Engine::resume_run`]. Used by
+    /// [`crate::testing::TestEngine`] and single-process deployments where
+    /// the API also registers the handlers.
+    #[default]
+    Local,
+    /// Requeue the run to `Pending` instead. A worker's `pick_next_pending`
+    /// claims it and finishes it via [`Engine::execute_handler_run`].
+    Workers,
+}
+
 /// The workflow orchestration engine.
 ///
 /// Holds references to the store, agent provider, and a registry of
@@ -170,6 +192,7 @@ pub struct Engine {
     event_bus: Option<WorkflowEventBus>,
     decision_provider: Option<Arc<dyn DecisionProvider>>,
     step_interceptor: Option<Arc<dyn StepInterceptor>>,
+    execution_mode: ExecutionMode,
 }
 
 /// Validate a workflow category path.
@@ -237,6 +260,7 @@ impl Engine {
             event_bus: None,
             decision_provider: None,
             step_interceptor: None,
+            execution_mode: ExecutionMode::default(),
         }
     }
 
@@ -357,6 +381,36 @@ impl Engine {
     /// Returns the workflow guard configuration, if any.
     pub fn guard_config(&self) -> Option<&WorkflowGuardConfig> {
         self.guard_config.as_ref()
+    }
+
+    /// Choose where a run resumes once its approval, human input or
+    /// escalation is resolved.
+    ///
+    /// Defaults to [`ExecutionMode::Local`]. Set [`ExecutionMode::Workers`]
+    /// on an API process that delegates execution to workers.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_engine::engine::{Engine, ExecutionMode};
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// )
+    /// .with_execution_mode(ExecutionMode::Workers);
+    /// ```
+    pub fn with_execution_mode(mut self, mode: ExecutionMode) -> Self {
+        self.execution_mode = mode;
+        self
+    }
+
+    /// Returns where a run resumes once its gate is resolved.
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
     }
 
     /// Attach a log sender for real-time step output streaming.
@@ -1066,11 +1120,12 @@ impl Engine {
         let run_start = Instant::now();
         let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
 
-        // On a retry the whole run is replayed from the start, but an approval a
-        // human already granted must not be asked again.
-        if run.retry_count > 0 {
-            ctx.load_replay_steps().await?;
-        }
+        // Replay the steps already persisted for this run: on a retry, an approval
+        // a human already granted must not be asked again, and a run requeued to
+        // `Pending` after its approval, human input or escalation resolved
+        // (`ExecutionMode::Workers`, `retry_count` unchanged) must not re-run
+        // completed steps. A brand-new run has no steps, so this is a no-op.
+        ctx.load_replay_steps().await?;
 
         let result = handler.execute(&mut ctx).await;
         self.finalize_run(
@@ -1743,6 +1798,18 @@ mod tests {
     fn engine_new_creates_instance() {
         let engine = create_test_engine();
         assert_eq!(engine.handler_names().len(), 0);
+    }
+
+    #[test]
+    fn execution_mode_defaults_to_local() {
+        let engine = create_test_engine();
+        assert_eq!(engine.execution_mode(), ExecutionMode::Local);
+    }
+
+    #[test]
+    fn with_execution_mode_overrides_the_default() {
+        let engine = create_test_engine().with_execution_mode(ExecutionMode::Workers);
+        assert_eq!(engine.execution_mode(), ExecutionMode::Workers);
     }
 
     #[test]

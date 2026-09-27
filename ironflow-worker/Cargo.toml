@@ -39,3 +39,7 @@ heartbeat = []
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 rust_decimal = "1"
+ironflow-api = { version = "2.40.0", path = "../ironflow-api" }
+ironflow-auth = { version = "2.4.30", path = "../ironflow-auth" }
+ironflow-store = { version = "2.38.0", path = "../ironflow-store", features = ["store-memory"] }
+schemars = "1"

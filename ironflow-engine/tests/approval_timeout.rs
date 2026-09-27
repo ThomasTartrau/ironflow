@@ -25,7 +25,7 @@ use ironflow_engine::config::{
     ApprovalConfig, Assignee, EscalationPolicy, NotificationTarget, ShellConfig,
 };
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::engine::Engine;
+use ironflow_engine::engine::{Engine, ExecutionMode};
 use ironflow_engine::escalation::{
     APPROVAL_TIMEOUT_ERROR, ApprovalEscalator, EscalationAction, SYSTEM_TIMEOUT_ACTOR,
 };
@@ -172,6 +172,45 @@ async fn approval_timeout_auto_approve_completes_step_and_resumes_run() {
         assert_eq!(run.status.state, RunStatus::Completed);
         assert!(
             step_names(&store, run_id)
+                .await
+                .contains(&"deploy".to_string())
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn approval_timeout_auto_approve_in_workers_mode_requeues_run() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let config = ApprovalConfig::new("Deploy?")
+            .with_deadline_secs(1)
+            .on_timeout(EscalationPolicy::AutoApprove);
+        let engine = Arc::new(
+            engine_with(store.clone(), config).with_execution_mode(ExecutionMode::Workers),
+        );
+
+        let run_id = suspended_run(&engine).await;
+        let step_id = expire_gate(&store, run_id).await;
+
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action, EscalationAction::Approved);
+        assert_eq!(records[0].step_id, step_id);
+
+        let gate = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(gate.status.state, StepStatus::Completed);
+
+        // Requeued for a worker: nothing resumed the run in this process.
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Pending);
+        assert!(
+            !step_names(&store, run_id)
                 .await
                 .contains(&"deploy".to_string())
         );
