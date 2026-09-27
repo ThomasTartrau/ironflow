@@ -26,6 +26,18 @@ let gitlab = GitLab::from_context_with_host(&ctx, "gitlab.example.com").await?;
 let gitlab = GitLab::new("glpat-xxxx", "gitlab.com").await?;
 ```
 
+```rust
+use ironflow_ops_gitlab::GitLab;
+use gitlab::GitlabBuilder;
+
+// From an already configured AsyncGitlab (e.g. wiremock in tests, custom TLS)
+let client = GitlabBuilder::new("gitlab.example.com", "glpat-xxxx")
+    .insecure()
+    .build_async()
+    .await?;
+let gitlab: GitLab = client.into();
+```
+
 ### Typed queries
 
 Use the re-exported `gitlab::api` builders for type-safe endpoint calls:

@@ -14,9 +14,12 @@ use ironflow_core::operation::Operation;
 use tower::Service;
 use tower::service_fn;
 
-use k8s_openapi::api::core::v1::Toleration;
+use k8s_openapi::api::core::v1::{
+    EmptyDirVolumeSource, PersistentVolumeClaimVolumeSource, Toleration, Volume, VolumeMount,
+};
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 
-use super::{PodRun, ResourceSpec, SecuritySpec, active_deadline_secs};
+use super::{PodRun, ResourceSpec, SecuritySpec, active_deadline_secs, build_env_vars};
 use crate::KubeClient;
 
 /// Wrap a canned `tower` service as a [`KubeClient`].
@@ -388,6 +391,293 @@ async fn build_pod_multiple_pvcs_map_claims() {
     assert_eq!(mounts[0].mount_path, "/workspace");
     assert_eq!(mounts[1].name, volumes[1].name);
     assert_eq!(mounts[1].mount_path, "/cache");
+}
+
+#[tokio::test]
+async fn build_pod_applies_arbitrary_volume_with_sub_path() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc("shared-claim", "/workspace")
+        .volume(
+            Volume {
+                name: "cache-subpath".to_string(),
+                persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                    claim_name: "shared-claim".to_string(),
+                    read_only: None,
+                }),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "cache-subpath".to_string(),
+                mount_path: "/cache".to_string(),
+                sub_path: Some("cache-dir".to_string()),
+                ..Default::default()
+            },
+        )
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    assert_eq!(volumes.len(), 2);
+    assert_eq!(volumes[0].name, "workspace");
+    assert_eq!(volumes[1].name, "cache-subpath");
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts[1].sub_path.as_deref(), Some("cache-dir"));
+    assert_eq!(
+        volumes[0]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap()
+            .claim_name,
+        "shared-claim"
+    );
+    assert_eq!(
+        volumes[1]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap()
+            .claim_name,
+        "shared-claim"
+    );
+}
+
+#[tokio::test]
+async fn build_pod_applies_arbitrary_empty_dir_volume_with_size_limit() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .volume(
+            Volume {
+                name: "scratch".to_string(),
+                empty_dir: Some(EmptyDirVolumeSource {
+                    size_limit: Some(Quantity("1Gi".to_string())),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "scratch".to_string(),
+                mount_path: "/scratch".to_string(),
+                ..Default::default()
+            },
+        )
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(
+        volumes[0]
+            .empty_dir
+            .as_ref()
+            .unwrap()
+            .size_limit
+            .as_ref()
+            .unwrap()
+            .0,
+        "1Gi"
+    );
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts[0].read_only, None);
+}
+
+#[tokio::test]
+async fn build_pod_arbitrary_volume_readonly() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .volume(
+            Volume {
+                name: "scratch".to_string(),
+                empty_dir: Some(EmptyDirVolumeSource::default()),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "scratch".to_string(),
+                mount_path: "/scratch".to_string(),
+                read_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts[0].read_only, Some(true));
+}
+
+#[tokio::test]
+async fn build_pod_arbitrary_volumes_after_pvcs_in_call_order() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc("claim-a", "/a")
+        .volume(
+            Volume {
+                name: "v1".to_string(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "v1".to_string(),
+                mount_path: "/v1".to_string(),
+                ..Default::default()
+            },
+        )
+        .pvc("claim-b", "/b")
+        .volume(
+            Volume {
+                name: "v2".to_string(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "v2".to_string(),
+                mount_path: "/v2".to_string(),
+                ..Default::default()
+            },
+        )
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    let names: Vec<&str> = volumes.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, vec!["workspace", "workspace-1", "v1", "v2"]);
+}
+
+#[tokio::test]
+#[should_panic(expected = "must match")]
+async fn build_pod_volume_panics_on_name_mismatch() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").volume(
+        Volume {
+            name: "a".to_string(),
+            ..Default::default()
+        },
+        VolumeMount {
+            name: "b".to_string(),
+            mount_path: "/x".to_string(),
+            ..Default::default()
+        },
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "reserved for .pvc()")]
+async fn build_pod_volume_panics_on_reserved_name_workspace() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").volume(
+        Volume {
+            name: "workspace".to_string(),
+            ..Default::default()
+        },
+        VolumeMount {
+            name: "workspace".to_string(),
+            mount_path: "/x".to_string(),
+            ..Default::default()
+        },
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "reserved for .pvc()")]
+async fn build_pod_volume_panics_on_reserved_name_workspace_prefix() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").volume(
+        Volume {
+            name: "workspace-custom".to_string(),
+            ..Default::default()
+        },
+        VolumeMount {
+            name: "workspace-custom".to_string(),
+            mount_path: "/x".to_string(),
+            ..Default::default()
+        },
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "already used")]
+async fn build_pod_volume_panics_on_duplicate_name() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .volume(
+            Volume {
+                name: "cache".to_string(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "cache".to_string(),
+                mount_path: "/x".to_string(),
+                ..Default::default()
+            },
+        )
+        .volume(
+            Volume {
+                name: "cache".to_string(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "cache".to_string(),
+                mount_path: "/y".to_string(),
+                ..Default::default()
+            },
+        );
+}
+
+#[tokio::test]
+async fn build_pod_without_volume_has_no_extra_volumes() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc("claim", "/w")
+        .build_pod();
+    assert_eq!(pod.spec.unwrap().volumes.as_ref().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn build_pod_applies_env_var() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .env("RUST_LOG", "debug")
+        .build_pod();
+    let env = pod.spec.unwrap().containers[0].env.clone().unwrap();
+    assert_eq!(env.len(), 1);
+    assert_eq!(env[0].name, "RUST_LOG");
+    assert_eq!(env[0].value, Some("debug".to_string()));
+    assert!(env[0].value_from.is_none());
+}
+
+#[tokio::test]
+async fn build_pod_env_replaces_duplicate_name() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .env("RUST_LOG", "debug")
+        .env("RUST_LOG", "trace")
+        .build_pod();
+    let env = pod.spec.unwrap().containers[0].env.clone().unwrap();
+    assert_eq!(env.len(), 1);
+    assert_eq!(env[0].name, "RUST_LOG");
+    assert_eq!(env[0].value, Some("trace".to_string()));
+}
+
+#[tokio::test]
+async fn build_pod_multiple_envs() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .env("A", "1")
+        .env("B", "2")
+        .build_pod();
+    let env = pod.spec.unwrap().containers[0].env.clone().unwrap();
+    assert_eq!(env.len(), 2);
+    assert_eq!(env[0].name, "A");
+    assert_eq!(env[0].value, Some("1".to_string()));
+    assert_eq!(env[1].name, "B");
+    assert_eq!(env[1].value, Some("2".to_string()));
+}
+
+#[tokio::test]
+async fn build_pod_without_env_has_no_env() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    assert!(pod.spec.unwrap().containers[0].env.is_none());
+}
+
+#[test]
+fn build_env_vars_empty_is_none() {
+    assert!(build_env_vars(&BTreeMap::new()).is_none());
+}
+
+#[test]
+fn build_env_vars_maps_name_value_plain_text() {
+    let mut envs = BTreeMap::new();
+    envs.insert("A".to_string(), "1".to_string());
+    envs.insert("B".to_string(), "2".to_string());
+    let vars = build_env_vars(&envs).unwrap();
+    assert_eq!(vars.len(), 2);
+    assert_eq!(vars[0].name, "A");
+    assert_eq!(vars[0].value, Some("1".to_string()));
+    assert!(vars[0].value_from.is_none());
+    assert_eq!(vars[1].name, "B");
+    assert_eq!(vars[1].value, Some("2".to_string()));
+    assert!(vars[1].value_from.is_none());
 }
 
 #[tokio::test]
