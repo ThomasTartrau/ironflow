@@ -124,6 +124,35 @@ impl GitLab {
     }
 }
 
+/// Build a [`GitLab`] client from an already configured [`AsyncGitlab`].
+///
+/// Use this when [`GitLab::new`] is not flexible enough -- for example to
+/// point the client at an HTTP test double (wiremock) or a self-hosted
+/// instance with custom TLS settings, by building the client directly via
+/// [`GitlabBuilder`] and converting the result.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_ops_gitlab::GitLab;
+/// use gitlab::GitlabBuilder;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // `.insecure()` allows plain HTTP, e.g. against a wiremock server in tests.
+/// let client = GitlabBuilder::new("gitlab.example.com", "glpat-xxxx")
+///     .insecure()
+///     .build_async()
+///     .await?;
+/// let gitlab: GitLab = client.into();
+/// # Ok(())
+/// # }
+/// ```
+impl From<AsyncGitlab> for GitLab {
+    fn from(inner: AsyncGitlab) -> Self {
+        Self { inner }
+    }
+}
+
 impl std::fmt::Debug for GitLab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GitLab")
@@ -136,7 +165,11 @@ impl std::fmt::Debug for GitLab {
 mod tests {
     use std::sync::Arc;
 
-    use ironflow_core::operation::{NoopSecretResolver, OperationContext};
+    use gitlab::GitlabBuilder;
+    use gitlab::api::projects;
+    use ironflow_core::operation::{NoopSecretResolver, Operation, OperationContext};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
 
@@ -160,5 +193,45 @@ mod tests {
         let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
         let err = GitLab::from_context(&ctx).await.unwrap_err();
         assert!(err.to_string().contains("gitlab_token"));
+    }
+
+    #[tokio::test]
+    async fn from_async_gitlab_hits_mock_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/user"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"id":1,"username":"demo"}"#),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"id":42,"name":"demo"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitlabBuilder::new(server.address().to_string(), "test-token")
+            .insecure()
+            .build_async()
+            .await
+            .unwrap();
+        let gitlab: GitLab = client.into();
+
+        let endpoint = projects::Project::builder().project(42).build().unwrap();
+        let op = gitlab.op(endpoint);
+        let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+        let result = op.execute(&ctx).await.unwrap();
+
+        assert_eq!(result["id"], 42);
+        assert_eq!(result["name"], "demo");
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        let paths: Vec<&str> = requests.iter().map(|r| r.url.path()).collect();
+        assert!(paths.contains(&"/api/v4/user"));
+        assert!(paths.contains(&"/api/v4/projects/42"));
     }
 }
