@@ -31,7 +31,7 @@ use ironflow_store::models::{
 use strum::IntoStaticStr;
 
 use crate::config::{ApprovalConfig, EscalationPolicy, NotificationTarget};
-use crate::engine::Engine;
+use crate::engine::{Engine, ExecutionMode};
 use crate::error::EngineError;
 use crate::notify::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, Event, RetryConfig,
@@ -400,9 +400,11 @@ impl ApprovalEscalator {
                 },
             )
             .await?;
-        store
-            .update_run_status(step.run_id, RunStatus::Running)
-            .await?;
+        let resume_status = match self.engine.execution_mode() {
+            ExecutionMode::Local => RunStatus::Running,
+            ExecutionMode::Workers => RunStatus::Pending,
+        };
+        store.update_run_status(step.run_id, resume_status).await?;
 
         self.engine
             .event_publisher()
@@ -419,10 +421,14 @@ impl ApprovalEscalator {
                 at: now,
             }));
 
-        // The state change already happened: a failed resume is reported, not
+        // Under `ExecutionMode::Workers` the run is already `Pending` and a
+        // worker picks it up. Under `ExecutionMode::Local` it resumes here; the
+        // state change already happened, so a failed resume is reported, not
         // rolled back. The run sits in `Running` without a lease, exactly like
         // the human-approval path.
-        if let Err(err) = self.engine.resume_run(step.run_id).await {
+        if matches!(self.engine.execution_mode(), ExecutionMode::Local)
+            && let Err(err) = self.engine.resume_run(step.run_id).await
+        {
             error!(
                 run_id = %step.run_id,
                 error = %err,

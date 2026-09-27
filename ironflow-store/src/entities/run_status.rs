@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// - `Pending` -> `Running`, `Cancelled`
 /// - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`, `Sleeping`
 /// - `Retrying` -> `Running`, `Failed`, `Cancelled`
-/// - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
+/// - `AwaitingApproval` -> `Running`, `Pending` (requeued for a worker under `ExecutionMode::Workers`), `Failed`, `Cancelled`
 /// - `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`
 ///
 /// Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 /// // A run whose worker lease expired goes back to the queue:
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 /// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+/// assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Pending));
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
 /// assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
 /// assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));
@@ -84,6 +85,7 @@ impl RunStatus {
                 | (RunStatus::Retrying, RunStatus::Failed)
                 | (RunStatus::Retrying, RunStatus::Cancelled)
                 | (RunStatus::AwaitingApproval, RunStatus::Running)
+                | (RunStatus::AwaitingApproval, RunStatus::Pending)
                 | (RunStatus::AwaitingApproval, RunStatus::Failed)
                 | (RunStatus::AwaitingApproval, RunStatus::Cancelled)
                 | (RunStatus::Sleeping, RunStatus::Pending)
@@ -210,6 +212,11 @@ mod tests {
     #[test]
     fn awaiting_approval_can_transition_to_running() {
         assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+    }
+
+    #[test]
+    fn awaiting_approval_can_transition_to_pending() {
+        assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Pending));
     }
 
     #[test]

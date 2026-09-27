@@ -16,7 +16,10 @@ the answer back as a Rust type.
    stream.
 4. A person posts an answer to
    `POST /api/v1/runs/:id/steps/:step_id/input`. The API validates it against the
-   stored schema, completes the step and resumes the run.
+   stored schema, completes the step and resumes the run: in the API process
+   under `ExecutionMode::Local` (the default), or by requeuing it to `Pending`
+   for a worker under `ExecutionMode::Workers` (see
+   [execution mode](engine-worker.md#execution-mode)).
 5. The handler is replayed: completed steps come from cache and
    `human_input` returns the answer, deserialized into `T`.
 

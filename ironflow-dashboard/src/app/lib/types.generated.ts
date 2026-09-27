@@ -2638,7 +2638,7 @@ export interface components {
 		 *     - `Pending` -> `Running`, `Cancelled`
 		 *     - `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`, `Sleeping`
 		 *     - `Retrying` -> `Running`, `Failed`, `Cancelled`
-		 *     - `AwaitingApproval` -> `Running`, `Failed`, `Cancelled`
+		 *     - `AwaitingApproval` -> `Running`, `Pending` (requeued for a worker under `ExecutionMode::Workers`), `Failed`, `Cancelled`
 		 *     - `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`
 		 *
 		 *     Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
@@ -2657,6 +2657,7 @@ export interface components {
 		 *     // A run whose worker lease expired goes back to the queue:
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));
+		 *     assert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
 		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));

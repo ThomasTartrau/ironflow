@@ -8,6 +8,7 @@ use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::config::HUMAN_INPUT_SCHEMA_KEY;
+use ironflow_engine::engine::ExecutionMode;
 use ironflow_store::models::{
     Run, RunStatus, Step, StepApproval, StepKind, StepStatus, StepUpdate,
 };
@@ -111,7 +112,7 @@ pub async fn submit_human_input(
         .await?;
     state
         .store
-        .update_run_status(id, RunStatus::Running)
+        .update_run_status(id, resume_status(&state))
         .await?;
 
     resume_in_background(&state, id);
@@ -183,7 +184,7 @@ pub async fn reject_human_input(
         .await?;
     state
         .store
-        .update_run_status(id, RunStatus::Running)
+        .update_run_status(id, resume_status(&state))
         .await?;
 
     resume_in_background(&state, id);
@@ -254,8 +255,22 @@ fn validate_answer(input: Option<&Value>, answer: &Value) -> Result<(), ApiError
     }
 }
 
-/// Resume the run in the background; the handler replays up to the input.
+/// The status a run moves to once its input is answered or rejected:
+/// `Running` to resume it here, `Pending` to requeue it for a worker.
+fn resume_status(state: &AppState) -> RunStatus {
+    match state.engine.execution_mode() {
+        ExecutionMode::Local => RunStatus::Running,
+        ExecutionMode::Workers => RunStatus::Pending,
+    }
+}
+
+/// Under [`ExecutionMode::Local`], resume the run in the background; the
+/// handler replays up to the input. Under [`ExecutionMode::Workers`], do
+/// nothing: the run is already `Pending` and a worker picks it up.
 fn resume_in_background(state: &AppState, id: Uuid) {
+    if !matches!(state.engine.execution_mode(), ExecutionMode::Local) {
+        return;
+    }
     let engine = state.engine.clone();
     spawn(async move {
         if let Err(err) = engine.resume_run(id).await {
@@ -664,6 +679,66 @@ mod tests {
         assert_eq!(step.status.state, StepStatus::Rejected);
         assert_eq!(step.error.as_deref(), Some("out of scope"));
         assert!(step.approval_deadline_at.is_none());
+    }
+
+    /// A run awaiting a human input assigned to a member, on an engine that
+    /// requeues resumed runs for a worker.
+    async fn workers_setup() -> (Arc<InMemoryStore>, AppState, Uuid, Uuid, String) {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = member(&store, "alice").await;
+        let run_id = awaiting_run(&store).await;
+        let assignee = Some(Assignee::user(&alice.username));
+        let step_id = awaiting_step(&store, run_id, StepKind::HumanInput, assignee).await;
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let engine =
+            Engine::new(store.clone(), provider).with_execution_mode(ExecutionMode::Workers);
+        let jwt_config = Arc::new(JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        let state = AppState::new(
+            store.clone(),
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        );
+        let auth = member_header(&alice, &state);
+        (store, state, run_id, step_id, auth)
+    }
+
+    #[tokio::test]
+    async fn human_input_submit_in_workers_mode_requeues_the_run() {
+        let (store, state, run_id, step_id, auth) = workers_setup().await;
+
+        let answer = json!({"answers": ["ok"]});
+        let (status, body) = call(&state, &auth, run_id, step_id, "input", Some(answer)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["status"], "pending");
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Pending);
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn human_input_reject_in_workers_mode_requeues_the_run() {
+        let (store, state, run_id, step_id, auth) = workers_setup().await;
+
+        let body = json!({"reason": "out of scope"});
+        let (status, resp) = call(&state, &auth, run_id, step_id, "reject", Some(body)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(resp["data"]["status"], "pending");
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Pending);
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Rejected);
     }
 
     #[tokio::test]

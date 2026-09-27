@@ -6,6 +6,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use ironflow_auth::extractor::{AuthMethod, Authenticated};
+use ironflow_engine::engine::ExecutionMode;
 use ironflow_engine::notify::{ApprovalGrantedEvent, ApprovalRejectedEvent, Event};
 use ironflow_store::models::{
     Assignee, Run, RunStatus, Step, StepApproval, StepKind, StepStatus, StepUpdate,
@@ -201,6 +202,12 @@ fn caller_name(auth: &Authenticated) -> String {
     }
 }
 
+/// Approve or reject the gate a run is suspended on.
+///
+/// A rejection fails the run in every mode: there is nothing to resume. An
+/// approval resumes it according to the engine's [`ExecutionMode`]:
+/// `Local` moves the run to `Running` and resumes it in this process,
+/// `Workers` requeues it to `Pending` for a worker to pick up.
 async fn resolve_approval(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -305,7 +312,15 @@ async fn resolve_approval(
         state.store.update_step(step.id, update).await?;
     }
 
-    state.store.update_run_status(id, target_status).await?;
+    let next_status = if target_status == RunStatus::Running {
+        match state.engine.execution_mode() {
+            ExecutionMode::Local => RunStatus::Running,
+            ExecutionMode::Workers => RunStatus::Pending,
+        }
+    } else {
+        target_status
+    };
+    state.store.update_run_status(id, next_status).await?;
 
     match granted {
         Some(event) => publisher.publish(Event::ApprovalGranted(event)),
@@ -318,11 +333,14 @@ async fn resolve_approval(
         })),
     }
 
-    // On approval, resume the run in the background.
-    // The handler is re-executed with step replay: completed steps
-    // return cached output, and execution continues from where it
-    // stopped.
-    if target_status == RunStatus::Running {
+    // On approval under `ExecutionMode::Local`, resume the run in the
+    // background. The handler is re-executed with step replay: completed
+    // steps return cached output, and execution continues from where it
+    // stopped. Under `ExecutionMode::Workers` the run is already `Pending`
+    // and a worker picks it up, so nothing runs in this process.
+    if target_status == RunStatus::Running
+        && matches!(state.engine.execution_mode(), ExecutionMode::Local)
+    {
         let engine = state.engine.clone();
         spawn(async move {
             if let Err(err) = engine.resume_run(id).await {
@@ -453,6 +471,88 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert_eq!(json_val["data"]["status"], "running");
+    }
+
+    fn workers_state(store: Arc<InMemoryStore>) -> AppState {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let engine = Arc::new(
+            Engine::new(store.clone(), provider).with_execution_mode(ExecutionMode::Workers),
+        );
+        let jwt_config = Arc::new(JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        AppState::new(
+            store,
+            engine,
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        )
+    }
+
+    #[tokio::test]
+    async fn approve_in_workers_mode_requeues_run_to_pending() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+
+        let state = workers_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/approve", post(approve_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/approve", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::OK);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"], "pending");
+
+        let stored = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, RunStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn reject_in_workers_mode_still_fails_run() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+
+        let state = workers_state(store.clone());
+        let auth_header = make_auth_header(&state);
+        let app = Router::new()
+            .route("/{id}/reject", post(reject_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/reject", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::OK);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["status"], "failed");
+
+        let stored = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, RunStatus::Failed);
     }
 
     #[tokio::test]

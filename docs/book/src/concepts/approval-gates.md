@@ -8,7 +8,7 @@ An approval gate pauses a workflow run until a human approves or rejects it. Thi
 2. The run transitions to `AwaitingApproval`
 3. The worker releases the run and moves on to other work
 4. A human calls `POST /api/v1/runs/:id/approve` or `POST /api/v1/runs/:id/reject`
-5. On approval, the run is requeued. A worker picks it up, replays completed steps from cache, skips the approved gate, and continues execution
+5. On approval, the run resumes. Under [`ExecutionMode::Workers`](engine-worker.md#execution-mode) it is requeued to `Pending`: a worker picks it up, replays completed steps from cache, skips the approved gate, and continues execution. Under `ExecutionMode::Local` (the default) the API process resumes it the same way itself
 6. On rejection, the run transitions to `Failed`
 
 If the gate carries an SLA deadline and nobody answers in time, step 4 is
@@ -69,7 +69,7 @@ auto-rejects.
 
 | Policy | What it does when the deadline fires |
 |--------|--------------------------------------|
-| `AutoApprove` | Completes the gate with `approved_by: "system:timeout"` and resumes the run. |
+| `AutoApprove` | Completes the gate with `approved_by: "system:timeout"` and resumes the run: in the server under `ExecutionMode::Local`, by requeuing it for a worker under `ExecutionMode::Workers` ([execution mode](engine-worker.md#execution-mode)). |
 | `AutoReject` | Fails the step and the run with `approval timeout`. The default. |
 | `Notify(targets)` | Posts the escalation event to each target, leaves the gate open, restarts the timer. |
 | `Escalate(Assignee)` | Reassigns the gate to another user or group, leaves it open, restarts the timer. |
@@ -313,4 +313,4 @@ Group names are 1 to 64 characters from `[A-Za-z0-9_.-]`, at most 50 per user.
 
 ## Step replay
 
-After an approval, the engine re-executes the handler from the beginning. Completed steps return their cached output immediately -- they do not re-run. The approved gate is skipped, and execution resumes with the next step.
+After an approval, the engine re-executes the handler from the beginning: in the API process under `ExecutionMode::Local`, on the worker that picks up the requeued run under `ExecutionMode::Workers` (see [execution mode](engine-worker.md#execution-mode)). Completed steps return their cached output immediately -- they do not re-run. The approved gate is skipped, and execution resumes with the next step.

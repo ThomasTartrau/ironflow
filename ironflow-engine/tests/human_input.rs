@@ -152,6 +152,30 @@ impl WorkflowHandler for ClarifyOptions {
     }
 }
 
+/// Runs a step, asks for [`Answers`] and records them.
+///
+/// Registered under [`WORKFLOW`] so [`start`] drives it.
+struct ClarifyWithBefore {
+    seen: Seen,
+}
+
+impl WorkflowHandler for ClarifyWithBefore {
+    fn name(&self) -> &str {
+        WORKFLOW
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("before", ShellConfig::new("true")).await?;
+            let answers: Answers = ctx
+                .human_input("clarify", HumanInputConfig::new("Answer?"))
+                .await?;
+            self.seen.lock().expect("seen lock").extend(answers.answers);
+            Ok(())
+        })
+    }
+}
+
 fn provider() -> Arc<dyn AgentProvider> {
     Arc::new(RecordReplayProvider::replay(
         ClaudeCodeProvider::new(),
@@ -299,6 +323,46 @@ async fn human_input_resumes_with_the_typed_answer() {
         let run = store.get_run(run_id).await.unwrap().unwrap();
         assert_eq!(run.status.state, RunStatus::Completed);
         assert_eq!(seen(&seen_answers), vec!["staging", "eu-west"]);
+        assert_eq!(input_steps(&store, run_id).await.len(), 1);
+    })
+    .await
+    .expect("test timed out");
+}
+
+/// A run requeued after its input was answered keeps `retry_count == 0`, and
+/// a worker picks it up through `execute_handler_run`, not `resume_run`: the
+/// step before the input must replay from cache and the answer must be found.
+#[tokio::test]
+async fn human_input_execute_handler_run_replays_answer_without_rerunning_prior_steps() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let seen_answers = Seen::default();
+        let handler = ClarifyWithBefore {
+            seen: seen_answers.clone(),
+        };
+        let engine = engine_with(store.clone(), handler);
+
+        let run_id = start(&engine, &store, 0).await;
+        let step = input_step(&store, run_id).await;
+        answer(&store, run_id, step.id, json!({"answers": ["ok"]})).await;
+
+        engine
+            .execute_handler_run(run_id)
+            .await
+            .expect("resume via worker pickup");
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Completed);
+        assert_eq!(run.retry_count, 0);
+        assert_eq!(seen(&seen_answers), vec!["ok"]);
+        let before = store
+            .list_steps(run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|s| s.name == "before")
+            .count();
+        assert_eq!(before, 1);
         assert_eq!(input_steps(&store, run_id).await.len(), 1);
     })
     .await

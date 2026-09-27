@@ -355,6 +355,7 @@ impl PostgresStore {
             (RunStatus::Retrying, RunStatus::Cancelled) => Ok("cancel_requested"),
             (RunStatus::Running, RunStatus::AwaitingApproval) => Ok("approval_requested"),
             (RunStatus::AwaitingApproval, RunStatus::Running) => Ok("approved"),
+            (RunStatus::AwaitingApproval, RunStatus::Pending) => Ok("requeued_for_worker"),
             (RunStatus::AwaitingApproval, RunStatus::Failed) => Ok("rejected"),
             (RunStatus::AwaitingApproval, RunStatus::Cancelled) => Ok("cancel_requested"),
             (RunStatus::Running, RunStatus::Sleeping) => Ok("delay_started"),

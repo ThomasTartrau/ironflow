@@ -11,6 +11,25 @@ engine.register(Box::new(MyWorkflow))?;
 
 The Engine is used by both the API server (for metadata and describe endpoints) and the Worker (for execution).
 
+## Execution mode
+
+A run suspended on an approval, a human input or an escalation resumes once the
+gate is resolved. `Engine::with_execution_mode` decides where that happens:
+
+- `ExecutionMode::Local` (default): the API process moves the run to `Running`
+  and calls `Engine::resume_run` itself. Use it for single-process deployments
+  where the API also registers the handlers. `TestEngine` always resumes this way.
+- `ExecutionMode::Workers`: the API moves the run back to `Pending`. A worker
+  claims it through `pick_next_pending` and finishes it with
+  `Engine::execute_handler_run`, replaying the steps that already completed.
+  Use it when the API runs without the workspace, tools or handlers the workflow
+  needs.
+
+```rust,ignore
+let engine = Engine::new(store, provider)
+    .with_execution_mode(ExecutionMode::Workers);
+```
+
 ## Worker
 
 A Worker is a background process that:

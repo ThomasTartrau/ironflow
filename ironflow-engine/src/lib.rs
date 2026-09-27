@@ -84,7 +84,7 @@ pub mod prelude {
         HumanInputConfig, NotificationTarget, ShellConfig, StepConfig,
     };
     pub use crate::context::WorkflowContext;
-    pub use crate::engine::{Engine, EnqueueOptions, WorkflowResult};
+    pub use crate::engine::{Engine, EnqueueOptions, ExecutionMode, WorkflowResult};
     pub use crate::error::EngineError;
     pub use crate::executor::StepResult;
     pub use crate::fsm::{RunEvent, RunFsm, StepEvent, StepFsm};
