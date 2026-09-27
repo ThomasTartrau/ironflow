@@ -23,8 +23,14 @@ use ironflow_store::entities::{
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::store::RunStore;
 use serde_json::json;
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use uuid::Uuid;
+
+/// Serialises the tests of this file. They claim rows globally (every due approval deadline),
+/// so two of them running at once steal each other's rows, and the test
+/// harness runs tests in parallel.
+static SERIAL: Mutex<()> = Mutex::const_new(());
 
 async fn get_store() -> PostgresStore {
     let url = var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -120,6 +126,7 @@ async fn arm_expired_gates(store: &PostgresStore, count: usize) -> HashSet<Uuid>
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn deadline_claim_is_exclusive_across_concurrent_claimers() {
+    let _serial = SERIAL.lock().await;
     let store = Arc::new(get_store().await);
     drain(&store).await;
 
@@ -158,6 +165,7 @@ async fn deadline_claim_is_exclusive_across_concurrent_claimers() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL"]
 async fn deadline_claim_clears_the_timer_in_postgres() {
+    let _serial = SERIAL.lock().await;
     let store = get_store().await;
     drain(&store).await;
 

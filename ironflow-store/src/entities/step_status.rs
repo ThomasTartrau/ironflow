@@ -1,6 +1,7 @@
 //! [`StepStatus`] — lifecycle states for a workflow step.
 
 use serde::{Deserialize, Serialize};
+use strum::EnumIter;
 
 /// Status of an individual step within a run.
 ///
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// assert!(StepStatus::Completed.is_terminal());
 /// ```
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     /// Waiting to execute.
