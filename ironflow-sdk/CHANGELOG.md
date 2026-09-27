@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.31](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.30...ironflow-sdk-v0.1.31) - 2026-09-27
+
+### Fixed
+
+- #110 resume approval, human input and escalation on a worker instead of the API process
+
 ## [0.1.30](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.29...ironflow-sdk-v0.1.30) - 2026-09-27
 
 ### Added
