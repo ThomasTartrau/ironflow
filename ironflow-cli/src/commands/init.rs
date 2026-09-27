@@ -289,11 +289,15 @@ volumes:
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
     use tempfile::TempDir;
 
     use super::*;
 
+    // `execute` reads and the tests below set the process-wide current directory,
+    // so these tests must not run concurrently with each other.
     #[test]
+    #[serial]
     fn init_non_interactive_creates_project_structure() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path().join("test-project");
@@ -322,6 +326,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn init_refuses_non_empty_dir_without_force() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path().join("existing");

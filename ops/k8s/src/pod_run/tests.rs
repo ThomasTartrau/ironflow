@@ -1,6 +1,7 @@
 //! Tests for [`PodRun`](super::PodRun): pure `build_pod` manifest assertions
 //! and transport-mocked `run()` phase/cleanup behaviour.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -67,6 +68,47 @@ async fn build_pod_applies_node_selector() {
         .build_pod();
     let ns = pod.spec.unwrap().node_selector.unwrap();
     assert_eq!(ns.get("disktype").map(String::as_str), Some("ssd"));
+}
+
+#[tokio::test]
+async fn build_pod_applies_labels() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .label("run_id", "abc123")
+        .label("team", "platform")
+        .build_pod();
+    let labels = pod.metadata.labels.unwrap();
+    assert_eq!(labels.get("run_id").map(String::as_str), Some("abc123"));
+    assert_eq!(labels.get("team").map(String::as_str), Some("platform"));
+}
+
+#[tokio::test]
+async fn build_pod_without_label_has_no_labels() {
+    // Opt-in strict: the field stays absent unless the builder is called.
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    assert!(pod.metadata.labels.is_none());
+}
+
+#[tokio::test]
+async fn build_pod_label_last_call_wins() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .label("run_id", "first")
+        .label("run_id", "second")
+        .build_pod();
+    let labels = pod.metadata.labels.unwrap();
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels.get("run_id").map(String::as_str), Some("second"));
+}
+
+#[tokio::test]
+async fn build_pod_labels_replaces_whole_map() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .label("old", "value")
+        .labels(BTreeMap::from([("new".to_string(), "value".to_string())]))
+        .build_pod();
+    let labels = pod.metadata.labels.unwrap();
+    assert_eq!(labels.len(), 1);
+    assert!(!labels.contains_key("old"));
+    assert_eq!(labels.get("new").map(String::as_str), Some("value"));
 }
 
 #[tokio::test]

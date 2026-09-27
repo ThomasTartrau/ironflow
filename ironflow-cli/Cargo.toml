@@ -41,6 +41,7 @@ humantime = "2"
 
 [dev-dependencies]
 tempfile = "3"
+serial_test = "3"
 ironflow-api = { path = "../ironflow-api" }
 ironflow-auth = { path = "../ironflow-auth" }
 ironflow-store = { path = "../ironflow-store", features = ["store-memory", "secret-store"] }

@@ -122,6 +122,7 @@ pub struct PodRun {
     command: String,
     working_dir: Option<String>,
     node_selector: BTreeMap<String, String>,
+    labels: BTreeMap<String, String>,
     tolerations: Vec<Toleration>,
     image_pull_secret: Option<String>,
     pvcs: Vec<PvcMount>,
@@ -148,6 +149,7 @@ impl PodRun {
             command: command.to_string(),
             working_dir: None,
             node_selector: BTreeMap::new(),
+            labels: BTreeMap::new(),
             tolerations: Vec::new(),
             image_pull_secret: None,
             pvcs: Vec::new(),
@@ -180,6 +182,43 @@ impl PodRun {
     pub fn node_selector(mut self, key: &str, value: &str) -> Self {
         self.node_selector
             .insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Add a label to `metadata.labels` on the pod. Repeatable: each call
+    /// inserts one key, and calling it again with the same key overwrites the
+    /// previous value (last call wins).
+    ///
+    /// Opt-in: if this builder is never called, `metadata.labels` is left
+    /// absent -- unchanged behaviour for existing callers.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::pod_run::PodRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = PodRun::new(kube, "run-tests", "rust:1.94", "cargo test")
+    ///     .label("run_id", "abc123")
+    ///     .label("team", "platform");
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn label(mut self, key: &str, value: &str) -> Self {
+        self.labels.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Replace the whole set of pod labels at once.
+    ///
+    /// Unlike [`label`](Self::label), which is additive/insert-only, this
+    /// overwrites every previously set label. Passing an empty map clears all
+    /// labels set so far.
+    #[must_use]
+    pub fn labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        self.labels = labels;
         self
     }
 
@@ -365,6 +404,7 @@ impl PodRun {
         }
 
         let node_selector = (!self.node_selector.is_empty()).then(|| self.node_selector.clone());
+        let labels = (!self.labels.is_empty()).then(|| self.labels.clone());
         let tolerations = (!self.tolerations.is_empty()).then(|| self.tolerations.clone());
 
         let image_pull_secrets = self
@@ -382,6 +422,7 @@ impl PodRun {
             metadata: ObjectMeta {
                 name: Some(self.name.clone()),
                 namespace: Some(self.namespace.clone()),
+                labels,
                 ..Default::default()
             },
             spec: Some(PodSpec {
