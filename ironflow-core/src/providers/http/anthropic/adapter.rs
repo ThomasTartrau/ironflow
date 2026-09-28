@@ -219,9 +219,7 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             Some(text_parts.join(""))
         };
 
-        if use_output_config_format
-            && let Some(ref t) = text
-        {
+        if use_output_config_format && let Some(ref t) = text {
             structured_value = Some(serde_json::from_str(t).unwrap_or(json!({})));
         }
 
