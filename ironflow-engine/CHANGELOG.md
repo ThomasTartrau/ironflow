@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.41.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.40.4...ironflow-engine-v2.41.0) - 2026-09-28
+
+### Added
+
+- #125 #126 #127 Claude profiles, pod/job conventions, and release_run
+
+- #119 add sandboxed Claude Code pod preset to K8sEphemeralProvider
+
+
+### Changed
+
+- #119 extract reap_namespace and scope_step_config
+
+
+### Fixed
+
+- #119 ensure all providers release on router failure and resume_run
+
 ## [2.40.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.40.3...ironflow-engine-v2.40.4) - 2026-09-28
 
 ### Fixed
