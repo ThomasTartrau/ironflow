@@ -69,4 +69,5 @@ tokio-test = "0.4"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 serial_test = "3"
 tempfile = "3"
+wiremock = "0.6"
 

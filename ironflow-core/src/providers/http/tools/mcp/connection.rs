@@ -1,9 +1,11 @@
 //! MCP server connection management (stdio and HTTP transports).
 
+use std::fmt;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -66,6 +68,7 @@ pub struct HttpTransport {
     client: reqwest::Client,
     base_url: String,
     next_id: AtomicU64,
+    header_names: Vec<String>,
 }
 
 impl McpConnection {
@@ -152,8 +155,63 @@ impl McpConnection {
     /// # }
     /// ```
     pub async fn http(base_url: &str) -> Result<Self, McpError> {
+        Self::http_with_headers(base_url, &[]).await
+    }
+
+    /// Connect to an MCP server via HTTP (POST-based JSON-RPC), sending the
+    /// given headers on every request, including the initialization handshake.
+    ///
+    /// Intended for authenticated remote MCP servers (API key, Bearer token),
+    /// e.g. a Sentry or an internal API's MCP endpoint. Header values are never
+    /// logged: [`McpConnection`]'s `Debug` implementation and every [`McpError`]
+    /// message expose header names only.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError::ConnectionFailed`] if a header name or value is
+    /// invalid, or if the HTTP client cannot be built.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::http::tools::mcp::McpConnection;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let conn = McpConnection::http_with_headers(
+    ///     "https://mcp.example.com/mcp",
+    ///     &[("Authorization", "Bearer sk-example")],
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn http_with_headers(
+        base_url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Self, McpError> {
+        let header_names: Vec<String> = headers
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+
+        let mut header_map = HeaderMap::new();
+        for (name, value) in headers {
+            let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
+                McpError::ConnectionFailed {
+                    url: base_url.to_string(),
+                    reason: format!("invalid header name '{name}': {e}"),
+                }
+            })?;
+            let header_value =
+                HeaderValue::from_str(value).map_err(|e| McpError::ConnectionFailed {
+                    url: base_url.to_string(),
+                    reason: format!("invalid value for header '{name}': {e}"),
+                })?;
+            header_map.insert(header_name, header_value);
+        }
+
         let client = reqwest::Client::builder()
             .timeout(CALL_TIMEOUT)
+            .default_headers(header_map)
             .build()
             .map_err(|e| McpError::ConnectionFailed {
                 url: base_url.to_string(),
@@ -164,6 +222,7 @@ impl McpConnection {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
             next_id: AtomicU64::new(1),
+            header_names,
         }))
     }
 
@@ -433,6 +492,19 @@ impl HttpTransport {
         }
 
         Ok(())
+    }
+}
+
+impl fmt::Debug for McpConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdio(_) => f.debug_tuple("McpConnection::Stdio").finish(),
+            Self::Http(transport) => f
+                .debug_struct("McpConnection::Http")
+                .field("base_url", &transport.base_url)
+                .field("header_names", &transport.header_names)
+                .finish(),
+        }
     }
 }
 

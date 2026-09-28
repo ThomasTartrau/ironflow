@@ -56,6 +56,13 @@ pub enum McpError {
         /// Error message from the server.
         message: String,
     },
+    /// A tool name passed to [`McpToolFilter::allow`](super::McpToolFilter::allow)
+    /// was not found among the tools the MCP server exposes.
+    #[error("MCP tool '{name}' is in the allow filter but was not found on the server")]
+    ToolNotFound {
+        /// The allow-listed tool name that the server does not expose.
+        name: String,
+    },
 }
 
 #[cfg(test)]
@@ -117,5 +124,16 @@ mod tests {
             message: "not authorized".to_string(),
         };
         assert_eq!(err.to_string(), "MCP tool 'query' failed: not authorized");
+    }
+
+    #[test]
+    fn display_tool_not_found() {
+        let err = McpError::ToolNotFound {
+            name: "delete_all".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "MCP tool 'delete_all' is in the allow filter but was not found on the server"
+        );
     }
 }

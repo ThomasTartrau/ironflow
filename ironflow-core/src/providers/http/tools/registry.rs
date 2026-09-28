@@ -1,6 +1,7 @@
 //! Tool registry: stores tools and converts them to OpenAI format.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use serde_json::{Value, json};
 
@@ -27,6 +28,15 @@ pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
     index: HashMap<String, usize>,
     connectors: HashSet<String>,
+}
+
+impl fmt::Debug for ToolRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToolRegistry")
+            .field("tools", &self.tools.iter().map(|tool| tool.name()).collect::<Vec<_>>())
+            .field("connectors", &self.connectors)
+            .finish()
+    }
 }
 
 impl ToolRegistry {
