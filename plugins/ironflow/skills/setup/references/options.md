@@ -94,6 +94,40 @@ For an agent that investigates a codebase, `tool-grep` and `tool-glob` give it `
 `glob` confined to the directories passed to `with_allowed_paths`, without the isolation loss
 of `tool-bash`.
 
+When steps need different tools, register one named profile per tool set. Declare each
+`ToolProfile` once as a constant in the `workflows` crate, so the worker registers it and
+the handlers select it with the same name. A step picks its profile with
+`.tool_profile(BUG)` and sees nothing else; a step without one gets the `with_tools`
+registry, or no tools:
+
+```rust,no_run
+use ironflow_core::provider::ToolProfile;
+use ironflow_core::providers::http::OpenAiProvider;
+use ironflow_core::providers::http::tools::ToolRegistry;
+use ironflow_core::providers::http::tools::bash::BashTool;
+use ironflow_core::providers::http::tools::read_file::ReadFileTool;
+use ironflow_core::providers::http::tools::web_fetch::WebFetchTool;
+
+// In the workflows crate: `pub const`, shared with the handlers.
+pub const SUGGESTION: ToolProfile = ToolProfile::new("suggestion");
+pub const BUG: ToolProfile = ToolProfile::new("bug");
+
+fn provider() -> OpenAiProvider {
+    OpenAiProvider::from_env()
+        .with_tool_profile(SUGGESTION, ToolRegistry::new().register(ReadFileTool::new()))
+        .with_tool_profile(
+            BUG,
+            ToolRegistry::new()
+                .register(ReadFileTool::new())
+                .register(BashTool::new())
+                .register(WebFetchTool::new()),
+        )
+}
+```
+
+With the `tool-mcp` feature, share one MCP server between profiles with
+`register_shared_mcp_tools`: it is opened once.
+
 ### Mixing providers
 
 `ProviderRouter` dispatches on the model name, so one worker can serve several vendors:

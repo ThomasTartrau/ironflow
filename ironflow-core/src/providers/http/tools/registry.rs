@@ -1,6 +1,7 @@
 //! Tool registry: stores tools and converts them to OpenAI format.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use serde_json::{Value, json};
 
@@ -27,6 +28,22 @@ pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
     index: HashMap<String, usize>,
     connectors: HashSet<String>,
+}
+
+impl fmt::Debug for ToolRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToolRegistry")
+            .field(
+                "tools",
+                &self
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name())
+                    .collect::<Vec<_>>(),
+            )
+            .field("connectors", &self.connectors)
+            .finish()
+    }
 }
 
 impl ToolRegistry {
@@ -65,6 +82,19 @@ impl ToolRegistry {
     /// Returns `true` if no tools are registered.
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    /// Names of the registered tools, in registration order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::http::tools::ToolRegistry;
+    ///
+    /// assert!(ToolRegistry::new().tool_names().is_empty());
+    /// ```
+    pub fn tool_names(&self) -> Vec<&str> {
+        self.tools.iter().map(|tool| tool.name()).collect()
     }
 
     /// Convert all registered tools to the OpenAI `tools` array format.
@@ -258,6 +288,12 @@ mod tests {
     #[should_panic(expected = "tool 'add' already registered")]
     fn registry_duplicate_panics() {
         ToolRegistry::new().register(AddTool).register(AddTool);
+    }
+
+    #[test]
+    fn tool_names_keep_registration_order() {
+        let registry = ToolRegistry::new().register(EchoTool).register(AddTool);
+        assert_eq!(registry.tool_names(), vec!["echo", "add"]);
     }
 
     #[test]

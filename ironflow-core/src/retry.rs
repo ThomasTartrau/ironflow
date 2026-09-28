@@ -250,6 +250,8 @@ impl RetryPolicy {
 /// - [`OperationError::Agent`] wrapping [`AgentError::PromptTooLarge`] or
 ///   [`AgentError::BudgetExceeded`] (the budget is already spent, replaying it
 ///   costs money and cannot succeed)
+/// - [`OperationError::Agent`] wrapping [`AgentError::UnknownToolProfile`] or
+///   [`AgentError::ToolProfileUnsupported`] (a configuration error)
 /// - [`OperationError::Shell`]
 /// - [`OperationError::Deserialize`]
 /// - [`OperationError::External`]
@@ -267,7 +269,10 @@ pub fn is_retryable(error: &OperationError) -> bool {
             AgentError::HttpProvider { status_code, .. } => {
                 *status_code == 0 || *status_code >= 500
             }
-            AgentError::PromptTooLarge { .. } | AgentError::BudgetExceeded { .. } => false,
+            AgentError::PromptTooLarge { .. }
+            | AgentError::BudgetExceeded { .. }
+            | AgentError::UnknownToolProfile { .. }
+            | AgentError::ToolProfileUnsupported { .. } => false,
         },
         OperationError::Timeout { .. } => true,
         OperationError::Shell { .. }

@@ -125,6 +125,14 @@ async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineErro
 A structured answer that does not match its type fails the step with
 `EngineError::Serialization`.
 
+On an HTTP provider (OpenAI, Anthropic API, ...), tools live on the worker, grouped in
+named profiles (see the setup skill, `references/options.md`). A step picks one with
+`.tool_profile(BUG)`, a `ToolProfile` constant shared with the worker, and sees only
+those tools. A step without a profile gets the
+provider's default tools (`with_tools`), or none. An unknown profile fails the step;
+a Claude CLI provider refuses any profile. Like `allow_tool`, a profile rules out
+`.output::<T>()`.
+
 `Model::SONNET`, `Model::OPUS`, `Model::HAIKU` are aliases resolved by the provider;
 pass a full model id string for a pinned version. `verbose(true)` records the tool
 timeline shown in the dashboard.

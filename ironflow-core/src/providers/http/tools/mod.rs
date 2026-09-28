@@ -41,11 +41,11 @@ pub mod web_fetch;
 #[cfg(feature = "tool-web-search")]
 pub mod web_search;
 
-#[cfg(any(feature = "tool-glob", feature = "tool-grep"))]
-mod walk;
-
+pub(crate) mod profiles;
 mod registry;
 mod tool_trait;
+#[cfg(any(feature = "tool-glob", feature = "tool-grep"))]
+mod walk;
 
 pub use registry::ToolRegistry;
 pub use tool_trait::{Tool, ToolError, ToolOutput};

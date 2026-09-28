@@ -13,6 +13,7 @@ use thiserror::Error;
 /// assert!(err.to_string().contains("query"));
 /// ```
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum McpError {
     /// Failed to spawn the MCP server subprocess.
     #[error("failed to spawn MCP server '{command}': {reason}")]
@@ -55,6 +56,27 @@ pub enum McpError {
         tool_name: String,
         /// Error message from the server.
         message: String,
+    },
+    /// Names passed to [`McpToolFilter::allow`](super::McpToolFilter::allow)
+    /// were not found among the tools the MCP server exposes.
+    #[error(
+        "MCP tools in the allow filter not found on the server: {}",
+        names.join(", ")
+    )]
+    ToolNotFound {
+        /// Every allow-listed name the server does not expose, sorted.
+        names: Vec<String>,
+    },
+    /// Tools passed to [`McpToolFilter::allow`](super::McpToolFilter::allow)
+    /// lack the `readOnlyHint: true` annotation required by
+    /// [`McpToolFilter::require_read_only_hint`](super::McpToolFilter::require_read_only_hint).
+    #[error(
+        "MCP tools in the allow filter are not annotated readOnlyHint: true: {}",
+        names.join(", ")
+    )]
+    ToolNotReadOnly {
+        /// Every allow-listed tool without the annotation, sorted.
+        names: Vec<String>,
     },
 }
 
@@ -117,5 +139,27 @@ mod tests {
             message: "not authorized".to_string(),
         };
         assert_eq!(err.to_string(), "MCP tool 'query' failed: not authorized");
+    }
+
+    #[test]
+    fn display_tool_not_found() {
+        let err = McpError::ToolNotFound {
+            names: vec!["delete_all".to_string(), "purge".to_string()],
+        };
+        assert_eq!(
+            err.to_string(),
+            "MCP tools in the allow filter not found on the server: delete_all, purge"
+        );
+    }
+
+    #[test]
+    fn display_tool_not_read_only() {
+        let err = McpError::ToolNotReadOnly {
+            names: vec!["write_config".to_string()],
+        };
+        assert_eq!(
+            err.to_string(),
+            "MCP tools in the allow filter are not annotated readOnlyHint: true: write_config"
+        );
     }
 }

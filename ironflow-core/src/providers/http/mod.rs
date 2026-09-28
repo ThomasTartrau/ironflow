@@ -1,6 +1,6 @@
 //! HTTP-based LLM provider implementations.
 //!
-//! This module provides a shared adapter layer ([`HttpAgentAdapter`]) and generic
+//! This module provides a shared adapter layer ([`HttpAgentAdapter`](adapter::HttpAgentAdapter)) and generic
 //! provider wrapper ([`HttpAgentProvider`]) that handle HTTP transport, SSE streaming,
 //! timeout, and rate limiting. Concrete providers (OpenAI, Mistral, Gemini, Anthropic)
 //! only implement request/response format differences.

@@ -55,6 +55,14 @@ let verdict = ctx
 Tools are an enum: `.allow_tool(Tool::Bash)`, `Tool::Custom("mcp__server__tool".into())`
 for anything else. Tools and structured output are mutually exclusive.
 
+On an HTTP provider, tools are registered on the worker in named profiles
+(`HttpAgentProvider::with_tool_profile`). Each profile is a `ToolProfile` constant,
+`const BUG: ToolProfile = ToolProfile::new("bug");`, shared by the worker and the
+handlers, so a misspelled profile does not compile. A step picks one with
+`.tool_profile(BUG)` and sees only its tools; without a profile it gets the `with_tools` registry, or none.
+An unknown profile fails the step, a Claude CLI provider refuses any profile, and the
+run logs name the profile with the tools it exposed.
+
 ## Sub-workflow steps
 
 A child declares its input type with `TypedWorkflow` and the parent passes that

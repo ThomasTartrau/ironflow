@@ -432,6 +432,35 @@ let tools = ToolRegistry::new()
 # }
 ```
 
+A step picks a named tool profile and sees only its tools; without one it gets the
+`with_tools` registry, or none. Declare each `ToolProfile` once as a constant shared by the
+provider and the steps. An MCP server shared between profiles is opened once:
+
+```rust,no_run
+use std::sync::Arc;
+use ironflow_core::prelude::*;
+use ironflow_core::provider::{AgentConfig, ToolProfile};
+use ironflow_core::providers::http::OpenAiProvider;
+use ironflow_core::providers::http::tools::ToolRegistry;
+use ironflow_core::providers::http::tools::mcp::{McpConnection, register_shared_mcp_tools};
+
+const SUGGESTION: ToolProfile = ToolProfile::new("suggestion");
+const BUG: ToolProfile = ToolProfile::new("bug");
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let mut gitlab = McpConnection::stdio("mcp-gitlab", &[], &[]).await?;
+gitlab.initialize().await?;
+let gitlab = Arc::new(gitlab);
+let provider = OpenAiProvider::from_env()
+    .with_tool_profile(SUGGESTION, register_shared_mcp_tools(ToolRegistry::new(), &gitlab, "gitlab").await?)
+    .with_tool_profile(BUG, register_shared_mcp_tools(ToolRegistry::new(), &gitlab, "gitlab").await?);
+
+let config = AgentConfig::new("Find the root cause").tool_profile(BUG);
+let result = Agent::from_config(config).model("gpt-5.5").run(&provider).await?;
+# Ok(())
+# }
+```
+
 ### Routing between providers
 
 `ProviderRouter` dispatches on the model name, so a single workflow can mix vendors:

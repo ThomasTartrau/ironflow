@@ -619,9 +619,12 @@ function AgentInput({ input }: { input: Record<string, unknown> }) {
 		typeof input.working_dir === "string" ? input.working_dir : null;
 	const permissionMode =
 		typeof input.permission_mode === "string" ? input.permission_mode : null;
+	const toolProfile =
+		typeof input.tool_profile === "string" ? input.tool_profile : null;
 
 	const configItems = [
 		model && ["Model", model],
+		toolProfile && ["Tool profile", toolProfile],
 		maxBudget !== null && ["Max budget", `$${maxBudget}`],
 		maxTurns !== null && ["Max turns", String(maxTurns)],
 		workingDir && ["Working dir", workingDir],

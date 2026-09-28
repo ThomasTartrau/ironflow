@@ -16,7 +16,7 @@ mod human_input;
 mod shell;
 mod workflow;
 
-pub use agent::{AgentStep, AgentStepConfig, Tool};
+pub use agent::{AgentStep, AgentStepConfig, Tool, ToolProfile};
 pub use approval::ApprovalConfig;
 pub use approvers::Approvers;
 pub use artifact::{ArtifactInput, ArtifactOutput, ArtifactRef};

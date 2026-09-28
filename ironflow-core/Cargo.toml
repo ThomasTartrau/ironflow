@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-core"
-version = "3.22.0"
+version = "4.0.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -77,4 +77,5 @@ tokio-test = "0.4"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 serial_test = "3"
 tempfile = "3"
+wiremock = "0.6"
 
