@@ -169,7 +169,8 @@ impl McpConnection {
     /// # Errors
     ///
     /// Returns [`McpError::ConnectionFailed`] if a header name or value is
-    /// invalid, or if the HTTP client cannot be built.
+    /// invalid, if a header name is given more than once (names are
+    /// case-insensitive), or if the HTTP client cannot be built.
     ///
     /// # Examples
     ///
@@ -188,11 +189,7 @@ impl McpConnection {
         base_url: &str,
         headers: &[(&str, &str)],
     ) -> Result<Self, McpError> {
-        let header_names: Vec<String> = headers
-            .iter()
-            .map(|(name, _)| (*name).to_string())
-            .collect();
-
+        let mut header_names = Vec::with_capacity(headers.len());
         let mut header_map = HeaderMap::new();
         for (name, value) in headers {
             let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
@@ -201,12 +198,21 @@ impl McpConnection {
                     reason: format!("invalid header name '{name}': {e}"),
                 }
             })?;
-            let header_value =
+            let mut header_value =
                 HeaderValue::from_str(value).map_err(|e| McpError::ConnectionFailed {
                     url: base_url.to_string(),
                     reason: format!("invalid value for header '{name}': {e}"),
                 })?;
-            header_map.insert(header_name, header_value);
+            // Keeps the value out of `Debug` output (reqwest prints default
+            // headers) and out of HTTP/2 header compression tables.
+            header_value.set_sensitive(true);
+            if header_map.insert(header_name, header_value).is_some() {
+                return Err(McpError::ConnectionFailed {
+                    url: base_url.to_string(),
+                    reason: format!("header '{name}' is given more than once"),
+                });
+            }
+            header_names.push((*name).to_string());
         }
 
         let client = reqwest::Client::builder()

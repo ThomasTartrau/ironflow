@@ -45,13 +45,14 @@ pub(crate) mod protocol;
 
 use std::sync::Arc;
 
-use tracing::debug;
+use tracing::{debug, warn};
 
 pub use bridge::McpBridgeTool;
 pub use connection::McpConnection;
 pub use error::McpError;
 pub use filter::McpToolFilter;
 
+use filter::is_read_only;
 use protocol::McpToolDef;
 
 use super::ToolRegistry;
@@ -103,18 +104,22 @@ pub async fn register_mcp_tools(
 /// Connect to an MCP server and register only the tools that pass `filter`.
 ///
 /// Unlike [`register_mcp_tools`], which registers every tool the server
-/// exposes, this denies everything unless `filter` explicitly permits it: an
-/// unconfigured [`McpToolFilter`] (no [`McpToolFilter::allow`], no
-/// [`McpToolFilter::require_read_only_hint`]) registers zero tools.
+/// exposes, this registers only what `filter` permits (see [`McpToolFilter`]).
 ///
-/// The number of tools discovered but excluded by `filter` is logged at
-/// `debug` level, along with their names.
+/// Tools named with [`McpToolFilter::allow`] are checked against the server
+/// before anything is registered: a missing name, or a name without
+/// `readOnlyHint: true` when [`McpToolFilter::require_read_only_hint`] is set,
+/// is an error rather than a tool silently left out. Tools excluded by the
+/// filter are logged at `debug` level with their names; a filter that keeps
+/// no tool at all is logged at `warn` level.
 ///
 /// # Errors
 ///
-/// Returns [`McpError`] if initialization or tool discovery fails, or
-/// [`McpError::ToolNotFound`] if a name passed to
-/// [`McpToolFilter::allow`] is not exposed by the server.
+/// - [`McpError`] if initialization or tool discovery fails.
+/// - [`McpError::ToolNotFound`] if names passed to [`McpToolFilter::allow`]
+///   are not exposed by the server.
+/// - [`McpError::ToolNotReadOnly`] if the filter requires the read-only hint
+///   and allowed tools are not annotated `readOnlyHint: true`.
 ///
 /// # Examples
 ///
@@ -130,8 +135,7 @@ pub async fn register_mcp_tools(
 ///     &[("Authorization", "Bearer sk-example")],
 /// ).await?;
 ///
-/// let filter = McpToolFilter::new()
-///     .allow(&["list_incidents", "get_incident"])
+/// let filter = McpToolFilter::allow(["list_incidents", "get_incident"])
 ///     .require_read_only_hint();
 ///
 /// let registry = ToolRegistry::new();
@@ -149,9 +153,27 @@ pub async fn register_mcp_tools_filtered(
     let tools = connection.list_tools().await?;
 
     if let Some(allowed) = filter.allowed_names() {
-        for name in allowed {
-            if !tools.iter().any(|t| &t.name == name) {
-                return Err(McpError::ToolNotFound { name: name.clone() });
+        let find = |name: &String| tools.iter().find(|t| &t.name == name);
+
+        let missing: Vec<String> = allowed
+            .iter()
+            .filter(|name| find(name).is_none())
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            return Err(McpError::ToolNotFound { names: missing });
+        }
+
+        if filter.requires_read_only_hint() {
+            let not_read_only: Vec<String> = allowed
+                .iter()
+                .filter(|name| find(name).is_some_and(|t| !is_read_only(t)))
+                .cloned()
+                .collect();
+            if !not_read_only.is_empty() {
+                return Err(McpError::ToolNotReadOnly {
+                    names: not_read_only,
+                });
             }
         }
     }
@@ -166,6 +188,10 @@ pub async fn register_mcp_tools_filtered(
             ignored_names = ?ignored.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             "MCP tool filter ignored tools"
         );
+    }
+
+    if kept.is_empty() {
+        warn!(prefix = prefix, "MCP tool filter kept no tool");
     }
 
     let conn = Arc::new(connection);
@@ -190,10 +216,7 @@ fn register_tool_defs(
 ) -> ToolRegistry {
     for tool_def in tools {
         let registry_name = format!("{}{CONNECTOR_SEPARATOR}{}", prefix, tool_def.name);
-        let read_only = tool_def
-            .annotations
-            .as_ref()
-            .is_some_and(|a| a.read_only_hint);
+        let read_only = is_read_only(&tool_def);
         let bridge = McpBridgeTool::new(
             conn.clone(),
             registry_name,

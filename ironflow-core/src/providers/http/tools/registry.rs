@@ -33,7 +33,14 @@ pub struct ToolRegistry {
 impl fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ToolRegistry")
-            .field("tools", &self.tools.iter().map(|tool| tool.name()).collect::<Vec<_>>())
+            .field(
+                "tools",
+                &self
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name())
+                    .collect::<Vec<_>>(),
+            )
             .field("connectors", &self.connectors)
             .finish()
     }
