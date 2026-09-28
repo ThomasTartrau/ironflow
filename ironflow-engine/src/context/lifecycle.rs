@@ -14,7 +14,7 @@ use tokio::time::sleep;
 use tracing::{Span, error, info, warn};
 use uuid::Uuid;
 
-use ironflow_core::provider::{LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
+use ironflow_core::provider::{LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 use ironflow_store::models::{
     NewStep, NewStepDependency, RunUpdate, Step, StepKind, StepStatus, StepUpdate, step_trace_id,
 };
@@ -587,8 +587,8 @@ impl WorkflowContext {
         last_result
     }
 
-    /// Attach the step's trace context, and for an agent step the run/step pod
-    /// labels, to `config`.
+    /// Attach the step's trace context, and for an agent step the run, root
+    /// run and step pod labels, to `config`.
     ///
     /// Retries reuse the scoped config, so every attempt carries the same
     /// labels and the K8s provider can find the previous attempt.
@@ -600,6 +600,9 @@ impl WorkflowContext {
                 agent_config
                     .pod_labels
                     .insert(LABEL_RUN_ID.to_string(), self.run_id.to_string());
+                agent_config
+                    .pod_labels
+                    .insert(LABEL_ROOT_RUN_ID.to_string(), self.root_run_id.to_string());
                 agent_config
                     .pod_labels
                     .insert(LABEL_STEP.to_string(), sanitize_label_value(name));

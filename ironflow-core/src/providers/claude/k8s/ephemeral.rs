@@ -32,12 +32,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use futures_util::future::join_all;
 use futures_util::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{ConfigMap, Pod};
-use kube::Error as KubeError;
-use kube::api::{Api, DeleteParams, ListParams, LogParams, PostParams};
-use kube::runtime::wait::{await_condition, conditions};
+use kube::Client;
+use kube::api::{Api, DeleteParams, LogParams, PostParams};
+use kube::runtime::wait::await_condition;
 use serde_json::{from_value, json};
 use tokio::spawn;
 use tokio::task::JoinHandle;
@@ -47,19 +46,22 @@ use tracing::{debug, info, warn};
 
 use crate::error::AgentError;
 use crate::provider::{
-    AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_EGRESS_PROFILE, LABEL_RUN_ID,
-    LABEL_STEP, LogSink, PodVolumeSource, ReadOnlyVolume, SecretEnvVar, upsert_secret_env,
+    AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT,
+    LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, LogSink, PodVolumeSource, ReadOnlyVolume,
+    ReleaseFuture, SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label,
+    upsert_secret_env,
 };
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
+use super::cleanup::{delete_and_wait, release_run, step_selection};
 use super::common::{
     DEFAULT_DEADLINE_MARGIN, DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig,
-    K8sResources, LABEL_EXPIRES_AT, PodConfig, PodHardening, SandboxSettings,
-    build_credentials_from_env_prefix, build_credentials_prefix, build_pod_spec,
-    build_profile_copy_prefix, create_client, generate_pod_name,
+    K8sResources, PodConfig, PodHardening, SandboxSettings, build_credentials_from_env_prefix,
+    build_credentials_prefix, build_pod_spec, create_client, generate_pod_name,
 };
-use super::reaper::{ReapReport, reap_namespace};
+use super::profile::{ClaudeProfile, build_profile_copy_prefix};
+use super::reaper::{ReapReport, reap_orphans};
 use super::toleration::K8sToleration;
 
 /// Environment variable carrying the OAuth credentials JSON read from a Secret.
@@ -67,6 +69,10 @@ const CREDENTIALS_ENV_VAR: &str = "IRONFLOW_CLAUDE_CREDENTIALS";
 
 /// Environment variables a sandboxed provider refuses as plain values.
 const PLAIN_TEXT_SECRETS: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+/// Label selector matching every pod and Job created by ironflow: agent pods,
+/// `PodRun` and `JobRun` of `ironflow-ops-k8s`.
+pub(super) const MANAGED_SELECTOR: &str = "app.kubernetes.io/managed-by=ironflow";
 
 /// Label selector matching every agent pod created by ironflow.
 pub(super) const RUNNER_SELECTOR: &str =
@@ -157,7 +163,8 @@ pub struct K8sEphemeralProvider {
     read_only_volumes: Vec<ReadOnlyVolume>,
     managed_settings_presets: BTreeMap<String, String>,
     default_managed_settings: Option<String>,
-    claude_profile_configmap: Option<String>,
+    /// Set by the builders of [`super::profile`].
+    pub(super) claude_profiles: Vec<ClaudeProfile>,
     egress_profile: Option<String>,
     previous_attempt_timeout: Duration,
 }
@@ -203,7 +210,7 @@ impl K8sEphemeralProvider {
             read_only_volumes: Vec::new(),
             managed_settings_presets: BTreeMap::new(),
             default_managed_settings: None,
-            claude_profile_configmap: None,
+            claude_profiles: Vec::new(),
             egress_profile: None,
             previous_attempt_timeout: Duration::from_secs(60),
         }
@@ -479,22 +486,6 @@ impl K8sEphemeralProvider {
         self
     }
 
-    /// Mount a ConfigMap holding a Claude profile (`CLAUDE.md`, `settings.json`,
-    /// agents, commands) and copy it into `~/.claude` before the agent starts.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
-    ///
-    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
-    ///     .claude_profile_configmap("claude-profile");
-    /// ```
-    pub fn claude_profile_configmap(mut self, name: &str) -> Self {
-        self.claude_profile_configmap = Some(name.to_string());
-        self
-    }
-
     /// Set the default network egress profile of every pod (the
     /// `ironflow.io/egress-profile` label). A step's
     /// [`AgentConfig::egress_profile`] wins.
@@ -672,13 +663,23 @@ impl K8sEphemeralProvider {
     ///
     /// Can be called multiple times. These labels serve as defaults and are
     /// overridden by per-invocation labels from [`AgentConfig::pod_labels`].
+    ///
+    /// # Panics
+    ///
+    /// Panics on a label ironflow sets itself ([`is_reserved_pod_label`]).
     pub fn pod_label(mut self, key: &str, value: &str) -> Self {
+        assert_pod_label_allowed(key);
         self.pod_labels.insert(key.to_string(), value.to_string());
         self
     }
 
     /// Replace the entire provider-level pod labels map.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`pod_label`](Self::pod_label).
     pub fn pod_labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        labels.keys().for_each(|key| assert_pod_label_allowed(key));
         self.pod_labels = labels;
         self
     }
@@ -892,6 +893,14 @@ impl K8sEphemeralProvider {
             })
             .transpose()?;
 
+        if let Some(key) = config.pod_labels.keys().find(|k| is_reserved_pod_label(k)) {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!(
+                    "pod label '{key}' is reserved: ironflow sets it on every object it creates"
+                ),
+            });
+        }
         let mut labels = self.pod_labels.clone();
         if let Some(profile) = &self.egress_profile {
             labels.insert(LABEL_EGRESS_PROFILE.to_string(), profile.clone());
@@ -905,6 +914,18 @@ impl K8sEphemeralProvider {
             managed_settings_configmap,
             labels,
         })
+    }
+
+    /// Shell prefix filling `~/.claude`: the profiles, then the credentials,
+    /// so that a profile cannot overwrite them.
+    pub(super) fn home_setup_prefix(&self) -> String {
+        let credentials = if self.oauth_credentials_secret.is_some() {
+            build_credentials_from_env_prefix(CREDENTIALS_ENV_VAR)
+        } else {
+            build_credentials_prefix(self.oauth_credentials.as_deref())
+        };
+        let profiles = build_profile_copy_prefix(&self.claude_profiles);
+        format!("{profiles}{credentials}")
     }
 
     /// Margin added to the timeout for the deadline and the expiry annotation.
@@ -941,95 +962,31 @@ impl K8sEphemeralProvider {
     /// agent never starts next to a live one.
     async fn delete_previous_attempt(
         &self,
-        pods: &Api<Pod>,
-        configmaps: &Api<ConfigMap>,
+        client: &Client,
         run_id: &str,
         step: &str,
     ) -> Result<usize, AgentError> {
-        let scope = format!("{LABEL_RUN_ID}={run_id},{LABEL_STEP}={step}");
-
-        let pod_selector = format!("{RUNNER_SELECTOR},{scope}");
-        let pod_params = ListParams::default().labels(&pod_selector);
-        let listed = pods.list(&pod_params).await;
-        let previous = listed.map_err(|e| AgentError::ProcessFailed {
-            exit_code: -1,
-            stderr: format!("failed to list previous attempt pods: {e}"),
-        })?;
-
-        let mut deleted: Vec<(String, String)> = Vec::new();
-        for pod in previous.items {
-            let (Some(name), Some(uid)) = (pod.metadata.name, pod.metadata.uid) else {
-                continue;
-            };
-            match pods.delete(&name, &DeleteParams::default()).await {
-                Ok(_) => deleted.push((name, uid)),
-                // Already gone between the list and the delete.
-                Err(KubeError::Api(e)) if e.code == 404 => {}
-                Err(e) => {
-                    return Err(AgentError::ProcessFailed {
-                        exit_code: -1,
-                        stderr: format!("failed to delete previous attempt pod '{name}': {e}"),
-                    });
-                }
-            }
-        }
-
-        let waits = deleted
-            .iter()
-            .map(|(name, uid)| await_condition(pods.clone(), name, conditions::is_deleted(uid)));
+        let selection = step_selection(run_id, step);
         let limit = self.previous_attempt_timeout;
-        let waited = time::timeout(limit, join_all(waits)).await;
-        let results = waited.map_err(|e| AgentError::ProcessFailed {
-            exit_code: -1,
-            stderr: format!(
-                "previous attempt pods still terminating after {limit:?} (run {run_id}, step {step}): {e}"
-            ),
-        })?;
-        for result in results {
-            result.map_err(|e| AgentError::ProcessFailed {
-                exit_code: -1,
-                stderr: format!("failed waiting for previous attempt pod deletion: {e}"),
-            })?;
-        }
-
-        let cm_selector = format!("{PROMPT_SELECTOR},{scope}");
-        let cm_params = ListParams::default().labels(&cm_selector);
-        match configmaps.list(&cm_params).await {
-            Ok(list) => {
-                for name in list.items.into_iter().filter_map(|cm| cm.metadata.name) {
-                    if let Err(e) = configmaps.delete(&name, &DeleteParams::default()).await {
-                        warn!(configmap = %name, error = %e, "failed to delete previous attempt prompt ConfigMap");
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "failed to list previous attempt prompt ConfigMaps");
-            }
-        }
-
-        if !deleted.is_empty() {
+        let deleted = delete_and_wait(client, &self.namespace, &selection, limit).await?;
+        if deleted > 0 {
             info!(
                 run_id = %run_id,
                 step = %step,
-                pods_deleted = deleted.len(),
+                pods_deleted = deleted,
                 "deleted pods of a previous attempt before retrying"
             );
         }
-        Ok(deleted.len())
+        Ok(deleted)
     }
 
-    /// Delete orphaned agent pods and prompt ConfigMaps in the namespace.
-    ///
-    /// A pod is deleted when Kubernetes killed it for exceeding its deadline,
-    /// or when its `ironflow.io/expires-at` annotation lies in the past (see
-    /// [`reap_reason`](super::reap_reason)). Objects without a parseable
-    /// annotation are never touched.
+    /// Delete the orphaned ironflow pods, Jobs and prompt ConfigMaps of the
+    /// provider's namespace: [`reap_orphans`] with the provider's cluster and
+    /// namespace.
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError::ProcessFailed`] when the client cannot be built
-    /// or the pods or ConfigMaps cannot be listed. A failed delete is logged
-    /// and not counted.
+    /// Same as [`reap_orphans`].
     ///
     /// # Examples
     ///
@@ -1044,7 +1001,7 @@ impl K8sEphemeralProvider {
     /// # }
     /// ```
     pub async fn reap_orphans(&self) -> Result<ReapReport, AgentError> {
-        reap_namespace(&self.cluster_config, &self.namespace).await
+        reap_orphans(&self.cluster_config, &self.namespace).await
     }
 
     /// Spawn a background task calling [`reap_orphans`](Self::reap_orphans)
@@ -1081,7 +1038,7 @@ impl K8sEphemeralProvider {
             let mut ticker = time::interval(interval);
             loop {
                 ticker.tick().await;
-                if let Err(e) = reap_namespace(&cluster_config, &namespace).await {
+                if let Err(e) = reap_orphans(&cluster_config, &namespace).await {
                     warn!(error = %e, "orphan reaping pass failed");
                 }
             }
@@ -1095,31 +1052,19 @@ impl K8sEphemeralProvider {
         let merged = self.merged_pod_inputs(config)?;
 
         let pod_name = generate_pod_name("claude-code");
-        let credentials = if self.oauth_credentials_secret.is_some() {
-            build_credentials_from_env_prefix(CREDENTIALS_ENV_VAR)
-        } else {
-            build_credentials_prefix(self.oauth_credentials.as_deref())
-        };
-        // The profile is copied first so it cannot overwrite the credentials.
-        let profile = if self.claude_profile_configmap.is_some() {
-            build_profile_copy_prefix()
-        } else {
-            String::new()
-        };
-        let creds_prefix = format!("{profile}{credentials}");
+        let creds_prefix = self.home_setup_prefix();
 
         let start = Instant::now();
         let client = create_client(&self.cluster_config).await?;
         let pods: Api<Pod> = Api::namespaced(client.clone(), &self.namespace);
 
         let mut prompt_configmap_name: Option<String> = None;
-        let configmaps: Api<ConfigMap> = Api::namespaced(client, &self.namespace);
+        let configmaps: Api<ConfigMap> = Api::namespaced(client.clone(), &self.namespace);
 
         let run_id = merged.labels.get(LABEL_RUN_ID);
         let step = merged.labels.get(LABEL_STEP);
         if let (Some(run_id), Some(step)) = (run_id, step) {
-            self.delete_previous_attempt(&pods, &configmaps, run_id, step)
-                .await?;
+            self.delete_previous_attempt(&client, run_id, step).await?;
         }
 
         // Computed after the cleanup wait so it does not eat into the timeout.
@@ -1139,6 +1084,9 @@ impl K8sEphemeralProvider {
             let mut cm_labels = BTreeMap::new();
             cm_labels.insert("app.kubernetes.io/managed-by", "ironflow");
             cm_labels.insert("app.kubernetes.io/component", "prompt-data");
+            if let Some(root) = merged.labels.get(LABEL_ROOT_RUN_ID) {
+                cm_labels.insert(LABEL_ROOT_RUN_ID, root.as_str());
+            }
             if let (Some(run_id), Some(step)) = (run_id, step) {
                 cm_labels.insert(LABEL_RUN_ID, run_id.as_str());
                 cm_labels.insert(LABEL_STEP, step.as_str());
@@ -1239,7 +1187,7 @@ impl K8sEphemeralProvider {
                 secret_env: &merged.secret_env,
                 read_only_volumes: &merged.read_only_volumes,
                 managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
-                claude_profile_configmap: self.claude_profile_configmap.as_deref(),
+                claude_profiles: &self.claude_profiles,
                 annotations: Some(&annotations),
             },
         })?;
@@ -1302,6 +1250,21 @@ impl K8sEphemeralProvider {
 }
 
 impl AgentProvider for K8sEphemeralProvider {
+    /// Delete every pod, `JobRun` Job and prompt ConfigMap labelled with the
+    /// run (`ironflow.io/run-id`) or with the run as the root of a
+    /// sub-workflow (`ironflow.io/root-run-id`), and wait up to
+    /// [`previous_attempt_timeout`](Self::previous_attempt_timeout) until the
+    /// pods are gone.
+    fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
+        let limit = self.previous_attempt_timeout;
+        Box::pin(release_run(
+            &self.cluster_config,
+            &self.namespace,
+            run_id,
+            limit,
+        ))
+    }
+
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             let created = self.create_pod(config).await?;
@@ -1550,6 +1513,9 @@ impl AgentProvider for K8sEphemeralProvider {
         })
     }
 }
+
+#[cfg(test)]
+mod label_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1866,10 +1832,7 @@ mod tests {
             .previous_attempt_timeout(Duration::from_secs(5));
         assert_eq!(provider.read_only_volumes.len(), 1);
         assert_eq!(provider.read_only_volumes[0].mount_path, "/data/repos");
-        assert_eq!(
-            provider.claude_profile_configmap.as_deref(),
-            Some("claude-profile")
-        );
+        assert_eq!(provider.claude_profiles[0].configmap, "claude-profile");
         assert_eq!(provider.egress_profile.as_deref(), Some("anthropic-only"));
         assert_eq!(provider.previous_attempt_timeout, Duration::from_secs(5));
     }

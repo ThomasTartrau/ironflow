@@ -44,7 +44,9 @@ use tokio::time;
 use tracing::{debug, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
+use crate::provider::{
+    AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink, assert_pod_label_allowed,
+};
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
@@ -248,13 +250,24 @@ impl K8sPersistentProvider {
     ///
     /// Can be called multiple times. These labels are applied when the
     /// persistent worker pod is created.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a label ironflow sets itself
+    /// ([`is_reserved_pod_label`](crate::provider::is_reserved_pod_label)).
     pub fn pod_label(mut self, key: &str, value: &str) -> Self {
+        assert_pod_label_allowed(key);
         self.pod_labels.insert(key.to_string(), value.to_string());
         self
     }
 
     /// Replace the entire provider-level pod labels map.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`pod_label`](Self::pod_label).
     pub fn pod_labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        labels.keys().for_each(|key| assert_pod_label_allowed(key));
         self.pod_labels = labels;
         self
     }
@@ -572,6 +585,20 @@ mod tests {
 
     use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
+    use crate::provider::{LABEL_COMPONENT, LABEL_MANAGED_BY};
+
+    #[test]
+    #[should_panic(expected = "pod label 'app.kubernetes.io/component' is reserved")]
+    fn k8s_reserved_persistent_pod_label_panics() {
+        let _ = K8sPersistentProvider::new("img:v1").pod_label(LABEL_COMPONENT, "agent");
+    }
+
+    #[test]
+    #[should_panic(expected = "pod label 'app.kubernetes.io/managed-by' is reserved")]
+    fn k8s_reserved_persistent_pod_labels_map_panics() {
+        let labels = BTreeMap::from([(LABEL_MANAGED_BY.to_string(), "helm".to_string())]);
+        let _ = K8sPersistentProvider::new("img:v1").pod_labels(labels);
+    }
 
     #[test]
     fn persistent_provider_defaults() {

@@ -10,8 +10,12 @@ use kube::config::{KubeConfigOptions, Kubeconfig};
 use serde_json::{Value, json};
 
 use crate::error::AgentError;
-use crate::provider::{AgentInput, PodVolumeSource, ReadOnlyVolume, SecretEnvVar};
+use crate::provider::{
+    AgentInput, LABEL_COMPONENT, LABEL_MANAGED_BY, MANAGED_BY_IRONFLOW, PodVolumeSource,
+    ReadOnlyVolume, SecretEnvVar,
+};
 use crate::providers::claude::common::env_vars_to_remove;
+use crate::providers::claude::k8s::profile::{ClaudeProfile, profile_mount_path};
 use crate::providers::claude::k8s::toleration::K8sToleration;
 
 /// Default image used by the input-fetch initContainer.
@@ -31,13 +35,9 @@ pub const SANDBOX_HOME: &str = "/home/claude";
 /// Directory Claude Code reads `managed-settings.json` from on Linux.
 pub const MANAGED_SETTINGS_DIR: &str = "/etc/claude-code";
 
-/// Directory a Claude profile ConfigMap is mounted at, then copied into
-/// `~/.claude` before the agent starts.
+/// Directory holding the mounts of the Claude profile ConfigMaps (see
+/// [`profile_mount_path`]), copied into `~/.claude` before the agent starts.
 pub const PROFILE_MOUNT_DIR: &str = "/etc/ironflow/claude-profile";
-
-/// Annotation holding the unix time (seconds) after which an ironflow pod or
-/// prompt ConfigMap is considered orphaned and may be reaped.
-pub const LABEL_EXPIRES_AT: &str = "ironflow.io/expires-at";
 
 /// Default margin added to the provider timeout for the pod deadline and the
 /// expiry annotation.
@@ -74,8 +74,9 @@ pub struct PodHardening<'a> {
     pub read_only_volumes: &'a [ReadOnlyVolume],
     /// ConfigMap holding `managed-settings.json`, mounted at [`MANAGED_SETTINGS_DIR`].
     pub managed_settings_configmap: Option<&'a str>,
-    /// ConfigMap holding a Claude profile, mounted at [`PROFILE_MOUNT_DIR`].
-    pub claude_profile_configmap: Option<&'a str>,
+    /// ConfigMaps holding a Claude profile, the n-th mounted read-only at
+    /// [`profile_mount_path`]`(n)`.
+    pub claude_profiles: &'a [ClaudeProfile],
     /// Annotations written into the pod metadata.
     pub annotations: Option<&'a BTreeMap<String, String>>,
 }
@@ -227,25 +228,6 @@ pub fn build_credentials_prefix(oauth_json: Option<&str>) -> String {
 pub fn build_credentials_from_env_prefix(var: &str) -> String {
     format!(
         r#"mkdir -p "$HOME/.claude" && printf '%s' "${var}" > "$HOME/.claude/.credentials.json" && "#
-    )
-}
-
-/// Build a shell prefix that copies the Claude profile mounted at
-/// [`PROFILE_MOUNT_DIR`] into `~/.claude`.
-///
-/// The profile is copied rather than mounted in place because Claude Code
-/// must be able to write into `~/.claude`.
-///
-/// # Examples
-///
-/// ```
-/// use ironflow_core::providers::claude::k8s::common::build_profile_copy_prefix;
-///
-/// assert!(build_profile_copy_prefix().ends_with("&& "));
-/// ```
-pub fn build_profile_copy_prefix() -> String {
-    format!(
-        r#"if [ -d {PROFILE_MOUNT_DIR} ]; then mkdir -p "$HOME/.claude" && cp -rL {PROFILE_MOUNT_DIR}/. "$HOME/.claude/"; fi && "#
     )
 }
 
@@ -513,8 +495,8 @@ fn hardening_error(stderr: String) -> AgentError {
 ///
 /// Rejects read-only mounts at a relative path, at a directory the sandbox
 /// owns (`/`, [`SANDBOX_HOME`], `/tmp`, [`MANAGED_SETTINGS_DIR`],
-/// [`PROFILE_MOUNT_DIR`]) or at a path already mounted, and secret env
-/// entries with an empty name, secret or key.
+/// [`PROFILE_MOUNT_DIR`] and below) or at a path already mounted, and secret
+/// env entries with an empty name, secret or key.
 fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
     let reserved = [
         SANDBOX_HOME,
@@ -522,6 +504,7 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
         MANAGED_SETTINGS_DIR,
         PROFILE_MOUNT_DIR,
     ];
+    let profile_prefix = format!("{PROFILE_MOUNT_DIR}/");
     let mut seen: BTreeSet<&str> = config
         .volumes
         .iter()
@@ -537,7 +520,8 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
             )));
         }
         let normalized = path.trim_end_matches('/');
-        if normalized.is_empty() || reserved.contains(&normalized) {
+        let under_profiles = normalized.starts_with(&profile_prefix);
+        if normalized.is_empty() || reserved.contains(&normalized) || under_profiles {
             return Err(hardening_error(format!(
                 "read-only volume cannot be mounted at reserved path '{path}'"
             )));
@@ -623,13 +607,10 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
 
     let mut labels: BTreeMap<String, String> = config.extra_labels.clone();
     labels.insert(
-        "app.kubernetes.io/managed-by".to_string(),
-        "ironflow".to_string(),
+        LABEL_MANAGED_BY.to_string(),
+        MANAGED_BY_IRONFLOW.to_string(),
     );
-    labels.insert(
-        "app.kubernetes.io/component".to_string(),
-        "claude-runner".to_string(),
-    );
+    labels.insert(LABEL_COMPONENT.to_string(), "claude-runner".to_string());
 
     let mut pod_json = json!({
         "apiVersion": "v1",
@@ -721,14 +702,12 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
             "readOnly": true
         }));
     }
-    if let Some(cm_name) = hardening.claude_profile_configmap {
-        volumes_json.push(json!({
-            "name": "ironflow-claude-profile",
-            "configMap": { "name": cm_name }
-        }));
+    for (i, profile) in hardening.claude_profiles.iter().enumerate() {
+        let name = format!("ironflow-claude-profile-{i}");
+        volumes_json.push(json!({ "name": name, "configMap": { "name": profile.configmap } }));
         main_mounts_json.push(json!({
-            "name": "ironflow-claude-profile",
-            "mountPath": PROFILE_MOUNT_DIR,
+            "name": name,
+            "mountPath": profile_mount_path(i),
             "readOnly": true
         }));
     }
@@ -810,6 +789,8 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
 #[cfg(test)]
 mod tests {
     use serde_json::to_value;
+
+    use crate::provider::LABEL_EXPIRES_AT;
 
     use super::*;
 
@@ -1858,18 +1839,30 @@ mod tests {
     }
 
     #[test]
-    fn build_pod_spec_profile_mount() {
-        let config = hardened_config(PodHardening {
-            claude_profile_configmap: Some("claude-profile"),
+    fn k8s_profile_mounts_one_read_only_sibling_per_configmap() {
+        let profiles = [
+            ClaudeProfile {
+                configmap: "claude-profile".to_string(),
+                subdir: String::new(),
+            },
+            ClaudeProfile {
+                configmap: "claude-rules".to_string(),
+                subdir: "rules".to_string(),
+            },
+        ];
+        let pod = pod_json(&hardened_config(PodHardening {
+            claude_profiles: &profiles,
             ..PodHardening::default()
-        });
-        let pod = pod_json(&config);
-        let vol = find_by_name(&pod["spec"]["volumes"], "ironflow-claude-profile").unwrap();
-        assert_eq!(vol["configMap"]["name"], "claude-profile");
+        }));
         let mounts = &pod["spec"]["containers"][0]["volumeMounts"];
-        let mount = find_by_name(mounts, "ironflow-claude-profile").unwrap();
-        assert_eq!(mount["mountPath"], PROFILE_MOUNT_DIR);
-        assert_eq!(mount["readOnly"], true);
+        for (i, configmap) in ["claude-profile", "claude-rules"].into_iter().enumerate() {
+            let name = format!("ironflow-claude-profile-{i}");
+            let vol = find_by_name(&pod["spec"]["volumes"], &name).unwrap();
+            assert_eq!(vol["configMap"]["name"], configmap);
+            let mount = find_by_name(mounts, &name).unwrap();
+            assert_eq!(mount["mountPath"], profile_mount_path(i).as_str());
+            assert_eq!(mount["readOnly"], true);
+        }
     }
 
     #[test]
@@ -1903,7 +1896,17 @@ mod tests {
 
     #[test]
     fn validate_hardening_rejects_reserved_paths() {
-        for path in ["/", SANDBOX_HOME, "/tmp", "/tmp/", MANAGED_SETTINGS_DIR] {
+        let profile_mount = profile_mount_path(0);
+        let reserved = [
+            "/",
+            SANDBOX_HOME,
+            "/tmp",
+            "/tmp/",
+            MANAGED_SETTINGS_DIR,
+            PROFILE_MOUNT_DIR,
+            &profile_mount,
+        ];
+        for path in reserved {
             let volumes = vec![cm_ro(path)];
             let config = hardened_config(PodHardening {
                 read_only_volumes: &volumes,
@@ -1964,13 +1967,5 @@ mod tests {
         assert!(prefix.contains(".credentials.json"));
         assert!(!prefix.contains('{'), "no JSON must be embedded: {prefix}");
         assert!(prefix.ends_with("&& "));
-    }
-
-    #[test]
-    fn build_profile_copy_prefix_copies_mounted_profile() {
-        let prefix = build_profile_copy_prefix();
-        assert!(prefix.contains(&format!("if [ -d {PROFILE_MOUNT_DIR} ]")));
-        assert!(prefix.contains(&format!("cp -rL {PROFILE_MOUNT_DIR}/.")));
-        assert!(prefix.ends_with("fi && "));
     }
 }

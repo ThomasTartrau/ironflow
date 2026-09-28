@@ -69,6 +69,7 @@
 
 pub mod apply;
 mod client;
+pub mod conventions;
 pub(crate) mod error;
 pub mod helpers;
 pub mod job_run;

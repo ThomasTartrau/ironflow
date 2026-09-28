@@ -84,12 +84,8 @@ async fn build_pod_applies_labels() {
     assert_eq!(labels.get("team").map(String::as_str), Some("platform"));
 }
 
-#[tokio::test]
-async fn build_pod_without_label_has_no_labels() {
-    // Opt-in strict: the field stays absent unless the builder is called.
-    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
-    assert!(pod.metadata.labels.is_none());
-}
+// A pod without caller labels carries exactly the ironflow labels: see
+// `conventions::tests::pod_run_carries_ironflow_labels_without_caller_labels`.
 
 #[tokio::test]
 async fn build_pod_label_last_call_wins() {
@@ -98,7 +94,8 @@ async fn build_pod_label_last_call_wins() {
         .label("run_id", "second")
         .build_pod();
     let labels = pod.metadata.labels.unwrap();
-    assert_eq!(labels.len(), 1);
+    // `run_id` once, plus managed-by and component.
+    assert_eq!(labels.len(), 3);
     assert_eq!(labels.get("run_id").map(String::as_str), Some("second"));
 }
 
@@ -109,7 +106,8 @@ async fn build_pod_labels_replaces_whole_map() {
         .labels(BTreeMap::from([("new".to_string(), "value".to_string())]))
         .build_pod();
     let labels = pod.metadata.labels.unwrap();
-    assert_eq!(labels.len(), 1);
+    // `new`, plus managed-by and component.
+    assert_eq!(labels.len(), 3);
     assert!(!labels.contains_key("old"));
     assert_eq!(labels.get("new").map(String::as_str), Some("value"));
 }

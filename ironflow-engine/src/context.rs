@@ -83,6 +83,9 @@ pub(crate) type HandlerResolver =
 /// ```
 pub struct WorkflowContext {
     run_id: Uuid,
+    /// The top-level run: `run_id` itself, or the parent's root for a
+    /// sub-workflow. Stamped on agent pods so a retry releases the children.
+    root_run_id: Uuid,
     workflow_name: String,
     store: Arc<dyn Store>,
     provider: Arc<dyn AgentProvider>,

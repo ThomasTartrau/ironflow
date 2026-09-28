@@ -86,6 +86,27 @@ let output = ctx.operation("run-tests", &run).await?;
 mount several PVCs in the same pod (e.g. an RWX workspace plus a node-local
 cache). A single call reproduces the historical single-volume manifest exactly.
 
+### Orphans and retries
+
+A `PodRun` pod and a `JobRun` Job carry the conventions of the ironflow agent
+pods (module `conventions`): `app.kubernetes.io/managed-by=ironflow`,
+`app.kubernetes.io/component=pod-run` / `job-run`, and `ironflow.io/expires-at`
+= creation + timeout + `.expiry_margin(d)` (60s by default). If the worker dies,
+`reap_orphans` of `ironflow-core` (feature `transport-k8s`) deletes them once
+expired. `.label()` refuses `managed-by` and `component`.
+
+Tag the object with the run so that a retry of the run deletes whatever the
+dead attempt left running, before the first step:
+
+```rust,ignore
+use ironflow_core::provider::{LABEL_ROOT_RUN_ID, LABEL_RUN_ID};
+
+let run = PodRun::new(&kube, "check", "rust:1.94", "cargo test")
+    .label(LABEL_RUN_ID, &ctx.run_id().to_string())
+    // Inside a sub-workflow: the top-level run is the one that is retried.
+    .label(LABEL_ROOT_RUN_ID, &ctx.root_run_id().to_string());
+```
+
 ## Authentication
 
 Register `kubeconfig` in your workflow's secret store. If not provided, falls back to in-cluster configuration:

@@ -48,6 +48,7 @@ impl WorkflowContext {
         let trace_context = WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
+            root_run_id: run_id,
             workflow_name,
             store,
             provider,
@@ -94,6 +95,7 @@ impl WorkflowContext {
         let trace_context = WorkflowTraceContext::from_workflow_run_id(&run_id.to_string());
         Self {
             run_id,
+            root_run_id: run_id,
             workflow_name,
             store,
             provider,
@@ -359,6 +361,28 @@ impl WorkflowContext {
     /// The run ID this context is executing for.
     pub fn run_id(&self) -> Uuid {
         self.run_id
+    }
+
+    /// The top-level run this context belongs to: [`run_id`](Self::run_id)
+    /// itself, or, inside a sub-workflow, the run that started the chain.
+    ///
+    /// The engine stamps it on agent pods as
+    /// [`LABEL_ROOT_RUN_ID`](ironflow_core::provider::LABEL_ROOT_RUN_ID); set
+    /// the same label on a pod you create yourself (`PodRun`, `JobRun`) so
+    /// that a retry of the top-level run deletes what a dead attempt left.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::provider::LABEL_ROOT_RUN_ID;
+    /// use ironflow_engine::context::WorkflowContext;
+    ///
+    /// fn root_label(ctx: &WorkflowContext) -> (&'static str, String) {
+    ///     (LABEL_ROOT_RUN_ID, ctx.root_run_id().to_string())
+    /// }
+    /// ```
+    pub fn root_run_id(&self) -> Uuid {
+        self.root_run_id
     }
 
     /// The workflow name this run belongs to.

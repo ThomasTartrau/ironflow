@@ -44,7 +44,7 @@ The image runs as uid/gid `10001` (`claude`), matching the provider's
 | `/home/claude` | provider (`emptyDir`, 1Gi by default) | `HOME`; `~/.claude` is written here |
 | `/tmp` | provider (`emptyDir`, 512Mi by default) | `TMPDIR` |
 | `/etc/claude-code` | root, 0755 | `managed-settings.json`; a baked default, replaced by a managed-settings preset ConfigMap |
-| `/etc/ironflow/claude-profile` | root, 0755 | Claude profile ConfigMap, copied into `~/.claude` at startup |
+| `/etc/ironflow/claude-profile` | root, 0755 | One read-only mount per Claude profile ConfigMap (`<n>/`), the keys of the n-th copied into `~/.claude/<subdir>` at startup |
 
 The root filesystem is read-only in the sandbox: anything the agent writes
 goes to `HOME`, `/tmp` or a volume.

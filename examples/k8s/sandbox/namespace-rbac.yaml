@@ -25,6 +25,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "get", "list", "delete"]
+  # The orphan reaper and the run cleanup delete the Jobs of JobRun
+  # (ironflow-ops-k8s). Add "create" and "get" if the worker runs JobRun.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["list", "delete"]
 ---
 # Bind the Role to the worker's service account. The worker runs in its own
 # namespace (`ironflow` here), not in `ironflow-agents`: keep the agent

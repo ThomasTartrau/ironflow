@@ -36,8 +36,9 @@ mod tool_profile;
 
 pub(crate) use pod::upsert_secret_env;
 pub use pod::{
-    LABEL_EGRESS_PROFILE, LABEL_RUN_ID, LABEL_STEP, PodSettings, PodVolumeSource, ReadOnlyVolume,
-    SecretEnvVar, sanitize_label_value,
+    LABEL_COMPONENT, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT, LABEL_MANAGED_BY, LABEL_ROOT_RUN_ID,
+    LABEL_RUN_ID, LABEL_STEP, MANAGED_BY_IRONFLOW, PodSettings, PodVolumeSource, ReadOnlyVolume,
+    SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label, sanitize_label_value,
 };
 pub use tool::Tool;
 pub use tool_profile::ToolProfile;
@@ -45,6 +46,9 @@ pub use tool_profile::ToolProfile;
 /// Boxed future returned by [`AgentProvider::invoke`].
 pub type InvokeFuture<'a> =
     Pin<Box<dyn Future<Output = Result<AgentOutput, AgentError>> + Send + 'a>>;
+
+/// Boxed future returned by [`AgentProvider::release_run`].
+pub type ReleaseFuture<'a> = Pin<Box<dyn Future<Output = Result<(), AgentError>> + Send + 'a>>;
 
 // ── Typestate markers ──────────────────────────────────────────────
 
@@ -1380,6 +1384,34 @@ pub trait AgentProvider: Send + Sync {
         let _ = log_sink;
         self.invoke(config)
     }
+
+    /// Stop whatever a previous execution of the run `run_id` left running
+    /// outside the worker process, before the run executes again.
+    ///
+    /// The engine calls it before every execution of a run, the first one
+    /// included. The default does nothing; the Kubernetes ephemeral provider
+    /// deletes the run's pods and waits until they are gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the release fails; the engine then fails
+    /// the execution with a replayable error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_core::provider::AgentProvider;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::AgentError> {
+    /// ClaudeCodeProvider::new().release_run("run-1").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
+        let _ = run_id;
+        Box::pin(async { Ok(()) })
+    }
 }
 
 // The decision abstraction lives beside `AgentProvider`: re-exported here so
@@ -1959,6 +1991,15 @@ mod tests {
                 })
             })
         }
+    }
+
+    #[tokio::test]
+    async fn release_run_default_does_nothing() {
+        let provider = FixedProvider {
+            output: AgentOutput::new(json!("ok")),
+        };
+        assert!(provider.release_run("run-1").await.is_ok());
+        assert!(provider.release_run("").await.is_ok());
     }
 
     #[tokio::test]

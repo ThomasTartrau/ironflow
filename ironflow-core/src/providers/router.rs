@@ -22,11 +22,12 @@
 //! let provider: Arc<dyn AgentProvider> = Arc::new(router);
 //! ```
 
+use std::iter::once;
 use std::sync::Arc;
 
 use tracing::debug;
 
-use crate::provider::{AgentConfig, AgentProvider, InvokeFuture, LogSink};
+use crate::provider::{AgentConfig, AgentProvider, InvokeFuture, LogSink, ReleaseFuture};
 
 /// Matching strategy for routing invocations to providers.
 #[derive(Debug, Clone)]
@@ -124,15 +125,29 @@ impl AgentProvider for ProviderRouter {
         let provider = self.resolve(config);
         provider.invoke_with_logs(config, log_sink)
     }
+
+    /// Release the run on the fallback and on every routed provider: any of
+    /// them may have started something for it.
+    fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
+        Box::pin(async move {
+            let routed = self.routes.iter().map(|(_, provider)| provider);
+            for provider in once(&self.fallback).chain(routed) {
+                provider.release_run(run_id).await?;
+            }
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use serde_json::json;
 
     use super::*;
+    use crate::error::AgentError;
     use crate::provider::AgentOutput;
 
     struct CountingProvider {
@@ -159,6 +174,58 @@ mod tests {
             let name = self.name;
             Box::pin(async move { Ok(AgentOutput::new(json!(name))) })
         }
+    }
+
+    /// Provider journaling the runs it is asked to release.
+    #[derive(Default)]
+    struct ReleaseProbe {
+        released: Mutex<Vec<String>>,
+        fail: bool,
+    }
+
+    impl AgentProvider for ReleaseProbe {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async { Ok(AgentOutput::new(json!("probe"))) })
+        }
+
+        fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
+            Box::pin(async move {
+                self.released.lock().unwrap().push(run_id.to_string());
+                if self.fail {
+                    return Err(AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: "release refused".to_string(),
+                    });
+                }
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn router_releases_the_run_on_every_provider() {
+        let fallback = Arc::new(ReleaseProbe::default());
+        let routed = Arc::new(ReleaseProbe::default());
+        let router = ProviderRouter::new(fallback.clone())
+            .route(ProviderMatcher::ModelPrefix("gpt".into()), routed.clone());
+
+        router.release_run("run-1").await.expect("released");
+
+        assert_eq!(*fallback.released.lock().unwrap(), vec!["run-1"]);
+        assert_eq!(*routed.released.lock().unwrap(), vec!["run-1"]);
+    }
+
+    #[tokio::test]
+    async fn router_release_failure_is_reported() {
+        let failing = Arc::new(ReleaseProbe {
+            fail: true,
+            ..ReleaseProbe::default()
+        });
+        let router = ProviderRouter::new(Arc::new(ReleaseProbe::default()))
+            .route(ProviderMatcher::ModelPrefix("gpt".into()), failing);
+
+        let err = router.release_run("run-1").await.expect_err("fails");
+        assert!(err.to_string().contains("release refused"), "{err}");
     }
 
     #[tokio::test]

@@ -17,6 +17,7 @@ use serde_json::Value;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::error::OperationError;
 #[cfg(feature = "prometheus")]
 use ironflow_core::metric_names::{
     RUN_BUDGET_EXCEEDED_TOTAL, RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL,
@@ -1090,11 +1091,15 @@ impl Engine {
     /// Execute a handler-based run (used by the worker after pick_next_pending).
     ///
     /// Looks up the handler by the run's `workflow_name` and executes it
-    /// with a fresh [`WorkflowContext`].
+    /// with a fresh [`WorkflowContext`], after
+    /// [`AgentProvider::release_run`] has stopped whatever a previous
+    /// execution of the run left running.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches. A
+    /// failed release fails the execution with [`EngineError::Operation`],
+    /// replayed while the run has retries left.
     #[tracing::instrument(name = "engine.execute_handler_run", skip_all, fields(run_id = %run_id))]
     pub async fn execute_handler_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
@@ -1127,7 +1132,12 @@ impl Engine {
         // completed steps. A brand-new run has no steps, so this is a no-op.
         ctx.load_replay_steps().await?;
 
-        let result = handler.execute(&mut ctx).await;
+        // Whatever a dead attempt left running (an agent pod writing to a
+        // shared worktree) must be gone before the first step runs again.
+        let result = match self.provider.release_run(&run_id.to_string()).await {
+            Ok(()) => handler.execute(&mut ctx).await,
+            Err(e) => Err(EngineError::Operation(OperationError::Agent(e))),
+        };
         self.finalize_run(
             run_id,
             &run.workflow_name,

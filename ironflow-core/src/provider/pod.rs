@@ -20,11 +20,78 @@ pub const LABEL_RUN_ID: &str = "ironflow.io/run-id";
 /// The value goes through [`sanitize_label_value`].
 pub const LABEL_STEP: &str = "ironflow.io/step";
 
+/// Pod label carrying the id of the top-level run of the pod's run.
+///
+/// Equal to [`LABEL_RUN_ID`] for a run started on its own; a sub-workflow's
+/// child run carries its parent's root. Stamped by the engine on every agent
+/// step, so a retry of the top-level run finds the pods its children left
+/// behind.
+pub const LABEL_ROOT_RUN_ID: &str = "ironflow.io/root-run-id";
+
 /// Pod label selecting the network egress profile of the pod.
 ///
 /// Network policies select agent pods on this label to open egress to the
 /// hosts of a profile (for instance `gitlab`).
 pub const LABEL_EGRESS_PROFILE: &str = "ironflow.io/egress-profile";
+
+/// Label naming the tool that manages an object, set to
+/// [`MANAGED_BY_IRONFLOW`] on every pod, Job and ConfigMap ironflow creates.
+///
+/// Reserved: see [`is_reserved_pod_label`].
+pub const LABEL_MANAGED_BY: &str = "app.kubernetes.io/managed-by";
+
+/// Value of [`LABEL_MANAGED_BY`] on every object ironflow creates. The orphan
+/// reaper and the run cleanup select on it.
+pub const MANAGED_BY_IRONFLOW: &str = "ironflow";
+
+/// Label naming what created the object inside ironflow: `claude-runner`,
+/// `prompt-data`, `pod-run` or `job-run`.
+///
+/// Reserved: see [`is_reserved_pod_label`].
+pub const LABEL_COMPONENT: &str = "app.kubernetes.io/component";
+
+/// Annotation holding the unix time (seconds) after which an ironflow pod,
+/// Job or prompt ConfigMap is considered orphaned and may be reaped.
+pub const LABEL_EXPIRES_AT: &str = "ironflow.io/expires-at";
+
+/// Return `true` for a label ironflow sets itself on every object it
+/// creates ([`LABEL_MANAGED_BY`], [`LABEL_COMPONENT`]): a caller cannot set
+/// it, since the orphan reaper and the run cleanup select on it.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::provider::{LABEL_COMPONENT, LABEL_RUN_ID, is_reserved_pod_label};
+///
+/// assert!(is_reserved_pod_label(LABEL_COMPONENT));
+/// assert!(!is_reserved_pod_label(LABEL_RUN_ID));
+/// ```
+pub fn is_reserved_pod_label(key: &str) -> bool {
+    key == LABEL_MANAGED_BY || key == LABEL_COMPONENT
+}
+
+/// Refuse a reserved label passed to a pod builder.
+///
+/// Called by every builder that takes a label from its caller: the K8s
+/// providers, `PodRun` and `JobRun` of `ironflow-ops-k8s`.
+///
+/// # Panics
+///
+/// Panics when [`is_reserved_pod_label`] returns `true` for `key`.
+///
+/// # Examples
+///
+/// ```should_panic
+/// use ironflow_core::provider::{LABEL_COMPONENT, assert_pod_label_allowed};
+///
+/// assert_pod_label_allowed(LABEL_COMPONENT);
+/// ```
+pub fn assert_pod_label_allowed(key: &str) {
+    assert!(
+        !is_reserved_pod_label(key),
+        "pod label '{key}' is reserved: ironflow sets it on every object it creates"
+    );
+}
 
 /// Maximum length of a Kubernetes label value, in bytes.
 const LABEL_VALUE_MAX: usize = 63;
