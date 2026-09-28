@@ -130,7 +130,7 @@ pub async fn register_shared_mcp_tools(
         "Registering MCP tools"
     );
 
-    registry = register_tool_defs(registry, &conn, prefix, tools);
+    registry = register_tool_defs(registry, conn, prefix, tools);
     registry = registry.register_connector(prefix);
 
     Ok(registry)
