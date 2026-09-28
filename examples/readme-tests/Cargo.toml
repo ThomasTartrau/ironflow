@@ -19,6 +19,8 @@ ironflow-core = { path = "../../ironflow-core", features = [
     "provider-mistral",
     "provider-nvidia",
     "tool-bash",
+    "tool-glob",
+    "tool-grep",
     "tool-mcp",
     "tool-read-file",
     "tool-web-fetch",

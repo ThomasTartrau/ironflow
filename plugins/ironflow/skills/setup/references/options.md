@@ -90,6 +90,10 @@ HTTP providers have no CLI to run tools for them. Enable what the workflows need
 cargo add -p worker ironflow-core --features tool-bash,tool-read-file,tool-web-fetch
 ```
 
+For an agent that investigates a codebase, `tool-grep` and `tool-glob` give it `grep` and
+`glob` confined to the directories passed to `with_allowed_paths`, without the isolation loss
+of `tool-bash`.
+
 ### Mixing providers
 
 `ProviderRouter` dispatches on the model name, so one worker can serve several vendors:
