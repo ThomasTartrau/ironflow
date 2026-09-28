@@ -5,13 +5,16 @@
 
 #![cfg(feature = "tool-mcp")]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
 use tokio::time::timeout;
 
 use ironflow_core::providers::http::tools::ToolRegistry;
-use ironflow_core::providers::http::tools::mcp::{McpConnection, McpError, register_mcp_tools};
+use ironflow_core::providers::http::tools::mcp::{
+    McpConnection, McpError, register_mcp_tools, register_shared_mcp_tools,
+};
 
 const ECHO_MCP_SERVER: &str = r#"#!/bin/bash
 # Minimal MCP server that responds to initialize, tools/list, and tools/call
@@ -202,6 +205,37 @@ async fn register_mcp_tools_reads_read_only_hint() {
 
         assert!(registry.is_read_only("test__echo"));
         assert!(!registry.is_read_only("test__add"));
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn tool_profile_shares_one_mcp_connection() {
+    timeout(Duration::from_secs(10), async {
+        let mut conn = spawn_echo_server().await;
+        conn.initialize().await.expect("initialize should succeed");
+        let conn = Arc::new(conn);
+
+        let suggestion = register_shared_mcp_tools(ToolRegistry::new(), &conn, "srv")
+            .await
+            .expect("first profile");
+        let bug = register_shared_mcp_tools(ToolRegistry::new(), &conn, "srv")
+            .await
+            .expect("second profile");
+
+        // One handle here plus one per bridged tool (2 tools x 2 profiles):
+        // both profiles hold the same connection, no second server process.
+        assert_eq!(Arc::strong_count(&conn), 5);
+        for registry in [&suggestion, &bug] {
+            assert!(registry.connectors().contains("srv"));
+            let result = registry
+                .execute("srv__echo", json!({"message": "shared"}))
+                .await
+                .expect("tool should exist")
+                .expect("execution should succeed");
+            assert_eq!(result.content, "shared");
+        }
     })
     .await
     .expect("test timed out");

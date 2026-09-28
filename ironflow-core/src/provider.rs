@@ -31,8 +31,10 @@ use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
 mod tool;
+mod tool_profile;
 
 pub use tool::Tool;
+pub use tool_profile::ToolProfile;
 
 /// Boxed future returned by [`AgentProvider::invoke`].
 pub type InvokeFuture<'a> =
@@ -44,7 +46,8 @@ pub type InvokeFuture<'a> =
 #[derive(Debug, Clone, Copy)]
 pub struct NoTools;
 
-/// Marker: at least one tool has been added via [`AgentConfig::allow_tool`].
+/// Marker: at least one tool has been added via [`AgentConfig::allow_tool`],
+/// or a tool profile selected via [`AgentConfig::tool_profile`].
 #[derive(Debug, Clone, Copy)]
 pub struct WithTools;
 
@@ -153,6 +156,12 @@ impl AgentInput {
 /// let _ = AgentConfig::new("x").allow_tool(Tool::Read).output_schema_raw("{}");
 /// ```
 ///
+/// ```compile_fail,E0599
+/// use ironflow_core::provider::{AgentConfig, ToolProfile};
+/// // COMPILE ERROR: a tool profile counts as tools
+/// let _ = AgentConfig::new("x").tool_profile(ToolProfile::new("bug")).output_schema_raw("{}");
+/// ```
+///
 /// **Workaround**: split the work into two steps -- one agent with tools to
 /// gather data, then a second agent with `.output::<T>()` to structure the result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +195,13 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// affects `--json-schema` + `--allowedTools`.
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
+
+    /// Named tool profile the provider exposes to this step.
+    ///
+    /// Set it with [`AgentConfig::tool_profile`]. `None` means the provider's
+    /// default tools only (none unless it has some).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_profile: Option<ToolProfile>,
 
     /// Maximum number of agentic turns before the provider should stop.
     pub max_turns: Option<u32>,
@@ -318,6 +334,7 @@ impl AgentConfig {
             model: Model::SONNET.to_string(),
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
+            tool_profile: None,
             max_turns: None,
             max_parallel_tools: 4,
             max_budget_usd: None,
@@ -648,6 +665,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             model: self.model,
             allowed_tools: self.allowed_tools,
             disallowed_tools: self.disallowed_tools,
+            tool_profile: self.tool_profile,
             max_turns: self.max_turns,
             max_parallel_tools: self.max_parallel_tools,
             max_budget_usd: self.max_budget_usd,
@@ -706,6 +724,38 @@ impl<Tools> AgentConfig<Tools, NoSchema> {
     /// ```
     pub fn allow_tool(mut self, tool: Tool) -> AgentConfig<WithTools, NoSchema> {
         self.allowed_tools.push(tool.to_string());
+        self.change_state()
+    }
+
+    /// Select the named tool profile the provider exposes to this step.
+    ///
+    /// Profiles are registered with
+    /// [`HttpAgentProvider::with_tool_profile`](crate::providers::http::HttpAgentProvider::with_tool_profile);
+    /// declare each [`ToolProfile`] once as a constant and share it. A profile
+    /// the provider does not have fails the step with
+    /// [`AgentError::UnknownToolProfile`], never falling back to other tools.
+    /// Claude CLI providers fail with [`AgentError::ToolProfileUnsupported`].
+    /// Like [`allow_tool`](Self::allow_tool), it rules out
+    /// [`output`](AgentConfig::output): split into two steps.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::{AgentConfig, ToolProfile};
+    ///
+    /// const BUG: ToolProfile = ToolProfile::new("bug");
+    ///
+    /// let config = AgentConfig::new("Find the root cause").tool_profile(BUG);
+    /// assert_eq!(config.tool_profile, Some(BUG));
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// use ironflow_core::provider::AgentConfig;
+    /// // COMPILE ERROR: a profile is a `ToolProfile`, not a string
+    /// let _ = AgentConfig::new("x").tool_profile("bug");
+    /// ```
+    pub fn tool_profile(mut self, profile: ToolProfile) -> AgentConfig<WithTools, NoSchema> {
+        self.tool_profile = Some(profile);
         self.change_state()
     }
 }
@@ -1148,6 +1198,7 @@ mod tests {
             model: Model::OPUS.to_string(),
             allowed_tools: vec!["Read".to_string(), "Write".to_string()],
             disallowed_tools: vec!["Bash".to_string()],
+            tool_profile: None,
             max_turns: Some(10),
             max_parallel_tools: 2,
             max_budget_usd: Some(2.5),
@@ -1194,6 +1245,7 @@ mod tests {
             model: Model::HAIKU.to_string(),
             allowed_tools: vec![],
             disallowed_tools: vec![],
+            tool_profile: None,
             max_turns: None,
             max_parallel_tools: 4,
             max_budget_usd: None,

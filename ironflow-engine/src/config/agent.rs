@@ -7,7 +7,7 @@
 
 use serde::de::DeserializeOwned;
 
-pub use ironflow_core::provider::{AgentConfig, Tool};
+pub use ironflow_core::provider::{AgentConfig, Tool, ToolProfile};
 use ironflow_core::provider::{NoSchema, NoTools, RawSchema, WithSchema, WithTools};
 
 use crate::error::EngineError;

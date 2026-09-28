@@ -161,8 +161,9 @@ impl AgentProvider for ClaudeCodeProvider {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             common::validate_prompt_size(config)?;
-            materialize_inputs_local(&config.inputs).await?;
+            // Built before fetching inputs so an invalid config fails with no side effect.
             let built = common::build_command(config)?;
+            materialize_inputs_local(&config.inputs).await?;
 
             debug!(
                 model = %config.model,

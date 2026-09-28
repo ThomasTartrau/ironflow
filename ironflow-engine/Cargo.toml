@@ -47,6 +47,8 @@ openapi = ["utoipa", "ironflow-store/openapi"]
 secret-store = ["ironflow-store/secret-store"]
 
 [dev-dependencies]
+# A real HTTP provider for the tool profile tests.
+ironflow-core = { version = "3.22.0", path = "../ironflow-core", features = ["provider-openai"] }
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 tempfile = "3"

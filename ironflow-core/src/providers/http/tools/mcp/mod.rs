@@ -76,13 +76,48 @@ use super::routing::CONNECTOR_SEPARATOR;
 /// # }
 /// ```
 pub async fn register_mcp_tools(
-    mut registry: ToolRegistry,
+    registry: ToolRegistry,
     mut connection: McpConnection,
     prefix: &str,
 ) -> Result<ToolRegistry, McpError> {
     connection.initialize().await?;
-    let tools = connection.list_tools().await?;
-    let conn = Arc::new(connection);
+    register_shared_mcp_tools(registry, &Arc::new(connection), prefix).await
+}
+
+/// Register the tools of an already initialized, shared MCP connection.
+///
+/// Use it to put one MCP server in several tool profiles
+/// ([`HttpAgentProvider::with_tool_profile`](crate::providers::http::HttpAgentProvider::with_tool_profile))
+/// without opening it once per profile: every bridged tool holds the same
+/// `Arc`. Tool names are prefixed as in [`register_mcp_tools`].
+///
+/// # Errors
+///
+/// Returns [`McpError`] if tool discovery fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use ironflow_core::providers::http::tools::ToolRegistry;
+/// use ironflow_core::providers::http::tools::mcp::{McpConnection, register_shared_mcp_tools};
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut gitlab = McpConnection::stdio("mcp-gitlab", &[], &[]).await?;
+/// gitlab.initialize().await?;
+/// let gitlab = Arc::new(gitlab);
+///
+/// let suggestion = register_shared_mcp_tools(ToolRegistry::new(), &gitlab, "gitlab").await?;
+/// let bug = register_shared_mcp_tools(ToolRegistry::new(), &gitlab, "gitlab").await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn register_shared_mcp_tools(
+    mut registry: ToolRegistry,
+    conn: &Arc<McpConnection>,
+    prefix: &str,
+) -> Result<ToolRegistry, McpError> {
+    let tools = conn.list_tools().await?;
 
     debug!(
         prefix = prefix,
