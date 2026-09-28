@@ -4,6 +4,9 @@
 //! replay, budget check, step record creation, execution (with retries),
 //! persistence, events and error handlers.
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::{json, to_value};
@@ -13,7 +16,7 @@ use uuid::Uuid;
 
 use ironflow_core::provider::{LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 use ironflow_store::models::{
-    NewStep, NewStepDependency, RunUpdate, StepKind, StepStatus, StepUpdate, step_trace_id,
+    NewStep, NewStepDependency, RunUpdate, Step, StepKind, StepStatus, StepUpdate, step_trace_id,
 };
 
 use crate::budget::step_budget_usd;
@@ -33,6 +36,28 @@ use super::failure::{
     extract_raw_response_from_error, is_step_retryable, record_retry_metric,
 };
 
+/// Insert a step into a replay index, keeping the oldest `Completed` step
+/// when one already exists at `key`.
+///
+/// Guards against pre-fix data where a duplicated step ended up recorded
+/// twice at the same `(position, attempt)`: on resume the run must always
+/// replay the step that actually produced the side effects, not whichever
+/// row happened to be inserted last while iterating `list_steps`.
+fn insert_replay_candidate<K: Eq + Hash>(map: &mut HashMap<K, Step>, key: K, step: Step) {
+    match map.get(&key) {
+        Some(existing)
+            if existing.status.state == StepStatus::Completed
+                && (step.status.state != StepStatus::Completed
+                    || existing.created_at <= step.created_at) =>
+        {
+            // Keep the existing, older `Completed` step.
+        }
+        _ => {
+            map.insert(key, step);
+        }
+    }
+}
+
 impl WorkflowContext {
     /// Load existing steps from the store for replay after approval.
     ///
@@ -49,6 +74,9 @@ impl WorkflowContext {
     ///
     /// A human input of the current attempt that was rejected is replayed too,
     /// so the rejection reaches the handler instead of asking again.
+    ///
+    /// A step of the current attempt left `Skipped` by [`skip`](Self::skip) is
+    /// replayed as well, so a resumed run never records the same skip twice.
     pub(crate) async fn load_replay_steps(&mut self) -> Result<(), EngineError> {
         let steps = self.store.list_steps(self.run_id).await?;
         for step in steps {
@@ -75,14 +103,19 @@ impl WorkflowContext {
 
             let dominated = matches!(
                 step.status.state,
-                StepStatus::Completed | StepStatus::Running | StepStatus::AwaitingApproval
+                StepStatus::Completed
+                    | StepStatus::Running
+                    | StepStatus::AwaitingApproval
+                    | StepStatus::Skipped
             );
             if !dominated {
                 continue;
             }
 
             if step.attempt == self.attempt {
-                self.replay_steps.insert(step.position, step);
+                let wave_key = (step.position, step.name.clone());
+                insert_replay_candidate(&mut self.replay_wave_steps, wave_key, step.clone());
+                insert_replay_candidate(&mut self.replay_steps, step.position, step);
             } else if step.kind == StepKind::Approval && step.status.state == StepStatus::Completed
             {
                 self.granted_approvals.insert(step.position, step.attempt);
@@ -121,13 +154,15 @@ impl WorkflowContext {
     ///
     /// Returns `Some(StepOutput)` if a completed step exists at the given
     /// position, `None` otherwise.
-    fn try_replay_step(&mut self, position: u32) -> Option<StepOutput> {
+    pub(crate) fn try_replay_step(&mut self, position: u32) -> Option<StepOutput> {
         let step = self.replay_steps.get(&position)?;
         if step.status.state != StepStatus::Completed {
             return None;
         }
         let output = StepOutput::from(step);
-        self.total_cost_usd += output.cost_usd;
+        // Cost is not added: `carry_over_run_totals` seeded `total_cost_usd`
+        // from the run totals persisted before the suspension, which already
+        // include this step.
         self.total_duration_ms += output.duration_ms;
         self.last_step_ids = vec![step.id];
         info!(

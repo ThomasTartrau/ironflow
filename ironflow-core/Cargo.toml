@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-core"
-version = "4.0.0"
+version = "4.1.0"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -25,6 +25,12 @@ futures-util = "0.3"
 rust_decimal = { version = "1", features = ["serde-float"] }
 strum = { version = "0.27", features = ["derive"] }
 metrics = { version = "0.24", optional = true }
+
+# Tools: grep / glob
+ignore = { version = "0.4", optional = true }
+globset = { version = "0.4", optional = true }
+regex = { version = "1", optional = true }
+serde_path_to_error = { version = "0.1", optional = true }
 
 # OpenTelemetry
 opentelemetry = { version = "0.32", optional = true }
@@ -58,6 +64,8 @@ provider-anthropic-api = []
 provider-nvidia = []
 provider-typesafe = []
 tool-bash = []
+tool-glob = ["dep:ignore", "dep:globset", "dep:serde_path_to_error"]
+tool-grep = ["dep:ignore", "dep:regex", "dep:serde_path_to_error"]
 tool-mcp = []
 tool-read-file = []
 tool-web-fetch = []

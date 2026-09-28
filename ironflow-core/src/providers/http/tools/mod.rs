@@ -15,12 +15,22 @@
 //!
 //! Each concrete tool is behind its own feature flag:
 //! - `tool-bash` - `BashTool`
+//! - `tool-glob` - `GlobTool`
+//! - `tool-grep` - `GrepTool`
 //! - `tool-read-file` - `ReadFileTool`
 //! - `tool-web-fetch` - `WebFetchTool`
 //! - `tool-web-search` - `WebSearchTool`
 
 #[cfg(feature = "tool-bash")]
 pub mod bash;
+#[cfg(any(feature = "tool-glob", feature = "tool-grep"))]
+mod confinement;
+#[cfg(feature = "tool-glob")]
+pub mod glob;
+#[cfg(feature = "tool-grep")]
+pub mod grep;
+#[cfg(any(feature = "tool-glob", feature = "tool-grep"))]
+mod input;
 #[cfg(feature = "tool-mcp")]
 pub mod mcp;
 #[cfg(feature = "tool-read-file")]
@@ -34,6 +44,8 @@ pub mod web_search;
 pub(crate) mod profiles;
 mod registry;
 mod tool_trait;
+#[cfg(any(feature = "tool-glob", feature = "tool-grep"))]
+mod walk;
 
 pub use registry::ToolRegistry;
 pub use tool_trait::{Tool, ToolError, ToolOutput};

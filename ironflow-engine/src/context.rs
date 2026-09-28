@@ -106,6 +106,12 @@ pub struct WorkflowContext {
     /// Steps from a previous execution of the *same* attempt, keyed by position.
     /// Used when resuming after approval to replay completed steps.
     replay_steps: HashMap<u32, Step>,
+    /// All steps of a previous execution of the *same* attempt, keyed by
+    /// `(position, step name)`. A `parallel` wave shares one position across
+    /// several steps, which `replay_steps` cannot represent -- this index lets
+    /// `parallel()` check that every step of a wave already completed before
+    /// replaying the whole wave from the store, without re-running any item.
+    replay_wave_steps: HashMap<(u32, String), Step>,
     /// Approvals granted in an *earlier* attempt, keyed by position, holding the
     /// attempt that granted them. An approval is carried by the run, not by the
     /// attempt, so a retry never asks a human to approve the same gate twice.

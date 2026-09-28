@@ -493,6 +493,10 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 }
 ```
 
+Every step of a wave needs its own name: a wave with two steps of the same name
+fails with `EngineError::StepConfig` before anything runs. On resume, the steps of
+the wave that already completed are replayed; only the others run again.
+
 ## Conditions
 
 Branching is plain Rust `if`/`else`. `ctx.when` and `ctx.when_dynamic` make a

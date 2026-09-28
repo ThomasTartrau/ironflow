@@ -68,8 +68,8 @@ async fn parallel_duplicate_step_names_fail_before_any_step_is_created() {
             .run_handler("duplicate-branches", TriggerKind::Manual, json!({}))
             .await
             .expect_err("two branches named lint");
-        let EngineError::InvalidWorkflow(message) = err else {
-            panic!("expected InvalidWorkflow, got {err:?}");
+        let EngineError::StepConfig(message) = err else {
+            panic!("expected StepConfig, got {err:?}");
         };
         assert!(message.contains("\"lint\""), "{message}");
 

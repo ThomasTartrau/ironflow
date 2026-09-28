@@ -412,8 +412,25 @@ let result = Agent::new()
 ```
 
 HTTP providers have no CLI to call tools for them, so tools are opt-in per feature: `tool-bash`,
-`tool-read-file`, `tool-web-fetch`, `tool-web-search`, and `tool-mcp` to bridge any MCP server
-into the agent's toolset.
+`tool-read-file`, `tool-grep`, `tool-glob`, `tool-web-fetch`, `tool-web-search`, and `tool-mcp`
+to bridge any MCP server into the agent's toolset. `GrepTool` and `GlobTool` search a codebase
+without handing the agent a shell: they are confined to the directories you give them.
+
+```rust,no_run
+use std::path::PathBuf;
+
+use ironflow_core::providers::http::tools::glob::GlobTool;
+use ironflow_core::providers::http::tools::grep::GrepTool;
+use ironflow_core::providers::http::tools::{ToolError, ToolRegistry};
+
+# fn example() -> Result<(), ToolError> {
+let repo = vec![PathBuf::from("/srv/repo")];
+let tools = ToolRegistry::new()
+    .register(GrepTool::with_allowed_paths(repo.clone())?)
+    .register(GlobTool::with_allowed_paths(repo)?);
+# Ok(())
+# }
+```
 
 A step picks a named tool profile and sees only its tools; without one it gets the
 `with_tools` registry, or none. Declare each `ToolProfile` once as a constant shared by the
@@ -669,6 +686,8 @@ scaffolded and built against each release. Details in
 | | `provider-nvidia` | NVIDIA NIM provider |
 | | `tool-bash` | Bash tool for HTTP providers |
 | | `tool-read-file` | File reading tool for HTTP providers |
+| | `tool-grep` | Confined content search (regex) tool for HTTP providers |
+| | `tool-glob` | Confined file-name search tool for HTTP providers |
 | | `tool-web-fetch` | Web fetch tool for HTTP providers |
 | | `tool-web-search` | Web search tool for HTTP providers |
 | | `tool-mcp` | MCP bridge, exposes MCP servers as agent tools |

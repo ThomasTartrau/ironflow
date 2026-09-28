@@ -59,9 +59,9 @@ const JITTER_RATIO: f64 = 0.2;
 ///
 /// | Error | Reason |
 /// |-------|--------|
-/// | [`EngineError::InvalidWorkflow`] | the handler is not registered, or its definition is invalid |
+/// | [`EngineError::InvalidWorkflow`] | the handler is not registered |
 /// | [`EngineError::Serialization`] | the payload or step config is malformed |
-/// | [`EngineError::StepConfig`] | the step config cannot be deserialized |
+/// | [`EngineError::StepConfig`] | the step config cannot be deserialized, or a parallel wave repeats a step name |
 /// | [`EngineError::Store`] | if the store is down, persisting the retry fails too |
 /// | [`EngineError::RunBudgetExceeded`] | the cost cap is cumulative; a replay only spends more |
 /// | [`EngineError::MonthlyBudgetExceeded`] | the monthly quota is exhausted for every run |

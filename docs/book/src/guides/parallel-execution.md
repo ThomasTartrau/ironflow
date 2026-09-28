@@ -19,8 +19,10 @@ Pass a list of step configurations to `ctx.parallel()`. All steps run concurrent
   (`r.output.artifact("report.html")?`)
 - If `fail_fast` is `true` (the second argument), the remaining steps are cancelled when one fails
 - If `fail_fast` is `false`, all steps run to completion regardless of individual failures
-- Step names must be unique within a `parallel()` call: a duplicate fails the run with
-  `EngineError::InvalidWorkflow` before any step is created (a dry-run plan reports it too)
+- Every step of a wave needs its own name: a wave with two steps of the same name fails
+  with `EngineError::StepConfig` before anything runs (a dry-run plan reports it too)
+- When a run resumes (after an approval, a human input or a delay), the steps of the wave
+  that already completed are replayed from the store; only the others run again
 
 ## Conditional branching
 
