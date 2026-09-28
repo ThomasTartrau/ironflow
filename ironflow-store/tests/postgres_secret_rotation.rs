@@ -20,7 +20,14 @@ use ironflow_store::secret_store::SecretStore;
 use sqlx::PgPool;
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
+use tokio::sync::Mutex;
 use uuid::Uuid;
+
+/// Serialises the tests of this file. A rotation re-encrypts every secret of
+/// the table, so it would move another test's version 1 secret to version 2
+/// between its write and its assertion, and the test harness runs tests in
+/// parallel.
+static SERIAL: Mutex<()> = Mutex::const_new(());
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL").expect("DATABASE_URL must be set")
@@ -99,6 +106,7 @@ async fn rotate_keys(store: &PostgresStore, pool: &PgPool, to_version: i32, keys
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn new_secret_is_written_with_the_active_version() {
+    let _serial = SERIAL.lock().await;
     let store = get_store(2).await;
     let pool = raw_pool().await;
     let key = unique_key("active-version");
@@ -113,6 +121,7 @@ async fn new_secret_is_written_with_the_active_version() {
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn secret_written_with_an_older_version_stays_readable() {
+    let _serial = SERIAL.lock().await;
     let mut store = get_store(1).await;
     let pool = raw_pool().await;
     let old = unique_key("old");
@@ -151,6 +160,7 @@ async fn secret_written_with_an_older_version_stays_readable() {
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn rotation_re_encrypts_without_changing_identity_or_timestamps() {
+    let _serial = SERIAL.lock().await;
     let mut store = get_store(1).await;
     let pool = raw_pool().await;
     let key = unique_key("identity");
@@ -177,6 +187,7 @@ async fn rotation_re_encrypts_without_changing_identity_or_timestamps() {
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn rotation_walks_the_stock_batch_by_batch() {
+    let _serial = SERIAL.lock().await;
     let mut store = get_store(1).await;
     let pool = raw_pool().await;
 
@@ -194,8 +205,8 @@ async fn rotation_walks_the_stock_batch_by_batch() {
     // whichever version it currently sits on.
     //
     // The batch counters are not asserted against the number of keys created
-    // here: the table is shared with the other tests in this file, which
-    // rotate rows of their own concurrently.
+    // here: the table is shared with other test files, and may hold rows
+    // those left behind.
     let mut cursor = None;
     let mut batches = 0;
     loop {
@@ -239,6 +250,7 @@ async fn rotation_walks_the_stock_batch_by_batch() {
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn rotation_is_idempotent() {
+    let _serial = SERIAL.lock().await;
     let mut store = get_store(1).await;
     let pool = raw_pool().await;
     let key = unique_key("idempotent");
@@ -259,6 +271,7 @@ async fn rotation_is_idempotent() {
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn concurrent_write_during_rotation_is_not_overwritten() {
+    let _serial = SERIAL.lock().await;
     let mut store = get_store(1).await;
     let pool = raw_pool().await;
     let key = unique_key("concurrent");
@@ -289,6 +302,7 @@ async fn concurrent_write_during_rotation_is_not_overwritten() {
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn rotating_to_an_unconfigured_version_fails() {
+    let _serial = SERIAL.lock().await;
     let store = get_store(2).await;
 
     let err = store
@@ -304,6 +318,7 @@ async fn rotating_to_an_unconfigured_version_fails() {
 #[tokio::test]
 #[ignore = "requires a live PostgreSQL database"]
 async fn key_status_reports_versions_in_use() {
+    let _serial = SERIAL.lock().await;
     let mut store = get_store(2).await;
     let key = unique_key("status");
     store.set_secret(&key, "value").await.expect("set");
