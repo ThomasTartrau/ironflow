@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.40.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.40.3...ironflow-engine-v2.40.4) - 2026-09-28
+
+### Fixed
+
+- #120 replay operation and parallel steps on run resume
+
+- #120 replay operation and parallel steps on run resume
+
 ## [2.40.3](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.40.2...ironflow-engine-v2.40.3) - 2026-09-28
 ## [2.40.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.40.0...ironflow-engine-v2.40.1) - 2026-09-27
 
