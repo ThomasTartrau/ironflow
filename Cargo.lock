@@ -4032,6 +4032,7 @@ dependencies = [
 name = "ironflow-worker"
 version = "2.22.5"
 dependencies = [
+ "async-trait",
  "axum",
  "bytes",
  "chrono",

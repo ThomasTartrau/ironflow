@@ -375,6 +375,7 @@ impl WorkflowContext {
             // shared cap, so the child cannot restart the budget from zero.
             inherited_cost_usd: self.charged_cost_usd(),
             replay_steps: HashMap::new(),
+            replay_wave_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
             answered_inputs: HashMap::new(),
             // A child run is created fresh here; it is never itself retried.
