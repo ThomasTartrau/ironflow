@@ -7,9 +7,11 @@ cleanup of a previous attempt described below.
 
 ## The image
 
-The official image `ironflow-claude-runner:<claude-code-version>-<n>` is built
-from `docker/claude-runner/` by the `build-claude-runner-image` CI job. There is
-no `latest` tag: pin the full tag.
+The official image
+`registry.gitlab.com/thomastartrau/ironflow/ironflow-claude-runner:<claude-code-version>-<n>`
+is built from `docker/claude-runner/` by the `build-claude-runner-image` CI job.
+The current tag is in `docker/claude-runner/IMAGE_TAG`. There is no `latest`
+tag: pin the full tag.
 
 | Path | Content |
 |------|---------|
@@ -90,8 +92,9 @@ names are sanitized into valid label values, with a hash suffix when altered.
 Before creating a pod, the provider deletes the pods and prompt ConfigMaps of a
 previous attempt of the same step of the same run, and waits until the pods
 are gone (`.previous_attempt_timeout(d)`, 60s by default). If they are still
-terminating, the step fails: two agents never run side by side. Step names must
-therefore be unique within a parallel group.
+terminating, the step fails: two agents never run side by side. Two branches of
+a `ctx.parallel()` group with the same name would delete each other's pod, so
+the engine fails such a group before creating any step.
 
 ## The reaper
 

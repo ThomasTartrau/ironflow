@@ -48,18 +48,18 @@ use tracing::{debug, info, warn};
 use crate::error::AgentError;
 use crate::provider::{
     AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_EGRESS_PROFILE, LABEL_RUN_ID,
-    LABEL_STEP, LogSink, PodVolumeSource, ReadOnlyVolume, SecretEnvVar,
+    LABEL_STEP, LogSink, PodVolumeSource, ReadOnlyVolume, SecretEnvVar, upsert_secret_env,
 };
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
 use super::common::{
-    DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, LABEL_EXPIRES_AT,
-    PodConfig, PodHardening, SandboxSettings, build_credentials_from_env_prefix,
-    build_credentials_prefix, build_pod_spec, build_profile_copy_prefix, create_client,
-    generate_pod_name,
+    DEFAULT_DEADLINE_MARGIN, DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig,
+    K8sResources, LABEL_EXPIRES_AT, PodConfig, PodHardening, SandboxSettings,
+    build_credentials_from_env_prefix, build_credentials_prefix, build_pod_spec,
+    build_profile_copy_prefix, create_client, generate_pod_name,
 };
-use super::reaper::{ReapReport, configmap_expired, reap_reason};
+use super::reaper::{ReapReport, reap_namespace};
 use super::toleration::K8sToleration;
 
 /// Environment variable carrying the OAuth credentials JSON read from a Secret.
@@ -68,19 +68,16 @@ const CREDENTIALS_ENV_VAR: &str = "IRONFLOW_CLAUDE_CREDENTIALS";
 /// Environment variables a sandboxed provider refuses as plain values.
 const PLAIN_TEXT_SECRETS: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 
-/// Margin added to the timeout for the expiry annotation when not sandboxed.
-const DEFAULT_DEADLINE_MARGIN: Duration = Duration::from_secs(60);
-
 /// Label selector matching every agent pod created by ironflow.
-const RUNNER_SELECTOR: &str =
+pub(super) const RUNNER_SELECTOR: &str =
     "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=claude-runner";
 
 /// Label selector matching every prompt ConfigMap created by ironflow.
-const PROMPT_SELECTOR: &str =
+pub(super) const PROMPT_SELECTOR: &str =
     "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=prompt-data";
 
 /// Current unix time in whole seconds.
-fn now_unix() -> Result<u64, AgentError> {
+pub(super) fn now_unix() -> Result<u64, AgentError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -365,10 +362,7 @@ impl K8sEphemeralProvider {
             secret: secret.to_string(),
             key: key.to_string(),
         };
-        match self.secret_env.iter_mut().find(|e| e.name == var) {
-            Some(existing) => *existing = entry,
-            None => self.secret_env.push(entry),
-        }
+        upsert_secret_env(&mut self.secret_env, entry);
         self
     }
 
@@ -861,10 +855,7 @@ impl K8sEphemeralProvider {
             });
         }
         for entry in &config.pod.secret_env {
-            match secret_env.iter_mut().find(|e| e.name == entry.name) {
-                Some(existing) => *existing = entry.clone(),
-                None => secret_env.push(entry.clone()),
-            }
+            upsert_secret_env(&mut secret_env, entry.clone());
         }
 
         let service_account = config
@@ -881,26 +872,25 @@ impl K8sEphemeralProvider {
             .managed_settings
             .as_ref()
             .or(self.default_managed_settings.as_ref());
-        let managed_settings_configmap = match preset {
-            Some(name) => match self.managed_settings_presets.get(name) {
-                Some(configmap) => Some(configmap.clone()),
-                None => {
+        let managed_settings_configmap = preset
+            .map(|name| {
+                let configmap = self.managed_settings_presets.get(name).cloned();
+                configmap.ok_or_else(|| {
                     let known: Vec<&str> = self
                         .managed_settings_presets
                         .keys()
                         .map(String::as_str)
                         .collect();
-                    return Err(AgentError::ProcessFailed {
+                    AgentError::ProcessFailed {
                         exit_code: -1,
                         stderr: format!(
                             "unknown managed settings preset '{name}', known presets: [{}]",
                             known.join(", ")
                         ),
-                    });
-                }
-            },
-            None => None,
-        };
+                    }
+                })
+            })
+            .transpose()?;
 
         let mut labels = self.pod_labels.clone();
         if let Some(profile) = &self.egress_profile {
@@ -937,9 +927,9 @@ impl K8sEphemeralProvider {
     /// Delete the pods and prompt ConfigMaps left by a previous attempt of the
     /// same step of the same run, and wait until the pods are gone.
     ///
-    /// Step names must be unique within a parallel group: two branches with
-    /// the same name share the `ironflow.io/step` label, and one would delete
-    /// the other's pod.
+    /// Two branches of a parallel group with the same name would share the
+    /// `ironflow.io/step` label, and one would delete the other's pod: the
+    /// engine rejects such a group before creating any step.
     ///
     /// Returns the number of pods deleted.
     ///
@@ -949,7 +939,7 @@ impl K8sEphemeralProvider {
     /// or deleted, or are still terminating after
     /// [`previous_attempt_timeout`](Self::previous_attempt_timeout): a new
     /// agent never starts next to a live one.
-    pub(crate) async fn delete_previous_attempt(
+    async fn delete_previous_attempt(
         &self,
         pods: &Api<Pod>,
         configmaps: &Api<ConfigMap>,
@@ -1054,59 +1044,7 @@ impl K8sEphemeralProvider {
     /// # }
     /// ```
     pub async fn reap_orphans(&self) -> Result<ReapReport, AgentError> {
-        let client = create_client(&self.cluster_config).await?;
-        let pods: Api<Pod> = Api::namespaced(client.clone(), &self.namespace);
-        let configmaps: Api<ConfigMap> = Api::namespaced(client, &self.namespace);
-        let now = now_unix()?;
-        let mut report = ReapReport::default();
-
-        let pod_params = ListParams::default().labels(RUNNER_SELECTOR);
-        let listed = pods.list(&pod_params).await;
-        let pod_list = listed.map_err(|e| AgentError::ProcessFailed {
-            exit_code: -1,
-            stderr: format!("failed to list agent pods: {e}"),
-        })?;
-        for pod in &pod_list.items {
-            let Some(name) = pod.metadata.name.as_deref() else {
-                continue;
-            };
-            let Some(reason) = reap_reason(pod, now) else {
-                continue;
-            };
-            match pods.delete(name, &DeleteParams::default()).await {
-                Ok(_) => {
-                    info!(pod = %name, ?reason, "reaped orphan agent pod");
-                    report.pods_deleted += 1;
-                }
-                Err(e) => warn!(pod = %name, error = %e, "failed to reap orphan agent pod"),
-            }
-        }
-
-        let cm_params = ListParams::default().labels(PROMPT_SELECTOR);
-        let listed = configmaps.list(&cm_params).await;
-        let cm_list = listed.map_err(|e| AgentError::ProcessFailed {
-            exit_code: -1,
-            stderr: format!("failed to list prompt ConfigMaps: {e}"),
-        })?;
-        for cm in &cm_list.items {
-            let Some(name) = cm.metadata.name.as_deref() else {
-                continue;
-            };
-            if !configmap_expired(cm, now) {
-                continue;
-            }
-            match configmaps.delete(name, &DeleteParams::default()).await {
-                Ok(_) => {
-                    info!(configmap = %name, "reaped orphan prompt ConfigMap");
-                    report.configmaps_deleted += 1;
-                }
-                Err(e) => {
-                    warn!(configmap = %name, error = %e, "failed to reap orphan prompt ConfigMap");
-                }
-            }
-        }
-
-        Ok(report)
+        reap_namespace(&self.cluster_config, &self.namespace).await
     }
 
     /// Spawn a background task calling [`reap_orphans`](Self::reap_orphans)
@@ -1135,12 +1073,15 @@ impl K8sEphemeralProvider {
             !interval.is_zero(),
             "orphan reaper interval must be greater than zero"
         );
-        let provider = self.clone();
+        // The task lives as long as the worker: keep only what a pass needs,
+        // not the whole provider and its inline credentials.
+        let cluster_config = self.cluster_config.clone();
+        let namespace = self.namespace.clone();
         spawn(async move {
             let mut ticker = time::interval(interval);
             loop {
                 ticker.tick().await;
-                if let Err(e) = provider.reap_orphans().await {
+                if let Err(e) = reap_namespace(&cluster_config, &namespace).await {
                     warn!(error = %e, "orphan reaping pass failed");
                 }
             }

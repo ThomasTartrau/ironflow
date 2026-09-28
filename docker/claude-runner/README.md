@@ -2,20 +2,35 @@
 
 Container image running the Claude Code CLI for
 `K8sEphemeralProvider::sandboxed`. Built by the `build-claude-runner-image` CI
-job and pushed to the project registry.
+job and pushed to
+`registry.gitlab.com/thomastartrau/ironflow/ironflow-claude-runner`.
 
 ## Tags
 
-`ironflow-claude-runner:<claude-code-version>-<n>`, for instance
-`ironflow-claude-runner:2.0.14-1`.
+`ironflow-claude-runner:<claude-code-version>-<n>`, read from
+[`IMAGE_TAG`](IMAGE_TAG), the only place the version is written.
 
 - `<claude-code-version>` is the `@anthropic-ai/claude-code` npm version baked
-  in (`RUNNER_CLAUDE_CODE_VERSION` in `.gitlab-ci.yml`).
-- `<n>` is the image revision for that version: bump it to rebuild the same
-  Claude Code version after a change to the Dockerfile
-  (`CLAUDE_RUNNER_IMAGE_TAG` in `.gitlab-ci.yml`).
+  in. Take the one behind the `stable` dist-tag
+  (`npm view @anthropic-ai/claude-code dist-tags.stable`), with `-1`.
+- `<n>` is the image revision for that version: bump it after any other change
+  to the Dockerfile, the base image digest included.
+
+The build fails if the installed CLI does not report `<claude-code-version>`.
+On merge requests, the `check-claude-runner-image` job builds the image
+without pushing it, and fails when the Dockerfile changes without a new
+`IMAGE_TAG`, so a merge never overwrites a published tag.
 
 There is no `latest` tag. Pin the full tag in the provider.
+
+## Base image
+
+`node:22-bookworm-slim`, pinned by digest. To update it, take the digest of
+the multi-arch index and bump `<n>`:
+
+```sh
+docker buildx imagetools inspect node:22-bookworm-slim --format '{{json .Manifest.Digest}}'
+```
 
 ## User
 
@@ -44,6 +59,7 @@ goes to `HOME`, `/tmp` or a volume.
 ## Local build
 
 ```sh
-docker build --build-arg CLAUDE_CODE_VERSION=2.0.14 \
-  -t ironflow-claude-runner:2.0.14-1 docker/claude-runner
+tag="$(cat docker/claude-runner/IMAGE_TAG)"
+docker build --build-arg CLAUDE_CODE_VERSION="${tag%-*}" \
+  -t "ironflow-claude-runner:${tag}" docker/claude-runner
 ```

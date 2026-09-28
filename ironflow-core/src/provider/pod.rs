@@ -165,6 +165,14 @@ impl PodSettings {
     }
 }
 
+/// Add `entry` to `list`, replacing in place an entry with the same name.
+pub(crate) fn upsert_secret_env(list: &mut Vec<SecretEnvVar>, entry: SecretEnvVar) {
+    match list.iter_mut().find(|e| e.name == entry.name) {
+        Some(existing) => *existing = entry,
+        None => list.push(entry),
+    }
+}
+
 /// 32-bit FNV-1a hash: deterministic across processes and platforms.
 fn fnv1a(data: &[u8]) -> u32 {
     let mut hash: u32 = 0x811c_9dc5;

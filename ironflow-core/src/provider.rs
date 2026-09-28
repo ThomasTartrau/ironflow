@@ -34,6 +34,7 @@ mod pod;
 mod tool;
 mod tool_profile;
 
+pub(crate) use pod::upsert_secret_env;
 pub use pod::{
     LABEL_EGRESS_PROFILE, LABEL_RUN_ID, LABEL_STEP, PodSettings, PodVolumeSource, ReadOnlyVolume,
     SecretEnvVar, sanitize_label_value,
@@ -690,10 +691,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             secret: secret.to_string(),
             key: key.to_string(),
         };
-        match self.pod.secret_env.iter_mut().find(|e| e.name == var) {
-            Some(existing) => *existing = entry,
-            None => self.pod.secret_env.push(entry),
-        }
+        upsert_secret_env(&mut self.pod.secret_env, entry);
         self
     }
 

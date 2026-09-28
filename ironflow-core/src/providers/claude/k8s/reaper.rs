@@ -8,12 +8,18 @@
 //!
 //! The decision functions here are pure: [`reap_reason`] and
 //! [`configmap_expired`] never delete anything on doubt (missing or
-//! unparseable annotation).
+//! unparseable annotation). The pass that applies them to a namespace backs
+//! [`K8sEphemeralProvider::reap_orphans`](super::K8sEphemeralProvider::reap_orphans).
 
 use k8s_openapi::api::core::v1::{ConfigMap, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use kube::api::{Api, DeleteParams, ListParams};
+use tracing::{info, warn};
 
-use super::common::LABEL_EXPIRES_AT;
+use crate::error::AgentError;
+
+use super::common::{K8sClusterConfig, LABEL_EXPIRES_AT, create_client};
+use super::ephemeral::{PROMPT_SELECTOR, RUNNER_SELECTOR, now_unix};
 
 /// Why the reaper deletes a pod.
 ///
@@ -105,6 +111,70 @@ pub fn reap_reason(pod: &Pod, now_unix: u64) -> Option<ReapReason> {
 /// ```
 pub fn configmap_expired(cm: &ConfigMap, now_unix: u64) -> bool {
     expires_at(&cm.metadata).is_some_and(|expiry| expiry < now_unix)
+}
+
+/// One reaping pass over `namespace`: see
+/// [`K8sEphemeralProvider::reap_orphans`](super::K8sEphemeralProvider::reap_orphans).
+///
+/// Takes only what a pass needs, so the periodic reaper task does not keep a
+/// whole provider alive.
+pub(super) async fn reap_namespace(
+    cluster_config: &K8sClusterConfig,
+    namespace: &str,
+) -> Result<ReapReport, AgentError> {
+    let client = create_client(cluster_config).await?;
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
+    let configmaps: Api<ConfigMap> = Api::namespaced(client, namespace);
+    let now = now_unix()?;
+    let mut report = ReapReport::default();
+
+    let pod_params = ListParams::default().labels(RUNNER_SELECTOR);
+    let listed = pods.list(&pod_params).await;
+    let pod_list = listed.map_err(|e| AgentError::ProcessFailed {
+        exit_code: -1,
+        stderr: format!("failed to list agent pods: {e}"),
+    })?;
+    for pod in &pod_list.items {
+        let Some(name) = pod.metadata.name.as_deref() else {
+            continue;
+        };
+        let Some(reason) = reap_reason(pod, now) else {
+            continue;
+        };
+        match pods.delete(name, &DeleteParams::default()).await {
+            Ok(_) => {
+                info!(pod = %name, ?reason, "reaped orphan agent pod");
+                report.pods_deleted += 1;
+            }
+            Err(e) => warn!(pod = %name, error = %e, "failed to reap orphan agent pod"),
+        }
+    }
+
+    let cm_params = ListParams::default().labels(PROMPT_SELECTOR);
+    let listed = configmaps.list(&cm_params).await;
+    let cm_list = listed.map_err(|e| AgentError::ProcessFailed {
+        exit_code: -1,
+        stderr: format!("failed to list prompt ConfigMaps: {e}"),
+    })?;
+    for cm in &cm_list.items {
+        let Some(name) = cm.metadata.name.as_deref() else {
+            continue;
+        };
+        if !configmap_expired(cm, now) {
+            continue;
+        }
+        match configmaps.delete(name, &DeleteParams::default()).await {
+            Ok(_) => {
+                info!(configmap = %name, "reaped orphan prompt ConfigMap");
+                report.configmaps_deleted += 1;
+            }
+            Err(e) => {
+                warn!(configmap = %name, error = %e, "failed to reap orphan prompt ConfigMap");
+            }
+        }
+    }
+
+    Ok(report)
 }
 
 #[cfg(test)]

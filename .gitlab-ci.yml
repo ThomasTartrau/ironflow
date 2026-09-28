@@ -39,11 +39,6 @@ variables:
   CACHE_COMPRESSION_LEVEL: "fastest"
   RELEASE_PLZ_VERSION: "0.3.160"
   CI_RUST_IMAGE_TAG: "1.94.1-v3"
-  # Claude Code version baked into ironflow-claude-runner. Not prefixed with
-  # CLAUDE: the providers blank every host CLAUDE* variable in agent processes.
-  RUNNER_CLAUDE_CODE_VERSION: "2.0.14"
-  # <claude-code-version>-<n>: bump <n> to rebuild the same Claude Code version.
-  CLAUDE_RUNNER_IMAGE_TAG: "2.0.14-1"
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
   COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
@@ -108,22 +103,66 @@ build-ci-images:
       --destination "${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}"
       --cache=true
 
-# Official sandboxed Claude Code runner image (docker/claude-runner). Published
-# as ironflow-claude-runner:<claude-code-version>-<n>, never as `latest`. On main
-# it rebuilds when the image sources change; bump CLAUDE_RUNNER_IMAGE_TAG (and
-# RUNNER_CLAUDE_CODE_VERSION) in this file to publish a new tag. The manual rule is a
-# fallback to republish on demand.
-build-claude-runner-image:
-  stage: build
+# Official sandboxed Claude Code runner image (docker/claude-runner), published
+# as ironflow-claude-runner:<IMAGE_TAG>, never as `latest`. The tag lives in
+# docker/claude-runner/IMAGE_TAG (<claude-code-version>-<n>), not in this file,
+# so a version bump is a change to the image sources and triggers the build.
+# The Claude Code version is the tag without its -<n> revision. A file the
+# Dockerfile COPYs must be added to the `changes` lists of both jobs.
+.claude-runner-image:
   image:
     name: gcr.io/kaniko-project/executor:v1.23.2-debug
     entrypoint: [""]
   variables:
     GIT_DEPTH: 1
+  before_script:
+    - RUNNER_IMAGE_TAG="$(cat docker/claude-runner/IMAGE_TAG)"
+    - RUNNER_CLAUDE_CODE_VERSION="${RUNNER_IMAGE_TAG%-*}"
+    - |
+      if ! echo "${RUNNER_IMAGE_TAG}" | grep -Eq '^.+-[0-9]+$'; then
+        echo "docker/claude-runner/IMAGE_TAG must read <claude-code-version>-<n>, got '${RUNNER_IMAGE_TAG}'"
+        exit 1
+      fi
+
+# MR check, only when the image changes. Builds without pushing, so a broken
+# Dockerfile or a Claude Code version missing from npm fails before merge. A
+# Dockerfile change without a new IMAGE_TAG fails too: main would overwrite a
+# published tag with different content.
+check-claude-runner-image:
+  extends: .claude-runner-image
+  stage: check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - docker/claude-runner/IMAGE_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - docker/claude-runner/Dockerfile
+      variables:
+        RUNNER_IMAGE_TAG_UNCHANGED: "true"
+  script:
+    - |
+      if [ "${RUNNER_IMAGE_TAG_UNCHANGED}" = "true" ]; then
+        echo "docker/claude-runner/Dockerfile changed but docker/claude-runner/IMAGE_TAG did not."
+        echo "Bump its -<n> revision, or main overwrites the published ${RUNNER_IMAGE_TAG}."
+        exit 1
+      fi
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}/docker/claude-runner"
+      --dockerfile "${CI_PROJECT_DIR}/docker/claude-runner/Dockerfile"
+      --build-arg "CLAUDE_CODE_VERSION=${RUNNER_CLAUDE_CODE_VERSION}"
+      --no-push
+
+# On main, publishes the image when the Dockerfile or IMAGE_TAG changes. The
+# manual rule is a fallback to republish on demand.
+build-claude-runner-image:
+  extends: .claude-runner-image
+  stage: build
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
-        - docker/claude-runner/**
+        - docker/claude-runner/Dockerfile
+        - docker/claude-runner/IMAGE_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
       allow_failure: true
@@ -134,7 +173,7 @@ build-claude-runner-image:
       --context "${CI_PROJECT_DIR}/docker/claude-runner"
       --dockerfile "${CI_PROJECT_DIR}/docker/claude-runner/Dockerfile"
       --build-arg "CLAUDE_CODE_VERSION=${RUNNER_CLAUDE_CODE_VERSION}"
-      --destination "${CI_REGISTRY_IMAGE}/ironflow-claude-runner:${CLAUDE_RUNNER_IMAGE_TAG}"
+      --destination "${CI_REGISTRY_IMAGE}/ironflow-claude-runner:${RUNNER_IMAGE_TAG}"
       --cache=true
 
 # release-plz is installed as a prebuilt musl binary, not built from source:

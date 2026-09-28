@@ -19,6 +19,8 @@ Pass a list of step configurations to `ctx.parallel()`. All steps run concurrent
   (`r.output.artifact("report.html")?`)
 - If `fail_fast` is `true` (the second argument), the remaining steps are cancelled when one fails
 - If `fail_fast` is `false`, all steps run to completion regardless of individual failures
+- Step names must be unique within a `parallel()` call: a duplicate fails the run with
+  `EngineError::InvalidWorkflow` before any step is created (a dry-run plan reports it too)
 
 ## Conditional branching
 

@@ -1,6 +1,6 @@
 //! Parallel step wave for [`WorkflowContext`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -10,7 +10,6 @@ use tokio::time::timeout;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use ironflow_core::provider::{LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 use ironflow_store::models::{NewStep, StepStatus, StepUpdate, step_trace_id};
 
 use crate::budget::step_budget_usd;
@@ -40,9 +39,15 @@ impl WorkflowContext {
     /// failure. When false, all steps run to completion and the first
     /// error is returned.
     ///
+    /// Step names must be unique within the wave: branches share the run and
+    /// the position, so two branches with the same name would share a trace
+    /// id and the `ironflow.io/step` pod label, and the K8s ephemeral provider
+    /// would delete one branch's pod when starting the other.
+    ///
     /// # Errors
     ///
-    /// Returns [`EngineError`] if any step fails.
+    /// Returns [`EngineError::InvalidWorkflow`] when two steps share a name,
+    /// before any step is created. Returns [`EngineError`] if any step fails.
     ///
     /// # Examples
     ///
@@ -73,6 +78,14 @@ impl WorkflowContext {
     ) -> Result<Vec<ParallelStepResult>, EngineError> {
         if steps.is_empty() {
             return Ok(Vec::new());
+        }
+
+        // Checked before plan mode too, so a dry run reports it.
+        let mut seen = HashSet::with_capacity(steps.len());
+        if let Some((duplicate, _)) = steps.iter().find(|(name, _)| !seen.insert(*name)) {
+            return Err(EngineError::InvalidWorkflow(format!(
+                "duplicate step name {duplicate:?} in ctx.parallel(): each branch needs a unique name"
+            )));
         }
 
         // Plan mode: record the whole wave under one parallel group and return
@@ -162,22 +175,7 @@ impl WorkflowContext {
             }
 
             let mut config_with_trace = config.clone();
-            let step_trace = self.trace_context.child();
-            match config_with_trace {
-                StepConfig::Agent(ref mut agent_config) => {
-                    agent_config.trace_context = Some(step_trace);
-                    agent_config
-                        .pod_labels
-                        .insert(LABEL_RUN_ID.to_string(), self.run_id.to_string());
-                    agent_config
-                        .pod_labels
-                        .insert(LABEL_STEP.to_string(), sanitize_label_value(name));
-                }
-                StepConfig::Http(ref mut http_config) => {
-                    http_config.trace_context = Some(step_trace);
-                }
-                _ => {}
-            }
+            self.scope_step_config(&mut config_with_trace, name);
             step_records.push((step.id, trace_id, name.to_string(), config_with_trace));
         }
 

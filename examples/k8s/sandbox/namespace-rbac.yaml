@@ -26,8 +26,10 @@ rules:
     resources: ["configmaps"]
     verbs: ["create", "get", "list", "delete"]
 ---
-# Bind the Role to the worker's service account. Adjust the subject to the
-# namespace and name the worker runs under.
+# Bind the Role to the worker's service account. The worker runs in its own
+# namespace (`ironflow` here), not in `ironflow-agents`: keep the agent
+# namespace for agent pods only. Adjust the subject to the namespace and name
+# the worker runs under.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

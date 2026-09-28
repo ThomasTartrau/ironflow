@@ -458,8 +458,10 @@ impl WorkflowHandler for ParallelTokenAgents {
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            let steps: Vec<(&str, StepConfig)> = (0..self.n)
-                .map(|_| ("agent", StepConfig::Agent(agent_config())))
+            let names: Vec<String> = (0..self.n).map(|i| format!("agent-{i}")).collect();
+            let steps: Vec<(&str, StepConfig)> = names
+                .iter()
+                .map(|name| (name.as_str(), StepConfig::Agent(agent_config())))
                 .collect();
             ctx.parallel(steps, true).await?;
             Ok(())

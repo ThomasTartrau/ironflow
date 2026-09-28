@@ -39,6 +39,10 @@ pub const PROFILE_MOUNT_DIR: &str = "/etc/ironflow/claude-profile";
 /// prompt ConfigMap is considered orphaned and may be reaped.
 pub const LABEL_EXPIRES_AT: &str = "ironflow.io/expires-at";
 
+/// Default margin added to the provider timeout for the pod deadline and the
+/// expiry annotation.
+pub(crate) const DEFAULT_DEADLINE_MARGIN: Duration = Duration::from_secs(60);
+
 /// Key of the managed settings file inside its ConfigMap.
 const MANAGED_SETTINGS_KEY: &str = "managed-settings.json";
 
@@ -109,7 +113,7 @@ impl Default for SandboxSettings {
             writable_root: false,
             home_size_limit: "1Gi".to_string(),
             tmp_size_limit: "512Mi".to_string(),
-            deadline_margin: Duration::from_secs(60),
+            deadline_margin: DEFAULT_DEADLINE_MARGIN,
         }
     }
 }

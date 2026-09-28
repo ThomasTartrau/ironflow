@@ -51,6 +51,9 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// Built once per step and stored as JSON, so the size of `Agent` costs nothing.
+// Boxing it would make authors write `StepConfig::Agent(Box::new(..))`.
+#[allow(clippy::large_enum_variant)]
 pub enum StepConfig {
     /// A shell command step.
     Shell(ShellConfig),
