@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.1.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.0.0...ironflow-core-v4.1.0) - 2026-09-28
+
+### Added
+
+- #117 add confined grep and glob tools for the HTTP provider
+
+
+### Fixed
+
+- #117 serialise postgres secret rotation tests and drop needless borrow
+
 ## [4.0.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v3.22.0...ironflow-core-v4.0.0) - 2026-09-28
 
 ### Added
