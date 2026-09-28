@@ -19,7 +19,8 @@ root run is the run itself, or the top-level run inside a sub-workflow
 (`ctx.root_run_id()`).
 
 Before every execution of a run (`Engine::execute_handler_run`, the first one
-included), the engine calls `AgentProvider::release_run` with the run id. The
+included, and `Engine::resume_run` after a gate under `ExecutionMode::Local`),
+the engine calls `AgentProvider::release_run` with the run id. The
 default does nothing; `K8sEphemeralProvider` deletes the pods left by a dead
 attempt of the run or of its sub-workflows, and waits until they are gone. A
 failed release fails the execution with a replayable error: the run goes to

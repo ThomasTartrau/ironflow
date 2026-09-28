@@ -83,9 +83,10 @@ fn controlled_by_job(meta: &ObjectMeta) -> bool {
 ///
 /// Returns [`ReapReason::DeadlineExceeded`] for a `Failed` pod whose reason is
 /// `DeadlineExceeded`, [`ReapReason::Expired`] for a pod past its
-/// [`LABEL_EXPIRES_AT`] annotation in a known phase, and `None` otherwise,
-/// including when the annotation is missing or unparseable, or when a Job
-/// controls the pod (see [`job_reap_reason`]).
+/// [`LABEL_EXPIRES_AT`] annotation whatever its phase (an `Unknown` pod on a
+/// lost node included), and `None` otherwise, including when the annotation
+/// is missing or unparseable, when the pod is already being deleted, or when
+/// a Job controls the pod (see [`job_reap_reason`]).
 ///
 /// # Examples
 ///
@@ -97,7 +98,9 @@ fn controlled_by_job(meta: &ObjectMeta) -> bool {
 /// assert_eq!(reap_reason(&pod, 1_700_000_000), None);
 /// ```
 pub fn reap_reason(pod: &Pod, now_unix: u64) -> Option<ReapReason> {
-    if controlled_by_job(&pod.metadata) {
+    // A pod stuck terminating on a lost node would otherwise be deleted, and
+    // counted, again on every pass.
+    if pod.metadata.deletion_timestamp.is_some() || controlled_by_job(&pod.metadata) {
         return None;
     }
     let status = pod.status.as_ref();
@@ -108,9 +111,8 @@ pub fn reap_reason(pod: &Pod, now_unix: u64) -> Option<ReapReason> {
         return Some(ReapReason::DeadlineExceeded);
     }
 
-    let known_phase = matches!(phase, Some("Running" | "Pending" | "Succeeded" | "Failed"));
     match expires_at(&pod.metadata) {
-        Some(expiry) if known_phase && expiry < now_unix => Some(ReapReason::Expired),
+        Some(expiry) if expiry < now_unix => Some(ReapReason::Expired),
         _ => None,
     }
 }
@@ -388,8 +390,22 @@ mod tests {
     }
 
     #[test]
-    fn k8s_reap_unknown_phase_past_expiry_is_kept() {
+    fn k8s_reap_unknown_phase_past_expiry() {
         let p = pod("Unknown", None, Some(&past()));
+        assert_eq!(reap_reason(&p, NOW), Some(ReapReason::Expired));
+    }
+
+    #[test]
+    fn k8s_reap_unknown_phase_future_expiry_is_kept() {
+        let p = pod("Unknown", None, Some(&future()));
+        assert_eq!(reap_reason(&p, NOW), None);
+    }
+
+    #[test]
+    fn k8s_reap_pod_already_terminating_is_left_alone() {
+        let mut p = pod("Running", None, Some(&past()));
+        let deleting = from_value(json!("2023-11-14T22:13:20Z")).expect("valid timestamp");
+        p.metadata.deletion_timestamp = Some(deleting);
         assert_eq!(reap_reason(&p, NOW), None);
     }
 

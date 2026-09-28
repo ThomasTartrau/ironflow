@@ -7,7 +7,7 @@
 //! assert on what it saw and in which order.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ use ironflow_core::provider::{
     AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_ROOT_RUN_ID, LABEL_RUN_ID,
     ReleaseFuture,
 };
-use ironflow_engine::config::AgentStepConfig;
+use ironflow_engine::config::{AgentStepConfig, ApprovalConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
@@ -39,13 +39,13 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 struct JournalProvider {
     journal: Mutex<Vec<String>>,
     configs: Mutex<Vec<AgentConfig>>,
-    fail_release: bool,
+    fail_release: AtomicBool,
 }
 
 impl JournalProvider {
     fn failing_release() -> Self {
         Self {
-            fail_release: true,
+            fail_release: AtomicBool::new(true),
             ..Self::default()
         }
     }
@@ -78,7 +78,7 @@ impl AgentProvider for JournalProvider {
                 .lock()
                 .expect("lock")
                 .push(format!("release:{run_id}"));
-            if self.fail_release {
+            if self.fail_release.load(Ordering::SeqCst) {
                 return Err(AgentError::ProcessFailed {
                     exit_code: -1,
                     stderr: "k8s api unreachable".to_string(),
@@ -127,6 +127,36 @@ impl WorkflowHandler for Investigate {
             Ok(())
         })
     }
+}
+
+/// An agent step, an approval gate, then another agent step.
+struct Gated;
+
+impl WorkflowHandler for Gated {
+    fn name(&self) -> &str {
+        "gated"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.agent("plan", step("before-gate")).await?;
+            ctx.approval("gate", ApprovalConfig::new("Apply?")).await?;
+            ctx.agent("apply", step("after-gate")).await?;
+            Ok(())
+        })
+    }
+}
+
+/// Run [`Gated`] up to its gate, then approve it like the approval API does.
+async fn approved_gated_run(engine: &Engine, store: &InMemoryStore) -> Uuid {
+    let run_id = enqueue(store, "gated", 0).await;
+    let suspended = engine.execute_run(run_id).await.expect("reaches the gate");
+    assert_eq!(suspended.run.status.state, RunStatus::AwaitingApproval);
+    store
+        .update_run_status(run_id, RunStatus::Running)
+        .await
+        .expect("to running");
+    run_id
 }
 
 /// Input of [`Child`].
@@ -351,6 +381,61 @@ async fn failed_release_without_retries_left_fails_the_run_with_its_cause() {
         assert_eq!(run.status.state, RunStatus::Failed);
         let error = run.error.expect("error recorded");
         assert!(error.contains("k8s api unreachable"), "{error}");
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn resume_run_releases_before_the_replay() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(JournalProvider::default());
+        let mut engine = Engine::new(store.clone(), provider.clone());
+        engine.register(Gated).expect("register");
+        let run_id = approved_gated_run(&engine, &store).await;
+
+        let resumed = engine.resume_run(run_id).await.expect("resume");
+
+        assert_eq!(resumed.run.status.state, RunStatus::Completed);
+        let release = format!("release:{run_id}");
+        let expected = vec![
+            release.clone(),
+            "invoke:before-gate".to_string(),
+            release,
+            "invoke:after-gate".to_string(),
+        ];
+        assert_eq!(provider.journal(), expected);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn failed_release_on_resume_fails_the_run_before_the_next_step() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(JournalProvider::default());
+        let mut engine = Engine::new(store.clone(), provider.clone());
+        engine.register(Gated).expect("register");
+        let run_id = approved_gated_run(&engine, &store).await;
+        provider.fail_release.store(true, Ordering::SeqCst);
+
+        let err = engine.resume_run(run_id).await.expect_err("release fails");
+
+        assert!(
+            matches!(err, EngineError::Operation(OperationError::Agent(_))),
+            "{err:?}"
+        );
+        let run = store.get_run(run_id).await.expect("get").expect("run");
+        assert_eq!(run.status.state, RunStatus::Failed);
+        let error = run.error.expect("error recorded");
+        assert!(error.contains("k8s api unreachable"), "{error}");
+        let journal = provider.journal();
+        assert!(
+            !journal.contains(&"invoke:after-gate".to_string()),
+            "{journal:?}"
+        );
     })
     .await
     .expect("test timed out");

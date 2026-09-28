@@ -127,14 +127,18 @@ impl AgentProvider for ProviderRouter {
     }
 
     /// Release the run on the fallback and on every routed provider: any of
-    /// them may have started something for it.
+    /// them may have started something for it. A failure does not stop the
+    /// others; the first one is returned once all have been asked.
     fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
         Box::pin(async move {
             let routed = self.routes.iter().map(|(_, provider)| provider);
+            let mut first_err = None;
             for provider in once(&self.fallback).chain(routed) {
-                provider.release_run(run_id).await?;
+                if let Err(e) = provider.release_run(run_id).await {
+                    first_err.get_or_insert(e);
+                }
             }
-            Ok(())
+            first_err.map_or(Ok(()), Err)
         })
     }
 }
@@ -216,16 +220,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn router_release_failure_is_reported() {
+    async fn router_release_failure_is_reported_after_releasing_the_others() {
         let failing = Arc::new(ReleaseProbe {
             fail: true,
             ..ReleaseProbe::default()
         });
-        let router = ProviderRouter::new(Arc::new(ReleaseProbe::default()))
-            .route(ProviderMatcher::ModelPrefix("gpt".into()), failing);
+        let routed = Arc::new(ReleaseProbe::default());
+        let router = ProviderRouter::new(failing.clone())
+            .route(ProviderMatcher::ModelPrefix("gpt".into()), routed.clone());
 
         let err = router.release_run("run-1").await.expect_err("fails");
         assert!(err.to_string().contains("release refused"), "{err}");
+        assert_eq!(*failing.released.lock().unwrap(), vec!["run-1"]);
+        assert_eq!(*routed.released.lock().unwrap(), vec!["run-1"]);
     }
 
     #[tokio::test]

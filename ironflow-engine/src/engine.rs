@@ -1132,12 +1132,9 @@ impl Engine {
         // completed steps. A brand-new run has no steps, so this is a no-op.
         ctx.load_replay_steps().await?;
 
-        // Whatever a dead attempt left running (an agent pod writing to a
-        // shared worktree) must be gone before the first step runs again.
-        let result = match self.provider.release_run(&run_id.to_string()).await {
-            Ok(()) => handler.execute(&mut ctx).await,
-            Err(e) => Err(EngineError::Operation(OperationError::Agent(e))),
-        };
+        let result = self
+            .release_then_execute(run_id, handler.as_ref(), &mut ctx)
+            .await;
         self.finalize_run(
             run_id,
             &run.workflow_name,
@@ -1170,10 +1167,15 @@ impl Engine {
     /// Supports multiple approval gates -- each resume replays all prior
     /// steps and stops at the next approval (or completes the run).
     ///
+    /// Like [`execute_handler_run`](Self::execute_handler_run), the handler
+    /// only starts once [`AgentProvider::release_run`] has stopped whatever
+    /// a previous execution of the run left running.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
     /// Returns [`EngineError`] if execution fails or hits another approval.
+    /// A failed release fails the execution with [`EngineError::Operation`].
     #[tracing::instrument(name = "engine.resume_run", skip_all, fields(run_id = %run_id))]
     pub async fn resume_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
@@ -1199,7 +1201,9 @@ impl Engine {
         let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
         ctx.load_replay_steps().await?;
 
-        let result = handler.execute(&mut ctx).await;
+        let result = self
+            .release_then_execute(run_id, handler.as_ref(), &mut ctx)
+            .await;
         self.finalize_run(
             run_id,
             &run.workflow_name,
@@ -1383,6 +1387,22 @@ impl Engine {
         }
 
         Ok(())
+    }
+
+    /// Execute `handler` once [`AgentProvider::release_run`] has stopped
+    /// whatever a previous execution of the run left running (an agent pod
+    /// writing to a shared worktree). A failed release fails the execution
+    /// before its first step, with [`EngineError::Operation`].
+    async fn release_then_execute(
+        &self,
+        run_id: Uuid,
+        handler: &dyn WorkflowHandler,
+        ctx: &mut WorkflowContext,
+    ) -> Result<(), EngineError> {
+        match self.provider.release_run(&run_id.to_string()).await {
+            Ok(()) => handler.execute(ctx).await,
+            Err(e) => Err(EngineError::Operation(OperationError::Agent(e))),
+        }
     }
 
     /// Finalize a run with the given result and context.
