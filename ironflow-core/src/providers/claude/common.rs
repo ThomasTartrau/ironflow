@@ -224,6 +224,18 @@ pub fn push_opt(args: &mut Vec<String>, flag: &str, value: &Option<impl ToString
     }
 }
 
+/// Refuse a tool profile: the Claude CLI has no notion of one, and ignoring
+/// it would run the step with tools it did not ask for.
+fn reject_tool_profile(config: &AgentConfig) -> Result<(), AgentError> {
+    match config.tool_profile {
+        Some(ref profile) => Err(AgentError::ToolProfileUnsupported {
+            provider: "claude-code".to_string(),
+            profile: profile.to_string(),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Build the CLI argument list from an [`AgentConfig`].
 ///
 /// Returns the list of arguments to pass after the `claude` binary name.
@@ -231,8 +243,10 @@ pub fn push_opt(args: &mut Vec<String>, flag: &str, value: &Option<impl ToString
 /// # Errors
 ///
 /// Returns [`AgentError::ProcessFailed`] if `BypassPermissions` is requested
-/// without the `IRONFLOW_ALLOW_BYPASS=1` environment variable.
+/// without the `IRONFLOW_ALLOW_BYPASS=1` environment variable, and
+/// [`AgentError::ToolProfileUnsupported`] if the config selects a tool profile.
 pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
+    reject_tool_profile(config)?;
     let output_format = if config.verbose {
         "stream-json"
     } else {
@@ -328,8 +342,10 @@ pub struct BuiltCommand {
 /// # Errors
 ///
 /// Returns [`AgentError::ProcessFailed`] if `BypassPermissions` is requested
-/// without the `IRONFLOW_ALLOW_BYPASS=1` environment variable.
+/// without the `IRONFLOW_ALLOW_BYPASS=1` environment variable, and
+/// [`AgentError::ToolProfileUnsupported`] if the config selects a tool profile.
 pub fn build_command(config: &AgentConfig) -> Result<BuiltCommand, AgentError> {
+    reject_tool_profile(config)?;
     let prompt_via_stdin = config.prompt.len() > PROMPT_STDIN_THRESHOLD;
 
     let output_format = if config.verbose {
@@ -1696,6 +1712,7 @@ mod tests {
             ),
             allowed_tools: vec!["WebSearch".to_string(), "WebFetch".to_string()],
             disallowed_tools: vec![],
+            tool_profile: None,
             max_turns: Some(5),
             max_parallel_tools: 4,
             permission_mode: PermissionMode::Default,

@@ -243,6 +243,43 @@ pub enum AgentError {
         /// Error message from the provider response body, or transport error description.
         message: String,
     },
+
+    /// The step asked for a tool profile the provider does not have.
+    ///
+    /// Never falls back to other tools: a typo must not widen what the model
+    /// can do. Deterministic, so never retried.
+    #[error(
+        "unknown tool profile '{profile}' (registered profiles: {})",
+        list_or_none(available)
+    )]
+    UnknownToolProfile {
+        /// The profile the step asked for.
+        profile: String,
+        /// Profiles registered on the provider, sorted.
+        available: Vec<String>,
+    },
+
+    /// The step asked for a tool profile, but the provider cannot apply one.
+    ///
+    /// Claude CLI providers pick their tools with `allowed_tools` and MCP
+    /// configuration; they refuse a profile rather than ignore it.
+    #[error(
+        "{provider} does not support tool profiles (step asked for '{profile}'): pick its tools with allow_tool or an MCP config"
+    )]
+    ToolProfileUnsupported {
+        /// Provider that refused the profile (e.g. `"claude-code"`).
+        provider: String,
+        /// The profile the step asked for.
+        profile: String,
+    },
+}
+
+fn list_or_none(names: &[String]) -> String {
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join(", ")
+    }
 }
 
 /// Error raised when accessing a typed answer on a

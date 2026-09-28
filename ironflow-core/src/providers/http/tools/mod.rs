@@ -31,6 +31,7 @@ pub mod web_fetch;
 #[cfg(feature = "tool-web-search")]
 pub mod web_search;
 
+pub(crate) mod profiles;
 mod registry;
 mod tool_trait;
 

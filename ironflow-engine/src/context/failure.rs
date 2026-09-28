@@ -31,6 +31,9 @@ pub(super) fn is_step_retryable(err: &EngineError) -> bool {
         EngineError::Operation(op) => match op {
             OperationError::Agent(AgentError::PromptTooLarge { .. }) => false,
             OperationError::Agent(AgentError::BudgetExceeded { .. }) => false,
+            OperationError::Agent(
+                AgentError::UnknownToolProfile { .. } | AgentError::ToolProfileUnsupported { .. },
+            ) => false,
             OperationError::Deserialize { .. } => false,
             OperationError::Http {
                 status: Some(code), ..
@@ -123,4 +126,35 @@ pub(super) fn extract_partial_usage_from_error(err: &EngineError) -> Option<Step
         });
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn agent_error(err: AgentError) -> EngineError {
+        EngineError::Operation(OperationError::Agent(err))
+    }
+
+    #[test]
+    fn tool_profile_errors_are_not_step_retryable() {
+        assert!(!is_step_retryable(&agent_error(
+            AgentError::UnknownToolProfile {
+                profile: "bgu".to_string(),
+                available: vec!["bug".to_string()],
+            }
+        )));
+        assert!(!is_step_retryable(&agent_error(
+            AgentError::ToolProfileUnsupported {
+                provider: "claude-code".to_string(),
+                profile: "bug".to_string(),
+            }
+        )));
+        // A transient failure stays retryable: the arm above is not a catch-all.
+        assert!(is_step_retryable(&agent_error(AgentError::Timeout {
+            limit: Duration::from_secs(1),
+        })));
+    }
 }

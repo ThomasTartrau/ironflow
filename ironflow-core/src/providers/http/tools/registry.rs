@@ -84,6 +84,19 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 
+    /// Names of the registered tools, in registration order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::http::tools::ToolRegistry;
+    ///
+    /// assert!(ToolRegistry::new().tool_names().is_empty());
+    /// ```
+    pub fn tool_names(&self) -> Vec<&str> {
+        self.tools.iter().map(|tool| tool.name()).collect()
+    }
+
     /// Convert all registered tools to the OpenAI `tools` array format.
     ///
     /// Each tool is represented as:
@@ -275,6 +288,12 @@ mod tests {
     #[should_panic(expected = "tool 'add' already registered")]
     fn registry_duplicate_panics() {
         ToolRegistry::new().register(AddTool).register(AddTool);
+    }
+
+    #[test]
+    fn tool_names_keep_registration_order() {
+        let registry = ToolRegistry::new().register(EchoTool).register(AddTool);
+        assert_eq!(registry.tool_names(), vec!["echo", "add"]);
     }
 
     #[test]

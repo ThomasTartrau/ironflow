@@ -12,10 +12,11 @@ use tracing::{debug, info, warn};
 use crate::error::AgentError;
 use crate::provider::{
     AgentConfig, AgentOutput, AgentProvider, DebugMessage, DebugToolCall, DebugToolResult,
-    InvokeFuture,
+    InvokeFuture, LogSink, ToolProfile,
 };
 use crate::providers::http::sse::{SseDelta, collect_sse_stream};
 use crate::providers::http::tools::ToolRegistry;
+use crate::providers::http::tools::profiles::ToolProfiles;
 use crate::providers::http::tools::routing::route_tool_call;
 
 /// Normalized result of one API turn (one HTTP request/response cycle).
@@ -116,11 +117,14 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// (or hits `max_turns` / `max_budget_usd` limits).
 ///
 /// Without a registry, the provider behaves as single-turn (backward-compatible).
+///
+/// Steps that need different tools pick a named profile registered with
+/// [`with_tool_profile`](Self::with_tool_profile).
 pub struct HttpAgentProvider<A: HttpAgentAdapter> {
     adapter: A,
     client: Client,
     timeout: Duration,
-    tool_registry: Option<ToolRegistry>,
+    tools: ToolProfiles,
 }
 
 impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
@@ -134,18 +138,52 @@ impl<A: HttpAgentAdapter> HttpAgentProvider<A> {
             adapter,
             client,
             timeout: DEFAULT_TIMEOUT,
-            tool_registry: None,
+            tools: ToolProfiles::default(),
         }
     }
 
-    /// Attach a tool registry to enable multi-turn agentic execution.
+    /// Attach the default tool registry to enable multi-turn agentic execution.
     ///
-    /// When tools are registered, the provider will:
+    /// The default tools go to every step that selects no tool profile. When
+    /// tools are selected, the provider will:
     /// 1. Include the tools in every request (OpenAI `tools` format).
     /// 2. Execute tool calls returned by the model.
     /// 3. Loop until the model produces a final response or limits are hit.
     pub fn with_tools(mut self, registry: ToolRegistry) -> Self {
-        self.tool_registry = Some(registry);
+        self.tools.set_default(registry);
+        self
+    }
+
+    /// Register a named tool profile that steps select with
+    /// [`AgentConfig::tool_profile`]. Call it once per profile.
+    ///
+    /// A step only sees the tools of the profile it selects, and only those
+    /// can run. To share an MCP server between profiles without opening it
+    /// twice, see `register_shared_mcp_tools` (feature `tool-mcp`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `profile` is already registered.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::ToolProfile;
+    /// use ironflow_core::providers::http::HttpAgentProvider;
+    /// use ironflow_core::providers::http::adapter::HttpAgentAdapter;
+    /// use ironflow_core::providers::http::tools::ToolRegistry;
+    ///
+    /// const SUGGESTION: ToolProfile = ToolProfile::new("suggestion");
+    /// const BUG: ToolProfile = ToolProfile::new("bug");
+    ///
+    /// fn with_profiles<A: HttpAgentAdapter>(provider: HttpAgentProvider<A>) -> HttpAgentProvider<A> {
+    ///     provider
+    ///         .with_tool_profile(SUGGESTION, ToolRegistry::new())
+    ///         .with_tool_profile(BUG, ToolRegistry::new())
+    /// }
+    /// ```
+    pub fn with_tool_profile(mut self, profile: ToolProfile, registry: ToolRegistry) -> Self {
+        self.tools.insert(profile, registry);
         self
     }
 
@@ -415,10 +453,21 @@ async fn execute_turn_tool_calls(
 impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
+            // Resolved before any request: an unknown profile never reaches the model.
+            let selection = self.tools.select(config.tool_profile.as_ref())?;
+            if !self.tools.is_empty() {
+                info!(
+                    provider = self.adapter.provider_name(),
+                    profile = %selection.label(),
+                    "{}",
+                    selection.describe()
+                );
+            }
+            let tool_registry = selection.registry();
             let mut request_body = self.adapter.build_request(config)?;
 
             // Inject tools into the request if a registry is available
-            if let Some(ref registry) = self.tool_registry
+            if let Some(registry) = tool_registry
                 && !registry.is_empty()
             {
                 let tools_array = registry.to_openai_tools();
@@ -508,8 +557,8 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
                 }
 
                 // Tool calls but no registry -> return text (backward compat)
-                let registry = match self.tool_registry {
-                    Some(ref r) => r,
+                let registry = match tool_registry {
+                    Some(r) => r,
                     None => {
                         warn!(
                             provider = self.adapter.provider_name(),
@@ -603,6 +652,22 @@ impl<A: HttpAgentAdapter> AgentProvider for HttpAgentProvider<A> {
             );
             Ok(state.into_output(Value::String(String::new())))
         })
+    }
+
+    /// Same as [`invoke`](AgentProvider::invoke), and records on `log_sink`
+    /// the tool profile of the step with the tools it exposes.
+    fn invoke_with_logs<'a>(
+        &'a self,
+        config: &'a AgentConfig,
+        log_sink: Arc<dyn LogSink>,
+    ) -> InvokeFuture<'a> {
+        // An unknown profile is not logged here: `invoke` fails with it.
+        if !self.tools.is_empty()
+            && let Ok(selection) = self.tools.select(config.tool_profile.as_ref())
+        {
+            log_sink.log("system", &selection.describe());
+        }
+        self.invoke(config)
     }
 }
 
