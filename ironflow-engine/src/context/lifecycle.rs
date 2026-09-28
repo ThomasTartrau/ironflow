@@ -14,6 +14,7 @@ use tokio::time::sleep;
 use tracing::{Span, error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::provider::{LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 use ironflow_store::models::{
     NewStep, NewStepDependency, RunUpdate, Step, StepKind, StepStatus, StepUpdate, step_trace_id,
 };
@@ -321,16 +322,7 @@ impl WorkflowContext {
         }
 
         let mut config = config;
-        let step_trace = self.trace_context.child();
-        match config {
-            StepConfig::Agent(ref mut agent_config) => {
-                agent_config.trace_context = Some(step_trace);
-            }
-            StepConfig::Http(ref mut http_config) => {
-                http_config.trace_context = Some(step_trace);
-            }
-            _ => {}
-        }
+        self.scope_step_config(&mut config, name);
 
         let step_log_sender = self
             .log_sender
@@ -593,6 +585,33 @@ impl WorkflowContext {
         );
 
         last_result
+    }
+
+    /// Attach the step's trace context, and for an agent step the run, root
+    /// run and step pod labels, to `config`.
+    ///
+    /// Retries reuse the scoped config, so every attempt carries the same
+    /// labels and the K8s provider can find the previous attempt.
+    pub(super) fn scope_step_config(&self, config: &mut StepConfig, name: &str) {
+        let step_trace = self.trace_context.child();
+        match config {
+            StepConfig::Agent(agent_config) => {
+                agent_config.trace_context = Some(step_trace);
+                agent_config
+                    .pod_labels
+                    .insert(LABEL_RUN_ID.to_string(), self.run_id.to_string());
+                agent_config
+                    .pod_labels
+                    .insert(LABEL_ROOT_RUN_ID.to_string(), self.root_run_id.to_string());
+                agent_config
+                    .pod_labels
+                    .insert(LABEL_STEP.to_string(), sanitize_label_value(name));
+            }
+            StepConfig::Http(http_config) => {
+                http_config.trace_context = Some(step_trace);
+            }
+            _ => {}
+        }
     }
 
     /// Record dependency edges and transition a step to Running.

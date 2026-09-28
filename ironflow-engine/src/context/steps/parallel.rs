@@ -40,7 +40,9 @@ impl WorkflowContext {
     /// error is returned.
     ///
     /// Every step of a wave must have its own name: the name identifies the
-    /// step in the run timeline, in its artifact handles and on resume.
+    /// step in the run timeline, in its artifact handles, on resume and in the
+    /// `ironflow.io/step` pod label. Two steps sharing that label would let
+    /// the K8s ephemeral provider delete one step's pod when starting the other.
     ///
     /// On resume, each step of the wave that already completed in a prior
     /// execution of the current attempt is replayed from the store; only the
@@ -189,16 +191,7 @@ impl WorkflowContext {
             }
 
             let mut config_with_trace = config.clone();
-            let step_trace = self.trace_context.child();
-            match config_with_trace {
-                StepConfig::Agent(ref mut agent_config) => {
-                    agent_config.trace_context = Some(step_trace);
-                }
-                StepConfig::Http(ref mut http_config) => {
-                    http_config.trace_context = Some(step_trace);
-                }
-                _ => {}
-            }
+            self.scope_step_config(&mut config_with_trace, name);
             step_records.push((step.id, trace_id, name.to_string(), config_with_trace));
             record_slots.push(slot);
         }

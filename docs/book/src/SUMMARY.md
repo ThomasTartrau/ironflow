@@ -26,6 +26,7 @@
 - [Parallel Execution](guides/parallel-execution.md)
 - [Execution Plans](guides/execution-plan.md)
 - [Transports](guides/transports.md)
+- [Kubernetes Sandbox](guides/k8s-sandbox.md)
 - [Testing Workflows](guides/testing-workflows.md)
 
 # Architecture

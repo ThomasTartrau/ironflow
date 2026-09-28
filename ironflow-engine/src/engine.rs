@@ -17,6 +17,7 @@ use serde_json::Value;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::error::OperationError;
 #[cfg(feature = "prometheus")]
 use ironflow_core::metric_names::{
     RUN_BUDGET_EXCEEDED_TOTAL, RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL,
@@ -1090,11 +1091,15 @@ impl Engine {
     /// Execute a handler-based run (used by the worker after pick_next_pending).
     ///
     /// Looks up the handler by the run's `workflow_name` and executes it
-    /// with a fresh [`WorkflowContext`].
+    /// with a fresh [`WorkflowContext`], after
+    /// [`AgentProvider::release_run`] has stopped whatever a previous
+    /// execution of the run left running.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches. A
+    /// failed release fails the execution with [`EngineError::Operation`],
+    /// replayed while the run has retries left.
     #[tracing::instrument(name = "engine.execute_handler_run", skip_all, fields(run_id = %run_id))]
     pub async fn execute_handler_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
@@ -1127,7 +1132,9 @@ impl Engine {
         // completed steps. A brand-new run has no steps, so this is a no-op.
         ctx.load_replay_steps().await?;
 
-        let result = handler.execute(&mut ctx).await;
+        let result = self
+            .release_then_execute(run_id, handler.as_ref(), &mut ctx)
+            .await;
         self.finalize_run(
             run_id,
             &run.workflow_name,
@@ -1160,10 +1167,15 @@ impl Engine {
     /// Supports multiple approval gates -- each resume replays all prior
     /// steps and stops at the next approval (or completes the run).
     ///
+    /// Like [`execute_handler_run`](Self::execute_handler_run), the handler
+    /// only starts once [`AgentProvider::release_run`] has stopped whatever
+    /// a previous execution of the run left running.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
     /// Returns [`EngineError`] if execution fails or hits another approval.
+    /// A failed release fails the execution with [`EngineError::Operation`].
     #[tracing::instrument(name = "engine.resume_run", skip_all, fields(run_id = %run_id))]
     pub async fn resume_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
@@ -1189,7 +1201,9 @@ impl Engine {
         let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
         ctx.load_replay_steps().await?;
 
-        let result = handler.execute(&mut ctx).await;
+        let result = self
+            .release_then_execute(run_id, handler.as_ref(), &mut ctx)
+            .await;
         self.finalize_run(
             run_id,
             &run.workflow_name,
@@ -1373,6 +1387,22 @@ impl Engine {
         }
 
         Ok(())
+    }
+
+    /// Execute `handler` once [`AgentProvider::release_run`] has stopped
+    /// whatever a previous execution of the run left running (an agent pod
+    /// writing to a shared worktree). A failed release fails the execution
+    /// before its first step, with [`EngineError::Operation`].
+    async fn release_then_execute(
+        &self,
+        run_id: Uuid,
+        handler: &dyn WorkflowHandler,
+        ctx: &mut WorkflowContext,
+    ) -> Result<(), EngineError> {
+        match self.provider.release_run(&run_id.to_string()).await {
+            Ok(()) => handler.execute(ctx).await,
+            Err(e) => Err(EngineError::Operation(OperationError::Agent(e))),
+        }
     }
 
     /// Finalize a run with the given result and context.

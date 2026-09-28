@@ -1,0 +1,64 @@
+# FQDN egress for agent pods with Cilium.
+#
+# Every claude-runner pod may resolve names through kube-dns and reach
+# api.anthropic.com on 443. The DNS rule with `matchPattern: "*"` is required:
+# Cilium learns the IPs behind toFQDNs names by inspecting DNS answers.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: claude-runner-egress-anthropic
+  namespace: ironflow-agents
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: claude-runner
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: api.anthropic.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+# Per-profile opening: pods labelled ironflow.io/egress-profile=gitlab (set
+# with `.egress_profile("gitlab")` on the provider or the step) may also reach
+# gitlab.com. Cilium policies are additive: this adds to the rule above.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: claude-runner-egress-gitlab
+  namespace: ironflow-agents
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: claude-runner
+      ironflow.io/egress-profile: gitlab
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: gitlab.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

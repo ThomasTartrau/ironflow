@@ -11,6 +11,21 @@ engine.register(Box::new(MyWorkflow))?;
 
 The Engine is used by both the API server (for metadata and describe endpoints) and the Worker (for execution).
 
+Before running an agent step, the engine stamps the `ironflow.io/run-id`,
+`ironflow.io/root-run-id` and `ironflow.io/step` pod labels on its config (the
+step name is sanitized into a valid label value), so the Kubernetes providers
+can tag the pod and clean up a previous attempt of the same step on retry. The
+root run is the run itself, or the top-level run inside a sub-workflow
+(`ctx.root_run_id()`).
+
+Before every execution of a run (`Engine::execute_handler_run`, the first one
+included, and `Engine::resume_run` after a gate under `ExecutionMode::Local`),
+the engine calls `AgentProvider::release_run` with the run id. The
+default does nothing; `K8sEphemeralProvider` deletes the pods left by a dead
+attempt of the run or of its sub-workflows, and waits until they are gone. A
+failed release fails the execution with a replayable error: the run goes to
+`Retrying` while it has retries left.
+
 ## Execution mode
 
 A run suspended on an approval, a human input or an escalation resumes once the

@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string_pretty};
 use tracing::{info, warn};
 
-use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture};
+use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, ReleaseFuture};
 
 #[derive(Serialize, Deserialize)]
 struct Fixture {
@@ -210,12 +210,17 @@ impl<P: AgentProvider> AgentProvider for RecordReplayProvider<P> {
             Ok(output)
         })
     }
+
+    fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
+        self.inner.release_run(run_id)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use serde_json::json;
 
@@ -375,6 +380,33 @@ mod tests {
     }
 
     // ──── replay: reads fixture from disk ─────────────────────────
+
+    /// Provider journaling the runs it is asked to release.
+    struct ReleaseProbe(Arc<Mutex<Vec<String>>>);
+
+    impl AgentProvider for ReleaseProbe {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async { Ok(AgentOutput::new(json!("probe"))) })
+        }
+
+        fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push(run_id.to_string());
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn release_run_reaches_the_inner_provider() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let released = Arc::new(Mutex::new(Vec::new()));
+        let provider = RecordReplayProvider::replay(ReleaseProbe(released.clone()), &dir);
+
+        provider.release_run("run-1").await.expect("released");
+
+        assert_eq!(*released.lock().unwrap(), vec!["run-1"]);
+    }
 
     #[tokio::test]
     async fn test_replay_returns_fixture_when_present() {

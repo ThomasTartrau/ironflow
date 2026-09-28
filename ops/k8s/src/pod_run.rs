@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
+use ironflow_core::provider::assert_pod_label_allowed;
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, LocalObjectReference, PersistentVolumeClaimVolumeSource, Pod,
     PodSecurityContext, PodSpec, ResourceRequirements, SecurityContext, Toleration, Volume,
@@ -19,6 +20,10 @@ use serde_json::{Value, json};
 use tokio::time::{sleep, timeout};
 
 use crate::KubeClient;
+use crate::conventions::{
+    DEFAULT_EXPIRY_MARGIN, POD_RUN_COMPONENT, assert_labels_allowed, expiry_annotation,
+    ironflow_labels,
+};
 use crate::error::k8s_external;
 
 #[cfg(test)]
@@ -135,6 +140,7 @@ pub struct PodRun {
     allow_privilege_escalation: Option<bool>,
     active_deadline_seconds: Option<Duration>,
     timeout: Duration,
+    expiry_margin: Duration,
     poll_interval: Duration,
 }
 
@@ -164,6 +170,7 @@ impl PodRun {
             allow_privilege_escalation: None,
             active_deadline_seconds: None,
             timeout: DEFAULT_TIMEOUT,
+            expiry_margin: DEFAULT_EXPIRY_MARGIN,
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
     }
@@ -194,8 +201,14 @@ impl PodRun {
     /// inserts one key, and calling it again with the same key overwrites the
     /// previous value (last call wins).
     ///
-    /// Opt-in: if this builder is never called, `metadata.labels` is left
-    /// absent -- unchanged behaviour for existing callers.
+    /// The pod always carries the labels of [`crate::conventions`] as well;
+    /// set [`LABEL_RUN_ID`](ironflow_core::provider::LABEL_RUN_ID) so a retry
+    /// of the run deletes the pod.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a label ironflow sets itself (`app.kubernetes.io/managed-by`,
+    /// `app.kubernetes.io/component`).
     ///
     /// # Examples
     ///
@@ -212,18 +225,34 @@ impl PodRun {
     /// ```
     #[must_use]
     pub fn label(mut self, key: &str, value: &str) -> Self {
+        assert_pod_label_allowed(key);
         self.labels.insert(key.to_string(), value.to_string());
         self
     }
 
-    /// Replace the whole set of pod labels at once.
+    /// Replace the whole set of caller labels at once.
     ///
     /// Unlike [`label`](Self::label), which is additive/insert-only, this
     /// overwrites every previously set label. Passing an empty map clears all
-    /// labels set so far.
+    /// labels set so far; the ironflow labels stay.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`label`](Self::label).
     #[must_use]
     pub fn labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        assert_labels_allowed(&labels);
         self.labels = labels;
+        self
+    }
+
+    /// Set the time added to [`timeout`](Self::timeout) for the pod's
+    /// `ironflow.io/expires-at` annotation (default
+    /// [`DEFAULT_EXPIRY_MARGIN`], 60s). Past that time, the orphan reaper
+    /// deletes a pod its worker left behind.
+    #[must_use]
+    pub fn expiry_margin(mut self, margin: Duration) -> Self {
+        self.expiry_margin = margin;
         self
     }
 
@@ -450,7 +479,6 @@ impl PodRun {
         container.env = build_env_vars(&self.envs);
 
         let node_selector = (!self.node_selector.is_empty()).then(|| self.node_selector.clone());
-        let labels = (!self.labels.is_empty()).then(|| self.labels.clone());
         let tolerations = (!self.tolerations.is_empty()).then(|| self.tolerations.clone());
 
         let image_pull_secrets = self
@@ -468,7 +496,8 @@ impl PodRun {
             metadata: ObjectMeta {
                 name: Some(self.name.clone()),
                 namespace: Some(self.namespace.clone()),
-                labels,
+                labels: Some(ironflow_labels(&self.labels, POD_RUN_COMPONENT)),
+                annotations: Some(expiry_annotation(self.timeout + self.expiry_margin)),
                 ..Default::default()
             },
             spec: Some(PodSpec {

@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
+use ironflow_core::provider::assert_pod_label_allowed;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
     Container, Pod, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount,
@@ -17,6 +18,10 @@ use serde_json::{Value, json};
 use tokio::time::{sleep, timeout};
 
 use crate::KubeClient;
+use crate::conventions::{
+    DEFAULT_EXPIRY_MARGIN, JOB_RUN_COMPONENT, assert_labels_allowed, expiry_annotation,
+    ironflow_labels,
+};
 use crate::error::k8s_external;
 use crate::pod_run::{
     PvcMount, active_deadline_secs, build_env_vars, build_pvc_volumes, push_volume,
@@ -94,7 +99,9 @@ pub struct JobRun {
     automount_service_account_token: Option<bool>,
     allow_privilege_escalation: Option<bool>,
     active_deadline_seconds: Option<Duration>,
+    labels: BTreeMap<String, String>,
     timeout: Duration,
+    expiry_margin: Duration,
     poll_interval: Duration,
 }
 
@@ -117,7 +124,9 @@ impl JobRun {
             automount_service_account_token: None,
             allow_privilege_escalation: None,
             active_deadline_seconds: None,
+            labels: BTreeMap::new(),
             timeout: DEFAULT_TIMEOUT,
+            expiry_margin: DEFAULT_EXPIRY_MARGIN,
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
     }
@@ -238,10 +247,63 @@ impl JobRun {
         self
     }
 
+    /// Add a label to the Job and to its pods. Repeatable, last call wins.
+    ///
+    /// Both always carry the labels of [`crate::conventions`] as well; set
+    /// [`LABEL_RUN_ID`](ironflow_core::provider::LABEL_RUN_ID) so a retry of
+    /// the run deletes the Job.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a label ironflow sets itself (`app.kubernetes.io/managed-by`,
+    /// `app.kubernetes.io/component`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::provider::LABEL_RUN_ID;
+    /// use ironflow_ops_k8s::job_run::JobRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = JobRun::new(kube, "migrate", "migrate:1", "migrate up").label(LABEL_RUN_ID, "run-1");
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn label(mut self, key: &str, value: &str) -> Self {
+        assert_pod_label_allowed(key);
+        self.labels.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    /// Replace the whole set of caller labels at once; the ironflow labels
+    /// stay.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`label`](Self::label).
+    #[must_use]
+    pub fn labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        assert_labels_allowed(&labels);
+        self.labels = labels;
+        self
+    }
+
     /// Set the wall-clock timeout for the whole run.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set the time added to [`timeout`](Self::timeout) for the Job's
+    /// `ironflow.io/expires-at` annotation (default
+    /// [`DEFAULT_EXPIRY_MARGIN`], 60s). Past that time, the orphan reaper
+    /// deletes a Job its worker left behind, pods included.
+    #[must_use]
+    pub fn expiry_margin(mut self, margin: Duration) -> Self {
+        self.expiry_margin = margin;
         self
     }
 
@@ -289,18 +351,26 @@ impl JobRun {
         // Set on both the JobSpec (bounds the whole Job, retries included) and
         // the pod template (caps each individual pod attempt).
         let deadline_secs = active_deadline_secs(self.active_deadline_seconds);
+        let labels = ironflow_labels(&self.labels, JOB_RUN_COMPONENT);
 
         Job {
             metadata: ObjectMeta {
                 name: Some(self.name.clone()),
                 namespace: Some(self.namespace.clone()),
+                labels: Some(labels.clone()),
+                annotations: Some(expiry_annotation(self.timeout + self.expiry_margin)),
                 ..Default::default()
             },
             spec: Some(JobSpec {
                 backoff_limit: Some(self.backoff_limit),
                 active_deadline_seconds: deadline_secs,
                 template: PodTemplateSpec {
-                    metadata: None,
+                    // The pods carry the labels, so a run cleanup finds them,
+                    // but no expiry: the reaper removes them with their Job.
+                    metadata: Some(ObjectMeta {
+                        labels: Some(labels),
+                        ..Default::default()
+                    }),
                     spec: Some(PodSpec {
                         containers: vec![container],
                         restart_policy: Some("Never".to_string()),

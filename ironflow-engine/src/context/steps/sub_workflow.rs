@@ -361,6 +361,7 @@ impl WorkflowContext {
         let run_start = Instant::now();
         let mut child_ctx = WorkflowContext {
             run_id: child_run_id,
+            root_run_id: self.root_run_id,
             workflow_name: config.workflow_name.clone(),
             store: self.store.clone(),
             provider: self.provider.clone(),
