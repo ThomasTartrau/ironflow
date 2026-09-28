@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Security
+
+- Fix `ReadFileTool` allowed-path bypass via `..` traversal and symlinks: the requested path and every configured allowed root are now canonicalized before comparison, and a root that does not exist is now a construction-time panic instead of a silently ignored restriction. Added `ReadFileTool::unrestricted()` as the explicit way to opt into full filesystem access and deprecated `ReadFileTool::new()` in its favor.
+
 ## [4.3.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.2.0...ironflow-core-v4.3.0) - 2026-09-28
 
 ### Added
