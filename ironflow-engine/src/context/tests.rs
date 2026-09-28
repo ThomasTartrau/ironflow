@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::config::{ApprovalConfig, ShellConfig};
@@ -484,6 +485,262 @@ async fn context_load_replay_steps_loads_completed_steps() {
     assert_eq!(ctx.replay_steps.len(), 1);
     assert!(ctx.replay_steps.contains_key(&0));
     assert!(!ctx.replay_steps.contains_key(&1));
+}
+
+#[tokio::test]
+async fn context_load_replay_steps_keeps_the_oldest_completed_step_on_position_collision() {
+    let store = Arc::new(InMemoryStore::new());
+    let provider = create_test_provider();
+
+    store
+        .create_run(NewRun {
+            created_by: None,
+            workflow_name: "test".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        })
+        .await
+        .expect("failed to create run")
+        .into_run();
+
+    let runs = store
+        .list_runs(RunFilter::default(), 1, 10)
+        .await
+        .expect("failed to list runs");
+    let created_run_id = runs.items[0].id;
+
+    // Two steps recorded at the same position (pre-fix duplication bug):
+    // the older one is the one that actually produced the side effects.
+    let older = store
+        .create_step(NewStep {
+            run_id: created_run_id,
+            trace_id: step_trace_id(created_run_id, "dup", 0),
+            name: "dup".to_string(),
+            kind: StepKind::Shell,
+            position: 0,
+            input: None,
+            is_error_handler: false,
+        })
+        .await
+        .expect("failed to create step");
+    store
+        .update_step(
+            older.id,
+            StepUpdate {
+                status: Some(StepStatus::Running),
+                started_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to start older step");
+    store
+        .update_step(
+            older.id,
+            StepUpdate {
+                status: Some(StepStatus::Completed),
+                completed_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to complete older step");
+
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    let newer = store
+        .create_step(NewStep {
+            run_id: created_run_id,
+            trace_id: step_trace_id(created_run_id, "dup", 0),
+            name: "dup".to_string(),
+            kind: StepKind::Shell,
+            position: 0,
+            input: None,
+            is_error_handler: false,
+        })
+        .await
+        .expect("failed to create step");
+    store
+        .update_step(
+            newer.id,
+            StepUpdate {
+                status: Some(StepStatus::Running),
+                started_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to start newer step");
+    store
+        .update_step(
+            newer.id,
+            StepUpdate {
+                status: Some(StepStatus::Completed),
+                completed_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to complete newer step");
+
+    let mut ctx = WorkflowContext::new(created_run_id, "test".to_string(), store, provider);
+    ctx.load_replay_steps()
+        .await
+        .expect("failed to load replay steps");
+
+    let replayed = ctx.replay_steps.get(&0).expect("a replay candidate");
+    assert_eq!(replayed.id, older.id);
+}
+
+#[tokio::test]
+async fn context_load_replay_steps_populates_replay_wave_steps() {
+    let store = Arc::new(InMemoryStore::new());
+    let provider = create_test_provider();
+
+    store
+        .create_run(NewRun {
+            created_by: None,
+            workflow_name: "test".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        })
+        .await
+        .expect("failed to create run")
+        .into_run();
+
+    let runs = store
+        .list_runs(RunFilter::default(), 1, 10)
+        .await
+        .expect("failed to list runs");
+    let created_run_id = runs.items[0].id;
+
+    // A parallel wave: two steps sharing one position, distinct names.
+    for name in ["wave-a", "wave-b"] {
+        let step = store
+            .create_step(NewStep {
+                run_id: created_run_id,
+                trace_id: step_trace_id(created_run_id, name, 0),
+                name: name.to_string(),
+                kind: StepKind::Shell,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("failed to create step");
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    started_at: Some(Utc::now()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("failed to start step");
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Completed),
+                    completed_at: Some(Utc::now()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("failed to complete step");
+    }
+
+    let mut ctx = WorkflowContext::new(created_run_id, "test".to_string(), store, provider);
+    ctx.load_replay_steps()
+        .await
+        .expect("failed to load replay steps");
+
+    assert_eq!(ctx.replay_wave_steps.len(), 2);
+    assert!(
+        ctx.replay_wave_steps
+            .contains_key(&(0, "wave-a".to_string()))
+    );
+    assert!(
+        ctx.replay_wave_steps
+            .contains_key(&(0, "wave-b".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn context_load_replay_steps_includes_skipped_steps() {
+    let store = Arc::new(InMemoryStore::new());
+    let provider = create_test_provider();
+
+    store
+        .create_run(NewRun {
+            created_by: None,
+            workflow_name: "test".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        })
+        .await
+        .expect("failed to create run")
+        .into_run();
+
+    let runs = store
+        .list_runs(RunFilter::default(), 1, 10)
+        .await
+        .expect("failed to list runs");
+    let created_run_id = runs.items[0].id;
+
+    let step = store
+        .create_step(NewStep {
+            run_id: created_run_id,
+            trace_id: step_trace_id(created_run_id, "maybe", 0),
+            name: "maybe".to_string(),
+            kind: StepKind::Custom("skip".to_string()),
+            position: 0,
+            input: None,
+            is_error_handler: false,
+        })
+        .await
+        .expect("failed to create step");
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Skipped),
+                output: Some(json!({"reason": "not needed"})),
+                completed_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to mark step skipped");
+
+    let mut ctx = WorkflowContext::new(created_run_id, "test".to_string(), store, provider);
+    ctx.load_replay_steps()
+        .await
+        .expect("failed to load replay steps");
+
+    let replayed = ctx.replay_steps.get(&0).expect("skipped step is replayed");
+    assert_eq!(replayed.id, step.id);
+    assert_eq!(replayed.status.state, StepStatus::Skipped);
 }
 
 #[tokio::test]

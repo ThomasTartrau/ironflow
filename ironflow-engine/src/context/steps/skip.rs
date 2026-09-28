@@ -21,6 +21,9 @@ impl WorkflowContext {
     /// The step is created directly in [`StepStatus::Skipped`] state and the
     /// reason is stored in the output as `{"reason": "..."}`.
     ///
+    /// On resume, a skip already recorded in a prior execution of the current
+    /// attempt is replayed instead of creating a second `Skipped` step.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError`] if the store fails.
@@ -62,6 +65,20 @@ impl WorkflowContext {
 
         let position = self.position;
         self.position += 1;
+
+        if let Some(existing) = self.replay_steps.get(&position)
+            && existing.kind == StepKind::Custom("skip".to_string())
+            && existing.status.state == StepStatus::Skipped
+        {
+            self.last_step_ids = vec![existing.id];
+            info!(
+                run_id = %self.run_id,
+                step = %name,
+                position,
+                "step replayed from previous execution"
+            );
+            return Ok(());
+        }
 
         let trace_id = step_trace_id(self.run_id, name, position);
         let step = self

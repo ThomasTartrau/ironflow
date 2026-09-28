@@ -10,7 +10,7 @@ use tokio::time::timeout;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use ironflow_store::models::{NewStep, StepStatus, StepUpdate, step_trace_id};
+use ironflow_store::models::{NewStep, Step, StepStatus, StepUpdate, step_trace_id};
 
 use crate::budget::step_budget_usd;
 use crate::config::StepConfig;
@@ -38,6 +38,10 @@ impl WorkflowContext {
     /// When `fail_fast` is true, remaining steps are aborted on the first
     /// failure. When false, all steps run to completion and the first
     /// error is returned.
+    ///
+    /// On resume, if every step of the wave already completed in a prior
+    /// execution of the current attempt, the whole wave is replayed from the
+    /// store instead of being launched again.
     ///
     /// # Errors
     ///
@@ -106,6 +110,17 @@ impl WorkflowContext {
         // Guard timeout: checked before launching the wave.
         self.check_guard_timeout()?;
 
+        let wave_position = self.position;
+        self.position += 1;
+
+        // Replay: if every step of this wave already completed in a prior
+        // execution of the current attempt, return their cached outputs
+        // without creating a step or launching anything. Mirrors the
+        // replay-before-budget-check ordering of `execute_step`.
+        if let Some(results) = self.try_replay_wave(wave_position, &steps) {
+            return Ok(results);
+        }
+
         // Cost cap: the whole wave is charged at once. Refused before any step
         // record is created, so nothing in the wave starts.
         let wave_budget: Decimal = steps
@@ -117,9 +132,6 @@ impl WorkflowContext {
             .map(step_budget_usd)
             .sum();
         self.check_run_budget(wave_budget)?;
-
-        let wave_position = self.position;
-        self.position += 1;
 
         let now = Utc::now();
         let mut step_records: Vec<(Uuid, Uuid, String, StepConfig)> =
@@ -481,5 +493,58 @@ impl WorkflowContext {
             .collect();
 
         Ok(results)
+    }
+
+    /// Try to replay a whole parallel wave from a previous execution.
+    ///
+    /// Returns `Some` only when every step of `steps` completed at
+    /// `position` in the current attempt; a partially completed or absent
+    /// wave returns `None` so the wave runs normally (existing behavior,
+    /// including for items already completed -- they are re-created).
+    fn try_replay_wave(
+        &mut self,
+        position: u32,
+        steps: &[(&str, StepConfig)],
+    ) -> Option<Vec<ParallelStepResult>> {
+        let stored: Vec<Step> = steps
+            .iter()
+            .map(|(name, _)| {
+                self.replay_wave_steps
+                    .get(&(position, (*name).to_string()))
+                    .cloned()
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        if stored
+            .iter()
+            .any(|step| step.status.state != StepStatus::Completed)
+        {
+            return None;
+        }
+
+        let mut results = Vec::with_capacity(steps.len());
+        let mut last_ids = Vec::with_capacity(steps.len());
+        for ((name, config), step) in steps.iter().zip(stored.iter()) {
+            let mut output = StepOutput::from(step);
+            self.total_cost_usd += output.cost_usd;
+            self.total_duration_ms += output.duration_ms;
+            output.artifacts = StepArtifacts::new(name, Some(step.id), config.declared_outputs());
+
+            info!(
+                run_id = %self.run_id,
+                step = %name,
+                position,
+                "step replayed from previous execution"
+            );
+
+            last_ids.push(step.id);
+            results.push(ParallelStepResult {
+                name: (*name).to_string(),
+                output,
+                step_id: step.id,
+            });
+        }
+        self.last_step_ids = last_ids;
+        Some(results)
     }
 }
