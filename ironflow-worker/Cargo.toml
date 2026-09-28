@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.22.3"
+version = "2.22.4"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -39,7 +39,7 @@ heartbeat = []
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 rust_decimal = "1"
-ironflow-api = { version = "2.40.2", path = "../ironflow-api" }
+ironflow-api = { version = "2.40.3", path = "../ironflow-api" }
 ironflow-auth = { version = "2.4.32", path = "../ironflow-auth" }
 ironflow-store = { version = "2.38.2", path = "../ironflow-store", features = ["store-memory"] }
 schemars = "1"
