@@ -26,7 +26,9 @@ impl AnthropicModel {
     pub const OPUS_5_5: &str = "claude-opus-5-5";
     /// Claude Opus 5 - flagship for complex agentic coding and enterprise work (1M context).
     pub const OPUS_5: &str = "claude-opus-5";
-    /// Claude Sonnet 5 - best combination of speed and intelligence (1M context).
+    /// Claude Sonnet 5.5 - next Sonnet, launching; use only when explicitly requested (1M context).
+    pub const SONNET_5_5: &str = "claude-sonnet-5-5";
+    /// Claude Sonnet 5 - previous Sonnet, still served (1M context).
     pub const SONNET_5: &str = "claude-sonnet-5";
     /// Claude Opus 4.8 - previous Opus flagship (1M context).
     pub const OPUS_4_8: &str = "claude-opus-4-8";
@@ -40,6 +42,26 @@ impl AnthropicModel {
     pub const OPUS_4_6: &str = "claude-opus-4-6";
     /// Claude Sonnet 4.5 - previous generation balanced (200k context).
     pub const SONNET_4_5: &str = "claude-sonnet-4-5-20250929";
+}
+
+/// Anthropic models that reject forced `tool_choice` for structured output
+/// and require `output_config.format` (`json_schema`) instead.
+const OUTPUT_CONFIG_FORMAT_MODELS: &[&str] = &[
+    AnthropicModel::SONNET_5_5,
+    AnthropicModel::OPUS_5_5,
+    AnthropicModel::FABLE_5_1,
+    AnthropicModel::MYTHOS_5_1,
+];
+
+/// Whether `model` must receive structured output via `output_config.format`
+/// instead of the synthetic tool + forced `tool_choice`.
+///
+/// Matches the base model id or the same id with a `[1m]` suffix, mirroring
+/// the substring resolution used by [`crate::pricing::StaticPricing`].
+fn requires_output_config_format(model: &str) -> bool {
+    OUTPUT_CONFIG_FORMAT_MODELS
+        .iter()
+        .any(|known| model.starts_with(known))
 }
 
 /// Adapter for the Anthropic Messages API (`/v1/messages`).
@@ -115,15 +137,24 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             let transformed = transform_schema(schema_str);
             let schema_value: Value = serde_json::from_str(&transformed).unwrap_or(json!({}));
 
-            body["tools"] = json!([{
-                "name": "structured_output",
-                "description": "Output the result in the requested JSON schema.",
-                "input_schema": schema_value
-            }]);
-            body["tool_choice"] = json!({
-                "type": "tool",
-                "name": "structured_output"
-            });
+            if requires_output_config_format(&model) {
+                body["output_config"] = json!({
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema_value
+                    }
+                });
+            } else {
+                body["tools"] = json!([{
+                    "name": "structured_output",
+                    "description": "Output the result in the requested JSON schema.",
+                    "input_schema": schema_value
+                }]);
+                body["tool_choice"] = json!({
+                    "type": "tool",
+                    "name": "structured_output"
+                });
+            }
         }
 
         Ok(body)
@@ -131,6 +162,10 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
 
     fn parse_response(&self, body: &Value, config: &AgentConfig) -> Result<TurnResult, AgentError> {
         let content = body.get("content").and_then(|c| c.as_array());
+        let model = body.get("model").and_then(|m| m.as_str()).map(String::from);
+
+        let use_output_config_format = config.json_schema.is_some()
+            && model.as_deref().is_some_and(requires_output_config_format);
 
         let mut text_parts: Vec<String> = Vec::new();
         let mut tool_calls: Vec<HttpToolCall> = Vec::new();
@@ -177,13 +212,18 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
         let is_final = stop_reason == "end_turn" || stop_reason == "max_tokens";
 
         let usage = parse_anthropic_usage(body);
-        let model = body.get("model").and_then(|m| m.as_str()).map(String::from);
 
         let text = if text_parts.is_empty() {
             None
         } else {
             Some(text_parts.join(""))
         };
+
+        if use_output_config_format
+            && let Some(ref t) = text
+        {
+            structured_value = Some(serde_json::from_str(t).unwrap_or(json!({})));
+        }
 
         Ok(TurnResult {
             text,
@@ -456,6 +496,21 @@ mod tests {
     }
 
     #[test]
+    fn build_request_sonnet_5_5_uses_output_config_format() {
+        let a = adapter();
+        let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
+        let config = AgentConfig::new("Give x")
+            .model(AnthropicModel::SONNET_5_5)
+            .output_schema_raw(schema)
+            .into();
+        let body = a.build_request(&config).expect("build_request failed");
+
+        assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+        assert!(body.get("tools").is_none());
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
     fn parse_response_text() {
         let a = adapter();
         let body = json!({
@@ -620,6 +675,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_response_output_config_format_reads_text_json() {
+        let a = adapter();
+        let body = json!({
+            "content": [{"type": "text", "text": "{\"x\":42}"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 15, "output_tokens": 10},
+            "model": "claude-sonnet-5-5"
+        });
+        let schema = r#"{"type":"object"}"#;
+        let config = AgentConfig::new("Give x").output_schema_raw(schema).into();
+        let result = a.parse_response(&body, &config).expect("parse failed");
+
+        assert_eq!(result.structured_value, Some(json!({"x": 42})));
+        assert_eq!(result.text, Some("{\"x\":42}".to_string()));
+    }
+
+    #[test]
     fn parse_sse_line_text_delta() {
         let a = adapter();
         let line =
@@ -646,6 +718,10 @@ mod tests {
         assert_eq!(a.resolve_model("claude-opus-4-8"), "claude-opus-4-8");
         assert_eq!(a.resolve_model("claude-opus-5"), "claude-opus-5");
         assert_eq!(a.resolve_model("claude-opus-5-5"), AnthropicModel::OPUS_5_5);
+        assert_eq!(
+            a.resolve_model("claude-sonnet-5-5"),
+            AnthropicModel::SONNET_5_5
+        );
         assert_eq!(
             a.resolve_model("claude-mythos-5-1"),
             AnthropicModel::MYTHOS_5_1

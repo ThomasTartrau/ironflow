@@ -275,6 +275,7 @@ impl StaticPricing {
             ("claude-mythos-5", 10.0, 50.0),
             ("claude-mythos-5-1", 10.0, 50.0),
             ("claude-opus-5-5", 4.0, 20.0),
+            ("claude-sonnet-5-5", 2.0, 10.0),
             ("claude-opus-5", 5.0, 25.0),
             ("claude-sonnet-5", 2.0, 10.0),
             ("claude-opus-4-8", 5.0, 25.0),
@@ -426,6 +427,16 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_5_has_current_pricing() {
+        let pricing = StaticPricing::new();
+        assert_eq!(pricing.price_per_1m("claude-sonnet-5-5"), Some((2.0, 10.0)));
+        assert_eq!(
+            pricing.price_per_1m("claude-sonnet-5-5[1m]"),
+            Some((2.0, 10.0))
+        );
+    }
+
+    #[test]
     fn substring_resolution_most_specific_wins() {
         let pricing = StaticPricing::new();
         // "claude-sonnet-4-6[1m]" contains "claude-sonnet-4-6" (17 chars)
@@ -508,6 +519,7 @@ mod tests {
             "claude-mythos-5",
             "claude-mythos-5-1",
             "claude-opus-5-5",
+            "claude-sonnet-5-5",
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-opus-4-8",
