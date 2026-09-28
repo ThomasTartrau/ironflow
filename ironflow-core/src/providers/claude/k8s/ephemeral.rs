@@ -30,27 +30,65 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures_util::future::join_all;
 use futures_util::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{ConfigMap, Pod};
-use kube::api::{Api, DeleteParams, LogParams, PostParams};
-use kube::runtime::wait::await_condition;
-use serde_json::json;
+use kube::Error as KubeError;
+use kube::api::{Api, DeleteParams, ListParams, LogParams, PostParams};
+use kube::runtime::wait::{await_condition, conditions};
+use serde_json::{from_value, json};
+use tokio::spawn;
+use tokio::task::JoinHandle;
 use tokio::time;
 
 use tracing::{debug, info, warn};
 
 use crate::error::AgentError;
-use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
+use crate::provider::{
+    AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_EGRESS_PROFILE, LABEL_RUN_ID,
+    LABEL_STEP, LogSink, PodVolumeSource, ReadOnlyVolume, SecretEnvVar,
+};
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
 use super::common::{
-    DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig,
-    build_credentials_prefix, build_pod_spec, create_client, generate_pod_name,
+    DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, LABEL_EXPIRES_AT,
+    PodConfig, PodHardening, SandboxSettings, build_credentials_from_env_prefix,
+    build_credentials_prefix, build_pod_spec, build_profile_copy_prefix, create_client,
+    generate_pod_name,
 };
+use super::reaper::{ReapReport, configmap_expired, reap_reason};
 use super::toleration::K8sToleration;
+
+/// Environment variable carrying the OAuth credentials JSON read from a Secret.
+const CREDENTIALS_ENV_VAR: &str = "IRONFLOW_CLAUDE_CREDENTIALS";
+
+/// Environment variables a sandboxed provider refuses as plain values.
+const PLAIN_TEXT_SECRETS: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+/// Margin added to the timeout for the expiry annotation when not sandboxed.
+const DEFAULT_DEADLINE_MARGIN: Duration = Duration::from_secs(60);
+
+/// Label selector matching every agent pod created by ironflow.
+const RUNNER_SELECTOR: &str =
+    "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=claude-runner";
+
+/// Label selector matching every prompt ConfigMap created by ironflow.
+const PROMPT_SELECTOR: &str =
+    "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=prompt-data";
+
+/// Current unix time in whole seconds.
+fn now_unix() -> Result<u64, AgentError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("system clock is before the unix epoch: {e}"),
+        })
+}
 
 fn is_terminal_phase(phase: &str) -> bool {
     phase == "Succeeded" || phase == "Failed"
@@ -116,6 +154,15 @@ pub struct K8sEphemeralProvider {
     node_selector: BTreeMap<String, String>,
     tolerations: Vec<K8sToleration>,
     active_deadline_seconds: Option<Duration>,
+    sandbox: Option<SandboxSettings>,
+    secret_env: Vec<SecretEnvVar>,
+    oauth_credentials_secret: Option<(String, String)>,
+    read_only_volumes: Vec<ReadOnlyVolume>,
+    managed_settings_presets: BTreeMap<String, String>,
+    default_managed_settings: Option<String>,
+    claude_profile_configmap: Option<String>,
+    egress_profile: Option<String>,
+    previous_attempt_timeout: Duration,
 }
 
 /// Apply a Kubernetes `activeDeadlineSeconds` onto a built pod, in whole seconds.
@@ -153,7 +200,341 @@ impl K8sEphemeralProvider {
             node_selector: BTreeMap::new(),
             tolerations: Vec::new(),
             active_deadline_seconds: None,
+            sandbox: None,
+            secret_env: Vec::new(),
+            oauth_credentials_secret: None,
+            read_only_volumes: Vec::new(),
+            managed_settings_presets: BTreeMap::new(),
+            default_managed_settings: None,
+            claude_profile_configmap: None,
+            egress_profile: None,
+            previous_attempt_timeout: Duration::from_secs(60),
         }
+    }
+
+    /// Create a hardened ephemeral provider for the given image.
+    ///
+    /// Same as [`new`](Self::new), plus a sandbox with the
+    /// [`SandboxSettings`] defaults:
+    ///
+    /// * runs as uid/gid `10001`, `runAsNonRoot`, seccomp `RuntimeDefault`;
+    /// * read-only root filesystem, all capabilities dropped, no privilege
+    ///   escalation;
+    /// * `HOME` (`/home/claude`, 1Gi) and `/tmp` (512Mi) on `emptyDir`s;
+    /// * no service account token unless a service account is set;
+    /// * `activeDeadlineSeconds` = timeout + 60s unless set explicitly;
+    /// * refuses secrets as plain text ([`oauth_credentials`](Self::oauth_credentials),
+    ///   `env("ANTHROPIC_API_KEY", ..)`, `env("CLAUDE_CODE_OAUTH_TOKEN", ..)`).
+    ///
+    /// Each default has an explicit relaxation method.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("registry.example.com/claude-runner:2.1.0-1")
+    ///     .namespace("ironflow-agents")
+    ///     .oauth_token_from_secret("claude-oauth", "token");
+    /// ```
+    pub fn sandboxed(image: &str) -> Self {
+        Self {
+            sandbox: Some(SandboxSettings::default()),
+            ..Self::new(image)
+        }
+    }
+
+    fn sandbox_mut(&mut self, method: &str) -> &mut SandboxSettings {
+        self.sandbox.as_mut().unwrap_or_else(|| {
+            panic!("{method} requires a provider built with K8sEphemeralProvider::sandboxed")
+        })
+    }
+
+    /// Keep the root filesystem of a sandboxed pod writable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider was not built with [`sandboxed`](Self::sandboxed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").allow_writable_root();
+    /// ```
+    pub fn allow_writable_root(mut self) -> Self {
+        self.sandbox_mut("allow_writable_root").writable_root = true;
+        self
+    }
+
+    /// Set the size limit of the `emptyDir` backing `HOME` (default `1Gi`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider was not built with [`sandboxed`](Self::sandboxed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").home_size_limit("4Gi");
+    /// ```
+    pub fn home_size_limit(mut self, limit: &str) -> Self {
+        self.sandbox_mut("home_size_limit").home_size_limit = limit.to_string();
+        self
+    }
+
+    /// Set the size limit of the `emptyDir` backing `/tmp` (default `512Mi`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider was not built with [`sandboxed`](Self::sandboxed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").tmp_size_limit("2Gi");
+    /// ```
+    pub fn tmp_size_limit(mut self, limit: &str) -> Self {
+        self.sandbox_mut("tmp_size_limit").tmp_size_limit = limit.to_string();
+        self
+    }
+
+    /// Set the margin added to the timeout for the pod deadline and the
+    /// expiry annotation (default 60s).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider was not built with [`sandboxed`](Self::sandboxed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .deadline_margin(Duration::from_secs(120));
+    /// ```
+    pub fn deadline_margin(mut self, margin: Duration) -> Self {
+        self.sandbox_mut("deadline_margin").deadline_margin = margin;
+        self
+    }
+
+    /// Run the sandboxed pod as another uid (also used as gid and fsGroup).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider was not built with [`sandboxed`](Self::sandboxed),
+    /// or if `uid` is not strictly positive (root is never allowed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").run_as_user(20000);
+    /// ```
+    pub fn run_as_user(mut self, uid: i64) -> Self {
+        assert!(uid > 0, "run_as_user must be greater than 0");
+        self.sandbox_mut("run_as_user").run_as_user = uid;
+        self
+    }
+
+    /// Read an environment variable from a Kubernetes Secret.
+    ///
+    /// The pod gets `valueFrom.secretKeyRef`: the value never enters the pod
+    /// spec. Calling it again with the same `var` replaces the entry. A step
+    /// entry ([`AgentConfig::env_from_secret`]) with the same name wins.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .env_from_secret("ANTHROPIC_API_KEY", "anthropic", "api-key");
+    /// ```
+    pub fn env_from_secret(mut self, var: &str, secret: &str, key: &str) -> Self {
+        let entry = SecretEnvVar {
+            name: var.to_string(),
+            secret: secret.to_string(),
+            key: key.to_string(),
+        };
+        match self.secret_env.iter_mut().find(|e| e.name == var) {
+            Some(existing) => *existing = entry,
+            None => self.secret_env.push(entry),
+        }
+        self
+    }
+
+    /// Read the Claude OAuth credentials JSON from a Kubernetes Secret.
+    ///
+    /// The JSON reaches the container through the
+    /// `IRONFLOW_CLAUDE_CREDENTIALS` variable (`secretKeyRef`) and is written
+    /// to `~/.claude/.credentials.json` before the agent starts. Only the
+    /// variable name appears in the pod spec.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .oauth_credentials_from_secret("claude-credentials", "credentials.json");
+    /// ```
+    pub fn oauth_credentials_from_secret(mut self, secret: &str, key: &str) -> Self {
+        self.oauth_credentials_secret = Some((secret.to_string(), key.to_string()));
+        self
+    }
+
+    /// Read a long-lived Claude OAuth token (`claude setup-token`) from a
+    /// Kubernetes Secret into `CLAUDE_CODE_OAUTH_TOKEN`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .oauth_token_from_secret("claude-oauth", "token");
+    /// ```
+    pub fn oauth_token_from_secret(self, secret: &str, key: &str) -> Self {
+        self.env_from_secret("CLAUDE_CODE_OAUTH_TOKEN", secret, key)
+    }
+
+    /// Mount a volume read-only into every pod. Step volumes
+    /// ([`AgentConfig::read_only_volume`]) come after these.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::provider::{PodVolumeSource, ReadOnlyVolume};
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").read_only_volume(ReadOnlyVolume {
+    ///     source: PodVolumeSource::ConfigMap { name: "guidelines".to_string() },
+    ///     mount_path: "/data/guidelines".to_string(),
+    ///     sub_path: None,
+    /// });
+    /// ```
+    pub fn read_only_volume(mut self, volume: ReadOnlyVolume) -> Self {
+        self.read_only_volumes.push(volume);
+        self
+    }
+
+    /// Mount a PersistentVolumeClaim read-only into every pod.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").read_only_pvc("repos", "/data/repos");
+    /// ```
+    pub fn read_only_pvc(self, claim: &str, mount_path: &str) -> Self {
+        self.read_only_volume(ReadOnlyVolume {
+            source: PodVolumeSource::PersistentVolumeClaim {
+                claim_name: claim.to_string(),
+            },
+            mount_path: mount_path.to_string(),
+            sub_path: None,
+        })
+    }
+
+    /// Register a managed-settings preset: `name` is what steps select with
+    /// [`AgentConfig::managed_settings`], `configmap` the ConfigMap holding
+    /// `managed-settings.json`, mounted at `/etc/claude-code`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .managed_settings_preset("locked", "claude-managed-locked")
+    ///     .managed_settings_preset("readonly", "claude-managed-readonly");
+    /// ```
+    pub fn managed_settings_preset(mut self, name: &str, configmap: &str) -> Self {
+        self.managed_settings_presets
+            .insert(name.to_string(), configmap.to_string());
+        self
+    }
+
+    /// Select the managed-settings preset used by steps that do not pick one.
+    ///
+    /// The name must be registered with
+    /// [`managed_settings_preset`](Self::managed_settings_preset), otherwise
+    /// every invocation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .managed_settings_preset("locked", "claude-managed-locked")
+    ///     .default_managed_settings("locked");
+    /// ```
+    pub fn default_managed_settings(mut self, name: &str) -> Self {
+        self.default_managed_settings = Some(name.to_string());
+        self
+    }
+
+    /// Mount a ConfigMap holding a Claude profile (`CLAUDE.md`, `settings.json`,
+    /// agents, commands) and copy it into `~/.claude` before the agent starts.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .claude_profile_configmap("claude-profile");
+    /// ```
+    pub fn claude_profile_configmap(mut self, name: &str) -> Self {
+        self.claude_profile_configmap = Some(name.to_string());
+        self
+    }
+
+    /// Set the default network egress profile of every pod (the
+    /// `ironflow.io/egress-profile` label). A step's
+    /// [`AgentConfig::egress_profile`] wins.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").egress_profile("anthropic-only");
+    /// ```
+    pub fn egress_profile(mut self, name: &str) -> Self {
+        self.egress_profile = Some(name.to_string());
+        self
+    }
+
+    /// Set how long to wait for the pods of a previous attempt of the same
+    /// step to terminate before starting a new one (default 60s).
+    ///
+    /// On timeout the invocation fails rather than running two agents side
+    /// by side.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .previous_attempt_timeout(Duration::from_secs(120));
+    /// ```
+    pub fn previous_attempt_timeout(mut self, timeout: Duration) -> Self {
+        self.previous_attempt_timeout = timeout;
+        self
     }
 
     /// Set the Kubernetes namespace (default: `"default"`).
@@ -193,6 +574,11 @@ impl K8sEphemeralProvider {
     }
 
     /// Set Claude OAuth credentials JSON to inject into the pod.
+    ///
+    /// **The JSON lands in the pod spec in clear text**: anyone who can read
+    /// pods in the namespace can read it. Prefer
+    /// [`oauth_credentials_from_secret`](Self::oauth_credentials_from_secret).
+    /// A [`sandboxed`](Self::sandboxed) provider rejects it at invocation time.
     ///
     /// The JSON is written to `~/.claude/.credentials.json` inside the container
     /// before the `claude` CLI is invoked. Format:
@@ -427,14 +813,359 @@ struct CreatedPod {
     configmaps: Option<Api<ConfigMap>>,
 }
 
+/// Pod inputs merged from the provider defaults and the step's [`AgentConfig`].
+#[derive(Debug)]
+struct MergedPodInputs {
+    secret_env: Vec<SecretEnvVar>,
+    service_account: Option<String>,
+    read_only_volumes: Vec<ReadOnlyVolume>,
+    managed_settings_configmap: Option<String>,
+    labels: BTreeMap<String, String>,
+}
+
 impl K8sEphemeralProvider {
+    /// Merge the provider settings with the step's, the step winning.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::ProcessFailed`] when a sandboxed provider carries
+    /// a secret as plain text, or when the managed-settings preset is unknown.
+    fn merged_pod_inputs(&self, config: &AgentConfig) -> Result<MergedPodInputs, AgentError> {
+        if self.sandbox.is_some() {
+            if self.oauth_credentials.is_some() {
+                return Err(AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: "sandboxed provider refuses inline oauth_credentials; use oauth_credentials_from_secret".to_string(),
+                });
+            }
+            if let Some((key, _)) = self
+                .env_vars
+                .iter()
+                .find(|(k, _)| PLAIN_TEXT_SECRETS.contains(&k.as_str()))
+            {
+                return Err(AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!(
+                        "sandboxed provider refuses {key} as a plain env var; use env_from_secret"
+                    ),
+                });
+            }
+        }
+
+        let mut secret_env = self.secret_env.clone();
+        if let Some((secret, key)) = &self.oauth_credentials_secret {
+            secret_env.push(SecretEnvVar {
+                name: CREDENTIALS_ENV_VAR.to_string(),
+                secret: secret.clone(),
+                key: key.clone(),
+            });
+        }
+        for entry in &config.pod.secret_env {
+            match secret_env.iter_mut().find(|e| e.name == entry.name) {
+                Some(existing) => *existing = entry.clone(),
+                None => secret_env.push(entry.clone()),
+            }
+        }
+
+        let service_account = config
+            .pod
+            .service_account
+            .clone()
+            .or_else(|| self.service_account.clone());
+
+        let mut read_only_volumes = self.read_only_volumes.clone();
+        read_only_volumes.extend(config.pod.read_only_volumes.iter().cloned());
+
+        let preset = config
+            .pod
+            .managed_settings
+            .as_ref()
+            .or(self.default_managed_settings.as_ref());
+        let managed_settings_configmap = match preset {
+            Some(name) => match self.managed_settings_presets.get(name) {
+                Some(configmap) => Some(configmap.clone()),
+                None => {
+                    let known: Vec<&str> = self
+                        .managed_settings_presets
+                        .keys()
+                        .map(String::as_str)
+                        .collect();
+                    return Err(AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: format!(
+                            "unknown managed settings preset '{name}', known presets: [{}]",
+                            known.join(", ")
+                        ),
+                    });
+                }
+            },
+            None => None,
+        };
+
+        let mut labels = self.pod_labels.clone();
+        if let Some(profile) = &self.egress_profile {
+            labels.insert(LABEL_EGRESS_PROFILE.to_string(), profile.clone());
+        }
+        labels.extend(config.pod_labels.clone());
+
+        Ok(MergedPodInputs {
+            secret_env,
+            service_account,
+            read_only_volumes,
+            managed_settings_configmap,
+            labels,
+        })
+    }
+
+    /// Margin added to the timeout for the deadline and the expiry annotation.
+    fn deadline_margin_or_default(&self) -> Duration {
+        self.sandbox
+            .as_ref()
+            .map_or(DEFAULT_DEADLINE_MARGIN, |s| s.deadline_margin)
+    }
+
+    /// The `activeDeadlineSeconds` of the pod: the explicit value when set,
+    /// else timeout + margin when sandboxed, else none.
+    fn effective_deadline(&self) -> Option<Duration> {
+        self.active_deadline_seconds.or_else(|| {
+            self.sandbox
+                .as_ref()
+                .map(|s| self.timeout + s.deadline_margin)
+        })
+    }
+
+    /// Delete the pods and prompt ConfigMaps left by a previous attempt of the
+    /// same step of the same run, and wait until the pods are gone.
+    ///
+    /// Step names must be unique within a parallel group: two branches with
+    /// the same name share the `ironflow.io/step` label, and one would delete
+    /// the other's pod.
+    ///
+    /// Returns the number of pods deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::ProcessFailed`] when the pods cannot be listed
+    /// or deleted, or are still terminating after
+    /// [`previous_attempt_timeout`](Self::previous_attempt_timeout): a new
+    /// agent never starts next to a live one.
+    pub(crate) async fn delete_previous_attempt(
+        &self,
+        pods: &Api<Pod>,
+        configmaps: &Api<ConfigMap>,
+        run_id: &str,
+        step: &str,
+    ) -> Result<usize, AgentError> {
+        let scope = format!("{LABEL_RUN_ID}={run_id},{LABEL_STEP}={step}");
+
+        let pod_selector = format!("{RUNNER_SELECTOR},{scope}");
+        let pod_params = ListParams::default().labels(&pod_selector);
+        let listed = pods.list(&pod_params).await;
+        let previous = listed.map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("failed to list previous attempt pods: {e}"),
+        })?;
+
+        let mut deleted: Vec<(String, String)> = Vec::new();
+        for pod in previous.items {
+            let (Some(name), Some(uid)) = (pod.metadata.name, pod.metadata.uid) else {
+                continue;
+            };
+            match pods.delete(&name, &DeleteParams::default()).await {
+                Ok(_) => deleted.push((name, uid)),
+                // Already gone between the list and the delete.
+                Err(KubeError::Api(e)) if e.code == 404 => {}
+                Err(e) => {
+                    return Err(AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: format!("failed to delete previous attempt pod '{name}': {e}"),
+                    });
+                }
+            }
+        }
+
+        let waits = deleted
+            .iter()
+            .map(|(name, uid)| await_condition(pods.clone(), name, conditions::is_deleted(uid)));
+        let limit = self.previous_attempt_timeout;
+        let waited = time::timeout(limit, join_all(waits)).await;
+        let results = waited.map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!(
+                "previous attempt pods still terminating after {limit:?} (run {run_id}, step {step}): {e}"
+            ),
+        })?;
+        for result in results {
+            result.map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed waiting for previous attempt pod deletion: {e}"),
+            })?;
+        }
+
+        let cm_selector = format!("{PROMPT_SELECTOR},{scope}");
+        let cm_params = ListParams::default().labels(&cm_selector);
+        match configmaps.list(&cm_params).await {
+            Ok(list) => {
+                for name in list.items.into_iter().filter_map(|cm| cm.metadata.name) {
+                    if let Err(e) = configmaps.delete(&name, &DeleteParams::default()).await {
+                        warn!(configmap = %name, error = %e, "failed to delete previous attempt prompt ConfigMap");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to list previous attempt prompt ConfigMaps");
+            }
+        }
+
+        if !deleted.is_empty() {
+            info!(
+                run_id = %run_id,
+                step = %step,
+                pods_deleted = deleted.len(),
+                "deleted pods of a previous attempt before retrying"
+            );
+        }
+        Ok(deleted.len())
+    }
+
+    /// Delete orphaned agent pods and prompt ConfigMaps in the namespace.
+    ///
+    /// A pod is deleted when Kubernetes killed it for exceeding its deadline,
+    /// or when its `ironflow.io/expires-at` annotation lies in the past (see
+    /// [`reap_reason`](super::reap_reason)). Objects without a parseable
+    /// annotation are never touched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::ProcessFailed`] when the client cannot be built
+    /// or the pods or ConfigMaps cannot be listed. A failed delete is logged
+    /// and not counted.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::AgentError> {
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").namespace("ironflow-agents");
+    /// let report = provider.reap_orphans().await?;
+    /// println!("{} pods deleted", report.pods_deleted);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn reap_orphans(&self) -> Result<ReapReport, AgentError> {
+        let client = create_client(&self.cluster_config).await?;
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &self.namespace);
+        let configmaps: Api<ConfigMap> = Api::namespaced(client, &self.namespace);
+        let now = now_unix()?;
+        let mut report = ReapReport::default();
+
+        let pod_params = ListParams::default().labels(RUNNER_SELECTOR);
+        let listed = pods.list(&pod_params).await;
+        let pod_list = listed.map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("failed to list agent pods: {e}"),
+        })?;
+        for pod in &pod_list.items {
+            let Some(name) = pod.metadata.name.as_deref() else {
+                continue;
+            };
+            let Some(reason) = reap_reason(pod, now) else {
+                continue;
+            };
+            match pods.delete(name, &DeleteParams::default()).await {
+                Ok(_) => {
+                    info!(pod = %name, ?reason, "reaped orphan agent pod");
+                    report.pods_deleted += 1;
+                }
+                Err(e) => warn!(pod = %name, error = %e, "failed to reap orphan agent pod"),
+            }
+        }
+
+        let cm_params = ListParams::default().labels(PROMPT_SELECTOR);
+        let listed = configmaps.list(&cm_params).await;
+        let cm_list = listed.map_err(|e| AgentError::ProcessFailed {
+            exit_code: -1,
+            stderr: format!("failed to list prompt ConfigMaps: {e}"),
+        })?;
+        for cm in &cm_list.items {
+            let Some(name) = cm.metadata.name.as_deref() else {
+                continue;
+            };
+            if !configmap_expired(cm, now) {
+                continue;
+            }
+            match configmaps.delete(name, &DeleteParams::default()).await {
+                Ok(_) => {
+                    info!(configmap = %name, "reaped orphan prompt ConfigMap");
+                    report.configmaps_deleted += 1;
+                }
+                Err(e) => {
+                    warn!(configmap = %name, error = %e, "failed to reap orphan prompt ConfigMap");
+                }
+            }
+        }
+
+        Ok(report)
+    }
+
+    /// Spawn a background task calling [`reap_orphans`](Self::reap_orphans)
+    /// every `interval`. Errors are logged, never fatal.
+    ///
+    /// Abort the returned handle to stop the reaper.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `interval` is zero, or when called outside a Tokio runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// # async fn example() {
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1");
+    /// let reaper = provider.spawn_orphan_reaper(Duration::from_secs(300));
+    /// reaper.abort();
+    /// # }
+    /// ```
+    pub fn spawn_orphan_reaper(&self, interval: Duration) -> JoinHandle<()> {
+        assert!(
+            !interval.is_zero(),
+            "orphan reaper interval must be greater than zero"
+        );
+        let provider = self.clone();
+        spawn(async move {
+            let mut ticker = time::interval(interval);
+            loop {
+                ticker.tick().await;
+                if let Err(e) = provider.reap_orphans().await {
+                    warn!(error = %e, "orphan reaping pass failed");
+                }
+            }
+        })
+    }
+
     /// Prepare config, create the K8s pod, and return handles for the wait phase.
     async fn create_pod(&self, config: &AgentConfig) -> Result<CreatedPod, AgentError> {
         claude_common::validate_prompt_size(config)?;
         let built = claude_common::build_command(config)?;
+        let merged = self.merged_pod_inputs(config)?;
 
         let pod_name = generate_pod_name("claude-code");
-        let creds_prefix = build_credentials_prefix(self.oauth_credentials.as_deref());
+        let credentials = if self.oauth_credentials_secret.is_some() {
+            build_credentials_from_env_prefix(CREDENTIALS_ENV_VAR)
+        } else {
+            build_credentials_prefix(self.oauth_credentials.as_deref())
+        };
+        // The profile is copied first so it cannot overwrite the credentials.
+        let profile = if self.claude_profile_configmap.is_some() {
+            build_profile_copy_prefix()
+        } else {
+            String::new()
+        };
+        let creds_prefix = format!("{profile}{credentials}");
 
         let start = Instant::now();
         let client = create_client(&self.cluster_config).await?;
@@ -442,6 +1173,19 @@ impl K8sEphemeralProvider {
 
         let mut prompt_configmap_name: Option<String> = None;
         let configmaps: Api<ConfigMap> = Api::namespaced(client, &self.namespace);
+
+        let run_id = merged.labels.get(LABEL_RUN_ID);
+        let step = merged.labels.get(LABEL_STEP);
+        if let (Some(run_id), Some(step)) = (run_id, step) {
+            self.delete_previous_attempt(&pods, &configmaps, run_id, step)
+                .await?;
+        }
+
+        // Computed after the cleanup wait so it does not eat into the timeout.
+        let lifetime = self.timeout + self.deadline_margin_or_default();
+        let expires_at = now_unix()? + lifetime.as_secs();
+        let mut annotations = BTreeMap::new();
+        annotations.insert(LABEL_EXPIRES_AT.to_string(), expires_at.to_string());
 
         let trace_prefix = config
             .trace_context
@@ -451,16 +1195,21 @@ impl K8sEphemeralProvider {
 
         let full_cmd = if let Some(ref prompt) = built.stdin_prompt {
             let cm_name = format!("{pod_name}-prompt");
-            let cm: ConfigMap = serde_json::from_value(json!({
+            let mut cm_labels = BTreeMap::new();
+            cm_labels.insert("app.kubernetes.io/managed-by", "ironflow");
+            cm_labels.insert("app.kubernetes.io/component", "prompt-data");
+            if let (Some(run_id), Some(step)) = (run_id, step) {
+                cm_labels.insert(LABEL_RUN_ID, run_id.as_str());
+                cm_labels.insert(LABEL_STEP, step.as_str());
+            }
+            let cm: ConfigMap = from_value(json!({
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
                 "metadata": {
                     "name": &cm_name,
                     "namespace": &self.namespace,
-                    "labels": {
-                        "app.kubernetes.io/managed-by": "ironflow",
-                        "app.kubernetes.io/component": "prompt-data"
-                    }
+                    "labels": cm_labels,
+                    "annotations": &annotations
                 },
                 "data": {
                     PROMPT_CM_KEY: prompt
@@ -524,21 +1273,18 @@ impl K8sEphemeralProvider {
             "creating ephemeral K8s pod"
         );
 
-        let mut merged_labels = self.pod_labels.clone();
-        merged_labels.extend(config.pod_labels.clone());
-
         let pod_spec = build_pod_spec(&PodConfig {
             name: &pod_name,
             image: &self.image,
             command: vec!["sh".to_string(), "-c".to_string(), full_cmd],
             namespace: &self.namespace,
             resources: &self.resources,
-            service_account: self.service_account.as_deref(),
+            service_account: merged.service_account.as_deref(),
             restart_policy: "Never",
             image_pull_policy: &self.image_pull_policy,
             env_vars: &self.env_vars,
             image_pull_secrets: &self.image_pull_secrets,
-            extra_labels: &merged_labels,
+            extra_labels: &merged.labels,
             node_selector: &self.node_selector,
             tolerations: &self.tolerations,
             volumes: &self.volumes,
@@ -547,12 +1293,20 @@ impl K8sEphemeralProvider {
             input_init_image: &self.input_init_image,
             prompt_configmap: prompt_configmap_name.as_deref(),
             prompt_mount_path: PROMPT_MOUNT_PATH,
+            hardening: PodHardening {
+                sandbox: self.sandbox.as_ref(),
+                secret_env: &merged.secret_env,
+                read_only_volumes: &merged.read_only_volumes,
+                managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
+                claude_profile_configmap: self.claude_profile_configmap.as_deref(),
+                annotations: Some(&annotations),
+            },
         })?;
 
         // Applied after build_pod_spec: the shared PodConfig builder does not
         // carry this field, so it is set on the built pod here.
         let mut pod_spec = pod_spec;
-        apply_active_deadline_seconds(&mut pod_spec, self.active_deadline_seconds);
+        apply_active_deadline_seconds(&mut pod_spec, self.effective_deadline());
 
         pods.create(&PostParams::default(), &pod_spec)
             .await
@@ -858,8 +1612,6 @@ impl AgentProvider for K8sEphemeralProvider {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::from_value;
-
     use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
 
@@ -1061,5 +1813,306 @@ mod tests {
             from_value(json!({"spec": {"containers": []}})).expect("valid minimal pod");
         apply_active_deadline_seconds(&mut pod, None);
         assert_eq!(pod.spec.unwrap().active_deadline_seconds, None);
+    }
+
+    // ── Sandbox ─────────────────────────────────────────────────────
+
+    fn err_text(result: Result<MergedPodInputs, AgentError>) -> String {
+        result.unwrap_err().to_string()
+    }
+
+    fn merge(provider: &K8sEphemeralProvider, config: &AgentConfig) -> MergedPodInputs {
+        provider.merged_pod_inputs(config).unwrap()
+    }
+
+    #[test]
+    fn sandboxed_defaults() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1");
+        let sandbox = provider.sandbox.as_ref().expect("sandbox set");
+        assert_eq!(sandbox, &SandboxSettings::default());
+        assert_eq!(sandbox.deadline_margin, Duration::from_secs(60));
+        assert_eq!(provider.image, "img:v1");
+        assert_eq!(provider.previous_attempt_timeout, Duration::from_secs(60));
+        assert!(K8sEphemeralProvider::new("img:v1").sandbox.is_none());
+    }
+
+    #[test]
+    fn sandboxed_relaxation_builders() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .allow_writable_root()
+            .home_size_limit("4Gi")
+            .tmp_size_limit("2Gi")
+            .deadline_margin(Duration::from_secs(120))
+            .run_as_user(20000);
+        let sandbox = provider.sandbox.unwrap();
+        assert!(sandbox.writable_root);
+        assert_eq!(sandbox.home_size_limit, "4Gi");
+        assert_eq!(sandbox.tmp_size_limit, "2Gi");
+        assert_eq!(sandbox.deadline_margin, Duration::from_secs(120));
+        assert_eq!(sandbox.run_as_user, 20000);
+    }
+
+    #[test]
+    #[should_panic(expected = "allow_writable_root requires a provider built with")]
+    fn allow_writable_root_on_non_sandboxed_panics() {
+        let _ = K8sEphemeralProvider::new("img:v1").allow_writable_root();
+    }
+
+    #[test]
+    #[should_panic(expected = "home_size_limit requires a provider built with")]
+    fn home_size_limit_on_non_sandboxed_panics() {
+        let _ = K8sEphemeralProvider::new("img:v1").home_size_limit("1Gi");
+    }
+
+    #[test]
+    #[should_panic(expected = "run_as_user must be greater than 0")]
+    fn run_as_user_zero_panics() {
+        let _ = K8sEphemeralProvider::sandboxed("img:v1").run_as_user(0);
+    }
+
+    #[test]
+    fn oauth_token_from_secret_builder() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .oauth_token_from_secret("claude-oauth", "token");
+        assert_eq!(provider.secret_env.len(), 1);
+        assert_eq!(provider.secret_env[0].name, "CLAUDE_CODE_OAUTH_TOKEN");
+        assert_eq!(provider.secret_env[0].secret, "claude-oauth");
+        assert_eq!(provider.secret_env[0].key, "token");
+    }
+
+    #[test]
+    fn oauth_credentials_from_secret_adds_credentials_env() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .oauth_credentials_from_secret("claude-credentials", "credentials.json");
+        let (secret, key) = provider.oauth_credentials_secret.clone().unwrap();
+        assert_eq!(secret, "claude-credentials");
+        assert_eq!(key, "credentials.json");
+        let merged = merge(&provider, &AgentConfig::new("hi"));
+        assert_eq!(merged.secret_env.len(), 1);
+        assert_eq!(merged.secret_env[0].name, CREDENTIALS_ENV_VAR);
+        assert_eq!(merged.secret_env[0].secret, "claude-credentials");
+    }
+
+    #[test]
+    fn env_from_secret_replaces_same_var() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .env_from_secret("TOKEN", "a", "k")
+            .env_from_secret("TOKEN", "b", "k");
+        assert_eq!(provider.secret_env.len(), 1);
+        assert_eq!(provider.secret_env[0].secret, "b");
+    }
+
+    #[test]
+    fn managed_settings_preset_map() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .managed_settings_preset("locked", "claude-managed-locked")
+            .managed_settings_preset("readonly", "claude-managed-readonly")
+            .default_managed_settings("locked");
+        assert_eq!(provider.managed_settings_presets.len(), 2);
+        assert_eq!(
+            provider.managed_settings_presets["readonly"],
+            "claude-managed-readonly"
+        );
+        assert_eq!(provider.default_managed_settings.as_deref(), Some("locked"));
+    }
+
+    #[test]
+    fn other_sandbox_builders() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .read_only_pvc("repos", "/data/repos")
+            .claude_profile_configmap("claude-profile")
+            .egress_profile("anthropic-only")
+            .previous_attempt_timeout(Duration::from_secs(5));
+        assert_eq!(provider.read_only_volumes.len(), 1);
+        assert_eq!(provider.read_only_volumes[0].mount_path, "/data/repos");
+        assert_eq!(
+            provider.claude_profile_configmap.as_deref(),
+            Some("claude-profile")
+        );
+        assert_eq!(provider.egress_profile.as_deref(), Some("anthropic-only"));
+        assert_eq!(provider.previous_attempt_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn merged_step_secret_overrides_provider_secret() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .env_from_secret("TOKEN", "provider-secret", "k")
+            .env_from_secret("OTHER", "other", "k");
+        let config = AgentConfig::new("hi")
+            .env_from_secret("TOKEN", "step-secret", "k2")
+            .env_from_secret("STEP_ONLY", "step", "k");
+        let merged = merge(&provider, &config);
+        assert_eq!(merged.secret_env.len(), 3);
+        // The step entry replaces the provider entry in place.
+        let token = &merged.secret_env[0];
+        assert_eq!(token.name, "TOKEN");
+        assert_eq!(token.secret, "step-secret");
+        assert_eq!(token.key, "k2");
+    }
+
+    #[test]
+    fn merged_step_service_account_overrides_provider() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").service_account("provider-sa");
+        let merged = merge(&provider, &AgentConfig::new("hi"));
+        assert_eq!(merged.service_account.as_deref(), Some("provider-sa"));
+
+        let config = AgentConfig::new("hi").service_account("step-sa");
+        let merged = merge(&provider, &config);
+        assert_eq!(merged.service_account.as_deref(), Some("step-sa"));
+    }
+
+    #[test]
+    fn merged_read_only_volumes_provider_then_step() {
+        let provider =
+            K8sEphemeralProvider::sandboxed("img:v1").read_only_pvc("repos", "/data/repos");
+        let config = AgentConfig::new("hi").read_only_config_map("cm", "/data/cm");
+        let merged = merge(&provider, &config);
+        let paths: Vec<&str> = merged
+            .read_only_volumes
+            .iter()
+            .map(|v| v.mount_path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["/data/repos", "/data/cm"]);
+    }
+
+    #[test]
+    fn merged_unknown_preset_is_an_error() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .managed_settings_preset("locked", "claude-managed-locked");
+        let config = AgentConfig::new("hi").managed_settings("typo");
+        let err = err_text(provider.merged_pod_inputs(&config));
+        assert!(
+            err.contains("unknown managed settings preset 'typo'"),
+            "{err}"
+        );
+        assert!(err.contains("locked"), "{err}");
+    }
+
+    #[test]
+    fn merged_unknown_default_preset_is_an_error() {
+        let provider =
+            K8sEphemeralProvider::sandboxed("img:v1").default_managed_settings("missing");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(
+            err.contains("unknown managed settings preset 'missing'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn merged_default_preset_used_when_step_has_none() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .managed_settings_preset("locked", "claude-managed-locked")
+            .managed_settings_preset("readonly", "claude-managed-readonly")
+            .default_managed_settings("locked");
+        let merged = merge(&provider, &AgentConfig::new("hi"));
+        assert_eq!(
+            merged.managed_settings_configmap.as_deref(),
+            Some("claude-managed-locked")
+        );
+
+        let config = AgentConfig::new("hi").managed_settings("readonly");
+        let merged = merge(&provider, &config);
+        assert_eq!(
+            merged.managed_settings_configmap.as_deref(),
+            Some("claude-managed-readonly")
+        );
+    }
+
+    #[test]
+    fn merged_no_preset_means_no_managed_settings() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        let merged = merge(&provider, &AgentConfig::new("hi"));
+        assert!(merged.managed_settings_configmap.is_none());
+    }
+
+    #[test]
+    fn merged_step_egress_label_overrides_provider() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").egress_profile("anthropic-only");
+        let merged = merge(&provider, &AgentConfig::new("hi"));
+        assert_eq!(merged.labels[LABEL_EGRESS_PROFILE], "anthropic-only");
+
+        let config = AgentConfig::new("hi").egress_profile("gitlab");
+        let merged = merge(&provider, &config);
+        assert_eq!(merged.labels[LABEL_EGRESS_PROFILE], "gitlab");
+    }
+
+    #[test]
+    fn merged_labels_carry_run_scope() {
+        let provider = K8sEphemeralProvider::new("img:v1").pod_label("team", "infra");
+        let config = AgentConfig::new("hi").run_scope("run-1", "investigate");
+        let merged = merge(&provider, &config);
+        assert_eq!(merged.labels["team"], "infra");
+        assert_eq!(merged.labels[LABEL_RUN_ID], "run-1");
+        assert_eq!(merged.labels[LABEL_STEP], "investigate");
+    }
+
+    #[test]
+    fn sandboxed_refuses_inline_oauth_credentials() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").oauth_credentials("{}");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("refuses inline oauth_credentials"), "{err}");
+    }
+
+    #[test]
+    fn sandboxed_refuses_plain_api_key() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").env("ANTHROPIC_API_KEY", "sk");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("ANTHROPIC_API_KEY"), "{err}");
+        assert!(err.contains("env_from_secret"), "{err}");
+    }
+
+    #[test]
+    fn sandboxed_refuses_plain_oauth_token() {
+        let provider =
+            K8sEphemeralProvider::sandboxed("img:v1").env("CLAUDE_CODE_OAUTH_TOKEN", "tok");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("CLAUDE_CODE_OAUTH_TOKEN"), "{err}");
+    }
+
+    #[test]
+    fn non_sandboxed_keeps_inline_credentials() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .oauth_credentials("{}")
+            .env("ANTHROPIC_API_KEY", "sk");
+        assert!(provider.merged_pod_inputs(&AgentConfig::new("hi")).is_ok());
+    }
+
+    #[test]
+    fn effective_deadline_explicit_value_wins() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .timeout(Duration::from_secs(600))
+            .active_deadline_seconds(Duration::from_secs(30));
+        assert_eq!(provider.effective_deadline(), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn effective_deadline_sandboxed_is_timeout_plus_margin() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").timeout(Duration::from_secs(600));
+        assert_eq!(
+            provider.effective_deadline(),
+            Some(Duration::from_secs(660))
+        );
+    }
+
+    #[test]
+    fn effective_deadline_non_sandboxed_defaults_to_none() {
+        let provider = K8sEphemeralProvider::new("img:v1").timeout(Duration::from_secs(600));
+        assert_eq!(provider.effective_deadline(), None);
+    }
+
+    #[test]
+    fn deadline_margin_defaults_to_sixty_seconds_when_not_sandboxed() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        assert_eq!(
+            provider.deadline_margin_or_default(),
+            DEFAULT_DEADLINE_MARGIN
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "orphan reaper interval must be greater than zero")]
+    fn spawn_orphan_reaper_zero_interval_panics() {
+        drop(K8sEphemeralProvider::sandboxed("img:v1").spawn_orphan_reaper(Duration::ZERO));
     }
 }

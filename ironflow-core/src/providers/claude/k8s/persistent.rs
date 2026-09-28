@@ -50,7 +50,7 @@ use crate::providers::claude::common::DEFAULT_TIMEOUT;
 
 use super::common::{
     DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sClusterConfig, K8sResources, PodConfig,
-    build_credentials_prefix, build_pod_spec, create_client,
+    PodHardening, build_credentials_prefix, build_pod_spec, create_client,
 };
 use super::toleration::K8sToleration;
 
@@ -370,6 +370,7 @@ impl K8sPersistentProvider {
                 input_init_image: DEFAULT_INPUT_INIT_IMAGE,
                 prompt_configmap: None,
                 prompt_mount_path: "",
+                hardening: PodHardening::default(),
             })?;
 
             pods.create(&PostParams::default(), &pod_spec)

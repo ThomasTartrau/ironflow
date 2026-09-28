@@ -1,0 +1,46 @@
+# Managed-settings presets for Claude Code. Each ConfigMap holds one
+# `managed-settings.json`, mounted read-only at /etc/claude-code by the
+# provider. Register them on the provider:
+#
+#   K8sEphemeralProvider::sandboxed(image)
+#       .managed_settings_preset("locked", "claude-managed-locked")
+#       .managed_settings_preset("readonly", "claude-managed-readonly")
+#       .default_managed_settings("locked")
+#
+# and select one per step with `.managed_settings("readonly")`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claude-managed-locked
+  namespace: ironflow-agents
+data:
+  managed-settings.json: |
+    {
+      "permissions": {
+        "deny": ["WebFetch", "WebSearch", "Bash(curl:*)", "Bash(wget:*)"]
+      },
+      "disableAllHooks": true,
+      "strictKnownMarketplaces": []
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claude-managed-readonly
+  namespace: ironflow-agents
+data:
+  managed-settings.json: |
+    {
+      "permissions": {
+        "deny": [
+          "WebFetch",
+          "WebSearch",
+          "Bash(curl:*)",
+          "Bash(wget:*)",
+          "Edit",
+          "Write"
+        ]
+      },
+      "disableAllHooks": true,
+      "strictKnownMarketplaces": []
+    }

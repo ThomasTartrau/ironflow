@@ -39,6 +39,11 @@ variables:
   CACHE_COMPRESSION_LEVEL: "fastest"
   RELEASE_PLZ_VERSION: "0.3.160"
   CI_RUST_IMAGE_TAG: "1.94.1-v3"
+  # Claude Code version baked into ironflow-claude-runner. Not prefixed with
+  # CLAUDE: the providers blank every host CLAUDE* variable in agent processes.
+  RUNNER_CLAUDE_CODE_VERSION: "2.0.14"
+  # <claude-code-version>-<n>: bump <n> to rebuild the same Claude Code version.
+  CLAUDE_RUNNER_IMAGE_TAG: "2.0.14-1"
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
   COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
@@ -101,6 +106,35 @@ build-ci-images:
       --context "${CI_PROJECT_DIR}/ci/rust"
       --dockerfile "${CI_PROJECT_DIR}/ci/rust/Dockerfile"
       --destination "${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}"
+      --cache=true
+
+# Official sandboxed Claude Code runner image (docker/claude-runner). Published
+# as ironflow-claude-runner:<claude-code-version>-<n>, never as `latest`. On main
+# it rebuilds when the image sources change; bump CLAUDE_RUNNER_IMAGE_TAG (and
+# RUNNER_CLAUDE_CODE_VERSION) in this file to publish a new tag. The manual rule is a
+# fallback to republish on demand.
+build-claude-runner-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: 1
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - docker/claude-runner/**
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}/docker/claude-runner"
+      --dockerfile "${CI_PROJECT_DIR}/docker/claude-runner/Dockerfile"
+      --build-arg "CLAUDE_CODE_VERSION=${RUNNER_CLAUDE_CODE_VERSION}"
+      --destination "${CI_REGISTRY_IMAGE}/ironflow-claude-runner:${CLAUDE_RUNNER_IMAGE_TAG}"
       --cache=true
 
 # release-plz is installed as a prebuilt musl binary, not built from source:

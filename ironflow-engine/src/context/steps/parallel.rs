@@ -10,6 +10,7 @@ use tokio::time::timeout;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use ironflow_core::provider::{LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 use ironflow_store::models::{NewStep, StepStatus, StepUpdate, step_trace_id};
 
 use crate::budget::step_budget_usd;
@@ -165,6 +166,12 @@ impl WorkflowContext {
             match config_with_trace {
                 StepConfig::Agent(ref mut agent_config) => {
                     agent_config.trace_context = Some(step_trace);
+                    agent_config
+                        .pod_labels
+                        .insert(LABEL_RUN_ID.to_string(), self.run_id.to_string());
+                    agent_config
+                        .pod_labels
+                        .insert(LABEL_STEP.to_string(), sanitize_label_value(name));
                 }
                 StepConfig::Http(ref mut http_config) => {
                     http_config.trace_context = Some(step_trace);

@@ -1,15 +1,17 @@
 //! Shared utilities for Kubernetes transport providers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use kube::Client;
 use kube::config::{KubeConfigOptions, Kubeconfig};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::error::AgentError;
-use crate::provider::AgentInput;
+use crate::provider::{AgentInput, PodVolumeSource, ReadOnlyVolume, SecretEnvVar};
+use crate::providers::claude::common::env_vars_to_remove;
 use crate::providers::claude::k8s::toleration::K8sToleration;
 
 /// Default image used by the input-fetch initContainer.
@@ -18,6 +20,99 @@ use crate::providers::claude::k8s::toleration::K8sToleration;
 /// when corporate registries forbid Docker Hub or when a specific curl version
 /// is required.
 pub const DEFAULT_INPUT_INIT_IMAGE: &str = "curlimages/curl:8.10.1";
+
+/// Uid (and gid) the sandboxed agent runs as, matching the official
+/// `ironflow-claude-runner` image.
+pub const SANDBOX_UID: i64 = 10001;
+
+/// Home directory of the sandboxed agent, backed by an `emptyDir`.
+pub const SANDBOX_HOME: &str = "/home/claude";
+
+/// Directory Claude Code reads `managed-settings.json` from on Linux.
+pub const MANAGED_SETTINGS_DIR: &str = "/etc/claude-code";
+
+/// Directory a Claude profile ConfigMap is mounted at, then copied into
+/// `~/.claude` before the agent starts.
+pub const PROFILE_MOUNT_DIR: &str = "/etc/ironflow/claude-profile";
+
+/// Annotation holding the unix time (seconds) after which an ironflow pod or
+/// prompt ConfigMap is considered orphaned and may be reaped.
+pub const LABEL_EXPIRES_AT: &str = "ironflow.io/expires-at";
+
+/// Key of the managed settings file inside its ConfigMap.
+const MANAGED_SETTINGS_KEY: &str = "managed-settings.json";
+
+/// Hardening applied to an agent pod by the sandboxed ephemeral provider.
+///
+/// Every field is optional: [`PodHardening::default`] leaves the pod spec
+/// exactly as it was before hardening existed.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::providers::claude::k8s::common::{PodHardening, SandboxSettings};
+///
+/// let sandbox = SandboxSettings::default();
+/// let hardening = PodHardening {
+///     sandbox: Some(&sandbox),
+///     ..PodHardening::default()
+/// };
+/// assert!(hardening.secret_env.is_empty());
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PodHardening<'a> {
+    /// Non-root, read-only root filesystem, dropped capabilities. `None`
+    /// keeps the image's defaults.
+    pub sandbox: Option<&'a SandboxSettings>,
+    /// Environment variables read from Kubernetes Secrets.
+    pub secret_env: &'a [SecretEnvVar],
+    /// Volumes mounted read-only into the agent container.
+    pub read_only_volumes: &'a [ReadOnlyVolume],
+    /// ConfigMap holding `managed-settings.json`, mounted at [`MANAGED_SETTINGS_DIR`].
+    pub managed_settings_configmap: Option<&'a str>,
+    /// ConfigMap holding a Claude profile, mounted at [`PROFILE_MOUNT_DIR`].
+    pub claude_profile_configmap: Option<&'a str>,
+    /// Annotations written into the pod metadata.
+    pub annotations: Option<&'a BTreeMap<String, String>>,
+}
+
+/// Security settings of a sandboxed agent pod.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::providers::claude::k8s::common::{SANDBOX_UID, SandboxSettings};
+///
+/// let settings = SandboxSettings::default();
+/// assert_eq!(settings.run_as_user, SANDBOX_UID);
+/// assert!(!settings.writable_root);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxSettings {
+    /// Uid, gid and fsGroup of the pod (default [`SANDBOX_UID`]).
+    pub run_as_user: i64,
+    /// Keep the root filesystem writable (default `false`).
+    pub writable_root: bool,
+    /// Size limit of the `emptyDir` backing [`SANDBOX_HOME`] (default `1Gi`).
+    pub home_size_limit: String,
+    /// Size limit of the `emptyDir` backing `/tmp` (default `512Mi`).
+    pub tmp_size_limit: String,
+    /// Time added to the provider timeout for the pod deadline and the expiry
+    /// annotation (default 60s).
+    pub deadline_margin: Duration,
+}
+
+impl Default for SandboxSettings {
+    fn default() -> Self {
+        Self {
+            run_as_user: SANDBOX_UID,
+            writable_root: false,
+            home_size_limit: "1Gi".to_string(),
+            tmp_size_limit: "512Mi".to_string(),
+            deadline_margin: Duration::from_secs(60),
+        }
+    }
+}
 
 /// Kubernetes cluster connection configuration.
 ///
@@ -109,6 +204,45 @@ pub fn build_credentials_prefix(oauth_json: Option<&str>) -> String {
         }
         None => String::new(),
     }
+}
+
+/// Build a shell prefix that writes OAuth credentials read from the
+/// environment variable `var` to `~/.claude/.credentials.json`.
+///
+/// Only the variable name enters the pod spec; its value comes from a
+/// Kubernetes Secret through `secretKeyRef`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::providers::claude::k8s::common::build_credentials_from_env_prefix;
+///
+/// let prefix = build_credentials_from_env_prefix("IRONFLOW_CLAUDE_CREDENTIALS");
+/// assert!(prefix.contains("$IRONFLOW_CLAUDE_CREDENTIALS"));
+/// ```
+pub fn build_credentials_from_env_prefix(var: &str) -> String {
+    format!(
+        r#"mkdir -p "$HOME/.claude" && printf '%s' "${var}" > "$HOME/.claude/.credentials.json" && "#
+    )
+}
+
+/// Build a shell prefix that copies the Claude profile mounted at
+/// [`PROFILE_MOUNT_DIR`] into `~/.claude`.
+///
+/// The profile is copied rather than mounted in place because Claude Code
+/// must be able to write into `~/.claude`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::providers::claude::k8s::common::build_profile_copy_prefix;
+///
+/// assert!(build_profile_copy_prefix().ends_with("&& "));
+/// ```
+pub fn build_profile_copy_prefix() -> String {
+    format!(
+        r#"if [ -d {PROFILE_MOUNT_DIR} ]; then mkdir -p "$HOME/.claude" && cp -rL {PROFILE_MOUNT_DIR}/. "$HOME/.claude/"; fi && "#
+    )
 }
 
 /// Generate a unique pod name with a timestamp and random suffix.
@@ -218,6 +352,9 @@ pub struct PodConfig<'a> {
     pub prompt_configmap: Option<&'a str>,
     /// Mount path for the prompt ConfigMap volume.
     pub prompt_mount_path: &'a str,
+    /// Hardening applied on top of the base spec. [`PodHardening::default`]
+    /// changes nothing.
+    pub hardening: PodHardening<'a>,
 }
 
 /// Return the directory part of an absolute path (everything before the last `/`).
@@ -323,8 +460,147 @@ fn build_input_artifacts(
     (volumes, volume_mounts, Some(init_container))
 }
 
+/// Build the container `env` list.
+///
+/// Order: blanking entries for the host's `CLAUDE*` vars, plain values, then
+/// `secretKeyRef` entries, then the sandbox `HOME`/`TMPDIR`. A blanking entry
+/// is dropped when the same name is set explicitly or from a Secret, so a
+/// name never appears twice with conflicting values.
+fn build_env(config: &PodConfig<'_>) -> Vec<Value> {
+    let hardening = &config.hardening;
+    let is_set = |name: &str| {
+        config.env_vars.iter().any(|(k, _)| k == name)
+            || hardening.secret_env.iter().any(|s| s.name == name)
+    };
+
+    let mut env: Vec<Value> = env_vars_to_remove()
+        .into_iter()
+        .filter(|var| !is_set(var.as_str()))
+        .map(|var| json!({"name": var, "value": ""}))
+        .collect();
+    for (k, v) in config.env_vars {
+        env.push(json!({"name": k, "value": v}));
+    }
+    for s in hardening.secret_env {
+        env.push(json!({
+            "name": s.name,
+            "valueFrom": { "secretKeyRef": { "name": s.secret, "key": s.key } }
+        }));
+    }
+    if hardening.sandbox.is_some() {
+        if !is_set("HOME") {
+            env.push(json!({"name": "HOME", "value": SANDBOX_HOME}));
+        }
+        if !is_set("TMPDIR") {
+            env.push(json!({"name": "TMPDIR", "value": "/tmp"}));
+        }
+    }
+    env
+}
+
+fn hardening_error(stderr: String) -> AgentError {
+    AgentError::ProcessFailed {
+        exit_code: -1,
+        stderr,
+    }
+}
+
+/// Validate the hardening inputs of a pod config.
+///
+/// Rejects read-only mounts at a relative path, at a directory the sandbox
+/// owns (`/`, [`SANDBOX_HOME`], `/tmp`, [`MANAGED_SETTINGS_DIR`],
+/// [`PROFILE_MOUNT_DIR`]) or at a path already mounted, and secret env
+/// entries with an empty name, secret or key.
+fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
+    let reserved = [
+        SANDBOX_HOME,
+        "/tmp",
+        MANAGED_SETTINGS_DIR,
+        PROFILE_MOUNT_DIR,
+    ];
+    let mut seen: BTreeSet<&str> = config
+        .volumes
+        .iter()
+        .chain(config.pvc_volumes.iter())
+        .map(|(_, mount)| mount.trim_end_matches('/'))
+        .collect();
+
+    for volume in config.hardening.read_only_volumes {
+        let path = volume.mount_path.as_str();
+        if !path.starts_with('/') {
+            return Err(hardening_error(format!(
+                "read-only volume mount_path must be absolute, got '{path}'"
+            )));
+        }
+        let normalized = path.trim_end_matches('/');
+        if normalized.is_empty() || reserved.contains(&normalized) {
+            return Err(hardening_error(format!(
+                "read-only volume cannot be mounted at reserved path '{path}'"
+            )));
+        }
+        if !seen.insert(normalized) {
+            let message = format!("duplicate volume mount path '{path}'");
+            return Err(hardening_error(message));
+        }
+    }
+
+    for secret in config.hardening.secret_env {
+        if secret.name.is_empty() || secret.secret.is_empty() || secret.key.is_empty() {
+            return Err(hardening_error(format!(
+                "secret env entry needs a non-empty name, secret and key, got name='{}' secret='{}' key='{}'",
+                secret.name, secret.secret, secret.key
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Container-level `securityContext` of a sandboxed pod.
+fn sandbox_container_security_context(sandbox: &SandboxSettings) -> Value {
+    json!({
+        "allowPrivilegeEscalation": false,
+        "readOnlyRootFilesystem": !sandbox.writable_root,
+        "runAsNonRoot": true,
+        "capabilities": { "drop": ["ALL"] },
+        "seccompProfile": { "type": "RuntimeDefault" }
+    })
+}
+
+/// Volume and mount JSON for a [`ReadOnlyVolume`] named `name`.
+fn read_only_volume_json(name: &str, volume: &ReadOnlyVolume) -> (Value, Value) {
+    let source = match &volume.source {
+        PodVolumeSource::PersistentVolumeClaim { claim_name } => json!({
+            "name": name,
+            "persistentVolumeClaim": { "claimName": claim_name, "readOnly": true }
+        }),
+        PodVolumeSource::HostPath { path } => json!({
+            "name": name,
+            "hostPath": { "path": path, "type": "Directory" }
+        }),
+        PodVolumeSource::ConfigMap { name: cm } => json!({
+            "name": name,
+            "configMap": { "name": cm }
+        }),
+    };
+    let mut mount = json!({
+        "name": name,
+        "mountPath": volume.mount_path,
+        "readOnly": true
+    });
+    if let Some(sub_path) = &volume.sub_path {
+        mount["subPath"] = json!(sub_path);
+    }
+    (source, mount)
+}
+
 /// Build a Kubernetes pod spec for running claude.
+///
+/// # Errors
+///
+/// Returns [`AgentError::ProcessFailed`] when an input or a hardening setting
+/// is invalid, or when the resulting JSON is not a valid pod.
 pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
+    validate_hardening(config)?;
     validate_inputs(config.inputs)?;
 
     let mut resource_limits: BTreeMap<String, Quantity> = BTreeMap::new();
@@ -366,11 +642,7 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
                 "image": config.image,
                 "imagePullPolicy": config.image_pull_policy.as_str(),
                 "command": &config.command,
-                "env": super::super::common::env_vars_to_remove()
-                    .iter()
-                    .map(|var| json!({"name": var, "value": ""}))
-                    .chain(config.env_vars.iter().map(|(k, v)| json!({"name": k, "value": v})))
-                    .collect::<Vec<_>>()
+                "env": build_env(config)
             }]
         }
     });
@@ -425,6 +697,52 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
         }));
     }
 
+    let hardening = &config.hardening;
+    for (i, volume) in hardening.read_only_volumes.iter().enumerate() {
+        let (vol, mount) = read_only_volume_json(&format!("ro-{i}"), volume);
+        volumes_json.push(vol);
+        main_mounts_json.push(mount);
+    }
+    if let Some(cm_name) = hardening.managed_settings_configmap {
+        volumes_json.push(json!({
+            "name": "ironflow-managed-settings",
+            "configMap": {
+                "name": cm_name,
+                "items": [{ "key": MANAGED_SETTINGS_KEY, "path": MANAGED_SETTINGS_KEY }]
+            }
+        }));
+        main_mounts_json.push(json!({
+            "name": "ironflow-managed-settings",
+            "mountPath": MANAGED_SETTINGS_DIR,
+            "readOnly": true
+        }));
+    }
+    if let Some(cm_name) = hardening.claude_profile_configmap {
+        volumes_json.push(json!({
+            "name": "ironflow-claude-profile",
+            "configMap": { "name": cm_name }
+        }));
+        main_mounts_json.push(json!({
+            "name": "ironflow-claude-profile",
+            "mountPath": PROFILE_MOUNT_DIR,
+            "readOnly": true
+        }));
+    }
+    if let Some(sandbox) = hardening.sandbox {
+        // With a read-only root filesystem, HOME and /tmp must be writable
+        // volumes of their own.
+        volumes_json.push(json!({
+            "name": "ironflow-home",
+            "emptyDir": { "sizeLimit": sandbox.home_size_limit }
+        }));
+        main_mounts_json.push(json!({ "name": "ironflow-home", "mountPath": SANDBOX_HOME }));
+        volumes_json.push(json!({
+            "name": "ironflow-tmp",
+            "emptyDir": { "sizeLimit": sandbox.tmp_size_limit }
+        }));
+        main_mounts_json.push(json!({ "name": "ironflow-tmp", "mountPath": "/tmp" }));
+    }
+
     if !volumes_json.is_empty() {
         pod_json["spec"]["volumes"] = json!(volumes_json);
     }
@@ -457,6 +775,28 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
         pod_json["spec"]["tolerations"] = json!(config.tolerations);
     }
 
+    if let Some(sandbox) = hardening.sandbox {
+        pod_json["spec"]["securityContext"] = json!({
+            "runAsNonRoot": true,
+            "runAsUser": sandbox.run_as_user,
+            "runAsGroup": sandbox.run_as_user,
+            "fsGroup": sandbox.run_as_user,
+            "seccompProfile": { "type": "RuntimeDefault" }
+        });
+        let container_ctx = sandbox_container_security_context(sandbox);
+        pod_json["spec"]["containers"][0]["securityContext"] = container_ctx.clone();
+        if pod_json["spec"].get("initContainers").is_some() {
+            pod_json["spec"]["initContainers"][0]["securityContext"] = container_ctx;
+        }
+        // An explicit service account means the caller wants its token.
+        if config.service_account.is_none() {
+            pod_json["spec"]["automountServiceAccountToken"] = json!(false);
+        }
+    }
+    if let Some(annotations) = hardening.annotations.filter(|a| !a.is_empty()) {
+        pod_json["metadata"]["annotations"] = json!(annotations);
+    }
+
     serde_json::from_value(pod_json).map_err(|e| AgentError::ProcessFailed {
         exit_code: -1,
         stderr: format!("failed to build K8s Pod spec: {e}"),
@@ -465,6 +805,8 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::to_value;
+
     use super::*;
 
     #[test]
@@ -528,6 +870,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         assert!(pod.spec.unwrap().image_pull_secrets.is_none());
@@ -556,6 +899,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let pull_secrets = pod.spec.unwrap().image_pull_secrets.unwrap();
@@ -586,6 +930,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -618,6 +963,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -654,6 +1000,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -692,6 +1039,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let labels = pod.metadata.labels.unwrap();
@@ -727,6 +1075,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let ns = pod
@@ -759,6 +1108,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         assert!(
@@ -789,6 +1139,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -823,6 +1174,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -875,6 +1227,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -920,6 +1273,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         let spec = pod.spec.unwrap();
@@ -990,6 +1344,7 @@ mod tests {
             input_init_image: "curlimages/curl:8.10.1",
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
 
@@ -1049,6 +1404,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
 
@@ -1090,6 +1446,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
         assert!(pod.spec.unwrap().init_containers.is_none());
@@ -1117,6 +1474,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: Some("my-pod-prompt"),
             prompt_mount_path: "/mnt/ironflow-prompt",
+            hardening: PodHardening::default(),
         })
         .unwrap();
 
@@ -1158,10 +1516,457 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         })
         .unwrap();
 
         let spec = pod.spec.unwrap();
         assert!(spec.volumes.is_none());
+    }
+
+    // ── Hardening (sandboxed provider) ──────────────────────────────
+
+    static NO_RESOURCES: K8sResources = K8sResources {
+        cpu_limit: None,
+        memory_limit: None,
+    };
+    static PULL_POLICY: ImagePullPolicy = ImagePullPolicy::IfNotPresent;
+    static EMPTY_MAP: BTreeMap<String, String> = BTreeMap::new();
+
+    /// A minimal pod config carrying `hardening`, everything else empty.
+    fn hardened_config(hardening: PodHardening<'_>) -> PodConfig<'_> {
+        PodConfig {
+            name: "test-pod",
+            image: "img:v1",
+            command: vec!["sh".to_string()],
+            namespace: "default",
+            resources: &NO_RESOURCES,
+            service_account: None,
+            restart_policy: "Never",
+            image_pull_policy: &PULL_POLICY,
+            env_vars: &[],
+            image_pull_secrets: &[],
+            extra_labels: &EMPTY_MAP,
+            node_selector: &EMPTY_MAP,
+            tolerations: &[],
+            volumes: &[],
+            pvc_volumes: &[],
+            inputs: &[],
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: "",
+            hardening,
+        }
+    }
+
+    fn pod_json(config: &PodConfig<'_>) -> Value {
+        to_value(build_pod_spec(config).unwrap()).unwrap()
+    }
+
+    fn sandboxed(sandbox: &SandboxSettings) -> PodHardening<'_> {
+        PodHardening {
+            sandbox: Some(sandbox),
+            ..PodHardening::default()
+        }
+    }
+
+    fn find_by_name<'v>(list: &'v Value, name: &str) -> Option<&'v Value> {
+        list.as_array()?.iter().find(|v| v["name"] == name)
+    }
+
+    fn secret(name: &str, secret: &str, key: &str) -> SecretEnvVar {
+        SecretEnvVar {
+            name: name.to_string(),
+            secret: secret.to_string(),
+            key: key.to_string(),
+        }
+    }
+
+    fn ro(source: PodVolumeSource, mount_path: &str) -> ReadOnlyVolume {
+        ReadOnlyVolume {
+            source,
+            mount_path: mount_path.to_string(),
+            sub_path: None,
+        }
+    }
+
+    /// A read-only ConfigMap volume mounted at `mount_path`.
+    fn cm_ro(mount_path: &str) -> ReadOnlyVolume {
+        let source = PodVolumeSource::ConfigMap {
+            name: "cm".to_string(),
+        };
+        ro(source, mount_path)
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_security_context() {
+        let sandbox = SandboxSettings::default();
+        let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+
+        let pod_ctx = &pod["spec"]["securityContext"];
+        assert_eq!(pod_ctx["runAsNonRoot"], true);
+        assert_eq!(pod_ctx["runAsUser"], SANDBOX_UID);
+        assert_eq!(pod_ctx["runAsGroup"], SANDBOX_UID);
+        assert_eq!(pod_ctx["fsGroup"], SANDBOX_UID);
+        assert_eq!(pod_ctx["seccompProfile"]["type"], "RuntimeDefault");
+
+        let ctx = &pod["spec"]["containers"][0]["securityContext"];
+        assert_eq!(ctx["readOnlyRootFilesystem"], true);
+        assert_eq!(ctx["allowPrivilegeEscalation"], false);
+        assert_eq!(ctx["runAsNonRoot"], true);
+        assert_eq!(ctx["capabilities"]["drop"], json!(["ALL"]));
+        assert_eq!(ctx["seccompProfile"]["type"], "RuntimeDefault");
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_custom_uid() {
+        let sandbox = SandboxSettings {
+            run_as_user: 4242,
+            ..SandboxSettings::default()
+        };
+        let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+        assert_eq!(pod["spec"]["securityContext"]["runAsUser"], 4242);
+        assert_eq!(pod["spec"]["securityContext"]["fsGroup"], 4242);
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_writable_root() {
+        let sandbox = SandboxSettings {
+            writable_root: true,
+            ..SandboxSettings::default()
+        };
+        let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+        assert_eq!(
+            pod["spec"]["containers"][0]["securityContext"]["readOnlyRootFilesystem"],
+            false
+        );
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_init_container_is_hardened() {
+        let sandbox = SandboxSettings::default();
+        let inputs = vec![AgentInput::new("https://x.com/a.pdf", "/work/a.pdf")];
+        let config = PodConfig {
+            inputs: &inputs,
+            ..hardened_config(sandboxed(&sandbox))
+        };
+        let pod = pod_json(&config);
+        let init_ctx = &pod["spec"]["initContainers"][0]["securityContext"];
+        assert_eq!(init_ctx["allowPrivilegeEscalation"], false);
+        assert_eq!(init_ctx["capabilities"]["drop"], json!(["ALL"]));
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_home_tmp_emptydir_size_limits() {
+        let sandbox = SandboxSettings {
+            home_size_limit: "2Gi".to_string(),
+            tmp_size_limit: "256Mi".to_string(),
+            ..SandboxSettings::default()
+        };
+        let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+
+        let volumes = &pod["spec"]["volumes"];
+        let home = find_by_name(volumes, "ironflow-home").expect("home volume");
+        assert_eq!(home["emptyDir"]["sizeLimit"], "2Gi");
+        let tmp = find_by_name(volumes, "ironflow-tmp").expect("tmp volume");
+        assert_eq!(tmp["emptyDir"]["sizeLimit"], "256Mi");
+
+        let mounts = &pod["spec"]["containers"][0]["volumeMounts"];
+        let home_mount = find_by_name(mounts, "ironflow-home").unwrap();
+        assert_eq!(home_mount["mountPath"], SANDBOX_HOME);
+        let tmp_mount = find_by_name(mounts, "ironflow-tmp").unwrap();
+        assert_eq!(tmp_mount["mountPath"], "/tmp");
+
+        let env = &pod["spec"]["containers"][0]["env"];
+        assert_eq!(find_by_name(env, "HOME").unwrap()["value"], SANDBOX_HOME);
+        assert_eq!(find_by_name(env, "TMPDIR").unwrap()["value"], "/tmp");
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_keeps_user_home() {
+        let sandbox = SandboxSettings::default();
+        let env_vars = vec![("HOME".to_string(), "/work".to_string())];
+        let config = PodConfig {
+            env_vars: &env_vars,
+            ..hardened_config(sandboxed(&sandbox))
+        };
+        let pod = pod_json(&config);
+        let env = pod["spec"]["containers"][0]["env"].as_array().unwrap();
+        let homes: Vec<_> = env.iter().filter(|e| e["name"] == "HOME").collect();
+        assert_eq!(homes.len(), 1);
+        assert_eq!(homes[0]["value"], "/work");
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_no_sa_disables_automount() {
+        let sandbox = SandboxSettings::default();
+        let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+        assert_eq!(pod["spec"]["automountServiceAccountToken"], false);
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_with_sa_omits_automount() {
+        let sandbox = SandboxSettings::default();
+        let config = PodConfig {
+            service_account: Some("reader"),
+            ..hardened_config(sandboxed(&sandbox))
+        };
+        let pod = pod_json(&config);
+        assert!(pod["spec"].get("automountServiceAccountToken").is_none());
+        assert_eq!(pod["spec"]["serviceAccountName"], "reader");
+    }
+
+    #[test]
+    fn build_pod_spec_without_sandbox_has_no_security_context() {
+        let pod = pod_json(&hardened_config(PodHardening::default()));
+        let spec = &pod["spec"];
+        assert!(spec.get("securityContext").is_none());
+        assert!(spec["containers"][0].get("securityContext").is_none());
+        assert!(spec.get("automountServiceAccountToken").is_none());
+        assert!(spec.get("volumes").is_none());
+        assert!(pod["metadata"].get("annotations").is_none());
+        let env = &spec["containers"][0]["env"];
+        assert!(find_by_name(env, "HOME").is_none());
+        assert!(find_by_name(env, "TMPDIR").is_none());
+    }
+
+    #[test]
+    fn build_pod_spec_secret_env_uses_secret_key_ref() {
+        // IRONFLOW_ALLOW_BYPASS is always in env_vars_to_remove: a secret with
+        // that name proves the blanking entry is filtered out.
+        let secrets = vec![
+            secret("CLAUDE_CODE_OAUTH_TOKEN", "claude-oauth", "token"),
+            secret("IRONFLOW_ALLOW_BYPASS", "bypass", "flag"),
+        ];
+        let config = hardened_config(PodHardening {
+            secret_env: &secrets,
+            ..PodHardening::default()
+        });
+        let pod = pod_json(&config);
+        let env_json = &pod["spec"]["containers"][0]["env"];
+        let env = env_json.as_array().unwrap();
+
+        let token = find_by_name(env_json, "CLAUDE_CODE_OAUTH_TOKEN").expect("token env");
+        assert_eq!(token["valueFrom"]["secretKeyRef"]["name"], "claude-oauth");
+        assert_eq!(token["valueFrom"]["secretKeyRef"]["key"], "token");
+        assert!(token.get("value").is_none());
+
+        let mut names: Vec<&str> = env.iter().map(|e| e["name"].as_str().unwrap()).collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), total, "env names must be unique: {env:?}");
+
+        let bypass = find_by_name(env_json, "IRONFLOW_ALLOW_BYPASS").unwrap();
+        assert!(bypass.get("valueFrom").is_some());
+    }
+
+    #[test]
+    fn build_pod_spec_explicit_env_drops_blanking_entry() {
+        let env_vars = vec![("IRONFLOW_ALLOW_BYPASS".to_string(), "1".to_string())];
+        let config = PodConfig {
+            env_vars: &env_vars,
+            ..hardened_config(PodHardening::default())
+        };
+        let pod = pod_json(&config);
+        let env = pod["spec"]["containers"][0]["env"].as_array().unwrap();
+        let entries: Vec<_> = env
+            .iter()
+            .filter(|e| e["name"] == "IRONFLOW_ALLOW_BYPASS")
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["value"], "1");
+    }
+
+    #[test]
+    fn build_pod_spec_read_only_volumes() {
+        let volumes = vec![
+            ro(
+                PodVolumeSource::PersistentVolumeClaim {
+                    claim_name: "repos".to_string(),
+                },
+                "/data/repos",
+            ),
+            ro(
+                PodVolumeSource::HostPath {
+                    path: "/srv/cache".to_string(),
+                },
+                "/data/cache",
+            ),
+            ReadOnlyVolume {
+                source: PodVolumeSource::ConfigMap {
+                    name: "guidelines".to_string(),
+                },
+                mount_path: "/data/guidelines/rules.md".to_string(),
+                sub_path: Some("rules.md".to_string()),
+            },
+        ];
+        let config = hardened_config(PodHardening {
+            read_only_volumes: &volumes,
+            ..PodHardening::default()
+        });
+        let pod = pod_json(&config);
+
+        let vols = &pod["spec"]["volumes"];
+        let pvc = find_by_name(vols, "ro-0").unwrap();
+        assert_eq!(pvc["persistentVolumeClaim"]["claimName"], "repos");
+        assert_eq!(pvc["persistentVolumeClaim"]["readOnly"], true);
+        let host = find_by_name(vols, "ro-1").unwrap();
+        assert_eq!(host["hostPath"]["path"], "/srv/cache");
+        assert_eq!(host["hostPath"]["type"], "Directory");
+        let cm = find_by_name(vols, "ro-2").unwrap();
+        assert_eq!(cm["configMap"]["name"], "guidelines");
+
+        let mounts = &pod["spec"]["containers"][0]["volumeMounts"];
+        for (name, path) in [
+            ("ro-0", "/data/repos"),
+            ("ro-1", "/data/cache"),
+            ("ro-2", "/data/guidelines/rules.md"),
+        ] {
+            let mount = find_by_name(mounts, name).unwrap();
+            assert_eq!(mount["mountPath"], path);
+            assert_eq!(mount["readOnly"], true);
+        }
+        let pvc_mount = find_by_name(mounts, "ro-0").unwrap();
+        assert!(pvc_mount.get("subPath").is_none());
+        let cm_mount = find_by_name(mounts, "ro-2").unwrap();
+        assert_eq!(cm_mount["subPath"], "rules.md");
+    }
+
+    #[test]
+    fn build_pod_spec_managed_settings_mount() {
+        let config = hardened_config(PodHardening {
+            managed_settings_configmap: Some("claude-managed-locked"),
+            ..PodHardening::default()
+        });
+        let pod = pod_json(&config);
+        let vol = find_by_name(&pod["spec"]["volumes"], "ironflow-managed-settings").unwrap();
+        assert_eq!(vol["configMap"]["name"], "claude-managed-locked");
+        assert_eq!(vol["configMap"]["items"][0]["key"], "managed-settings.json");
+        assert_eq!(
+            vol["configMap"]["items"][0]["path"],
+            "managed-settings.json"
+        );
+        let mounts = &pod["spec"]["containers"][0]["volumeMounts"];
+        let mount = find_by_name(mounts, "ironflow-managed-settings").unwrap();
+        assert_eq!(mount["mountPath"], MANAGED_SETTINGS_DIR);
+        assert_eq!(mount["readOnly"], true);
+    }
+
+    #[test]
+    fn build_pod_spec_profile_mount() {
+        let config = hardened_config(PodHardening {
+            claude_profile_configmap: Some("claude-profile"),
+            ..PodHardening::default()
+        });
+        let pod = pod_json(&config);
+        let vol = find_by_name(&pod["spec"]["volumes"], "ironflow-claude-profile").unwrap();
+        assert_eq!(vol["configMap"]["name"], "claude-profile");
+        let mounts = &pod["spec"]["containers"][0]["volumeMounts"];
+        let mount = find_by_name(mounts, "ironflow-claude-profile").unwrap();
+        assert_eq!(mount["mountPath"], PROFILE_MOUNT_DIR);
+        assert_eq!(mount["readOnly"], true);
+    }
+
+    #[test]
+    fn build_pod_spec_annotations() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(LABEL_EXPIRES_AT.to_string(), "1700000000".to_string());
+        let config = hardened_config(PodHardening {
+            annotations: Some(&annotations),
+            ..PodHardening::default()
+        });
+        let pod = pod_json(&config);
+        assert_eq!(
+            pod["metadata"]["annotations"][LABEL_EXPIRES_AT],
+            "1700000000"
+        );
+    }
+
+    fn hardening_err(config: &PodConfig<'_>) -> String {
+        build_pod_spec(config).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn validate_hardening_rejects_relative_path() {
+        let volumes = vec![cm_ro("data/x")];
+        let config = hardened_config(PodHardening {
+            read_only_volumes: &volumes,
+            ..PodHardening::default()
+        });
+        assert!(hardening_err(&config).contains("must be absolute"));
+    }
+
+    #[test]
+    fn validate_hardening_rejects_reserved_paths() {
+        for path in ["/", SANDBOX_HOME, "/tmp", "/tmp/", MANAGED_SETTINGS_DIR] {
+            let volumes = vec![cm_ro(path)];
+            let config = hardened_config(PodHardening {
+                read_only_volumes: &volumes,
+                ..PodHardening::default()
+            });
+            assert!(
+                hardening_err(&config).contains("reserved path"),
+                "path {path} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_hardening_rejects_duplicate_mounts() {
+        let volumes = vec![cm_ro("/data/x"), cm_ro("/data/x/")];
+        let config = hardened_config(PodHardening {
+            read_only_volumes: &volumes,
+            ..PodHardening::default()
+        });
+        assert!(hardening_err(&config).contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_hardening_rejects_mount_clashing_with_pvc_volume() {
+        let pvcs = vec![("repos".to_string(), "/data/repos".to_string())];
+        let volumes = vec![cm_ro("/data/repos")];
+        let config = PodConfig {
+            pvc_volumes: &pvcs,
+            ..hardened_config(PodHardening {
+                read_only_volumes: &volumes,
+                ..PodHardening::default()
+            })
+        };
+        assert!(hardening_err(&config).contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_hardening_rejects_empty_secret_fields() {
+        for entry in [
+            secret("", "s", "k"),
+            secret("VAR", "", "k"),
+            secret("VAR", "s", ""),
+        ] {
+            let secrets = vec![entry];
+            let config = hardened_config(PodHardening {
+                secret_env: &secrets,
+                ..PodHardening::default()
+            });
+            let err = hardening_err(&config);
+            assert!(err.contains("non-empty name, secret and key"), "{err}");
+        }
+    }
+
+    #[test]
+    fn build_credentials_from_env_prefix_uses_var_only() {
+        let prefix = build_credentials_from_env_prefix("IRONFLOW_CLAUDE_CREDENTIALS");
+        assert!(prefix.contains("\"$IRONFLOW_CLAUDE_CREDENTIALS\""));
+        assert!(prefix.contains(".credentials.json"));
+        assert!(!prefix.contains('{'), "no JSON must be embedded: {prefix}");
+        assert!(prefix.ends_with("&& "));
+    }
+
+    #[test]
+    fn build_profile_copy_prefix_copies_mounted_profile() {
+        let prefix = build_profile_copy_prefix();
+        assert!(prefix.contains(&format!("if [ -d {PROFILE_MOUNT_DIR} ]")));
+        assert!(prefix.contains(&format!("cp -rL {PROFILE_MOUNT_DIR}/.")));
+        assert!(prefix.ends_with("fi && "));
     }
 }

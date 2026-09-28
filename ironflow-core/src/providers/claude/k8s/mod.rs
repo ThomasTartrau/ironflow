@@ -4,18 +4,26 @@
 //!
 //! * [`K8sEphemeralProvider`] - creates a new pod for each invocation, reads logs,
 //!   then deletes the pod. Simple and isolated but has startup overhead.
+//!   [`K8sEphemeralProvider::sandboxed`] adds a hardened pod (non-root,
+//!   read-only root filesystem, secrets from Kubernetes Secrets, managed
+//!   settings presets, egress profile label), cleanup of a previous attempt's
+//!   pods on retry, and an orphan reaper ([`K8sEphemeralProvider::reap_orphans`]).
 //! * [`K8sPersistentProvider`] - reuses a long-running worker pod and executes
 //!   commands via the Kubernetes exec API. Lower latency but shared state between
 //!   invocations.
 //!
-//! Shared types ([`K8sResources`]) and helpers live in the [`common`] submodule.
+//! Shared types ([`K8sResources`], [`PodHardening`], [`SandboxSettings`]) and
+//! helpers live in the [`common`] submodule; the orphan reaping decisions
+//! ([`reap_reason`], [`configmap_expired`]) in [`reaper`].
 
 pub mod common;
 pub mod ephemeral;
 pub mod persistent;
+pub mod reaper;
 pub mod toleration;
 
-pub use common::{ImagePullPolicy, K8sClusterConfig, K8sResources};
+pub use common::{ImagePullPolicy, K8sClusterConfig, K8sResources, PodHardening, SandboxSettings};
 pub use ephemeral::K8sEphemeralProvider;
 pub use persistent::K8sPersistentProvider;
+pub use reaper::{ReapReason, ReapReport, configmap_expired, reap_reason};
 pub use toleration::{K8sToleration, TolerationEffect, TolerationOperator};

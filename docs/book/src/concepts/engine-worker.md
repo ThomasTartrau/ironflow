@@ -11,6 +11,11 @@ engine.register(Box::new(MyWorkflow))?;
 
 The Engine is used by both the API server (for metadata and describe endpoints) and the Worker (for execution).
 
+Before running an agent step, the engine stamps the `ironflow.io/run-id` and
+`ironflow.io/step` pod labels on its config (the step name is sanitized into a
+valid label value), so the Kubernetes providers can tag the pod and clean up a
+previous attempt of the same step on retry.
+
 ## Execution mode
 
 A run suspended on an approval, a human input or an escalation resumes once the

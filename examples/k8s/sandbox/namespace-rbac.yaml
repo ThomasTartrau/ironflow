@@ -1,0 +1,43 @@
+# Namespace for the agent pods, and the Role the ironflow worker needs to
+# run them with K8sEphemeralProvider.
+#
+# `networkpolicies` is deliberately absent from the Role: the worker must not
+# be able to create, change or delete the policies that confine the agents.
+# A cluster admin applies them (see networkpolicy-deny-all.yaml and
+# cilium-egress-anthropic.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ironflow-agents
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ironflow-worker
+  namespace: ironflow-agents
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "list", "delete"]
+---
+# Bind the Role to the worker's service account. Adjust the subject to the
+# namespace and name the worker runs under.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ironflow-worker
+  namespace: ironflow-agents
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ironflow-worker
+subjects:
+  - kind: ServiceAccount
+    name: ironflow-worker
+    namespace: ironflow

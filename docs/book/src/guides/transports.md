@@ -36,6 +36,11 @@ Two modes are available:
 
 See the `examples/transports/` directory for complete Kubernetes examples.
 
+For untrusted prompts or multi-tenant clusters, `K8sEphemeralProvider::sandboxed`
+runs each agent in a hardened pod: non-root, read-only root filesystem, secrets
+read from Kubernetes Secrets, managed-settings presets and egress profiles. See
+[Kubernetes Sandbox](k8s-sandbox.md).
+
 ## Choosing a transport
 
 - **Development**: use `ClaudeCodeProvider` (local). No setup needed.

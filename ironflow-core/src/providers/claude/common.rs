@@ -1701,6 +1701,7 @@ mod tests {
         use std::marker::PhantomData;
 
         use crate::operations::agent::PermissionMode;
+        use crate::provider::PodSettings;
 
         // Use direct field access to bypass typestate (testing CLI arg construction,
         // not the builder API -- this combination triggers a Claude CLI bug).
@@ -1725,6 +1726,7 @@ mod tests {
             resume_session_id: None,
             verbose: false,
             pod_labels: std::collections::BTreeMap::new(),
+            pod: PodSettings::default(),
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,

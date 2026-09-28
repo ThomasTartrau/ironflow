@@ -30,9 +30,14 @@ use crate::operations::agent::{Model, PermissionMode};
 use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
+mod pod;
 mod tool;
 mod tool_profile;
 
+pub use pod::{
+    LABEL_EGRESS_PROFILE, LABEL_RUN_ID, LABEL_STEP, PodSettings, PodVolumeSource, ReadOnlyVolume,
+    SecretEnvVar, sanitize_label_value,
+};
 pub use tool::Tool;
 pub use tool_profile::ToolProfile;
 
@@ -286,6 +291,14 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pod_labels: BTreeMap<String, String>,
 
+    /// Pod-level settings (K8s ephemeral provider only), merged with the provider's.
+    ///
+    /// Non-K8s providers ignore this field. Set it with
+    /// [`AgentConfig::env_from_secret`], [`AgentConfig::service_account`],
+    /// [`AgentConfig::read_only_volume`] and [`AgentConfig::managed_settings`].
+    #[serde(default, skip_serializing_if = "PodSettings::is_empty")]
+    pub pod: PodSettings,
+
     /// External inputs to materialize on the agent's filesystem before invocation.
     ///
     /// See [`AgentInput`] for the semantics. The provider is responsible for
@@ -348,6 +361,7 @@ impl AgentConfig {
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
+            pod: PodSettings::default(),
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,
@@ -654,6 +668,197 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Read an environment variable from a Kubernetes Secret (K8s ephemeral
+    /// provider only).
+    ///
+    /// The pod gets `valueFrom.secretKeyRef`, so the value never enters the
+    /// pod spec. Calling it again with the same `var` replaces the entry. A
+    /// step entry overrides a provider entry with the same name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("open the MR")
+    ///     .env_from_secret("GITLAB_TOKEN", "gitlab-bot", "token");
+    /// assert_eq!(config.pod.secret_env[0].secret, "gitlab-bot");
+    /// ```
+    pub fn env_from_secret(mut self, var: &str, secret: &str, key: &str) -> Self {
+        let entry = SecretEnvVar {
+            name: var.to_string(),
+            secret: secret.to_string(),
+            key: key.to_string(),
+        };
+        match self.pod.secret_env.iter_mut().find(|e| e.name == var) {
+            Some(existing) => *existing = entry,
+            None => self.pod.secret_env.push(entry),
+        }
+        self
+    }
+
+    /// Run the pod under a given Kubernetes service account (K8s ephemeral
+    /// provider only). Overrides the provider's service account.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("read the cluster").service_account("reader");
+    /// assert_eq!(config.pod.service_account.as_deref(), Some("reader"));
+    /// ```
+    pub fn service_account(mut self, name: &str) -> Self {
+        self.pod.service_account = Some(name.to_string());
+        self
+    }
+
+    /// Mount a volume read-only into the agent container (K8s ephemeral
+    /// provider only). Step volumes come after the provider's.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::{AgentConfig, PodVolumeSource, ReadOnlyVolume};
+    ///
+    /// let config = AgentConfig::new("review").read_only_volume(ReadOnlyVolume {
+    ///     source: PodVolumeSource::PersistentVolumeClaim { claim_name: "repos".to_string() },
+    ///     mount_path: "/data/repos/api".to_string(),
+    ///     sub_path: Some("api".to_string()),
+    /// });
+    /// assert_eq!(config.pod.read_only_volumes.len(), 1);
+    /// ```
+    pub fn read_only_volume(mut self, volume: ReadOnlyVolume) -> Self {
+        self.pod.read_only_volumes.push(volume);
+        self
+    }
+
+    /// Mount a PersistentVolumeClaim read-only at `mount_path` (K8s ephemeral
+    /// provider only).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").read_only_pvc("repos", "/data/repos");
+    /// assert_eq!(config.pod.read_only_volumes[0].mount_path, "/data/repos");
+    /// ```
+    pub fn read_only_pvc(self, claim: &str, mount_path: &str) -> Self {
+        self.read_only_volume(ReadOnlyVolume {
+            source: PodVolumeSource::PersistentVolumeClaim {
+                claim_name: claim.to_string(),
+            },
+            mount_path: mount_path.to_string(),
+            sub_path: None,
+        })
+    }
+
+    /// Mount a node directory read-only at `mount_path` (K8s ephemeral
+    /// provider only).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").read_only_host_path("/srv/repos", "/data/repos");
+    /// assert_eq!(config.pod.read_only_volumes.len(), 1);
+    /// ```
+    pub fn read_only_host_path(self, host_path: &str, mount_path: &str) -> Self {
+        self.read_only_volume(ReadOnlyVolume {
+            source: PodVolumeSource::HostPath {
+                path: host_path.to_string(),
+            },
+            mount_path: mount_path.to_string(),
+            sub_path: None,
+        })
+    }
+
+    /// Mount a ConfigMap read-only at `mount_path` (K8s ephemeral provider
+    /// only).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").read_only_config_map("guidelines", "/data/guidelines");
+    /// assert_eq!(config.pod.read_only_volumes.len(), 1);
+    /// ```
+    pub fn read_only_config_map(self, name: &str, mount_path: &str) -> Self {
+        self.read_only_volume(ReadOnlyVolume {
+            source: PodVolumeSource::ConfigMap {
+                name: name.to_string(),
+            },
+            mount_path: mount_path.to_string(),
+            sub_path: None,
+        })
+    }
+
+    /// Select a managed-settings preset registered on the provider (K8s
+    /// ephemeral provider only).
+    ///
+    /// The provider maps the preset to a ConfigMap holding
+    /// `managed-settings.json`. An unknown preset fails the step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").managed_settings("readonly");
+    /// assert_eq!(config.pod.managed_settings.as_deref(), Some("readonly"));
+    /// ```
+    pub fn managed_settings(mut self, preset: &str) -> Self {
+        self.pod.managed_settings = Some(preset.to_string());
+        self
+    }
+
+    /// Select the network egress profile of the pod (K8s providers only).
+    ///
+    /// Sets the [`LABEL_EGRESS_PROFILE`] pod label, which network policies
+    /// select on. Overrides the provider's egress profile.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::{AgentConfig, LABEL_EGRESS_PROFILE};
+    ///
+    /// let config = AgentConfig::new("open the MR").egress_profile("gitlab");
+    /// assert_eq!(config.pod_labels[LABEL_EGRESS_PROFILE], "gitlab");
+    /// ```
+    pub fn egress_profile(mut self, profile: &str) -> Self {
+        self.pod_labels
+            .insert(LABEL_EGRESS_PROFILE.to_string(), profile.to_string());
+        self
+    }
+
+    /// Tag the pod with the run id and step name (K8s providers only).
+    ///
+    /// Sets [`LABEL_RUN_ID`] and [`LABEL_STEP`], both passed through
+    /// [`sanitize_label_value`]. The engine sets these labels on every agent
+    /// step; call it yourself only when running an agent outside the engine.
+    /// The ephemeral provider uses them to delete the pods of a previous
+    /// attempt of the same step before starting a new one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::{AgentConfig, LABEL_RUN_ID, LABEL_STEP};
+    ///
+    /// let config = AgentConfig::new("investigate").run_scope("demo-run", "investigate");
+    /// assert_eq!(config.pod_labels[LABEL_RUN_ID], "demo-run");
+    /// assert_eq!(config.pod_labels[LABEL_STEP], "investigate");
+    /// ```
+    pub fn run_scope(mut self, run_id: &str, step: &str) -> Self {
+        self.pod_labels
+            .insert(LABEL_RUN_ID.to_string(), sanitize_label_value(run_id));
+        self.pod_labels
+            .insert(LABEL_STEP.to_string(), sanitize_label_value(step));
+        self
+    }
+
     /// Convert to a different typestate by moving all fields.
     ///
     /// Safe because the marker is a zero-sized [`PhantomData`] -- no
@@ -678,6 +883,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             resume_session_id: self.resume_session_id,
             verbose: self.verbose,
             pod_labels: self.pod_labels,
+            pod: self.pod,
             inputs: self.inputs,
             allow_failure: self.allow_failure,
             retry: self.retry,
@@ -1212,6 +1418,7 @@ mod tests {
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
+            pod: PodSettings::default(),
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,
@@ -1259,6 +1466,7 @@ mod tests {
             resume_session_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
+            pod: PodSettings::default(),
             inputs: Vec::new(),
             allow_failure: false,
             retry: None,
@@ -1617,6 +1825,91 @@ mod tests {
             "grafana-only"
         );
         assert_eq!(back.pod_labels["team"], "observability");
+    }
+
+    // ── Pod settings (K8s) ────────────────────────────────────────
+
+    #[test]
+    fn k8s_env_from_secret_replaces_same_var() {
+        let config = AgentConfig::new("x")
+            .env_from_secret("TOKEN", "old-secret", "a")
+            .env_from_secret("OTHER", "other", "b")
+            .env_from_secret("TOKEN", "new-secret", "c");
+        assert_eq!(config.pod.secret_env.len(), 2);
+        assert_eq!(config.pod.secret_env[0].name, "TOKEN");
+        assert_eq!(config.pod.secret_env[0].secret, "new-secret");
+        assert_eq!(config.pod.secret_env[0].key, "c");
+        assert_eq!(config.pod.secret_env[1].name, "OTHER");
+    }
+
+    #[test]
+    fn k8s_pod_settings_builders() {
+        let config = AgentConfig::new("x")
+            .service_account("reader")
+            .read_only_pvc("repos", "/data/repos")
+            .read_only_host_path("/srv", "/data/srv")
+            .read_only_config_map("cm", "/data/cm")
+            .managed_settings("locked")
+            .egress_profile("gitlab");
+        assert_eq!(config.pod.service_account.as_deref(), Some("reader"));
+        assert_eq!(config.pod.read_only_volumes.len(), 3);
+        assert_eq!(
+            config.pod.read_only_volumes[0].source,
+            PodVolumeSource::PersistentVolumeClaim {
+                claim_name: "repos".to_string(),
+            }
+        );
+        assert_eq!(config.pod.read_only_volumes[0].mount_path, "/data/repos");
+        assert_eq!(
+            config.pod.read_only_volumes[1].source,
+            PodVolumeSource::HostPath {
+                path: "/srv".to_string(),
+            }
+        );
+        assert_eq!(
+            config.pod.read_only_volumes[2].source,
+            PodVolumeSource::ConfigMap {
+                name: "cm".to_string(),
+            }
+        );
+        assert_eq!(config.pod.managed_settings.as_deref(), Some("locked"));
+        assert_eq!(config.pod_labels[LABEL_EGRESS_PROFILE], "gitlab");
+    }
+
+    #[test]
+    fn k8s_run_scope_sets_sanitized_labels() {
+        let config = AgentConfig::new("x").run_scope("run-1", "fix bug/42");
+        assert_eq!(config.pod_labels[LABEL_RUN_ID], "run-1");
+        assert_eq!(
+            config.pod_labels[LABEL_STEP],
+            sanitize_label_value("fix bug/42")
+        );
+        assert!(config.pod_labels[LABEL_STEP].starts_with("fix-bug-42-"));
+    }
+
+    #[test]
+    fn k8s_pod_settings_serde_skip_when_empty() {
+        let json = serde_json::to_value(AgentConfig::new("hello")).unwrap();
+        assert!(json.get("pod").is_none(), "empty pod must be skipped");
+    }
+
+    #[test]
+    fn k8s_pod_settings_serde_roundtrip() {
+        let config = AgentConfig::new("hello")
+            .env_from_secret("TOKEN", "s", "k")
+            .service_account("sa")
+            .read_only_pvc("repos", "/data/repos")
+            .managed_settings("locked");
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pod, config.pod);
+    }
+
+    #[test]
+    fn k8s_pod_settings_serde_default_when_missing() {
+        let raw = r#"{"prompt":"hello","model":"sonnet"}"#;
+        let config: AgentConfig = serde_json::from_str(raw).unwrap();
+        assert!(config.pod.is_empty());
     }
 
     // ── LogSink tests ─────────────────────────────────────────────

@@ -28,3 +28,7 @@ path = "src/bin/k8s_ephemeral.rs"
 [[bin]]
 name = "k8s-persistent"
 path = "src/bin/k8s_persistent.rs"
+
+[[bin]]
+name = "k8s-sandboxed"
+path = "src/bin/k8s_sandboxed.rs"

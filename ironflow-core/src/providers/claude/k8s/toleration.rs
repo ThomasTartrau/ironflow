@@ -106,7 +106,8 @@ mod tests {
 
     use super::{K8sToleration, TolerationEffect, TolerationOperator};
     use crate::providers::claude::k8s::common::{
-        DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sResources, PodConfig, build_pod_spec,
+        DEFAULT_INPUT_INIT_IMAGE, ImagePullPolicy, K8sResources, PodConfig, PodHardening,
+        build_pod_spec,
     };
 
     /// Build a `PodConfig` carrying `tolerations`, everything else empty/default.
@@ -140,6 +141,7 @@ mod tests {
             input_init_image: DEFAULT_INPUT_INIT_IMAGE,
             prompt_configmap: None,
             prompt_mount_path: "",
+            hardening: PodHardening::default(),
         }
     }
 
