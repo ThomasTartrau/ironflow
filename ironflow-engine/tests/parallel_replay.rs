@@ -1,9 +1,14 @@
-//! Non-regression test: `ctx.parallel()` must replay a completed wave on
-//! resume instead of launching its steps again.
+//! Non-regression tests: `ctx.parallel()` must replay the completed steps of a
+//! wave on resume instead of launching them again, whether the whole wave or
+//! only part of it completed.
 //!
 //! Drives a real [`Engine`] over a real [`InMemoryStore`] with a real
 //! [`WorkflowHandler`], the way `ironflow-engine/tests/human_input.rs` does.
 
+use std::env::temp_dir;
+use std::fs::{read_to_string, remove_file};
+use std::path::PathBuf;
+use std::process::id as process_id;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -63,6 +68,53 @@ impl WorkflowHandler for ParallelWorkflow {
     }
 }
 
+/// Workflow name registered by [`PartialWaveWorkflow`].
+const PARTIAL_WORKFLOW: &str = "parallel-replay-partial";
+
+/// Runs a wave where `record` completes, appending one line to `marker` per
+/// execution, and `flaky` fails with `allow_failure`, then asks for
+/// [`Answers`].
+struct PartialWaveWorkflow {
+    marker: PathBuf,
+}
+
+impl WorkflowHandler for PartialWaveWorkflow {
+    fn name(&self) -> &str {
+        PARTIAL_WORKFLOW
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let record = format!("echo ran >> {}", self.marker.display());
+            ctx.parallel(
+                vec![
+                    ("record", StepConfig::Shell(ShellConfig::new(&record))),
+                    (
+                        "flaky",
+                        StepConfig::Shell(ShellConfig::new("exit 1").allow_failure()),
+                    ),
+                ],
+                false,
+            )
+            .await?;
+            let answers = ctx
+                .human_input::<Answers>("clarify", HumanInputConfig::new("Answer?"))
+                .await?;
+            assert_eq!(answers.answers, vec!["ok".to_string()]);
+            Ok(())
+        })
+    }
+}
+
+/// Removes the marker file when the test ends.
+struct MarkerGuard(PathBuf);
+
+impl Drop for MarkerGuard {
+    fn drop(&mut self) {
+        let _ = remove_file(&self.0);
+    }
+}
+
 fn provider() -> Arc<dyn AgentProvider> {
     Arc::new(ClaudeCodeProvider::new())
 }
@@ -76,8 +128,14 @@ fn engine_with(store: Arc<InMemoryStore>, handler: impl WorkflowHandler + 'stati
 
 /// Enqueue and execute a run the way the worker does, returning its id.
 async fn start(engine: &Engine, store: &Arc<InMemoryStore>) -> Uuid {
+    start_workflow(engine, store, WORKFLOW).await
+}
+
+/// Enqueue and execute a run of `workflow` the way the worker does, returning
+/// its id.
+async fn start_workflow(engine: &Engine, store: &Arc<InMemoryStore>, workflow: &str) -> Uuid {
     let run = engine
-        .enqueue_handler(WORKFLOW, TriggerKind::Manual, json!({}), 0)
+        .enqueue_handler(workflow, TriggerKind::Manual, json!({}), 0)
         .await
         .expect("enqueue");
     store
@@ -154,6 +212,82 @@ async fn parallel_replay_does_not_rerun_a_completed_wave_on_resume() {
 
         let run = store.get_run(run_id).await.unwrap().unwrap();
         assert_eq!(run.status.state, RunStatus::Completed);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn parallel_replay_does_not_rerun_the_completed_steps_of_a_partial_wave() {
+    timeout(TEST_TIMEOUT, async {
+        let marker = temp_dir().join(format!(
+            "ironflow-parallel-replay-{}-{}",
+            process_id(),
+            Uuid::now_v7()
+        ));
+        let _guard = MarkerGuard(marker.clone());
+        let store = Arc::new(InMemoryStore::new());
+        let engine = engine_with(
+            store.clone(),
+            PartialWaveWorkflow {
+                marker: marker.clone(),
+            },
+        );
+
+        let run_id = start_workflow(&engine, &store, PARTIAL_WORKFLOW).await;
+
+        let steps = store.list_steps(run_id).await.expect("list steps");
+        let record = steps.iter().find(|s| s.name == "record").expect("record");
+        assert_eq!(record.status.state, StepStatus::Completed);
+        let record_id = record.id;
+        let flaky = steps.iter().find(|s| s.name == "flaky").expect("flaky");
+        assert_eq!(flaky.status.state, StepStatus::Failed);
+
+        let input_step = steps
+            .iter()
+            .find(|s| s.status.state == StepStatus::AwaitingApproval)
+            .expect("human input step suspended the run");
+        store
+            .update_step(
+                input_step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Completed),
+                    output: Some(json!({"answers": ["ok"]})),
+                    completed_at: Some(Utc::now()),
+                    clear_approval_deadline: true,
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("store the answer");
+        store
+            .update_run_status(run_id, RunStatus::Running)
+            .await
+            .expect("mark running");
+
+        engine
+            .execute_handler_run(run_id)
+            .await
+            .expect("resume via worker pickup");
+
+        let steps = store.list_steps(run_id).await.expect("list steps");
+        let record_steps: Vec<_> = steps.iter().filter(|s| s.name == "record").collect();
+        assert_eq!(
+            record_steps.len(),
+            1,
+            "the completed 'record' step must be replayed, not re-created"
+        );
+        assert_eq!(record_steps[0].id, record_id);
+        let runs = read_to_string(&marker).expect("read marker");
+        assert_eq!(
+            runs.lines().count(),
+            1,
+            "the completed 'record' command must run exactly once"
+        );
+
+        // `flaky` still fails under `allow_failure`, so the run ends in Warning.
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Warning);
     })
     .await
     .expect("test timed out");

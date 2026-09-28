@@ -67,6 +67,7 @@ impl WorkflowContext {
         self.position += 1;
 
         if let Some(existing) = self.replay_steps.get(&position)
+            && existing.name == name
             && existing.kind == StepKind::Custom("skip".to_string())
             && existing.status.state == StepStatus::Skipped
         {

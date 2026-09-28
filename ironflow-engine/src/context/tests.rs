@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::config::{ApprovalConfig, ShellConfig};
+use crate::config::{ApprovalConfig, ShellConfig, StepConfig};
 use crate::error::EngineError;
 use crate::handler::TypedWorkflow;
 use crate::testing::{MockInterceptor, MockShellOutput};
@@ -247,6 +247,33 @@ async fn context_parallel_empty_steps_returns_empty_vec() {
         .await
         .expect("parallel should not fail on empty input");
     assert!(results.is_empty());
+}
+
+#[tokio::test]
+async fn context_parallel_rejects_duplicate_step_names_before_running() {
+    let mut ctx = create_test_context();
+    let err = ctx
+        .parallel(
+            vec![
+                ("fetch", StepConfig::Shell(ShellConfig::new("echo alpha"))),
+                ("other", StepConfig::Shell(ShellConfig::new("echo other"))),
+                ("fetch", StepConfig::Shell(ShellConfig::new("echo beta"))),
+            ],
+            true,
+        )
+        .await
+        .expect_err("a wave with two steps named 'fetch' must be refused");
+
+    assert!(
+        matches!(&err, EngineError::StepConfig(msg) if msg.contains("\"fetch\"")),
+        "unexpected error: {err}"
+    );
+    assert_eq!(ctx.position, 0, "a refused wave takes no position");
+    let steps = ctx.store.list_steps(ctx.run_id).await.expect("list steps");
+    assert!(
+        steps.is_empty(),
+        "no step of a refused wave may be recorded"
+    );
 }
 
 #[tokio::test]

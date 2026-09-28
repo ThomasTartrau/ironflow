@@ -1,6 +1,6 @@
 //! Parallel step wave for [`WorkflowContext`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -10,7 +10,7 @@ use tokio::time::timeout;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use ironflow_store::models::{NewStep, Step, StepStatus, StepUpdate, step_trace_id};
+use ironflow_store::models::{NewStep, StepStatus, StepUpdate, step_trace_id};
 
 use crate::budget::step_budget_usd;
 use crate::config::StepConfig;
@@ -39,13 +39,17 @@ impl WorkflowContext {
     /// failure. When false, all steps run to completion and the first
     /// error is returned.
     ///
-    /// On resume, if every step of the wave already completed in a prior
-    /// execution of the current attempt, the whole wave is replayed from the
-    /// store instead of being launched again.
+    /// Every step of a wave must have its own name: the name identifies the
+    /// step in the run timeline, in its artifact handles and on resume.
+    ///
+    /// On resume, each step of the wave that already completed in a prior
+    /// execution of the current attempt is replayed from the store; only the
+    /// other steps of the wave are launched again.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError`] if any step fails.
+    /// Returns [`EngineError::StepConfig`] if two steps of the wave share a
+    /// name, before anything runs. Returns [`EngineError`] if any step fails.
     ///
     /// # Examples
     ///
@@ -77,6 +81,7 @@ impl WorkflowContext {
         if steps.is_empty() {
             return Ok(Vec::new());
         }
+        reject_duplicate_names(&steps)?;
 
         // Plan mode: record the whole wave under one parallel group and return
         // synthetic outputs. No step record is created and nothing runs.
@@ -113,19 +118,25 @@ impl WorkflowContext {
         let wave_position = self.position;
         self.position += 1;
 
-        // Replay: if every step of this wave already completed in a prior
-        // execution of the current attempt, return their cached outputs
-        // without creating a step or launching anything. Mirrors the
-        // replay-before-budget-check ordering of `execute_step`.
-        if let Some(results) = self.try_replay_wave(wave_position, &steps) {
+        // Replay: a step of this wave that already completed in a prior
+        // execution of the current attempt returns its cached output; only the
+        // other steps are launched. When the whole wave completed, nothing is
+        // created or launched. Mirrors the replay-before-budget-check ordering
+        // of `execute_step`.
+        let mut slots = self.replay_wave(wave_position, &steps);
+        if slots.iter().all(Option::is_some) {
+            let results: Vec<ParallelStepResult> = slots.into_iter().flatten().collect();
+            self.last_step_ids = results.iter().map(|r| r.step_id).collect();
             return Ok(results);
         }
 
-        // Cost cap: the whole wave is charged at once. Refused before any step
-        // record is created, so nothing in the wave starts.
+        // Cost cap: the steps left to run are charged at once. Refused before
+        // any step record is created, so nothing in the wave starts.
         let wave_budget: Decimal = steps
             .iter()
-            .filter_map(|(_, config)| match config {
+            .zip(&slots)
+            .filter(|(_, slot)| slot.is_none())
+            .filter_map(|((_, config), _)| match config {
                 StepConfig::Agent(agent_config) => Some(agent_config.max_budget_usd),
                 _ => None,
             })
@@ -136,8 +147,13 @@ impl WorkflowContext {
         let now = Utc::now();
         let mut step_records: Vec<(Uuid, Uuid, String, StepConfig)> =
             Vec::with_capacity(steps.len());
+        // Index in `steps` of each entry of `step_records`.
+        let mut record_slots: Vec<usize> = Vec::with_capacity(steps.len());
 
-        for (name, config) in &steps {
+        for (slot, (name, config)) in steps.iter().enumerate() {
+            if slots[slot].is_some() {
+                continue;
+            }
             let kind = config.kind();
             let trace_id = step_trace_id(self.run_id, name, wave_position);
             let step = self
@@ -184,6 +200,7 @@ impl WorkflowContext {
                 _ => {}
             }
             step_records.push((step.id, trace_id, name.to_string(), config_with_trace));
+            record_slots.push(slot);
         }
 
         let mut join_set = JoinSet::new();
@@ -471,64 +488,55 @@ impl WorkflowContext {
 
         self.persist_progress().await;
 
-        self.last_step_ids = step_records.iter().map(|(id, _, _, _)| *id).collect();
-
-        // Build results in original order.
-        let results: Vec<ParallelStepResult> = step_records
-            .iter()
-            .enumerate()
-            .map(|(idx, (step_id, _trace_id, name, config))| {
-                let mut output = match indexed_results[idx].take() {
-                    Some(Ok(o)) => o,
-                    _ => unreachable!("all steps succeeded if no error returned"),
-                };
-                output.artifacts =
-                    StepArtifacts::new(name, Some(*step_id), config.declared_outputs());
-                ParallelStepResult {
-                    name: name.clone(),
-                    output,
-                    step_id: *step_id,
-                }
-            })
-            .collect();
+        // Build results in original order, replayed and launched steps alike.
+        for (idx, (step_id, _trace_id, name, config)) in step_records.iter().enumerate() {
+            let mut output = match indexed_results[idx].take() {
+                Some(Ok(o)) => o,
+                _ => unreachable!("all steps succeeded if no error returned"),
+            };
+            output.artifacts = StepArtifacts::new(name, Some(*step_id), config.declared_outputs());
+            slots[record_slots[idx]] = Some(ParallelStepResult {
+                name: name.clone(),
+                output,
+                step_id: *step_id,
+            });
+        }
+        let results: Vec<ParallelStepResult> = slots.into_iter().flatten().collect();
+        self.last_step_ids = results.iter().map(|r| r.step_id).collect();
 
         Ok(results)
     }
 
-    /// Try to replay a whole parallel wave from a previous execution.
+    /// Replay the steps of a parallel wave that completed in a previous
+    /// execution of the current attempt.
     ///
-    /// Returns `Some` only when every step of `steps` completed at
-    /// `position` in the current attempt; a partially completed or absent
-    /// wave returns `None` so the wave runs normally (existing behavior,
-    /// including for items already completed -- they are re-created).
-    fn try_replay_wave(
+    /// Returns one slot per entry of `steps`, in order: `Some` holds the
+    /// replayed result of a step that completed at `position`, `None` marks a
+    /// step that must run. `last_step_ids` is left untouched, so the steps
+    /// launched next still depend on the steps before the wave.
+    fn replay_wave(
         &mut self,
         position: u32,
         steps: &[(&str, StepConfig)],
-    ) -> Option<Vec<ParallelStepResult>> {
-        let stored: Vec<Step> = steps
-            .iter()
-            .map(|(name, _)| {
-                self.replay_wave_steps
-                    .get(&(position, (*name).to_string()))
-                    .cloned()
-            })
-            .collect::<Option<Vec<_>>>()?;
+    ) -> Vec<Option<ParallelStepResult>> {
+        let mut slots = Vec::with_capacity(steps.len());
+        for (name, config) in steps {
+            let Some(step) = self
+                .replay_wave_steps
+                .get(&(position, (*name).to_string()))
+                .filter(|step| step.status.state == StepStatus::Completed)
+            else {
+                slots.push(None);
+                continue;
+            };
 
-        if stored
-            .iter()
-            .any(|step| step.status.state != StepStatus::Completed)
-        {
-            return None;
-        }
-
-        let mut results = Vec::with_capacity(steps.len());
-        let mut last_ids = Vec::with_capacity(steps.len());
-        for ((name, config), step) in steps.iter().zip(stored.iter()) {
             let mut output = StepOutput::from(step);
-            self.total_cost_usd += output.cost_usd;
+            let step_id = step.id;
+            // Cost is not added: `carry_over_run_totals` seeded
+            // `total_cost_usd` from the run totals persisted before the
+            // suspension, which already include this step.
             self.total_duration_ms += output.duration_ms;
-            output.artifacts = StepArtifacts::new(name, Some(step.id), config.declared_outputs());
+            output.artifacts = StepArtifacts::new(name, Some(step_id), config.declared_outputs());
 
             info!(
                 run_id = %self.run_id,
@@ -537,14 +545,29 @@ impl WorkflowContext {
                 "step replayed from previous execution"
             );
 
-            last_ids.push(step.id);
-            results.push(ParallelStepResult {
+            slots.push(Some(ParallelStepResult {
                 name: (*name).to_string(),
                 output,
-                step_id: step.id,
-            });
+                step_id,
+            }));
         }
-        self.last_step_ids = last_ids;
-        Some(results)
+        slots
     }
+}
+
+/// Reject a wave in which two steps share a name.
+///
+/// The name identifies a step of the wave in the run timeline, in its
+/// artifact handles and on resume, where two steps with one name would replay
+/// the same stored result.
+fn reject_duplicate_names(steps: &[(&str, StepConfig)]) -> Result<(), EngineError> {
+    let mut seen = HashSet::with_capacity(steps.len());
+    for (name, _) in steps {
+        if !seen.insert(*name) {
+            return Err(EngineError::StepConfig(format!(
+                "parallel wave has two steps named {name:?}; each step of a wave needs its own name"
+            )));
+        }
+    }
+    Ok(())
 }

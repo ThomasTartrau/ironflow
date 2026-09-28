@@ -159,7 +159,9 @@ impl WorkflowContext {
             return None;
         }
         let output = StepOutput::from(step);
-        self.total_cost_usd += output.cost_usd;
+        // Cost is not added: `carry_over_run_totals` seeded `total_cost_usd`
+        // from the run totals persisted before the suspension, which already
+        // include this step.
         self.total_duration_ms += output.duration_ms;
         self.last_step_ids = vec![step.id];
         info!(
