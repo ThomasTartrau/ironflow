@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.18](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.17...ironflow-ops-k8s-v0.1.18) - 2026-09-28
+
+### Added
+
+- #125 #126 #127 Claude profiles, pod/job conventions, and release_run
+
 ## [0.1.15](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.14...ironflow-ops-k8s-v0.1.15) - 2026-09-27
 
 ### Added
