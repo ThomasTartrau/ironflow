@@ -171,7 +171,7 @@ mod tests {
     use tokio::io::BufReader;
     use tokio::net::TcpListener;
     use tokio::sync::broadcast;
-    use tokio::time::{sleep, timeout};
+    use tokio::time::timeout;
     use uuid::Uuid;
 
     use super::run_events;
@@ -260,6 +260,23 @@ mod tests {
         BufReader::new(reader.reunite(writer).unwrap())
     }
 
+    /// Reads and discards the HTTP status line and headers, blocking until
+    /// the blank line that terminates them.
+    ///
+    /// By the time a client can read any response bytes, `run_events` has
+    /// already called `bus.subscribe`, so this is a deterministic
+    /// synchronization point for tests that publish events right after
+    /// connecting -- unlike a fixed `sleep`, it cannot race under load.
+    async fn wait_for_response_headers(reader: &mut BufReader<tokio::net::TcpStream>) {
+        loop {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line).await.unwrap();
+            if n == 0 || line == "\r\n" || line == "\n" {
+                break;
+            }
+        }
+    }
+
     async fn read_until_contains(
         reader: &mut BufReader<tokio::net::TcpStream>,
         needle: &str,
@@ -293,7 +310,7 @@ mod tests {
         let (addr, auth) = start_sse_server(state).await;
 
         let mut reader = connect_sse(&addr, &format!("/{run_id}/events"), &auth).await;
-        sleep(Duration::from_millis(50)).await;
+        wait_for_response_headers(&mut reader).await;
 
         bus.publish(
             run_id,
@@ -359,7 +376,7 @@ mod tests {
             &auth,
         )
         .await;
-        sleep(Duration::from_millis(50)).await;
+        wait_for_response_headers(&mut reader).await;
 
         bus.publish(
             run_id,
@@ -393,7 +410,7 @@ mod tests {
         let (addr, auth) = start_sse_server(state).await;
 
         let mut reader_a = connect_sse(&addr, &format!("/{run_a}/events"), &auth).await;
-        sleep(Duration::from_millis(50)).await;
+        wait_for_response_headers(&mut reader_a).await;
 
         bus.publish(
             run_b,
