@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.4.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.4.0...ironflow-core-v4.4.1) - 2026-09-29
+
+### Fixed
+
+- #133 surface Claude API errors and bump runner to 2.1.284
+
 ## [4.4.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.3.1...ironflow-core-v4.4.0) - 2026-09-29
 
 ### Added

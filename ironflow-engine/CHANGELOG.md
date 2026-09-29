@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.41.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.41.4...ironflow-engine-v2.41.5) - 2026-09-29
+
+### Fixed
+
+- #133 surface Claude API errors and bump runner to 2.1.284
+
 ## [2.41.3](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.41.2...ironflow-engine-v2.41.3) - 2026-09-29
 
 ### Fixed
