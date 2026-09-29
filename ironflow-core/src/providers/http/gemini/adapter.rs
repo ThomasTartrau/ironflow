@@ -77,7 +77,7 @@ impl HttpAgentAdapter for GeminiAdapter {
 
         let mut body = json!({ "contents": contents });
 
-        if let Some(ref system) = config.system_prompt {
+        if let Some(system) = config.full_system_prompt() {
             body["system_instruction"] = json!({
                 "parts": [{ "text": system }]
             });

@@ -11,7 +11,7 @@ use ironflow_templates::auto_register::detect_and_register_handler;
 use ironflow_templates::deps::inject_dependencies;
 use ironflow_templates::deps::{InjectionResult, validate_ironflow_version};
 use ironflow_templates::fetch::{fetch_latest_tag, fetch_repo_at_tag, validate_template_name};
-use ironflow_templates::install::install_template;
+use ironflow_templates::install::{default_destination, install_template};
 use ironflow_templates::lockfile::{InstalledEntry, LOCKFILE_NAME, LockFile};
 use ironflow_templates::registry::{
     fetch_registry_index, find_template, resolve_registry_url, resolve_template_entry,
@@ -79,7 +79,7 @@ pub fn cmd_add(
 
     let destination = match output {
         Some(path) => path.to_path_buf(),
-        None => PathBuf::from(format!("src/workflows/{name}")),
+        None => default_destination(Path::new("."), name),
     };
 
     let result = install_template(&manifest, &template_dir, &destination)?;
@@ -101,20 +101,18 @@ pub fn cmd_add(
         }
     }
 
-    // Auto-register handler
+    // Auto-register handler. Only the directory holding the installed module
+    // can declare it: a `mod` elsewhere would not find the files.
     let handler_type = to_pascal_case(name);
-    let search_dirs = [
-        destination.parent().unwrap_or(Path::new(".")),
-        Path::new("src/workflows"),
-        Path::new("src"),
-    ];
-    for dir in &search_dirs {
-        if dir.exists() {
-            let reg = detect_and_register_handler(dir, name, &handler_type)?;
-            println!();
-            println!("{}", reg.message);
-            break;
-        }
+    let module_parent = destination.parent().unwrap_or(Path::new("."));
+    let reg = detect_and_register_handler(module_parent, name, &handler_type)?;
+    println!();
+    println!("{}", reg.message);
+
+    let requirements = manifest.requirements.render();
+    if !requirements.is_empty() {
+        println!();
+        print!("{requirements}");
     }
 
     // Update lockfile

@@ -2,3 +2,4 @@
 //! routes that are missing from the [`gitlab`] crate.
 
 pub mod merge_requests;
+pub mod repository;

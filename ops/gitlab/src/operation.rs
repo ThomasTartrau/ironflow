@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use gitlab::AsyncGitlab;
-use gitlab::api::{AsyncQuery, Endpoint};
+use gitlab::api::{AsyncQuery, Endpoint, raw};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext};
 use serde_json::Value;
@@ -56,15 +56,22 @@ where
     }
 
     async fn execute(&self, _ctx: &OperationContext) -> Result<Value, OperationError> {
-        let result: Value =
-            self.endpoint
-                .query_async(&self.client)
-                .await
-                .map_err(|e| OperationError::Http {
-                    status: None,
-                    message: e.to_string(),
-                })?;
-        Ok(result)
+        // Read the raw body: a `204 No Content` (a DELETE) has none, and the
+        // JSON query would reject it.
+        let body: Vec<u8> = raw(&self.endpoint)
+            .query_async(&self.client)
+            .await
+            .map_err(|e| OperationError::Http {
+                status: None,
+                message: e.to_string(),
+            })?;
+        if body.iter().all(u8::is_ascii_whitespace) {
+            return Ok(Value::Null);
+        }
+        serde_json::from_slice(&body).map_err(|e| OperationError::Http {
+            status: None,
+            message: format!("could not parse the GitLab response: {e}"),
+        })
     }
 
     fn input(&self) -> Option<Value> {
