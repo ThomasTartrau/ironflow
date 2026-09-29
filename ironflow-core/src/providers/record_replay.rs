@@ -70,6 +70,12 @@ pub fn hash_config(config: &AgentConfig) -> String {
         hasher.update(b"|sp:");
         hasher.update(sp.as_bytes());
     }
+    // Only hashed when set, so fixtures recorded before the field existed
+    // keep their name.
+    if let Some(ref asp) = config.append_system_prompt {
+        hasher.update(b"|asp:");
+        hasher.update(asp.as_bytes());
+    }
     hasher.update(b"|m:");
     hasher.update(config.model.to_string().as_bytes());
     if !config.allowed_tools.is_empty() {
@@ -310,6 +316,20 @@ mod tests {
         config1.system_prompt = Some("You are a Rust expert".to_string());
         config2.system_prompt = Some("You are a Python expert".to_string());
         assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn test_hash_config_appended_system_prompt_affects_hash() {
+        let plain = AgentConfig::new("same prompt");
+        let appended = AgentConfig::new("same prompt").append_system_prompt("rules");
+        assert_ne!(hash_config(&plain), hash_config(&appended));
+    }
+
+    #[test]
+    fn test_hash_config_appended_prompt_is_not_the_system_prompt() {
+        let system = AgentConfig::new("same prompt").system_prompt("rules");
+        let appended = AgentConfig::new("same prompt").append_system_prompt("rules");
+        assert_ne!(hash_config(&system), hash_config(&appended));
     }
 
     #[test]

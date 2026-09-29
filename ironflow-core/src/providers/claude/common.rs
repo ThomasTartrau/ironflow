@@ -83,7 +83,9 @@ pub fn context_window_for_model(model: &str) -> usize {
 /// Returns [`AgentError::PromptTooLarge`] if the estimated token count exceeds
 /// the model's context window.
 pub fn validate_prompt_size(config: &AgentConfig) -> Result<(), AgentError> {
-    let total_chars = config.prompt.len() + config.system_prompt.as_ref().map_or(0, |s| s.len());
+    let total_chars = config.prompt.len()
+        + config.system_prompt.as_ref().map_or(0, |s| s.len())
+        + config.append_system_prompt.as_ref().map_or(0, |s| s.len());
     let estimated_tokens = estimate_tokens(total_chars);
     let model_limit = context_window_for_model(&config.model);
     if estimated_tokens > model_limit {
@@ -266,6 +268,11 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     }
 
     push_opt(&mut args, "--system-prompt", &config.system_prompt);
+    push_opt(
+        &mut args,
+        "--append-system-prompt",
+        &config.append_system_prompt,
+    );
     push_flag(&mut args, "--model", &config.model);
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
@@ -367,6 +374,11 @@ pub fn build_command(config: &AgentConfig) -> Result<BuiltCommand, AgentError> {
     }
 
     push_opt(&mut args, "--system-prompt", &config.system_prompt);
+    push_opt(
+        &mut args,
+        "--append-system-prompt",
+        &config.append_system_prompt,
+    );
     push_flag(&mut args, "--model", &config.model);
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
@@ -1718,6 +1730,7 @@ mod tests {
             max_parallel_tools: 4,
             permission_mode: PermissionMode::Default,
             system_prompt: None,
+            append_system_prompt: None,
             max_budget_usd: None,
             working_dir: None,
             mcp_config: None,

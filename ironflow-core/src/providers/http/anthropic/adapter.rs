@@ -125,7 +125,7 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             "messages": messages
         });
 
-        if let Some(ref system) = config.system_prompt {
+        if let Some(system) = config.full_system_prompt() {
             body["system"] = json!(system);
         }
 
@@ -479,6 +479,26 @@ mod tests {
         let body = a.build_request(&config).expect("build_request failed");
 
         assert_eq!(body["system"], "Be concise");
+    }
+
+    #[test]
+    fn build_request_appends_to_the_system_prompt() {
+        let a = adapter();
+        let config = AgentConfig::new("Hi")
+            .system_prompt("Be concise")
+            .append_system_prompt("Follow REVIEW.md");
+        let body = a.build_request(&config).expect("build_request failed");
+
+        assert_eq!(body["system"], "Be concise\n\nFollow REVIEW.md");
+    }
+
+    #[test]
+    fn build_request_with_only_an_appended_prompt() {
+        let a = adapter();
+        let config = AgentConfig::new("Hi").append_system_prompt("Follow REVIEW.md");
+        let body = a.build_request(&config).expect("build_request failed");
+
+        assert_eq!(body["system"], "Follow REVIEW.md");
     }
 
     #[test]

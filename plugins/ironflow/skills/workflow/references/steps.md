@@ -133,6 +133,11 @@ provider's default tools (`with_tools`), or none. An unknown profile fails the s
 a Claude CLI provider refuses any profile. Like `allow_tool`, a profile rules out
 `.output::<T>()`.
 
+`system_prompt(..)` replaces the provider's system prompt: on the Claude CLI, Claude Code
+loses its own (skills, slash commands). To give it project rules on top, use
+`append_system_prompt(..)` (`--append-system-prompt`); HTTP providers append it to the
+system prompt after a blank line.
+
 `Model::SONNET`, `Model::OPUS`, `Model::HAIKU` are aliases resolved by the provider;
 pass a full model id string for a pinned version. `verbose(true)` records the tool
 timeline shown in the dashboard.

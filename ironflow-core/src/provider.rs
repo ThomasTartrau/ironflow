@@ -31,6 +31,7 @@ use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
 mod pod;
+mod system_prompt;
 mod tool;
 mod tool_profile;
 
@@ -180,6 +181,15 @@ impl AgentInput {
 pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// Optional system prompt that sets the agent's persona or constraints.
     pub system_prompt: Option<String>,
+
+    /// Optional text appended to the system prompt instead of replacing it.
+    ///
+    /// On the Claude CLI this is `--append-system-prompt`: Claude Code keeps
+    /// its own system prompt (skills, slash commands, tools) and adds this
+    /// text after it. HTTP providers append it to
+    /// [`system_prompt`](Self::system_prompt), separated by a blank line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub append_system_prompt: Option<String>,
 
     /// The user prompt - the main instruction to the agent.
     pub prompt: String,
@@ -348,6 +358,7 @@ impl AgentConfig {
     pub fn new(prompt: &str) -> Self {
         Self {
             system_prompt: None,
+            append_system_prompt: None,
             prompt: prompt.to_string(),
             model: Model::SONNET.to_string(),
             allowed_tools: Vec::new(),
@@ -868,6 +879,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     fn change_state<T2, S2>(self) -> AgentConfig<T2, S2> {
         AgentConfig {
             system_prompt: self.system_prompt,
+            append_system_prompt: self.append_system_prompt,
             prompt: self.prompt,
             model: self.model,
             allowed_tools: self.allowed_tools,
@@ -1430,6 +1442,7 @@ mod tests {
     fn full_config() -> AgentConfig {
         AgentConfig {
             system_prompt: Some("you are helpful".to_string()),
+            append_system_prompt: Some("project rules".to_string()),
             prompt: "do stuff".to_string(),
             model: Model::OPUS.to_string(),
             allowed_tools: vec!["Read".to_string(), "Write".to_string()],
@@ -1478,6 +1491,7 @@ mod tests {
     fn agent_config_with_all_optional_fields_none() {
         let config: AgentConfig = AgentConfig {
             system_prompt: None,
+            append_system_prompt: None,
             prompt: "hello".to_string(),
             model: Model::HAIKU.to_string(),
             allowed_tools: vec![],

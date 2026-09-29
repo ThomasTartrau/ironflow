@@ -48,7 +48,7 @@ impl<C: OpenAiCompatConfig> HttpAgentAdapter for OpenAiCompatAdapter<C> {
 
         let mut messages: Vec<Value> = Vec::new();
 
-        if let Some(ref system) = config.system_prompt {
+        if let Some(system) = config.full_system_prompt() {
             messages.push(json!({
                 "role": "system",
                 "content": system
