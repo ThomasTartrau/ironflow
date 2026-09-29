@@ -58,6 +58,36 @@ fn insert_replay_candidate<K: Eq + Hash>(map: &mut HashMap<K, Step>, key: K, ste
     }
 }
 
+/// Human-readable identity of a step, for a [`EngineError::ReplayDivergence`] message.
+fn replay_identity(name: &str, kind: &StepKind) -> String {
+    format!("{name} ({kind})")
+}
+
+/// Verify that the step stored at `position` is the same step the handler
+/// just called, before any of its cached state (output, status) is trusted.
+///
+/// A resumed run replays purely by position. If the handler's code changed
+/// while the run was suspended, the step recorded at a given position may no
+/// longer be the step the new code calls there; silently trusting it would
+/// serve one step's output, vote or approval to another. Returns
+/// [`EngineError::ReplayDivergence`] when the recorded step's name or
+/// [`StepKind`] differs from what was just called; `Ok(())` otherwise.
+pub(crate) fn check_replay_identity(
+    step: &Step,
+    position: u32,
+    name: &str,
+    kind: &StepKind,
+) -> Result<(), EngineError> {
+    if step.name != name || step.kind != *kind {
+        return Err(EngineError::ReplayDivergence {
+            position,
+            expected: replay_identity(name, kind),
+            recorded: replay_identity(&step.name, &step.kind),
+        });
+    }
+    Ok(())
+}
+
 impl WorkflowContext {
     /// Load existing steps from the store for replay after approval.
     ///
@@ -154,10 +184,23 @@ impl WorkflowContext {
     ///
     /// Returns `Some(StepOutput)` if a completed step exists at the given
     /// position, `None` otherwise.
-    pub(crate) fn try_replay_step(&mut self, position: u32) -> Option<StepOutput> {
-        let step = self.replay_steps.get(&position)?;
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::ReplayDivergence`] when the step recorded at
+    /// `position` has a different name or [`StepKind`] than `name`/`kind`.
+    pub(crate) fn try_replay_step(
+        &mut self,
+        position: u32,
+        name: &str,
+        kind: &StepKind,
+    ) -> Result<Option<StepOutput>, EngineError> {
+        let Some(step) = self.replay_steps.get(&position) else {
+            return Ok(None);
+        };
+        check_replay_identity(step, position, name, kind)?;
         if step.status.state != StepStatus::Completed {
-            return None;
+            return Ok(None);
         }
         let output = StepOutput::from(step);
         // Cost is not added: `carry_over_run_totals` seeded `total_cost_usd`
@@ -171,7 +214,7 @@ impl WorkflowContext {
             position,
             "step replayed from previous execution"
         );
-        Some(output)
+        Ok(Some(output))
     }
 
     /// Internal: execute a step with full persistence lifecycle, and give its
@@ -253,7 +296,7 @@ impl WorkflowContext {
         self.position += 1;
 
         // Replay: if this step already completed in a prior execution, return cached output.
-        if let Some(output) = self.try_replay_step(position) {
+        if let Some(output) = self.try_replay_step(position, name, &kind)? {
             return Ok(output);
         }
 

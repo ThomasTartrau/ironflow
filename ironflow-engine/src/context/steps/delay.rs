@@ -11,6 +11,7 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 
 use crate::config::delay::DelayConfig;
 use crate::context::WorkflowContext;
+use crate::context::lifecycle::check_replay_identity;
 use crate::error::EngineError;
 use crate::plan::lock_plan;
 
@@ -27,7 +28,9 @@ impl WorkflowContext {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::DelaySleeping`] to suspend the run.
+    /// Returns [`EngineError::DelaySleeping`] to suspend the run. Returns
+    /// [`EngineError::ReplayDivergence`] when the step recorded at this
+    /// position has a different name or kind.
     ///
     /// # Examples
     ///
@@ -62,18 +65,24 @@ impl WorkflowContext {
 
         let position = self.next_position();
 
-        if let Some(existing) = self.replay_steps().get(&position)
-            && existing.kind == StepKind::Custom("delay".to_string())
-            && existing.status.state == StepStatus::Completed
-        {
-            self.set_last_step_ids(vec![existing.id]);
-            info!(
-                run_id = %self.run_id(),
-                step = %name,
+        if let Some(existing) = self.replay_steps().get(&position) {
+            check_replay_identity(
+                existing,
                 position,
-                "delay step replayed (already completed)"
-            );
-            return Ok(());
+                name,
+                &StepKind::Custom("delay".to_string()),
+            )?;
+
+            if existing.status.state == StepStatus::Completed {
+                self.set_last_step_ids(vec![existing.id]);
+                info!(
+                    run_id = %self.run_id(),
+                    step = %name,
+                    position,
+                    "delay step replayed (already completed)"
+                );
+                return Ok(());
+            }
         }
 
         let trace_id = step_trace_id(self.run_id(), name, position);

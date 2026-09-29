@@ -10,6 +10,7 @@ use ironflow_store::models::{NewStep, Step, StepKind, StepStatus, StepUpdate, st
 
 use crate::config::{Approvers, HUMAN_INPUT_SCHEMA_KEY, HumanInputConfig};
 use crate::context::WorkflowContext;
+use crate::context::lifecycle::check_replay_identity;
 use crate::error::EngineError;
 use crate::executor::HumanInputOutcome;
 use crate::notify::{WorkflowEvent, WorkflowInputRequiredEvent};
@@ -42,7 +43,9 @@ impl WorkflowContext {
     /// answer is given. Returns [`EngineError::HumanInputRejected`] when the
     /// input was rejected. Returns [`EngineError::StepConfig`] when the stored
     /// answer does not match `T`, or while planning when `T` cannot be built
-    /// from `{}`. Returns other [`EngineError`] variants on store failures.
+    /// from `{}`. Returns [`EngineError::ReplayDivergence`] when the step
+    /// recorded at this position has a different name or kind. Returns other
+    /// [`EngineError`] variants on store failures.
     ///
     /// # Examples
     ///
@@ -109,12 +112,8 @@ impl WorkflowContext {
         self.position += 1;
 
         // Replay: the step exists from a prior execution of this attempt.
-        if let Some(existing) = self
-            .replay_steps
-            .get(&position)
-            .filter(|step| step.kind == StepKind::HumanInput)
-            .cloned()
-        {
+        if let Some(existing) = self.replay_steps.get(&position).cloned() {
+            check_replay_identity(&existing, position, name, &StepKind::HumanInput)?;
             return self
                 .human_input_replay(name, config, position, existing)
                 .await;

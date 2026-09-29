@@ -19,6 +19,7 @@ use crate::context::failure::{
     allowed_failure_output, extract_debug_messages_from_error, extract_partial_usage_from_error,
     extract_raw_response_from_error,
 };
+use crate::context::lifecycle::check_replay_identity;
 use crate::error::EngineError;
 use crate::executor::{
     ParallelStepResult, StepArtifacts, StepOutput, StepResult, execute_step_config_intercepted,
@@ -51,7 +52,9 @@ impl WorkflowContext {
     /// # Errors
     ///
     /// Returns [`EngineError::StepConfig`] if two steps of the wave share a
-    /// name, before anything runs. Returns [`EngineError`] if any step fails.
+    /// name, before anything runs. Returns [`EngineError::ReplayDivergence`]
+    /// when the step recorded at a wave position has a different kind.
+    /// Returns [`EngineError`] if any step fails.
     ///
     /// # Examples
     ///
@@ -125,7 +128,7 @@ impl WorkflowContext {
         // other steps are launched. When the whole wave completed, nothing is
         // created or launched. Mirrors the replay-before-budget-check ordering
         // of `execute_step`.
-        let mut slots = self.replay_wave(wave_position, &steps);
+        let mut slots = self.replay_wave(wave_position, &steps)?;
         if slots.iter().all(Option::is_some) {
             let results: Vec<ParallelStepResult> = slots.into_iter().flatten().collect();
             self.last_step_ids = results.iter().map(|r| r.step_id).collect();
@@ -511,17 +514,18 @@ impl WorkflowContext {
         &mut self,
         position: u32,
         steps: &[(&str, StepConfig)],
-    ) -> Vec<Option<ParallelStepResult>> {
+    ) -> Result<Vec<Option<ParallelStepResult>>, EngineError> {
         let mut slots = Vec::with_capacity(steps.len());
         for (name, config) in steps {
-            let Some(step) = self
-                .replay_wave_steps
-                .get(&(position, (*name).to_string()))
-                .filter(|step| step.status.state == StepStatus::Completed)
-            else {
+            let Some(step) = self.replay_wave_steps.get(&(position, (*name).to_string())) else {
                 slots.push(None);
                 continue;
             };
+            check_replay_identity(step, position, name, &config.kind())?;
+            if step.status.state != StepStatus::Completed {
+                slots.push(None);
+                continue;
+            }
 
             let mut output = StepOutput::from(step);
             let step_id = step.id;
@@ -544,7 +548,7 @@ impl WorkflowContext {
                 step_id,
             }));
         }
-        slots
+        Ok(slots)
     }
 }
 

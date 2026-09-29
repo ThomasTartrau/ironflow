@@ -20,6 +20,7 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 
 use crate::config::DecisionConfig;
 use crate::context::WorkflowContext;
+use crate::context::lifecycle::check_replay_identity;
 use crate::decision::DecisionAnswers;
 use crate::error::EngineError;
 use crate::executor::{DecisionExecution, StepArtifacts, StepOutput, StepResult, execute_decision};
@@ -45,8 +46,9 @@ impl WorkflowContext {
     /// # Errors
     ///
     /// [`EngineError::NoDecisionProvider`], [`EngineError::ApprovalRequired`],
-    /// [`EngineError::Operation`], or [`EngineError::Decision`] when an answer
-    /// does not fit `T`.
+    /// [`EngineError::Operation`], [`EngineError::Decision`] when an answer
+    /// does not fit `T`, or [`EngineError::ReplayDivergence`] when the step
+    /// recorded at this position has a different name or kind.
     ///
     /// # Examples
     ///
@@ -136,9 +138,7 @@ impl WorkflowContext {
         let Some(existing) = self.replay_steps.get(&position).cloned() else {
             return Ok(None);
         };
-        if existing.kind != StepKind::Decision {
-            return Ok(None);
-        }
+        check_replay_identity(&existing, position, name, &StepKind::Decision)?;
 
         self.position += 1;
 

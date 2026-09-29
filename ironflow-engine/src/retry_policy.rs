@@ -69,6 +69,8 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::ApprovalRejected`] | a human decision, replaying cannot change it |
 /// | [`EngineError::HumanInputRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::HumanInputRejected`] | a human decision, replaying cannot change it |
+/// | [`EngineError::ReplayDivergence`] | replaying reproduces the same position divergence |
+/// | [`EngineError::HandlerVersionMismatch`] | replaying reproduces the same incompatible version |
 ///
 /// [`EngineError::Operation`] delegates to
 /// [`ironflow_core::retry::is_retryable`], so a 5xx or an agent timeout is
@@ -110,7 +112,11 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::WorkflowGuardRejected(_)
         | EngineError::Decision(_)
         | EngineError::NoDecisionProvider { .. }
-        | EngineError::DelaySleeping { .. } => false,
+        | EngineError::DelaySleeping { .. }
+        // Deterministic: replaying reproduces the same position divergence or
+        // the same incompatible handler version.
+        | EngineError::ReplayDivergence { .. }
+        | EngineError::HandlerVersionMismatch { .. } => false,
     }
 }
 
@@ -297,6 +303,27 @@ mod tests {
             stderr: "crashed".to_string(),
         }));
         assert!(is_run_retryable(&err));
+    }
+
+    #[test]
+    fn replay_divergence_is_not_retryable() {
+        let err = EngineError::ReplayDivergence {
+            position: 0,
+            expected: "clear-previous-attempt (Shell)".to_string(),
+            recorded: "kill-list-pods (Shell)".to_string(),
+        };
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn handler_version_mismatch_is_not_retryable() {
+        let err = EngineError::HandlerVersionMismatch {
+            run_id: Uuid::nil(),
+            workflow_name: "deploy".to_string(),
+            run_version: "1.0.0".to_string(),
+            current_version: "2.0.0".to_string(),
+        };
+        assert!(!is_run_retryable(&err));
     }
 
     // --- backoff ---
