@@ -1,5 +1,6 @@
 //! Concurrency: 2 runs in the queue with concurrency(2), both execute in
-//! parallel (their handlers overlap in time).
+//! parallel (their handlers overlap in time). With concurrency(1), the second
+//! run is only claimed once the first one has released its slot.
 
 mod helpers;
 
@@ -8,15 +9,16 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_worker::WorkerBuilder;
-use tokio::sync::Barrier;
-use tokio::time::timeout;
+use tokio::spawn;
+use tokio::sync::{Barrier, Semaphore};
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 use helpers::{TestApiState, make_run_json, spawn_test_api};
@@ -115,5 +117,124 @@ async fn two_runs_execute_in_parallel_with_concurrency_two() {
         distinct_ids.len(),
         2,
         "completed writes should be for 2 distinct run_ids"
+    );
+}
+
+/// Blocks every run until the test hands out a release permit.
+struct GatedHandler {
+    release: Arc<Semaphore>,
+    started: Arc<AtomicUsize>,
+}
+
+impl WorkflowHandler for GatedHandler {
+    fn name(&self) -> &str {
+        "gated-workflow"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a mut WorkflowContext,
+    ) -> Pin<Box<dyn Future<Output = Result<(), EngineError>> + Send + 'a>> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            self.release
+                .acquire()
+                .await
+                .expect("release semaphore closed")
+                .forget();
+            Ok(())
+        })
+    }
+}
+
+/// Regression for #130: a worker whose slots are all busy must not claim a
+/// run. Claiming it anyway puts it `Running` under a lease nobody refreshes,
+/// and the reaper fails it once the lease expires.
+#[tokio::test]
+async fn second_run_is_not_claimed_while_the_only_slot_is_busy() {
+    let started = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Semaphore::new(0));
+
+    let runs = vec![
+        make_run_json(Uuid::now_v7(), "gated-workflow", 0),
+        make_run_json(Uuid::now_v7(), "gated-workflow", 0),
+    ];
+    let state = Arc::new(TestApiState::new(runs));
+    let api_url = spawn_test_api(state.clone()).await;
+
+    let poll_interval = Duration::from_millis(20);
+    let worker = WorkerBuilder::new(&api_url, "test-token")
+        .provider(Arc::new(ClaudeCodeProvider::new()))
+        .register(GatedHandler {
+            release: release.clone(),
+            started: started.clone(),
+        })
+        .worker_id("worker-test")
+        .concurrency(1)
+        .poll_interval(poll_interval)
+        .lease_ttl(Duration::from_secs(5))
+        .lease_refresh_interval(Duration::from_millis(200))
+        .run_timeout(Duration::from_secs(10))
+        .build()
+        .expect("build worker");
+
+    let handle = spawn(async move {
+        if let Err(e) = worker.run().await {
+            eprintln!("worker exited with error: {e:?}");
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while started.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        1,
+        "the first run never started"
+    );
+
+    // The slot stays busy for 25 poll intervals: a worker that polls while
+    // saturated claims the second run within the first one.
+    let busy_until = Instant::now() + poll_interval * 25;
+    while state.handed_out.load(Ordering::SeqCst) < 2 && Instant::now() < busy_until {
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        state.handed_out.load(Ordering::SeqCst),
+        1,
+        "the second run was claimed while the only slot was busy"
+    );
+
+    release.add_permits(2);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let completed_count = |state: &TestApiState| {
+        state
+            .run_updates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|w| w.body.get("status").and_then(|s| s.as_str()) == Some("completed"))
+            .map(|w| w.run_id)
+            .collect::<HashSet<_>>()
+            .len()
+    };
+    while completed_count(&state) < 2 && Instant::now() < deadline {
+        sleep(Duration::from_millis(10)).await;
+    }
+    handle.abort();
+
+    assert_eq!(
+        state.handed_out.load(Ordering::SeqCst),
+        2,
+        "the second run should be claimed once the slot is free"
+    );
+    assert_eq!(started.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        completed_count(&state),
+        2,
+        "both runs should be marked Completed, got: {:?}",
+        state.all_status_bodies()
     );
 }
