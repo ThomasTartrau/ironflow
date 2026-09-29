@@ -18,7 +18,7 @@ interface FieldWrapperProps {
 	children: React.ReactNode;
 }
 
-function FieldWrapper({
+export function FieldWrapper({
 	name,
 	label,
 	description,
@@ -29,7 +29,11 @@ function FieldWrapper({
 		<div className="space-y-1.5">
 			<label className="text-sm font-medium" htmlFor={`field-${name}`}>
 				{label}
-				{required && <span className="text-destructive ml-0.5">*</span>}
+				{required && (
+					<span aria-hidden="true" className="text-destructive ml-0.5">
+						*
+					</span>
+				)}
 			</label>
 			{description && (
 				<p className="text-xs text-muted-foreground">{description}</p>

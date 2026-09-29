@@ -6,9 +6,10 @@ type Status = RunStatus | StepStatus;
 
 interface StatusBadgeProps {
 	status: Status;
+	awaitingKind?: string | null;
 }
 
-export function StatusBadge({ status }: StatusBadgeProps) {
+export function StatusBadge({ status, awaitingKind }: StatusBadgeProps) {
 	const getStatusStyles = (stat: Status): string => {
 		switch (stat) {
 			case "pending":
@@ -39,7 +40,10 @@ export function StatusBadge({ status }: StatusBadgeProps) {
 		}
 	};
 
-	const displayLabel = capitalize(status);
+	const displayLabel =
+		status === "awaiting_approval" && awaitingKind === "human_input"
+			? "Awaiting input"
+			: capitalize(status);
 
 	return (
 		<Badge

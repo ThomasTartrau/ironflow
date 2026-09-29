@@ -250,6 +250,7 @@ dashboard-check:
   script:
     - pnpm run lint
     - pnpm tsc -b --noEmit
+    - pnpm test
 
 cargo-audit:
   extends: .only-mr

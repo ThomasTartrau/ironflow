@@ -3,27 +3,39 @@ import { useRevalidator } from "react-router";
 import type { JSONSchema7 } from "json-schema";
 import type { StepResponse } from "@/app/lib/types";
 import { withToast } from "@/app/lib/api-toast";
-import { validateAgainstSchema } from "@/app/lib/json-schema";
+import {
+	validateAgainstSchema,
+	extractSchemaProperties,
+	buildDefaultValues,
+	buildAnswerSkeleton,
+	canRenderForm,
+} from "@/app/lib/json-schema";
+import { formatRemaining, formatEscalationPolicy } from "@/app/lib/format";
 import { rejectStepInput, submitStepInput } from "../_actions/actions";
+import { MarkdownContent } from "@/app/components/MarkdownContent";
+import { HumanInputField } from "./HumanInputField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Clock } from "lucide-react";
 
 interface HumanInputFormProps {
 	step: StepResponse;
 }
 
 type PendingAction = "idle" | "submitting" | "rejecting";
+type Mode = "form" | "json";
 
 interface StoredInput {
 	message: string;
 	schema: JSONSchema7 | null;
+	escalationPolicy: unknown;
 }
 
-/** Read the message and the answer schema stored on a human input step. */
+/** Read the message, answer schema and escalation policy stored on a human input step. */
 function readStoredInput(input: unknown): StoredInput {
 	if (typeof input !== "object" || input === null) {
-		return { message: "", schema: null };
+		return { message: "", schema: null, escalationPolicy: undefined };
 	}
 	const stored = input as Record<string, unknown>;
 	const message = typeof stored.message === "string" ? stored.message : "";
@@ -31,7 +43,7 @@ function readStoredInput(input: unknown): StoredInput {
 		typeof stored.schema === "object" && stored.schema !== null
 			? (stored.schema as JSONSchema7)
 			: null;
-	return { message, schema };
+	return { message, schema, escalationPolicy: stored.on_timeout };
 }
 
 interface ParsedAnswer {
@@ -52,23 +64,99 @@ function parseAnswer(raw: string, schema: JSONSchema7 | null): ParsedAnswer {
 	return { value, errors };
 }
 
+function DeadlineNotice({
+	step,
+	escalationPolicy,
+}: {
+	step: StepResponse;
+	escalationPolicy: unknown;
+}) {
+	if (
+		step.approval_deadline_at == null ||
+		step.approval_seconds_remaining == null
+	) {
+		return null;
+	}
+	const policyLabel = formatEscalationPolicy(escalationPolicy);
+	return (
+		<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+			<Clock className="w-3 h-3" />
+			<span>Expires in {formatRemaining(step.approval_seconds_remaining)}</span>
+			{policyLabel && <span>· {policyLabel}</span>}
+		</div>
+	);
+}
+
 /**
  * Answer or reject a human input step waiting on a run.
  *
- * The answer is typed as JSON and checked against the schema stored on the
- * step before it can be submitted. The server validates it again and stays
- * authoritative.
+ * When the schema's top-level properties can each be rendered as a widget,
+ * shows a generated form with a toggle to the raw JSON editor. Otherwise
+ * falls back to the JSON editor alone. Either way the answer is checked
+ * against the schema before it can be submitted; the server validates it
+ * again and stays authoritative.
  */
 export function HumanInputForm({ step }: HumanInputFormProps) {
 	const revalidator = useRevalidator();
-	const [raw, setRaw] = useState("{}");
+	const { message, schema, escalationPolicy } = readStoredInput(step.input);
+	const { properties, requiredFields } = extractSchemaProperties(schema);
+	const fieldNames = Object.keys(properties);
+	const formCapable =
+		schema !== null && fieldNames.length > 0 && canRenderForm(properties);
+
+	const [mode, setMode] = useState<Mode>(formCapable ? "form" : "json");
+	const [formValues, setFormValues] = useState<Record<string, unknown>>(() =>
+		formCapable ? buildDefaultValues(properties) : {},
+	);
+	const [raw, setRaw] = useState<string>(() =>
+		JSON.stringify(
+			formCapable
+				? buildDefaultValues(properties)
+				: buildAnswerSkeleton(schema),
+			null,
+			2,
+		),
+	);
+	const [touched, setTouched] = useState(false);
 	const [reason, setReason] = useState("");
 	const [pendingAction, setPendingAction] = useState<PendingAction>("idle");
-
-	const { message, schema } = readStoredInput(step.input);
-	const parsed = parseAnswer(raw, schema);
-	const isValid = parsed.errors.length === 0;
 	const isLoading = pendingAction !== "idle";
+
+	const jsonParsed = parseAnswer(raw, schema);
+	const currentValue = mode === "form" ? formValues : jsonParsed.value;
+	const currentErrors =
+		mode === "form"
+			? schema
+				? validateAgainstSchema(formValues, schema)
+				: []
+			: jsonParsed.errors;
+	const isValid = currentErrors.length === 0;
+	const showErrors = touched && !isValid;
+
+	const switchToJson = () => {
+		setRaw(JSON.stringify(formValues, null, 2));
+		setMode("json");
+	};
+	const switchToForm = () => {
+		try {
+			const parsedValue = JSON.parse(raw);
+			if (
+				typeof parsedValue === "object" &&
+				parsedValue !== null &&
+				!Array.isArray(parsedValue)
+			) {
+				setFormValues(parsedValue as Record<string, unknown>);
+			}
+		} catch {
+			// keep the current form values
+		}
+		setMode("form");
+	};
+
+	const updateField = (key: string, value: unknown) => {
+		setTouched(true);
+		setFormValues((prev) => ({ ...prev, [key]: value }));
+	};
 
 	const run = (action: PendingAction, promise: () => Promise<unknown>) => {
 		setPendingAction(action);
@@ -92,7 +180,7 @@ export function HumanInputForm({ step }: HumanInputFormProps) {
 
 	const handleSubmit = () =>
 		run("submitting", () =>
-			submitStepInput(step.run_id, step.id, parsed.value),
+			submitStepInput(step.run_id, step.id, currentValue),
 		);
 	const handleReject = () =>
 		run("rejecting", () =>
@@ -104,9 +192,56 @@ export function HumanInputForm({ step }: HumanInputFormProps) {
 			<div className="text-xs font-semibold text-cyan-700 dark:text-cyan-300">
 				Waiting for input: {step.name}
 			</div>
-			{message && (
-				<div className="text-sm whitespace-pre-wrap break-words">{message}</div>
+			{message && <MarkdownContent content={message} />}
+			<DeadlineNotice step={step} escalationPolicy={escalationPolicy} />
+			{formCapable && (
+				<div className="inline-flex rounded-[var(--radius-sm)] border border-border overflow-hidden text-xs w-fit">
+					<button
+						type="button"
+						onClick={switchToForm}
+						aria-pressed={mode === "form"}
+						className={`px-2 py-1 ${mode === "form" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:bg-muted"}`}
+					>
+						Form
+					</button>
+					<button
+						type="button"
+						onClick={switchToJson}
+						aria-pressed={mode === "json"}
+						className={`px-2 py-1 ${mode === "json" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:bg-muted"}`}
+					>
+						JSON
+					</button>
+				</div>
 			)}
+			<fieldset disabled={isLoading} className="space-y-3">
+				{mode === "form" && formCapable ? (
+					<div className="space-y-3">
+						{fieldNames.map((key) => (
+							<HumanInputField
+								key={key}
+								name={key}
+								schema={properties[key]}
+								value={formValues[key]}
+								onChange={(v) => updateField(key, v)}
+								required={requiredFields.has(key)}
+							/>
+						))}
+					</div>
+				) : (
+					<Textarea
+						aria-label="Answer (JSON)"
+						className="font-mono text-xs"
+						value={raw}
+						onChange={(e) => {
+							setTouched(true);
+							setRaw(e.target.value);
+						}}
+						aria-invalid={!isValid}
+						rows={6}
+					/>
+				)}
+			</fieldset>
 			{schema && (
 				<details className="text-xs">
 					<summary className="cursor-pointer text-muted-foreground">
@@ -117,18 +252,9 @@ export function HumanInputForm({ step }: HumanInputFormProps) {
 					</pre>
 				</details>
 			)}
-			<Textarea
-				aria-label="Answer (JSON)"
-				className="font-mono text-xs"
-				value={raw}
-				onChange={(e) => setRaw(e.target.value)}
-				aria-invalid={!isValid}
-				disabled={isLoading}
-				rows={6}
-			/>
-			{!isValid && (
+			{showErrors && (
 				<ul className="list-disc pl-5 text-xs text-destructive">
-					{parsed.errors.map((error) => (
+					{currentErrors.map((error) => (
 						<li key={error}>{error}</li>
 					))}
 				</ul>
