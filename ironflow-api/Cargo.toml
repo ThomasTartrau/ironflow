@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.40.9"
+version = "2.40.10"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
