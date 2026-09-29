@@ -118,6 +118,13 @@ pub struct ClaudeJsonOutput {
     /// Per-model token usage keyed by model identifier.
     #[serde(rename = "modelUsage")]
     pub model_usage: Option<Map<String, Value>>,
+    /// `true` when `result` carries an error message instead of an answer.
+    #[serde(default)]
+    pub is_error: bool,
+    /// HTTP status of the API error behind `is_error`, when the CLI reports one.
+    pub api_error_status: Option<u16>,
+    /// API error code behind `is_error`, e.g. `"claude_code_version_too_old"`.
+    pub api_error_code: Option<String>,
 }
 
 /// Token usage statistics from the `claude` CLI.
@@ -532,9 +539,62 @@ fn extract_raw_response_text(parsed: &ClaudeJsonOutput, stdout: &str) -> Option<
     None
 }
 
+/// The API error the CLI wrote in place of an answer, if any.
+///
+/// `error_*` subtypes (`error_max_budget_usd`, `error_max_turns`) are
+/// execution limits with their own handling in [`parse_response`], not API
+/// refusals: they never become [`AgentError::Api`].
+fn api_error(parsed: &ClaudeJsonOutput) -> Option<AgentError> {
+    let execution_limit = parsed
+        .subtype
+        .as_deref()
+        .is_some_and(|s| s.starts_with("error_"));
+    if !parsed.is_error || execution_limit {
+        return None;
+    }
+    let message = match &parsed.result {
+        Some(Value::String(text)) => truncate_to(text, ERROR_DETAIL_MAX_LEN),
+        Some(Value::Null) | None => "(no message from the claude CLI)".to_string(),
+        Some(other) => truncate_to(&other.to_string(), ERROR_DETAIL_MAX_LEN),
+    };
+    Some(AgentError::Api {
+        status: parsed.api_error_status,
+        code: parsed.api_error_code.clone(),
+        message,
+    })
+}
+
+/// Usage the CLI reported, kept on errors so the run totals stay accurate.
+fn partial_usage(parsed: &ClaudeJsonOutput) -> Box<PartialUsage> {
+    let usage = parsed.usage.as_ref();
+    Box::new(PartialUsage {
+        cost_usd: parsed.total_cost_usd,
+        duration_ms: parsed.duration_ms,
+        input_tokens: usage.and_then(|u| u.input_tokens),
+        cache_read_input_tokens: usage.and_then(|u| u.cache_read_input_tokens),
+        cache_creation_input_tokens: usage.and_then(|u| u.cache_creation_input_tokens),
+        output_tokens: usage.map(|u| u.total_output_tokens()),
+    })
+}
+
+/// [`AgentError::BudgetExceeded`] when the CLI stopped on `error_max_budget_usd`.
+fn budget_exceeded(parsed: &ClaudeJsonOutput, config: &AgentConfig) -> Option<AgentError> {
+    (parsed.subtype.as_deref() == Some("error_max_budget_usd")).then(|| {
+        AgentError::BudgetExceeded {
+            spent_usd: parsed.total_cost_usd.unwrap_or(0.0),
+            limit_usd: config.max_budget_usd.unwrap_or(0.0),
+            debug_messages: Vec::new(),
+            partial_usage: partial_usage(parsed),
+        }
+    })
+}
+
 /// Parse raw stdout from the `claude` CLI into an [`AgentOutput`].
 ///
 /// # Errors
+///
+/// Returns [`AgentError::Api`] if the CLI reported an API error
+/// (`is_error: true`), before any structured output extraction.
 ///
 /// Returns [`AgentError::SchemaValidation`] if the JSON cannot be parsed or
 /// if structured output was requested but not present in the response.
@@ -552,6 +612,15 @@ pub fn parse_response(
             raw_response: Some(truncate_to(stdout, RAW_RESPONSE_MAX_LEN)),
         })?;
 
+    if let Some(err) = api_error(&parsed) {
+        warn!(
+            status = ?parsed.api_error_status,
+            code = ?parsed.api_error_code,
+            "claude CLI reported an API error"
+        );
+        return Err(err);
+    }
+
     let value = if config.json_schema.is_some() {
         extract_structured_value(&parsed).ok_or_else(|| {
             warn!(
@@ -566,32 +635,13 @@ pub fn parse_response(
                 let truncated = &preview[..preview.len().min(2000)];
                 warn!(result_preview = truncated, "result field content (truncated to 2000 chars)");
             }
-            let usage = Box::new(PartialUsage {
-                cost_usd: parsed.total_cost_usd,
-                duration_ms: parsed.duration_ms,
-                input_tokens: parsed.usage.as_ref().and_then(|u| u.input_tokens),
-                cache_read_input_tokens: parsed
-                    .usage
-                    .as_ref()
-                    .and_then(|u| u.cache_read_input_tokens),
-                cache_creation_input_tokens: parsed
-                    .usage
-                    .as_ref()
-                    .and_then(|u| u.cache_creation_input_tokens),
-                output_tokens: parsed.usage.as_ref().map(|u| u.total_output_tokens()),
-            });
-
             // The budget running out is not a schema problem: retrying spends
             // more money and cannot succeed. Report it as its own error so the
             // retry layers can refuse to replay it.
-            if parsed.subtype.as_deref() == Some("error_max_budget_usd") {
-                return AgentError::BudgetExceeded {
-                    spent_usd: parsed.total_cost_usd.unwrap_or(0.0),
-                    limit_usd: config.max_budget_usd.unwrap_or(0.0),
-                    debug_messages: Vec::new(),
-                    partial_usage: usage,
-                };
+            if let Some(err) = budget_exceeded(&parsed, config) {
+                return err;
             }
+            let usage = partial_usage(&parsed);
 
             let hint = match parsed.subtype.as_deref() {
                 Some("error_max_turns") => {
@@ -613,6 +663,10 @@ pub fn parse_response(
                 raw_response,
             }
         })?
+    } else if let Some(err) = budget_exceeded(&parsed, config) {
+        // Without a schema, an exhausted budget would otherwise pass as an
+        // empty answer: the CLI leaves `result` null.
+        return Err(err);
     } else {
         parsed
             .result
@@ -969,6 +1023,7 @@ fn has_usage_data(err: &AgentError) -> bool {
 /// parse that output so cost, duration, and tokens are preserved in the error.
 ///
 /// Returns `Ok` if the JSON is a valid successful response (rare but possible),
+/// `Err(Api)` when the CLI reported an API error (`is_error: true`),
 /// `Err(BudgetExceeded)` when the CLI reported `error_max_budget_usd`,
 /// `Err(SchemaValidation)` with partial usage when structured output was
 /// requested but missing, or `Err(ProcessFailed)` as a fallback.
@@ -987,6 +1042,8 @@ pub fn handle_nonzero_exit(
             ok @ Ok(_) => return ok,
             // Always carries the usage the CLI reported before stopping.
             Err(err @ AgentError::BudgetExceeded { .. }) => return Err(err),
+            // The CLI reached the API and got an error back: report it as is.
+            Err(err @ AgentError::Api { .. }) => return Err(err),
             Err(err @ AgentError::SchemaValidation { .. }) => {
                 if has_usage_data(&err) {
                     return Err(err);

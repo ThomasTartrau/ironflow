@@ -12,7 +12,13 @@ job and pushed to
 
 - `<claude-code-version>` is the `@anthropic-ai/claude-code` npm version baked
   in. Take the one behind the `stable` dist-tag
-  (`npm view @anthropic-ai/claude-code dist-tags.stable`), with `-1`.
+  (`npm view @anthropic-ai/claude-code dist-tags.stable`), with `-1`, unless
+  it does not know every model of `Model` in ironflow-core: then take the one
+  behind `latest`. The API refuses a model to a CLI that
+  predates it (`400 claude_code_version_too_old`).
+  `scripts/check-runner-models.sh [<version>]` checks it, and the
+  `check-runner-models` CI job runs it on merge requests that change
+  `IMAGE_TAG` or the `Model` constants.
 - `<n>` is the image revision for that version: bump it after any other change
   to the Dockerfile, the base image digest included.
 

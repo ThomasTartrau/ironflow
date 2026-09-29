@@ -11,7 +11,7 @@
 //! | Operation | Retried | Not retried |
 //! |-----------|---------|-------------|
 //! | **HTTP** | Transport errors (DNS, timeout, connection refused), 5xx, 429 | SSRF blocks, 4xx (except 429), response too large |
-//! | **Agent** | Process failures, timeouts, schema validation (CLI non-determinism) | Prompt too large |
+//! | **Agent** | Process failures, timeouts, schema validation (CLI non-determinism), API errors with no status, 429 or 5xx | Prompt too large, exhausted budget, API errors with another 4xx (e.g. `claude_code_version_too_old`, unknown model) |
 //!
 //! # Examples
 //!
@@ -242,11 +242,16 @@ impl RetryPolicy {
 ///
 /// - [`OperationError::Http`] with no status (transport error) or status 5xx / 429
 /// - [`OperationError::Agent`] wrapping [`AgentError::ProcessFailed`] or [`AgentError::Timeout`]
+/// - [`OperationError::Agent`] wrapping [`AgentError::Api`] with no status, 429
+///   or 5xx (529 overloaded included)
 /// - [`OperationError::Timeout`] (operation-level timeout)
 ///
 /// # Non-retryable errors
 ///
 /// - [`OperationError::Http`] with 4xx status (except 429)
+/// - [`OperationError::Agent`] wrapping [`AgentError::Api`] with another 4xx
+///   (`claude_code_version_too_old`, unknown model): every attempt gets the
+///   same answer
 /// - [`OperationError::Agent`] wrapping [`AgentError::PromptTooLarge`] or
 ///   [`AgentError::BudgetExceeded`] (the budget is already spent, replaying it
 ///   costs money and cannot succeed)
@@ -269,6 +274,7 @@ pub fn is_retryable(error: &OperationError) -> bool {
             AgentError::HttpProvider { status_code, .. } => {
                 *status_code == 0 || *status_code >= 500
             }
+            AgentError::Api { status, .. } => status.is_none_or(is_retryable_status),
             AgentError::PromptTooLarge { .. }
             | AgentError::BudgetExceeded { .. }
             | AgentError::UnknownToolProfile { .. }

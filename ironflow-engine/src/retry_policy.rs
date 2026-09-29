@@ -261,6 +261,26 @@ mod tests {
     }
 
     #[test]
+    fn api_error_version_too_old_is_not_run_retryable() {
+        let err = EngineError::Operation(OperationError::Agent(AgentError::Api {
+            status: Some(400),
+            code: Some("claude_code_version_too_old".to_string()),
+            message: "API Error: 400".to_string(),
+        }));
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn api_error_overloaded_is_run_retryable() {
+        let err = EngineError::Operation(OperationError::Agent(AgentError::Api {
+            status: Some(529),
+            code: None,
+            message: "API Error: 529 Overloaded".to_string(),
+        }));
+        assert!(is_run_retryable(&err));
+    }
+
+    #[test]
     fn shell_failure_is_not_retryable() {
         let err = EngineError::Operation(OperationError::Shell {
             exit_code: 1,

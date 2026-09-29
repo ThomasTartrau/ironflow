@@ -11,7 +11,7 @@
 //! # Usage
 //!
 //! ```sh
-//! K8S_IMAGE=registry.gitlab.com/thomastartrau/ironflow/ironflow-claude-runner:2.1.274-1 \
+//! K8S_IMAGE=registry.gitlab.com/thomastartrau/ironflow/ironflow-claude-runner:2.1.284-1 \
 //!     cargo run --bin k8s-sandboxed
 //! ```
 

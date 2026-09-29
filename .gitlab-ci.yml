@@ -153,6 +153,23 @@ check-claude-runner-image:
       --build-arg "CLAUDE_CODE_VERSION=${RUNNER_CLAUDE_CODE_VERSION}"
       --no-push
 
+# MR check: the Claude Code version of the runner image must know every full
+# model id of `Model` (ironflow-core), or the API refuses the model with a 400
+# claude_code_version_too_old. Runs when either side changes.
+check-runner-models:
+  stage: check
+  image: node:22
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TITLE =~ /^chore: release/'
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - ironflow-core/src/operations/agent.rs
+        - docker/claude-runner/IMAGE_TAG
+        - scripts/check-runner-models.sh
+  script:
+    - scripts/check-runner-models.sh
+
 # On main, publishes the image when the Dockerfile or IMAGE_TAG changes. The
 # manual rule is a fallback to republish on demand.
 build-claude-runner-image:

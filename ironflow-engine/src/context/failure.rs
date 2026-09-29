@@ -8,6 +8,7 @@ use rust_decimal::Decimal;
 use serde_json::{Value, json, to_value};
 
 use ironflow_core::error::{AgentError, OperationError};
+use ironflow_core::retry::is_retryable;
 
 use crate::error::EngineError;
 use crate::executor::{StepArtifacts, StepOutput};
@@ -34,6 +35,8 @@ pub(super) fn is_step_retryable(err: &EngineError) -> bool {
             OperationError::Agent(
                 AgentError::UnknownToolProfile { .. } | AgentError::ToolProfileUnsupported { .. },
             ) => false,
+            // A 4xx from the model API fails the same way on every attempt.
+            OperationError::Agent(AgentError::Api { .. }) => is_retryable(op),
             OperationError::Deserialize { .. } => false,
             OperationError::Http {
                 status: Some(code), ..
@@ -156,5 +159,29 @@ mod tests {
         assert!(is_step_retryable(&agent_error(AgentError::Timeout {
             limit: Duration::from_secs(1),
         })));
+    }
+
+    fn api_error(status: Option<u16>, code: Option<&str>) -> EngineError {
+        agent_error(AgentError::Api {
+            status,
+            code: code.map(str::to_string),
+            message: "API Error".to_string(),
+        })
+    }
+
+    #[test]
+    fn api_error_4xx_is_not_step_retryable() {
+        assert!(!is_step_retryable(&api_error(
+            Some(400),
+            Some("claude_code_version_too_old")
+        )));
+        assert!(!is_step_retryable(&api_error(Some(404), None)));
+    }
+
+    #[test]
+    fn api_error_transient_is_step_retryable() {
+        assert!(is_step_retryable(&api_error(Some(529), None)));
+        assert!(is_step_retryable(&api_error(Some(429), None)));
+        assert!(is_step_retryable(&api_error(None, None)));
     }
 }
