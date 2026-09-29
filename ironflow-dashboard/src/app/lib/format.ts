@@ -92,6 +92,25 @@ export function formatAssignee(assignee: string): string {
 	return separator === -1 ? assignee : assignee.slice(separator + 1);
 }
 
+/** Labels of `EscalationPolicy`'s unit variants, serialized as bare strings. */
+const ESCALATION_UNIT_LABELS = new Map([
+	["auto_reject", "Auto-reject"],
+	["auto_approve", "Auto-approve"],
+]);
+
+/** Labels of `EscalationPolicy`'s tuple variants, serialized as `{ variant: payload }`. */
+const ESCALATION_TUPLE_LABELS = new Map<string, (payload: unknown) => string>([
+	["notify", () => "Notification"],
+	[
+		"escalate",
+		(assignee) =>
+			typeof assignee === "string"
+				? `Reassign to ${formatAssignee(assignee)}`
+				: "Reassignment",
+	],
+	["chain", () => "Escalation chain"],
+]);
+
 /**
  * Display label for an approval gate's escalation policy (`on_timeout`).
  *
@@ -99,19 +118,14 @@ export function formatAssignee(assignee: string): string {
  * bare strings, tuple variants as `{ variant: payload }`.
  */
 export function formatEscalationPolicy(policy: unknown): string | null {
-	if (policy === "auto_reject") return "Auto-reject";
-	if (policy === "auto_approve") return "Auto-approve";
-	if (typeof policy === "object" && policy !== null) {
-		if ("notify" in policy) return "Notification";
-		if ("escalate" in policy) {
-			const assignee = (policy as Record<string, unknown>).escalate;
-			return typeof assignee === "string"
-				? `Reassign to ${formatAssignee(assignee)}`
-				: "Reassignment";
-		}
-		if ("chain" in policy) return "Escalation chain";
+	if (typeof policy === "string") {
+		return ESCALATION_UNIT_LABELS.get(policy) ?? null;
 	}
-	return null;
+	if (typeof policy !== "object" || policy === null) return null;
+	const [variant, payload] = Object.entries(policy)[0] ?? [];
+	const label =
+		variant === undefined ? undefined : ESCALATION_TUPLE_LABELS.get(variant);
+	return label ? label(payload) : null;
 }
 
 /** Countdown to an SLA deadline, in seconds. Clamped at zero. */

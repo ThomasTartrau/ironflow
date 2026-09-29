@@ -32,17 +32,26 @@ beforeEach(() => {
 			disconnect() {}
 		},
 	);
-	vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-		width: 800,
-		height: 220,
-		top: 0,
-		left: 0,
-		bottom: 220,
-		right: 800,
-		x: 0,
-		y: 0,
-		toJSON() {},
-	} as DOMRect);
+	// Recharts measures the legend too: at the full chart height it would leave
+	// a zero-height plot area, so no bar would ever render.
+	vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+		function (this: HTMLElement) {
+			const height = this.classList.contains("recharts-legend-wrapper")
+				? 20
+				: 220;
+			return {
+				width: 800,
+				height,
+				top: 0,
+				left: 0,
+				bottom: height,
+				right: 800,
+				x: 0,
+				y: 0,
+				toJSON() {},
+			} as DOMRect;
+		},
+	);
 });
 
 afterEach(() => {
@@ -129,13 +138,18 @@ describe("StatsCharts", () => {
 			.getByText("Volume & Status")
 			.closest("div") as HTMLElement;
 
-		const bar = await waitFor(() => {
-			const rect = volumeCard.querySelector(".recharts-bar-rectangle");
-			expect(rect).not.toBeNull();
-			return rect as Element;
-		});
+		await waitFor(() =>
+			expect(
+				volumeCard.querySelector(".recharts-bar-rectangle"),
+			).not.toBeNull(),
+		);
 
-		fireEvent.mouseOver(bar);
+		// Recharts 3 opens the axis tooltip from the pointer position over the
+		// chart wrapper, not from a hover on the bar element itself.
+		fireEvent.mouseMove(
+			volumeCard.querySelector(".recharts-wrapper") as HTMLElement,
+			{ clientX: 400, clientY: 100 },
+		);
 
 		const tooltipWrapper = await waitFor(() => {
 			const wrapper = volumeCard.querySelector(".recharts-tooltip-wrapper");

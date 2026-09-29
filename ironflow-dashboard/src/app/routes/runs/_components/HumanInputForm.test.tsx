@@ -139,9 +139,10 @@ describe("HumanInputForm", () => {
 		]);
 		render(<RouterProvider router={router} />);
 
-		const field = await screen.findByLabelText("reply");
-		expect(field).toBeInTheDocument();
-		expect(screen.getAllByLabelText("reply")).toHaveLength(1);
+		// The label also holds the required marker ("reply*"): match its prefix.
+		const field = await screen.findByRole("textbox", { name: /^reply/ });
+		expect(field.tagName).toBe("TEXTAREA");
+		expect(screen.getAllByRole("textbox", { name: /^reply/ })).toHaveLength(1);
 		expect(submitButton()).toBeDisabled();
 
 		fireEvent.change(field, { target: { value: "sounds good" } });

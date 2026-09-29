@@ -233,9 +233,20 @@ describe("formatEscalationPolicy", () => {
 		);
 	});
 
+	it("falls back to a generic label for a reassignment without an assignee", () => {
+		expect(formatEscalationPolicy({ escalate: null })).toBe("Reassignment");
+	});
+
 	it("returns null for undefined or an unrecognized shape", () => {
 		expect(formatEscalationPolicy(undefined)).toBeNull();
 		expect(formatEscalationPolicy({ unknown: true })).toBeNull();
+		expect(formatEscalationPolicy({})).toBeNull();
+		expect(formatEscalationPolicy(42)).toBeNull();
+	});
+
+	it("does not mix up unit and tuple variants", () => {
+		expect(formatEscalationPolicy("notify")).toBeNull();
+		expect(formatEscalationPolicy({ auto_reject: null })).toBeNull();
 	});
 });
 
