@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::spawn;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::time::{sleep, timeout};
+use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -573,6 +573,12 @@ impl Worker {
                 }
             }
 
+            // Claim a run only once a slot is free: a claimed run is `Running`
+            // under a lease that nobody refreshes until it starts executing.
+            let Some(permit) = acquire_slot(&semaphore, &shutdown).await? else {
+                break;
+            };
+
             let run = self
                 .engine
                 .store()
@@ -606,14 +612,9 @@ impl Worker {
                         {
                             error!(run_id = %run.id, error = %e, "failed to mark poisoned run as failed");
                         }
+                        drop(permit);
                         continue;
                     }
-
-                    let permit = semaphore
-                        .clone()
-                        .acquire_owned()
-                        .await
-                        .map_err(|_| WorkerError::Internal("semaphore closed".to_string()))?;
 
                     idle_streak = 0;
                     let engine = self.engine.clone();
@@ -643,7 +644,7 @@ impl Worker {
 
                     let handle = spawn(async move {
                         let _permit = permit;
-                        let result = tokio::select! {
+                        let result = select! {
                             biased;
                             _ = lease_token.cancelled() => {
                                 refresher.abort();
@@ -733,6 +734,7 @@ impl Worker {
                     });
                 }
                 Ok(None) => {
+                    drop(permit);
                     #[cfg(feature = "prometheus")]
                     counter!(WORKER_POLLS_TOTAL, "result" => "miss").increment(1);
 
@@ -747,6 +749,7 @@ impl Worker {
                     sleep(backoff).await;
                 }
                 Err(e) => {
+                    drop(permit);
                     warn!(error = %e, "poll error");
                     sleep(self.poll_interval).await;
                 }
@@ -796,6 +799,27 @@ enum RunOutcome {
     Panicked(String),
     /// Run was abandoned because this worker lost its lease.
     LeaseLost(String),
+}
+
+/// Wait for a free execution slot, or give up as soon as shutdown is requested.
+///
+/// Returns `Ok(None)` on shutdown, even when a slot is free, so no run is
+/// claimed once the worker is draining.
+///
+/// # Errors
+///
+/// Returns [`WorkerError::Internal`] if the semaphore has been closed.
+async fn acquire_slot(
+    semaphore: &Arc<Semaphore>,
+    shutdown: &CancellationToken,
+) -> Result<Option<OwnedSemaphorePermit>, WorkerError> {
+    select! {
+        biased;
+        _ = shutdown.cancelled() => Ok(None),
+        permit = semaphore.clone().acquire_owned() => permit
+            .map(Some)
+            .map_err(|e| WorkerError::Internal(format!("semaphore closed: {e}"))),
+    }
 }
 
 /// Keep a run's lease alive until the run finishes or the lease is lost.
@@ -874,7 +898,7 @@ async fn shutdown_signal() {
         pending::<()>()
     };
 
-    tokio::select! {
+    select! {
         () = ctrl_c => {},
         () = terminate => {},
     }
@@ -1217,5 +1241,65 @@ mod tests {
         tracker.record_panic("wf");
         // Cooldown is 0ms, should immediately unblock
         assert!(!tracker.is_blocked("wf"));
+    }
+
+    #[tokio::test]
+    async fn acquire_slot_returns_a_permit_when_a_slot_is_free() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let shutdown = CancellationToken::new();
+
+        let permit = acquire_slot(&semaphore, &shutdown)
+            .await
+            .expect("semaphore open");
+
+        assert!(permit.is_some());
+        assert_eq!(semaphore.available_permits(), 0);
+        drop(permit);
+        assert_eq!(semaphore.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn acquire_slot_gives_up_on_shutdown_while_all_slots_are_busy() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let _busy = semaphore.clone().acquire_owned().await.expect("permit");
+        let shutdown = CancellationToken::new();
+
+        let cancel = shutdown.clone();
+        spawn(async move {
+            sleep(Duration::from_millis(20)).await;
+            cancel.cancel();
+        });
+
+        let permit = timeout(Duration::from_secs(5), acquire_slot(&semaphore, &shutdown))
+            .await
+            .expect("waiting for a slot must stop on shutdown")
+            .expect("semaphore open");
+
+        assert!(permit.is_none());
+    }
+
+    #[tokio::test]
+    async fn acquire_slot_takes_no_permit_once_shutdown_is_requested() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+
+        let permit = acquire_slot(&semaphore, &shutdown)
+            .await
+            .expect("semaphore open");
+
+        assert!(permit.is_none());
+        assert_eq!(semaphore.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn acquire_slot_fails_when_the_semaphore_is_closed() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        semaphore.close();
+        let shutdown = CancellationToken::new();
+
+        let result = acquire_slot(&semaphore, &shutdown).await;
+
+        assert!(matches!(result, Err(WorkerError::Internal(_))));
     }
 }

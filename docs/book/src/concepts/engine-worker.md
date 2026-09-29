@@ -49,11 +49,14 @@ let engine = Engine::new(store, provider)
 
 A Worker is a background process that:
 
-1. Polls the API for pending runs
-2. Acquires a lease on a run
+1. Waits for a free execution slot (`concurrency`)
+2. Polls the API for a pending run and acquires a lease on it
 3. Executes the workflow handler via the Engine
 4. Refreshes the lease periodically during execution
 5. Reports the result back to the API
+
+A saturated worker does not poll: a run is only claimed once a slot can execute
+it, so its lease never expires while it waits.
 
 ```rust,ignore
 let worker = WorkerBuilder::new(&api_url, &worker_token)
