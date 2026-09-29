@@ -194,6 +194,39 @@ pub enum AgentError {
         partial_usage: Box<PartialUsage>,
     },
 
+    /// The model API refused the request the Claude CLI sent.
+    ///
+    /// Built from a CLI result with `is_error: true`: the CLI reached the API,
+    /// got an error back and wrote it in place of an answer. Structured output
+    /// is never validated against it. [`is_retryable`](crate::retry::is_retryable)
+    /// retries it only when `status` is absent, 429 or 5xx (529 overloaded
+    /// included): a 4xx such as `claude_code_version_too_old` or an unknown
+    /// model fails the same way on every attempt.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::error::AgentError;
+    ///
+    /// let err = AgentError::Api {
+    ///     status: Some(400),
+    ///     code: Some("claude_code_version_too_old".to_string()),
+    ///     message: "API Error: 400 Claude Code 2.1.274 does not support this model".to_string(),
+    /// };
+    /// assert!(err.to_string().contains("claude_code_version_too_old"));
+    /// ```
+    #[error("claude api error ({}): {message}", api_error_context(*status, code.as_deref()))]
+    Api {
+        /// HTTP status the API answered with (`api_error_status`), absent when
+        /// the CLI did not report one.
+        status: Option<u16>,
+        /// API error code reported by the CLI (`api_error_code`), e.g.
+        /// `"claude_code_version_too_old"`.
+        code: Option<String>,
+        /// Error message printed by the CLI (its `result` field).
+        message: String,
+    },
+
     /// The prompt exceeds the model's context window.
     ///
     /// Returned before spawning the process when the estimated token count
@@ -272,6 +305,14 @@ pub enum AgentError {
         /// The profile the step asked for.
         profile: String,
     },
+}
+
+fn api_error_context(status: Option<u16>, code: Option<&str>) -> String {
+    let status = status.map_or_else(|| "no status".to_string(), |s| format!("status {s}"));
+    match code {
+        Some(code) => format!("{status}, api_error_code {code}"),
+        None => status,
+    }
 }
 
 fn list_or_none(names: &[String]) -> String {
@@ -394,6 +435,32 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "schema validation failed: expected object, got string"
+        );
+    }
+
+    #[test]
+    fn api_error_display_with_status_and_code() {
+        let err = AgentError::Api {
+            status: Some(400),
+            code: Some("claude_code_version_too_old".to_string()),
+            message: "API Error: 400 too old".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "claude api error (status 400, api_error_code claude_code_version_too_old): API Error: 400 too old"
+        );
+    }
+
+    #[test]
+    fn api_error_display_without_status_or_code() {
+        let err = AgentError::Api {
+            status: None,
+            code: None,
+            message: "API Error: Connection error.".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "claude api error (no status): API Error: Connection error."
         );
     }
 
