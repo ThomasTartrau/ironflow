@@ -72,6 +72,25 @@ pub enum TemplateError {
     #[error("registry error: {0}")]
     Registry(String),
 
+    /// The registry was reached but does not exist there: no such
+    /// repository, or no `index.toml` at its root.
+    #[error("registry not found at {url}: {reason}")]
+    RegistryNotFound {
+        /// The registry URL.
+        url: String,
+        /// What was missing.
+        reason: String,
+    },
+
+    /// The registry host could not be reached (DNS, connection, TLS, timeout).
+    #[error("registry unreachable at {url}: {reason}")]
+    RegistryUnreachable {
+        /// The registry URL.
+        url: String,
+        /// The transport failure reported by git.
+        reason: String,
+    },
+
     /// No Git tags found in the repository.
     #[error("no tags found in repository: {0}")]
     NoTagsFound(String),

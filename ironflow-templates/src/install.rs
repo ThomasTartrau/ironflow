@@ -92,6 +92,37 @@ pub fn install_template(
     })
 }
 
+/// Where `template add` installs a template when no output is given.
+///
+/// The directory is named after the Rust module the handler is registered
+/// under (`gitlab-mr-review` becomes `gitlab_mr_review`), since `mod` must
+/// find it. When `project_root/src/lib.rs` or `src/handlers.rs` defines
+/// `handlers()` (the layout `ironflow` scaffolds), the module goes next to it
+/// in `src/`; otherwise under `src/workflows/`.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// use ironflow_templates::install::default_destination;
+///
+/// let dest = default_destination(Path::new("/nonexistent"), "gitlab-mr-review");
+/// assert_eq!(dest, Path::new("/nonexistent/src/workflows/gitlab_mr_review"));
+/// ```
+pub fn default_destination(project_root: &Path, name: &str) -> PathBuf {
+    let module = name.replace('-', "_");
+    let src = project_root.join("src");
+    let handlers_in_src = ["lib.rs", "handlers.rs"].iter().any(|file| {
+        fs::read_to_string(src.join(file)).is_ok_and(|content| content.contains("fn handlers()"))
+    });
+
+    if handlers_in_src {
+        src.join(module)
+    } else {
+        src.join("workflows").join(module)
+    }
+}
+
 /// Recursively copy a directory and its contents.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), TemplateError> {
     fs::create_dir_all(dst).map_err(TemplateError::Io)?;
@@ -207,6 +238,49 @@ tokio = "1"
         install_template(&manifest, &template_dir, &dest).unwrap();
 
         assert!(dest.join("utils").join("helper.rs").exists());
+    }
+
+    #[test]
+    fn default_destination_is_a_rust_module_name() {
+        let tmp = TempDir::new().unwrap();
+
+        let dest = default_destination(tmp.path(), "gitlab-mr-review");
+
+        assert_eq!(
+            dest,
+            tmp.path()
+                .join("src")
+                .join("workflows")
+                .join("gitlab_mr_review")
+        );
+    }
+
+    #[test]
+    fn default_destination_sits_next_to_handlers_in_src() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("lib.rs"),
+            "pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {\n    vec![]\n}\n",
+        )
+        .unwrap();
+
+        let dest = default_destination(tmp.path(), "gitlab-mr-review");
+
+        assert_eq!(dest, src.join("gitlab_mr_review"));
+    }
+
+    #[test]
+    fn default_destination_ignores_lib_without_handlers() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("lib.rs"), "pub mod other;\n").unwrap();
+
+        let dest = default_destination(tmp.path(), "ci");
+
+        assert_eq!(dest, src.join("workflows").join("ci"));
     }
 
     #[test]

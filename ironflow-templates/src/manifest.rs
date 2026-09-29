@@ -61,6 +61,107 @@ pub struct TemplateManifest {
     /// The `[dependencies]` section (optional).
     #[serde(default)]
     pub dependencies: HashMap<String, DependencySpec>,
+    /// The `[requirements]` section (optional): what the installer must
+    /// provide outside of the copied source files.
+    #[serde(default)]
+    pub requirements: Requirements,
+}
+
+/// What a template needs from the project that installs it, beyond Rust
+/// dependencies. Printed after `ironflow-cli template add`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_templates::manifest::TemplateManifest;
+///
+/// let manifest = TemplateManifest::parse(r#"
+/// [template]
+/// name = "gitlab-mr-review"
+/// description = "Review merge requests"
+/// version = "0.1.0"
+///
+/// [requirements]
+/// tools = ["git"]
+/// secrets = ["gitlab_token"]
+/// "#)?;
+/// assert_eq!(manifest.requirements.tools, vec!["git"]);
+/// assert!(manifest.requirements.render().contains("gitlab_token"));
+/// # Ok::<(), ironflow_templates::error::TemplateError>(())
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Requirements {
+    /// Environment variables the installer must set.
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Workflow secrets (Ironflow secret store) the handler reads.
+    #[serde(default)]
+    pub secrets: Vec<String>,
+    /// Executables expected on the worker or in the agent runner image.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// Free-form setup steps that fit none of the lists above.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+impl Requirements {
+    /// `true` when the template declares no requirement at all.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_templates::manifest::Requirements;
+    ///
+    /// assert!(Requirements::default().is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.env.is_empty()
+            && self.secrets.is_empty()
+            && self.tools.is_empty()
+            && self.notes.is_empty()
+    }
+
+    /// Render the requirements as an indented, human-readable block, or an
+    /// empty string when there are none. Empty groups are left out.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_templates::manifest::Requirements;
+    ///
+    /// let requirements = Requirements {
+    ///     tools: vec!["git".to_string()],
+    ///     ..Requirements::default()
+    /// };
+    /// assert_eq!(
+    ///     requirements.render(),
+    ///     "Requirements:\n  tools in the runner image:\n    - git\n",
+    /// );
+    /// ```
+    pub fn render(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+
+        let groups = [
+            ("environment variables", &self.env),
+            ("workflow secrets", &self.secrets),
+            ("tools in the runner image", &self.tools),
+            ("notes", &self.notes),
+        ];
+        let mut out = String::from("Requirements:\n");
+        for (title, items) in groups {
+            if items.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("  {title}:\n"));
+            for item in items {
+                out.push_str(&format!("    - {item}\n"));
+            }
+        }
+        out
+    }
 }
 
 /// Metadata about a single template.
@@ -360,6 +461,99 @@ min_ironflow_version = "0.5.0"
     #[test]
     fn validate_name_rejects_trailing_hyphen() {
         assert!(validate_template_name("bad-").is_err());
+    }
+
+    #[test]
+    fn parse_requirements() {
+        let toml = r#"
+[template]
+name = "gitlab-mr-review"
+description = "Review"
+version = "0.1.0"
+
+[requirements]
+env = ["GITLAB_WEBHOOK_SECRET"]
+secrets = ["gitlab_token"]
+tools = ["git"]
+notes = ["Mount the workspace volume read-only in the agent pod"]
+"#;
+
+        let manifest = TemplateManifest::parse(toml).unwrap();
+        let requirements = &manifest.requirements;
+        assert_eq!(requirements.env, vec!["GITLAB_WEBHOOK_SECRET"]);
+        assert_eq!(requirements.secrets, vec!["gitlab_token"]);
+        assert_eq!(requirements.tools, vec!["git"]);
+        assert_eq!(
+            requirements.notes,
+            vec!["Mount the workspace volume read-only in the agent pod"]
+        );
+        assert!(!requirements.is_empty());
+    }
+
+    #[test]
+    fn parse_without_requirements_is_empty() {
+        let toml = r#"
+[template]
+name = "plain"
+description = "No requirements"
+version = "0.1.0"
+"#;
+
+        let manifest = TemplateManifest::parse(toml).unwrap();
+        assert!(manifest.requirements.is_empty());
+        assert!(manifest.requirements.render().is_empty());
+    }
+
+    #[test]
+    fn parse_rejects_requirements_with_wrong_type() {
+        let toml = r#"
+[template]
+name = "bad"
+description = "Bad requirements"
+version = "0.1.0"
+
+[requirements]
+tools = "git"
+"#;
+
+        let err = TemplateManifest::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("tools"), "got: {err}");
+    }
+
+    #[test]
+    fn render_requirements_lists_every_group() {
+        let requirements = Requirements {
+            env: vec!["GITLAB_WEBHOOK_SECRET".to_string()],
+            secrets: vec!["gitlab_token".to_string()],
+            tools: vec!["git".to_string()],
+            notes: vec!["Run the agent in a sandboxed pod".to_string()],
+        };
+
+        assert_eq!(
+            requirements.render(),
+            "Requirements:\n\
+             \x20 environment variables:\n\
+             \x20   - GITLAB_WEBHOOK_SECRET\n\
+             \x20 workflow secrets:\n\
+             \x20   - gitlab_token\n\
+             \x20 tools in the runner image:\n\
+             \x20   - git\n\
+             \x20 notes:\n\
+             \x20   - Run the agent in a sandboxed pod\n"
+        );
+    }
+
+    #[test]
+    fn render_requirements_skips_empty_groups() {
+        let requirements = Requirements {
+            tools: vec!["git".to_string()],
+            ..Requirements::default()
+        };
+
+        assert_eq!(
+            requirements.render(),
+            "Requirements:\n  tools in the runner image:\n    - git\n"
+        );
     }
 
     #[test]

@@ -25,6 +25,20 @@
 //!       code_review.rs
 //! ```
 //!
+//! A repository dedicated to one template can keep `template.toml` and
+//! `src/` at its root instead:
+//!
+//! ```text
+//! gitlab-mr-review/
+//!   template.toml
+//!   src/
+//!     mod.rs
+//! ```
+//!
+//! `template.toml` may also declare a `[requirements]` section (environment
+//! variables, workflow secrets, tools expected in the runner image, notes),
+//! printed after installation.
+//!
 //! # Quick start
 //!
 //! ```no_run

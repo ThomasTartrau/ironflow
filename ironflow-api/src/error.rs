@@ -132,6 +132,14 @@ pub enum ApiError {
     #[error("upstream service unavailable")]
     BadGateway(String),
 
+    /// No template registry exists at the configured URL (404).
+    #[error("template registry not found, check IRONFLOW_REGISTRY_URL")]
+    RegistryNotFound,
+
+    /// The template registry host cannot be reached (502).
+    #[error("template registry unreachable")]
+    RegistryUnreachable,
+
     /// A submitted value does not match the expected JSON schema (422).
     ///
     /// Carries one human-readable message per violation, returned to the
@@ -181,6 +189,8 @@ impl ApiError {
             ApiError::Store(_) => "DATABASE_ERROR",
             ApiError::Internal(_) => "INTERNAL_ERROR",
             ApiError::BadGateway(_) => "BAD_GATEWAY",
+            ApiError::RegistryNotFound => "REGISTRY_NOT_FOUND",
+            ApiError::RegistryUnreachable => "REGISTRY_UNREACHABLE",
             ApiError::InvalidInput(_) => "INVALID_INPUT",
         }
     }
@@ -215,6 +225,8 @@ impl ApiError {
             ApiError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::BadGateway(_) => StatusCode::BAD_GATEWAY,
+            ApiError::RegistryNotFound => StatusCode::NOT_FOUND,
+            ApiError::RegistryUnreachable => StatusCode::BAD_GATEWAY,
             ApiError::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }

@@ -20,6 +20,7 @@ import {
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { api } from "@/app/lib/api";
+import { registryErrorMessage } from "./registry-error";
 import { Badge } from "@/components/ui/badge";
 import {
 	Card,
@@ -66,12 +67,11 @@ export async function loader(_args: LoaderFunctionArgs): Promise<LoaderData> {
 			templates: res.data.templates,
 			ironflow_version: res.data.ironflow_version,
 		};
-	} catch {
+	} catch (error) {
 		return {
 			templates: [],
 			ironflow_version: "0.0.0",
-			error:
-				"Could not reach the template registry. Check your IRONFLOW_REGISTRY_URL configuration or try again later.",
+			error: registryErrorMessage(error),
 		};
 	}
 }

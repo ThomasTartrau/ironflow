@@ -41,7 +41,9 @@ pub struct RegisterResult {
 /// Looks for files named `lib.rs` or `handlers.rs` under `search_root`
 /// (typically `src/workflows/` or `src/`), searching for a function
 /// returning `Vec<Box<dyn WorkflowHandler>>`. If found, inserts:
-/// - A `mod <module_name>;` declaration
+/// - A `pub mod <module_name>;` declaration, public so the other crates of
+///   the workspace (a runtime calling the template's webhook trigger) reach
+///   its items
 /// - A `pub use <module_name>::<type_name>;` re-export
 /// - A `Box::new(<type_name>)` entry in the vec returned by `handlers()`
 ///
@@ -100,13 +102,14 @@ pub fn detect_and_register_handler(
         }
     }
 
+    let rust_module = module_name.replace('-', "_");
     Ok(RegisterResult {
         registered: false,
         message: format!(
             "Could not detect handlers() function. Add manually:\n\
              \n\
-             mod {module_name};\n\
-             pub use {module_name}::{type_name};\n\
+             pub mod {rust_module};\n\
+             pub use {rust_module}::{type_name};\n\
              \n\
              // In handlers():\n\
              Box::new({type_name}),",
@@ -147,29 +150,48 @@ fn insert_handler_simple(content: &str, rust_module: &str, type_name: &str) -> O
         t.starts_with("pub use ") && t.ends_with(';')
     })?;
 
-    // Find the ] that closes the vec in handlers()
     let handlers_idx = lines.iter().position(|l| l.contains("fn handlers()"))?;
-    let vec_close_idx = lines[handlers_idx..].iter().rposition(|l| {
-        let t = l.trim();
-        t == "]" || t == "];"
-    })?;
-    let vec_close_idx = handlers_idx + vec_close_idx;
+    let entry = format!("Box::new({type_name})");
+
+    // `vec![...]` on one line: rewrite that line. Otherwise find the `]`
+    // alone on its line that closes the vec.
+    let single_line = lines[handlers_idx..]
+        .iter()
+        .position(|l| {
+            let t = l.trim();
+            t.starts_with("vec![") && (t.ends_with(']') || t.ends_with("];"))
+        })
+        .map(|offset| handlers_idx + offset);
+    let vec_close_idx = match single_line {
+        Some(idx) => idx,
+        None => {
+            let offset = lines[handlers_idx..].iter().rposition(|l| {
+                let t = l.trim();
+                t == "]" || t == "];"
+            })?;
+            handlers_idx + offset
+        }
+    };
 
     let mut result = Vec::with_capacity(lines.len() + 3);
 
     for (i, line) in lines.iter().enumerate() {
-        result.push((*line).to_string());
+        if Some(i) == single_line {
+            result.push(append_to_single_line_vec(line, &entry));
+        } else {
+            result.push((*line).to_string());
+        }
 
         if i == last_mod_idx {
-            result.push(format!("mod {rust_module};"));
+            result.push(format!("pub mod {rust_module};"));
         }
 
         if i == last_use_idx {
             result.push(format!("pub use {rust_module}::{type_name};"));
         }
 
-        if i == vec_close_idx - 1 {
-            result.push(format!("    Box::new({type_name}),"));
+        if single_line.is_none() && i == vec_close_idx - 1 {
+            result.push(format!("    {entry},"));
         }
     }
 
@@ -178,6 +200,19 @@ fn insert_handler_simple(content: &str, rust_module: &str, type_name: &str) -> O
         output.push('\n');
     }
     Some(output)
+}
+
+/// Append `entry` to a `vec![...]` written on one line, keeping its
+/// indentation and trailing `;`.
+fn append_to_single_line_vec(line: &str, entry: &str) -> String {
+    let close = line.rfind(']').unwrap_or(line.len());
+    let (head, tail) = line.split_at(close);
+    let items = head.trim_end().trim_end_matches(',');
+    if items.trim_end().ends_with("vec![") {
+        format!("{items}{entry}{tail}")
+    } else {
+        format!("{items}, {entry}{tail}")
+    }
 }
 
 #[cfg(test)]
@@ -217,7 +252,9 @@ pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
         assert!(result.message.contains("CiPipeline"));
 
         let content = fs::read_to_string(&lib_path).unwrap();
-        assert!(content.contains("mod ci_pipeline;"));
+        // Public: other crates of the workspace (the runtime) reach the
+        // template's items, e.g. a webhook trigger.
+        assert!(content.contains("\npub mod ci_pipeline;\n"), "{content}");
         assert!(content.contains("pub use ci_pipeline::CiPipeline;"));
         assert!(content.contains("Box::new(CiPipeline),"));
     }
@@ -233,6 +270,12 @@ pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
         assert!(!result.registered);
         assert!(result.message.contains("Add manually"));
         assert!(result.message.contains("CiPipeline"));
+        assert!(
+            result.message.contains("pub mod ci_pipeline;"),
+            "{}",
+            result.message
+        );
+        assert!(result.message.contains("pub use ci_pipeline::CiPipeline;"));
     }
 
     #[test]
@@ -264,6 +307,67 @@ pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
     }
 
     #[test]
+    fn register_in_single_line_vec() {
+        let tmp = TempDir::new().unwrap();
+        let lib_path = tmp.path().join("lib.rs");
+        fs::write(
+            &lib_path,
+            "\
+mod hello;
+
+pub use hello::{Hello, HelloInput};
+
+use ironflow_engine::handler::WorkflowHandler;
+
+/// Every workflow handler of this project, boxed.
+pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
+    vec![Box::new(Hello)]
+}
+",
+        )
+        .unwrap();
+
+        let result =
+            detect_and_register_handler(tmp.path(), "gitlab-mr-review", "GitlabMrReview").unwrap();
+
+        assert!(result.registered, "{}", result.message);
+        let content = fs::read_to_string(&lib_path).unwrap();
+        assert!(content.contains("mod hello;\npub mod gitlab_mr_review;\n"));
+        assert!(content.contains("pub use gitlab_mr_review::GitlabMrReview;\n"));
+        assert!(
+            content.contains("    vec![Box::new(Hello), Box::new(GitlabMrReview)]\n"),
+            "got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn register_in_empty_single_line_vec() {
+        let tmp = TempDir::new().unwrap();
+        let lib_path = tmp.path().join("lib.rs");
+        fs::write(
+            &lib_path,
+            "\
+mod hello;
+
+pub use hello::Hello;
+
+pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
+    vec![]
+}
+",
+        )
+        .unwrap();
+
+        detect_and_register_handler(tmp.path(), "ci", "Ci").unwrap();
+
+        let content = fs::read_to_string(&lib_path).unwrap();
+        assert!(
+            content.contains("    vec![Box::new(Ci)]\n"),
+            "got:\n{content}"
+        );
+    }
+
+    #[test]
     fn hyphenated_name_uses_underscore() {
         let tmp = TempDir::new().unwrap();
         let lib_path = tmp.path().join("lib.rs");
@@ -272,7 +376,7 @@ pub fn handlers() -> Vec<Box<dyn WorkflowHandler>> {
         detect_and_register_handler(tmp.path(), "my-template", "MyTemplate").unwrap();
 
         let content = fs::read_to_string(&lib_path).unwrap();
-        assert!(content.contains("mod my_template;"));
+        assert!(content.contains("pub mod my_template;"));
         assert!(content.contains("pub use my_template::MyTemplate;"));
     }
 }

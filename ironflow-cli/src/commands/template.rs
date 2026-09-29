@@ -54,7 +54,9 @@ pub enum TemplateCommands {
         /// Registry URL (overrides config).
         #[arg(long)]
         registry_url: Option<String>,
-        /// Output directory (default: `src/workflows/<name>`).
+        /// Output directory (default: `src/<module>` next to a `src/lib.rs`
+        /// defining `handlers()`, `src/workflows/<module>` otherwise, where
+        /// `<module>` is the name in snake_case).
         #[arg(long, short)]
         output: Option<PathBuf>,
         /// Skip Ironflow version compatibility check.
@@ -226,6 +228,12 @@ fn cmd_info(source: &str, name: &str) -> Result<()> {
         for dep in deps {
             println!("  - {dep}");
         }
+    }
+
+    let requirements = manifest.requirements.render();
+    if !requirements.is_empty() {
+        println!();
+        print!("{requirements}");
     }
 
     Ok(())
