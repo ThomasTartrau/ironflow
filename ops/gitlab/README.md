@@ -83,6 +83,17 @@ let output = ctx.operation("create-issue", &gitlab.op(endpoint)).await?;
 Some GitLab REST routes are missing from the `gitlab` crate. This crate provides them
 under `endpoints`, wired the same way as any other endpoint:
 
+| Endpoint | Route |
+|---|---|
+| `merge_requests::CreateMergeRequestDiscussionNote` | `POST /projects/:id/merge_requests/:iid/discussions/:discussion_id/notes` |
+| `merge_requests::ResolveMergeRequestDiscussion` | `PUT /projects/:id/merge_requests/:iid/discussions/:discussion_id` |
+| `merge_requests::MergeRequestVersions` | `GET /projects/:id/merge_requests/:iid/versions` |
+| `merge_requests::MergeRequestVersion` | `GET /projects/:id/merge_requests/:iid/versions/:version_id` |
+| `merge_requests::DeleteMergeRequestNote` | `DELETE /projects/:id/merge_requests/:iid/notes/:note_id` |
+| `repository::MergeBase` | `GET /projects/:id/repository/merge_base` |
+
+A `204 No Content` answer (a deletion) comes back from `GitLab::op` as `Value::Null`.
+
 ```rust
 use ironflow_ops_gitlab::GitLab;
 use ironflow_ops_gitlab::endpoints::merge_requests::{
