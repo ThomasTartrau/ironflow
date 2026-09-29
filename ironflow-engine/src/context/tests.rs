@@ -13,6 +13,7 @@ use ironflow_store::models::{
     TriggerKind, step_trace_id,
 };
 use ironflow_store::store::RunStore;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -20,7 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::config::{ApprovalConfig, ShellConfig, StepConfig};
+use crate::config::delay::DelayConfig;
+use crate::config::{ApprovalConfig, DecisionConfig, HumanInputConfig, ShellConfig, StepConfig};
+use crate::decision::DecisionAnswers;
 use crate::error::EngineError;
 use crate::handler::TypedWorkflow;
 use crate::testing::{MockInterceptor, MockShellOutput};
@@ -1076,4 +1079,154 @@ fn a_normal_context_is_not_planning() {
     let ctx = create_test_context();
     assert!(!ctx.is_planning());
     assert!(ctx.plan().is_none());
+}
+
+/// The answer type used by [`context_decision_replay_divergence_on_kind_mismatch`].
+///
+/// The divergence error is returned before any answer is ever read, so the
+/// field only needs to exist for `DecisionConfig::answers::<T>()` to compile.
+#[allow(dead_code)]
+#[derive(Debug, DecisionAnswers)]
+struct DivergenceAnswers {
+    #[noul("Does this convey urgency?")]
+    is_urgent: f64,
+}
+
+/// Create a run with a single `Completed` step at position 0 under `name`/`kind`,
+/// then a context with that step already loaded into `replay_steps`.
+///
+/// Mirrors `context_approval_replay_returns_ok`'s Pending -> Running ->
+/// (terminal) transition sequence, which the in-memory store's step FSM
+/// requires.
+async fn context_with_replayed_step_at_position_zero(
+    name: &str,
+    kind: StepKind,
+) -> WorkflowContext {
+    let store = Arc::new(InMemoryStore::new());
+    let provider = create_test_provider();
+
+    let run_id = store
+        .create_run(NewRun {
+            created_by: None,
+            workflow_name: "test".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+        })
+        .await
+        .expect("failed to create run")
+        .into_run()
+        .id;
+
+    let step = store
+        .create_step(NewStep {
+            run_id,
+            trace_id: step_trace_id(run_id, name, 0),
+            name: name.to_string(),
+            kind,
+            position: 0,
+            input: None,
+            is_error_handler: false,
+        })
+        .await
+        .expect("failed to create step");
+
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Running),
+                started_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to update step to Running");
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Completed),
+                output: Some(json!({})),
+                completed_at: Some(Utc::now()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("failed to update step to Completed");
+
+    let mut ctx = WorkflowContext::new(run_id, "test".to_string(), store.clone(), provider);
+    ctx.load_replay_steps()
+        .await
+        .expect("failed to load replay steps");
+    ctx
+}
+
+#[tokio::test]
+async fn context_approval_replay_divergence_on_name_mismatch() {
+    let mut ctx = context_with_replayed_step_at_position_zero("old", StepKind::Approval).await;
+
+    let result = ctx.approval("new", ApprovalConfig::new("Continue?")).await;
+
+    assert!(matches!(
+        result.unwrap_err(),
+        EngineError::ReplayDivergence { position: 0, .. }
+    ));
+}
+
+/// The answer type used by [`context_human_input_replay_divergence_on_name_mismatch`].
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DivergenceHumanInputAnswers {
+    #[allow(dead_code)]
+    answers: Vec<String>,
+}
+
+#[tokio::test]
+async fn context_human_input_replay_divergence_on_name_mismatch() {
+    let mut ctx = context_with_replayed_step_at_position_zero("old", StepKind::HumanInput).await;
+
+    let result = ctx
+        .human_input::<DivergenceHumanInputAnswers>("new", HumanInputConfig::new("Answer?"))
+        .await;
+
+    assert!(matches!(
+        result.unwrap_err(),
+        EngineError::ReplayDivergence { position: 0, .. }
+    ));
+}
+
+#[tokio::test]
+async fn context_decision_replay_divergence_on_kind_mismatch() {
+    let mut ctx = context_with_replayed_step_at_position_zero("triage", StepKind::Shell).await;
+
+    let result = ctx
+        .decision(
+            "triage",
+            DecisionConfig::new("state").answers::<DivergenceAnswers>(),
+        )
+        .await;
+
+    assert!(matches!(
+        result.unwrap_err(),
+        EngineError::ReplayDivergence { position: 0, .. }
+    ));
+}
+
+#[tokio::test]
+async fn context_delay_replay_divergence_on_name_mismatch() {
+    let mut ctx =
+        context_with_replayed_step_at_position_zero("old", StepKind::Custom("delay".to_string()))
+            .await;
+
+    let result = ctx.delay("new", DelayConfig::from_secs(60)).await;
+
+    assert!(matches!(
+        result.unwrap_err(),
+        EngineError::ReplayDivergence { position: 0, .. }
+    ));
 }

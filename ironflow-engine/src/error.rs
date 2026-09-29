@@ -209,6 +209,55 @@ pub enum EngineError {
     /// error is raised.
     #[error("{WORKFLOW_GUARD_REJECTED_CODE}: {0}")]
     WorkflowGuardRejected(#[from] WorkflowRejection),
+
+    /// The step stored at `position` does not match the step the handler just
+    /// called: its name or its `StepKind` differ from what was recorded before
+    /// the run was suspended.
+    ///
+    /// Raised instead of silently serving another step's cached output when the
+    /// handler's code changed while the run was suspended (a deploy during a
+    /// pending approval, human input, decision escalation or delay): step
+    /// positions can shift, and without this check every step after the
+    /// divergence point would silently receive another step's output, vote or
+    /// approval.
+    #[error(
+        "replay divergence at position {position}: handler called '{expected}' but the run \
+         recorded '{recorded}' (handler changed since the run was suspended?)"
+    )]
+    ReplayDivergence {
+        /// The step position where the recorded step and the step just called
+        /// stopped matching.
+        position: u32,
+        /// Identity (`name (kind)`) of the step the handler just called.
+        expected: String,
+        /// Identity (`name (kind)`) of the step recorded at `position`.
+        recorded: String,
+    },
+
+    /// The run's handler changed since the run was created or suspended, and the
+    /// handler's current version is not declared compatible with the version the
+    /// run was created with.
+    ///
+    /// Checked before any step is replayed, on the same rule the manual retry
+    /// endpoint applies (`HANDLER_VERSION_MISMATCH`). Unlike retry, resume has no
+    /// `force` override: replaying an incompatible handler's steps risks serving
+    /// one step's cached output to another (see
+    /// [`ReplayDivergence`](EngineError::ReplayDivergence)).
+    #[error(
+        "{HANDLER_VERSION_MISMATCH_CODE}: run {run_id} for handler '{workflow_name}' was created \
+         with version {run_version}, but the handler is now at version {current_version}; \
+         resume refused (no force override for resume)"
+    )]
+    HandlerVersionMismatch {
+        /// The run that cannot be resumed.
+        run_id: uuid::Uuid,
+        /// The handler's registered name.
+        workflow_name: String,
+        /// The handler version the run was created with.
+        run_version: String,
+        /// The handler's current version.
+        current_version: String,
+    },
 }
 
 #[cfg(test)]
@@ -367,5 +416,35 @@ mod tests {
         };
         let engine_err = EngineError::from(rejection);
         assert!(engine_err.to_string().contains("cycle detected"));
+    }
+
+    #[test]
+    fn replay_divergence_display_carries_position_and_identities() {
+        let err = EngineError::ReplayDivergence {
+            position: 5,
+            expected: "resolve-base-branch (Shell)".to_string(),
+            recorded: "create-worktree (Shell)".to_string(),
+        };
+
+        let msg = err.to_string();
+        assert!(msg.contains("divergence"));
+        assert!(msg.contains("position 5"));
+        assert!(msg.contains("resolve-base-branch"));
+        assert!(msg.contains("create-worktree"));
+    }
+
+    #[test]
+    fn handler_version_mismatch_display_carries_code_and_versions() {
+        let err = EngineError::HandlerVersionMismatch {
+            run_id: uuid::Uuid::nil(),
+            workflow_name: "deploy".to_string(),
+            run_version: "1.0.0".to_string(),
+            current_version: "2.0.0".to_string(),
+        };
+
+        let msg = err.to_string();
+        assert!(msg.contains(HANDLER_VERSION_MISMATCH_CODE));
+        assert!(msg.contains("1.0.0"));
+        assert!(msg.contains("2.0.0"));
     }
 }

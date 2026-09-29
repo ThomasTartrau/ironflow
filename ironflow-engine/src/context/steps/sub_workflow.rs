@@ -20,6 +20,7 @@ use ironflow_store::models::{
 
 use crate::config::WorkflowStepConfig;
 use crate::context::WorkflowContext;
+use crate::context::lifecycle::check_replay_identity;
 use crate::error::EngineError;
 use crate::executor::SubWorkflowOutput;
 use crate::guard::WorkflowRejection;
@@ -41,7 +42,9 @@ impl WorkflowContext {
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered
     /// with the given name, or if no handler resolver is available, and
-    /// [`EngineError::Serialization`] if `input` cannot be serialized.
+    /// [`EngineError::Serialization`] if `input` cannot be serialized. Returns
+    /// [`EngineError::ReplayDivergence`] when the step recorded at this
+    /// position has a different name or kind.
     ///
     /// # Examples
     ///
@@ -164,6 +167,16 @@ impl WorkflowContext {
 
         let config = WorkflowStepConfig::new(handler.name(), payload);
         let position = self.position;
+
+        if let Some(existing) = self.replay_steps.get(&position) {
+            check_replay_identity(
+                existing,
+                position,
+                &config.workflow_name,
+                &StepKind::Workflow,
+            )?;
+        }
+
         self.position += 1;
 
         let trace_id = step_trace_id(self.run_id, &config.workflow_name, position);

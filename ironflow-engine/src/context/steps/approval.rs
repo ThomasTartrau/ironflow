@@ -8,6 +8,7 @@ use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_tra
 
 use crate::config::{ApprovalConfig, Approvers};
 use crate::context::WorkflowContext;
+use crate::context::lifecycle::check_replay_identity;
 use crate::error::EngineError;
 use crate::executor::ApprovalOutcome;
 use crate::notify::{WorkflowApprovalRequiredEvent, WorkflowEvent};
@@ -50,8 +51,9 @@ impl WorkflowContext {
     ///
     /// Returns [`EngineError::ApprovalRequired`] to pause the run on
     /// first execution. Returns [`EngineError::ApprovalRejected`] when an
-    /// interceptor refuses the gate. Returns other [`EngineError`] variants on
-    /// store failures.
+    /// interceptor refuses the gate. Returns [`EngineError::ReplayDivergence`]
+    /// when the step recorded at this position has a different name or kind.
+    /// Returns other [`EngineError`] variants on store failures.
     ///
     /// # Examples
     ///
@@ -99,9 +101,9 @@ impl WorkflowContext {
 
         // Replay: if this approval step exists from a prior execution,
         // the run was approved -- mark it completed (if not already) and continue.
-        if let Some(existing) = self.replay_steps.get(&position)
-            && existing.kind == StepKind::Approval
-        {
+        if let Some(existing) = self.replay_steps.get(&position) {
+            check_replay_identity(existing, position, name, &StepKind::Approval)?;
+
             if existing.status.state == StepStatus::AwaitingApproval {
                 self.store
                     .update_step(

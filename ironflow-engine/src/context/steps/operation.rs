@@ -31,6 +31,8 @@ impl WorkflowContext {
     /// # Errors
     ///
     /// Returns [`EngineError`] if the operation fails or the store errors.
+    /// Returns [`EngineError::ReplayDivergence`] when the step recorded at
+    /// this position has a different name or kind.
     ///
     /// # Examples
     ///
@@ -84,7 +86,7 @@ impl WorkflowContext {
         // Replay: if this step already completed in a prior execution of the
         // current attempt, return its cached output without calling
         // `op.execute` or creating a new step.
-        if let Some(mut output) = self.try_replay_step(position) {
+        if let Some(mut output) = self.try_replay_step(position, name, &kind)? {
             let step_id = self.last_step_ids.last().copied();
             output.artifacts = StepArtifacts::new(name, step_id, &[]);
             return Ok(output);

@@ -1099,7 +1099,10 @@ impl Engine {
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler matches. A
     /// failed release fails the execution with [`EngineError::Operation`],
-    /// replayed while the run has retries left.
+    /// replayed while the run has retries left. Returns
+    /// [`EngineError::HandlerVersionMismatch`] when the handler's current
+    /// version is incompatible with the run's `handler_version` -- checked
+    /// before any step is replayed.
     #[tracing::instrument(name = "engine.execute_handler_run", skip_all, fields(run_id = %run_id))]
     pub async fn execute_handler_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
@@ -1130,11 +1133,30 @@ impl Engine {
         // `Pending` after its approval, human input or escalation resolved
         // (`ExecutionMode::Workers`, `retry_count` unchanged) must not re-run
         // completed steps. A brand-new run has no steps, so this is a no-op.
-        ctx.load_replay_steps().await?;
+        //
+        // The handler version is checked first: replaying an incompatible
+        // handler's steps risks serving one step's cached output to another
+        // (`EngineError::ReplayDivergence`), so no step is replayed at all
+        // when the handler changed incompatibly since the run was created.
+        let result = if handler.is_version_compatible(run.handler_version.as_deref()) {
+            ctx.load_replay_steps().await?;
+            self.release_then_execute(run_id, handler.as_ref(), &mut ctx)
+                .await
+        } else {
+            Err(EngineError::HandlerVersionMismatch {
+                run_id,
+                workflow_name: run.workflow_name.clone(),
+                run_version: run
+                    .handler_version
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                current_version: handler
+                    .version()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "unknown".to_string()),
+            })
+        };
 
-        let result = self
-            .release_then_execute(run_id, handler.as_ref(), &mut ctx)
-            .await;
         self.finalize_run(
             run_id,
             &run.workflow_name,
@@ -1176,6 +1198,9 @@ impl Engine {
     /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
     /// Returns [`EngineError`] if execution fails or hits another approval.
     /// A failed release fails the execution with [`EngineError::Operation`].
+    /// Returns [`EngineError::HandlerVersionMismatch`] when the handler's
+    /// current version is incompatible with the run's `handler_version` --
+    /// checked before any step is replayed.
     #[tracing::instrument(name = "engine.resume_run", skip_all, fields(run_id = %run_id))]
     pub async fn resume_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
@@ -1199,11 +1224,26 @@ impl Engine {
 
         let run_start = Instant::now();
         let mut ctx = self.build_context_with_guard(&run, handler.as_ref());
-        ctx.load_replay_steps().await?;
 
-        let result = self
-            .release_then_execute(run_id, handler.as_ref(), &mut ctx)
-            .await;
+        let result = if handler.is_version_compatible(run.handler_version.as_deref()) {
+            ctx.load_replay_steps().await?;
+            self.release_then_execute(run_id, handler.as_ref(), &mut ctx)
+                .await
+        } else {
+            Err(EngineError::HandlerVersionMismatch {
+                run_id,
+                workflow_name: run.workflow_name.clone(),
+                run_version: run
+                    .handler_version
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                current_version: handler
+                    .version()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "unknown".to_string()),
+            })
+        };
+
         self.finalize_run(
             run_id,
             &run.workflow_name,
