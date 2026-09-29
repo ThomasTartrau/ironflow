@@ -40,7 +40,7 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 async-trait = "0.1"
 rust_decimal = "1"
-ironflow-api = { version = "2.40.9", path = "../ironflow-api" }
+ironflow-api = { version = "2.40.9", path = "../ironflow-api", features = ["prometheus"] }
 ironflow-auth = { version = "2.4.37", path = "../ironflow-auth" }
 ironflow-store = { version = "2.38.7", path = "../ironflow-store", features = ["store-memory"] }
 schemars = "1"
