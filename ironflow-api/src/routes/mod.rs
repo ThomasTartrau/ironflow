@@ -143,6 +143,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/runs", post(internal::create_run::create_run))
         .route("/runs/next", get(internal::pick_next_run::pick_next_run))
         .route(
+            "/runs/pending-count",
+            get(internal::count_pending_runs::count_pending_runs),
+        )
+        .route(
             "/runs/{id}",
             get(internal::get_run::get_run).put(internal::update_run::update_run),
         )

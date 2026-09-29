@@ -13,15 +13,11 @@ use uuid::Uuid;
 
 use ironflow_core::decision::DecisionProvider;
 #[cfg(feature = "prometheus")]
-use ironflow_core::metric_names::{
-    WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKER_POLLS_TOTAL, WORKER_QUEUE_DEPTH,
-};
+use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
-#[cfg(feature = "prometheus")]
-use ironflow_store::entities::RunFilter;
 use ironflow_store::entities::{LeaseRequest, RunStatus};
 use ironflow_store::error::StoreError;
 use ironflow_store::store::Store;
@@ -34,6 +30,8 @@ use crate::api_store::ApiRunStore;
 use crate::artifact_sink::ApiArtifactSink;
 use crate::error::WorkerError;
 use crate::log_pusher::LogPusher;
+#[cfg(feature = "prometheus")]
+use crate::queue_depth::QueueDepthGauge;
 
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -547,7 +545,7 @@ impl Worker {
         }
 
         #[cfg(feature = "prometheus")]
-        let mut last_gauge_update = Instant::now();
+        let mut queue_depth = QueueDepthGauge::new(&self.api_url, &self.worker_token);
 
         while !shutdown.is_cancelled() {
             // Drain outcome channel to update poison pill tracker
@@ -756,20 +754,7 @@ impl Worker {
             }
 
             #[cfg(feature = "prometheus")]
-            if last_gauge_update.elapsed() >= Duration::from_secs(5) {
-                if let Ok(stats) = self
-                    .engine
-                    .store()
-                    .get_stats(RunFilter {
-                        status: Some(RunStatus::Pending),
-                        ..RunFilter::default()
-                    })
-                    .await
-                {
-                    gauge!(WORKER_QUEUE_DEPTH).set(stats.total_runs as f64);
-                }
-                last_gauge_update = Instant::now();
-            }
+            queue_depth.refresh_if_due().await;
         }
 
         // Graceful drain: wait for all in-flight tasks to release their permits

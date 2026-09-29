@@ -30,6 +30,8 @@ pub mod api_store;
 mod artifact_sink;
 pub mod error;
 mod log_pusher;
+#[cfg(feature = "prometheus")]
+mod queue_depth;
 pub mod worker;
 
 pub use api_store::ApiRunStore;
