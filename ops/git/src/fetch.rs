@@ -1,15 +1,22 @@
 //! Fetch and push operations.
+//!
+//! Every operation here talks to a remote. Over HTTPS they authenticate with
+//! the token held in the `git_token` secret (username `oauth2`), both
+//! overridable with `token_secret` and `username`. Without that secret they
+//! fall back to the SSH agent and the git credential helper.
 
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use git2::Repository;
+use git2::{Direction, FetchOptions, PushOptions, Repository};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::helpers::{blocking, credentials_callbacks, to_value};
+use crate::helpers::{
+    GitAuth, auth_builders, blocking_authenticated, credentials_callbacks, to_value,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchPushOutput {
@@ -44,6 +51,7 @@ pub struct FetchRemote {
     repo_path: PathBuf,
     remote_name: String,
     refspecs: Vec<String>,
+    auth: GitAuth,
 }
 
 impl FetchRemote {
@@ -57,20 +65,27 @@ impl FetchRemote {
             repo_path: repo_path.into(),
             remote_name: remote_name.into(),
             refspecs: refspecs.into_iter().map(Into::into).collect(),
+            auth: GitAuth::default(),
         }
     }
 
     /// Execute and return a typed result.
-    pub async fn run(&self, _ctx: &OperationContext) -> Result<FetchPushOutput, OperationError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::Secret`] if the secret store fails, and
+    /// [`OperationError::External`] if the fetch fails. The token never
+    /// appears in the message.
+    pub async fn run(&self, ctx: &OperationContext) -> Result<FetchPushOutput, OperationError> {
         let repo_path = self.repo_path.clone();
         let remote_name = self.remote_name.clone();
         let refspecs = self.refspecs.clone();
-        blocking(move || {
+        blocking_authenticated(ctx, &self.auth, move |creds| {
             let repo = Repository::open(&repo_path)?;
             let mut remote = repo.find_remote(&remote_name)?;
             let refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-            let mut fetch_opts = git2::FetchOptions::new();
-            fetch_opts.remote_callbacks(credentials_callbacks());
+            let mut fetch_opts = FetchOptions::new();
+            fetch_opts.remote_callbacks(credentials_callbacks(creds));
             remote.fetch(&refs, Some(&mut fetch_opts), None)?;
             Ok(FetchPushOutput {
                 remote: remote_name,
@@ -98,6 +113,12 @@ impl TypedOperation for FetchRemote {
     type Output = FetchPushOutput;
 }
 
+auth_builders!(
+    FetchRemote,
+    "fetch",
+    "\"/path/to/repo\", \"origin\", vec![\"main\"]"
+);
+
 /// Push to a remote.
 ///
 /// # Examples
@@ -113,6 +134,7 @@ pub struct PushRemote {
     repo_path: PathBuf,
     remote_name: String,
     refspecs: Vec<String>,
+    auth: GitAuth,
 }
 
 impl PushRemote {
@@ -126,20 +148,27 @@ impl PushRemote {
             repo_path: repo_path.into(),
             remote_name: remote_name.into(),
             refspecs: refspecs.into_iter().map(Into::into).collect(),
+            auth: GitAuth::default(),
         }
     }
 
     /// Execute and return a typed result.
-    pub async fn run(&self, _ctx: &OperationContext) -> Result<FetchPushOutput, OperationError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::Secret`] if the secret store fails, and
+    /// [`OperationError::External`] if the push fails. The token never
+    /// appears in the message.
+    pub async fn run(&self, ctx: &OperationContext) -> Result<FetchPushOutput, OperationError> {
         let repo_path = self.repo_path.clone();
         let remote_name = self.remote_name.clone();
         let refspecs = self.refspecs.clone();
-        blocking(move || {
+        blocking_authenticated(ctx, &self.auth, move |creds| {
             let repo = Repository::open(&repo_path)?;
             let mut remote = repo.find_remote(&remote_name)?;
             let refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-            let mut push_opts = git2::PushOptions::new();
-            push_opts.remote_callbacks(credentials_callbacks());
+            let mut push_opts = PushOptions::new();
+            push_opts.remote_callbacks(credentials_callbacks(creds));
             remote.push(&refs, Some(&mut push_opts))?;
             Ok(FetchPushOutput {
                 remote: remote_name,
@@ -167,7 +196,16 @@ impl TypedOperation for PushRemote {
     type Output = FetchPushOutput;
 }
 
+auth_builders!(
+    PushRemote,
+    "fetch",
+    "\"/path/to/repo\", \"origin\", vec![\"refs/heads/main\"]"
+);
+
 /// Prune stale remote-tracking branches.
+///
+/// Connects to the remote to list its branches, then deletes the
+/// remote-tracking refs whose branch no longer exists there.
 ///
 /// # Examples
 ///
@@ -181,6 +219,7 @@ impl TypedOperation for PushRemote {
 pub struct RemotePrune {
     repo_path: PathBuf,
     remote_name: String,
+    auth: GitAuth,
 }
 
 impl RemotePrune {
@@ -189,17 +228,26 @@ impl RemotePrune {
         Self {
             repo_path: repo_path.into(),
             remote_name: remote_name.into(),
+            auth: GitAuth::default(),
         }
     }
 
     /// Execute and return a typed result.
-    pub async fn run(&self, _ctx: &OperationContext) -> Result<RemotePruneOutput, OperationError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::Secret`] if the secret store fails, and
+    /// [`OperationError::External`] if the connection or the prune fails. The
+    /// token never appears in the message.
+    pub async fn run(&self, ctx: &OperationContext) -> Result<RemotePruneOutput, OperationError> {
         let repo_path = self.repo_path.clone();
         let remote_name = self.remote_name.clone();
-        blocking(move || {
+        blocking_authenticated(ctx, &self.auth, move |creds| {
             let repo = Repository::open(&repo_path)?;
             let mut remote = repo.find_remote(&remote_name)?;
-            remote.prune(None)?;
+            let mut connection =
+                remote.connect_auth(Direction::Fetch, Some(credentials_callbacks(creds)), None)?;
+            connection.remote().prune(None)?;
             Ok(RemotePruneOutput {
                 remote: remote_name,
                 pruned: true,
@@ -226,7 +274,11 @@ impl TypedOperation for RemotePrune {
     type Output = RemotePruneOutput;
 }
 
+auth_builders!(RemotePrune, "fetch", "\"/path/to/repo\", \"origin\"");
+
 /// Get the default branch of a remote.
+///
+/// Connects to the remote and reads the branch its `HEAD` points to.
 ///
 /// # Examples
 ///
@@ -240,6 +292,7 @@ impl TypedOperation for RemotePrune {
 pub struct RemoteDefaultBranch {
     repo_path: PathBuf,
     remote_name: String,
+    auth: GitAuth,
 }
 
 impl RemoteDefaultBranch {
@@ -248,20 +301,29 @@ impl RemoteDefaultBranch {
         Self {
             repo_path: repo_path.into(),
             remote_name: remote_name.into(),
+            auth: GitAuth::default(),
         }
     }
 
     /// Execute and return a typed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::Secret`] if the secret store fails, and
+    /// [`OperationError::External`] if the connection fails or the remote
+    /// has no default branch. The token never appears in the message.
     pub async fn run(
         &self,
-        _ctx: &OperationContext,
+        ctx: &OperationContext,
     ) -> Result<RemoteDefaultBranchOutput, OperationError> {
         let repo_path = self.repo_path.clone();
         let remote_name = self.remote_name.clone();
-        blocking(move || {
+        blocking_authenticated(ctx, &self.auth, move |creds| {
             let repo = Repository::open(&repo_path)?;
-            let remote = repo.find_remote(&remote_name)?;
-            let default = remote.default_branch()?;
+            let mut remote = repo.find_remote(&remote_name)?;
+            let connection =
+                remote.connect_auth(Direction::Fetch, Some(credentials_callbacks(creds)), None)?;
+            let default = connection.default_branch()?;
             let name = default.as_str().map(String::from);
             Ok(RemoteDefaultBranchOutput {
                 remote: remote_name,
@@ -288,6 +350,12 @@ impl Operation for RemoteDefaultBranch {
 impl TypedOperation for RemoteDefaultBranch {
     type Output = RemoteDefaultBranchOutput;
 }
+
+auth_builders!(
+    RemoteDefaultBranch,
+    "fetch",
+    "\"/path/to/repo\", \"origin\""
+);
 
 #[cfg(test)]
 mod tests {

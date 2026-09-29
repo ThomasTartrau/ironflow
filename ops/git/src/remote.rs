@@ -1,4 +1,9 @@
 //! Remote operations.
+//!
+//! A URL recorded in an operation's input or returned in its output has its
+//! credentials masked (`https://***@host/...`), so a token embedded in a
+//! remote URL never lands in a step record. The remote itself keeps the URL
+//! as given.
 
 use std::path::PathBuf;
 
@@ -9,7 +14,7 @@ use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::helpers::{blocking, to_value};
+use crate::helpers::{blocking, redact_url, to_value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteCreateOutput {
@@ -93,7 +98,10 @@ impl RemoteCreate {
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
             repo.remote(&name, &url)?;
-            Ok(RemoteCreateOutput { name, url })
+            Ok(RemoteCreateOutput {
+                name,
+                url: redact_url(&url),
+            })
         })
         .await
     }
@@ -108,7 +116,9 @@ impl Operation for RemoteCreate {
         to_value(&self.run(ctx).await?)
     }
     fn input(&self) -> Option<Value> {
-        Some(serde_json::json!({ "repo_path": self.repo_path, "name": self.name, "url": self.url }))
+        Some(
+            serde_json::json!({ "repo_path": self.repo_path, "name": self.name, "url": redact_url(&self.url) }),
+        )
     }
 }
 
@@ -285,7 +295,10 @@ impl RemoteSetUrl {
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
             repo.remote_set_url(&name, &url)?;
-            Ok(RemoteSetUrlOutput { name, url })
+            Ok(RemoteSetUrlOutput {
+                name,
+                url: redact_url(&url),
+            })
         })
         .await
     }
@@ -300,7 +313,9 @@ impl Operation for RemoteSetUrl {
         to_value(&self.run(ctx).await?)
     }
     fn input(&self) -> Option<Value> {
-        Some(serde_json::json!({ "repo_path": self.repo_path, "name": self.name, "url": self.url }))
+        Some(
+            serde_json::json!({ "repo_path": self.repo_path, "name": self.name, "url": redact_url(&self.url) }),
+        )
     }
 }
 
@@ -344,7 +359,7 @@ impl RemoteList {
                     let remote = repo.find_remote(name).ok()?;
                     Some(RemoteEntry {
                         name: name.to_string(),
-                        url: remote.url().unwrap_or("").to_string(),
+                        url: redact_url(remote.url().unwrap_or("")),
                     })
                 })
                 .collect();
@@ -405,8 +420,8 @@ impl RemoteLookup {
             let remote = repo.find_remote(&name)?;
             Ok(RemoteLookupOutput {
                 name,
-                url: remote.url().unwrap_or("").to_string(),
-                pushurl: remote.pushurl().map(String::from),
+                url: redact_url(remote.url().unwrap_or("")),
+                pushurl: remote.pushurl().map(redact_url),
             })
         })
         .await
