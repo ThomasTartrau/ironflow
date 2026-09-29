@@ -10,7 +10,41 @@
 //! - [`GitRepo`] is the central handle, wrapping a repository path
 //! - Each operation is a standalone struct implementing [`Operation`](ironflow_core::operation::Operation)
 //! - All operations return `kind() == "git"`
-//! - Parameters are set at construction time, not via [`OperationContext`](ironflow_core::operation::OperationContext)
+//! - Parameters are set at construction time, not via [`OperationContext`](ironflow_core::operation::OperationContext);
+//!   the context only provides the secrets network operations authenticate with
+//!
+//! # Authentication and secrets
+//!
+//! Operations that talk to a remote ([`RepoClone`](repository::RepoClone),
+//! [`FetchRemote`](fetch::FetchRemote), [`PushRemote`](fetch::PushRemote),
+//! [`RemotePrune`](fetch::RemotePrune),
+//! [`RemoteDefaultBranch`](fetch::RemoteDefaultBranch),
+//! [`SubmoduleUpdate`](submodule::SubmoduleUpdate)) authenticate over HTTPS
+//! with the token held in the `git_token` secret, sent with the username
+//! `oauth2`. Both are overridable per operation with `.token_secret(key)` and
+//! `.username(name)`. Without that secret, they fall back to the SSH agent,
+//! the git credential helper, then libgit2's default credential.
+//!
+//! The token never reaches a step record: credentials embedded in a URL are
+//! masked as `***` in every `input()`, output and error message, and a token
+//! resolved from the secret store is scrubbed from error messages.
+//!
+//! ```no_run
+//! use ironflow_ops_git::repository::RepoClone;
+//! use ironflow_core::operation::{OperationContext, NoopSecretResolver};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+//! # let ctx = OperationContext::new(Arc::new(NoopSecretResolver));
+//! // Reads `gitlab_token` from the secret store.
+//! RepoClone::new("https://gitlab.com/group/private.git", "/tmp/review.git")
+//!     .bare(true)
+//!     .token_secret("gitlab_token")
+//!     .run(&ctx)
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! # Quick start
 //!
@@ -69,7 +103,7 @@
 //! | [`refs`] | Create, Delete, Rename, Lookup, NameToId |
 //! | [`reflog`] | Read, Append, Drop |
 //! | [`submodule`] | Add, Init, Update, Lookup, List |
-//! | [`worktree`] | Add, List, Validate, Prune |
+//! | [`worktree`] | Add (optionally detached at a commit), List, Validate, Prune, Remove |
 //! | [`config`] | Get, Set, Delete, List |
 //! | [`status`] | File, List, ShouldIgnore |
 //! | [`reset`] | Reset (soft, mixed, hard) |

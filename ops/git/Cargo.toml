@@ -19,5 +19,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]
+axum = "0.8"
+base64 = "0.22"
+ironflow-ops-common = { path = "../common", features = ["test-utils"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }

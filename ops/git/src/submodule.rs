@@ -1,15 +1,21 @@
 //! Submodule operations.
+//!
+//! A submodule URL recorded in an operation's input or returned in its output
+//! has its credentials masked (`https://***@host/...`).
 
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use git2::Repository;
+use git2::{FetchOptions, Repository, SubmoduleUpdateOptions};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::helpers::{blocking, to_value};
+use crate::helpers::{
+    GitAuth, auth_builders, blocking, blocking_authenticated, credentials_callbacks, redact_url,
+    to_value,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmoduleAddOutput {
@@ -89,7 +95,10 @@ impl SubmoduleAdd {
         blocking(move || {
             let repo = Repository::open(&repo_path)?;
             repo.submodule(&url, Path::new(&path), true)?;
-            Ok(SubmoduleAddOutput { url, path })
+            Ok(SubmoduleAddOutput {
+                url: redact_url(&url),
+                path,
+            })
         })
         .await
     }
@@ -104,7 +113,9 @@ impl Operation for SubmoduleAdd {
         to_value(&self.run(ctx).await?)
     }
     fn input(&self) -> Option<Value> {
-        Some(serde_json::json!({ "repo_path": self.repo_path, "url": self.url, "path": self.path }))
+        Some(
+            serde_json::json!({ "repo_path": self.repo_path, "url": redact_url(&self.url), "path": self.path }),
+        )
     }
 }
 
@@ -188,6 +199,7 @@ impl TypedOperation for SubmoduleInit {
 pub struct SubmoduleUpdate {
     repo_path: PathBuf,
     name: String,
+    auth: GitAuth,
 }
 
 impl SubmoduleUpdate {
@@ -196,20 +208,35 @@ impl SubmoduleUpdate {
         Self {
             repo_path: repo_path.into(),
             name: name.into(),
+            auth: GitAuth::default(),
         }
     }
 
     /// Execute and return a typed result.
+    ///
+    /// Over HTTPS, the submodule is fetched with the token held in the
+    /// `git_token` secret (username `oauth2`), see
+    /// [`SubmoduleUpdate::token_secret`] and [`SubmoduleUpdate::username`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::Secret`] if the secret store fails, and
+    /// [`OperationError::External`] if the submodule is unknown or the fetch
+    /// fails. The token never appears in the message.
     pub async fn run(
         &self,
-        _ctx: &OperationContext,
+        ctx: &OperationContext,
     ) -> Result<SubmoduleUpdateOutput, OperationError> {
         let repo_path = self.repo_path.clone();
         let name = self.name.clone();
-        blocking(move || {
+        blocking_authenticated(ctx, &self.auth, move |creds| {
             let repo = Repository::open(&repo_path)?;
             let mut sub = repo.find_submodule(&name)?;
-            sub.update(true, None)?;
+            let mut fetch_opts = FetchOptions::new();
+            fetch_opts.remote_callbacks(credentials_callbacks(creds));
+            let mut update_opts = SubmoduleUpdateOptions::new();
+            update_opts.fetch(fetch_opts);
+            sub.update(true, Some(&mut update_opts))?;
             Ok(SubmoduleUpdateOutput {
                 name,
                 updated: true,
@@ -235,6 +262,12 @@ impl Operation for SubmoduleUpdate {
 impl TypedOperation for SubmoduleUpdate {
     type Output = SubmoduleUpdateOutput;
 }
+
+auth_builders!(
+    SubmoduleUpdate,
+    "submodule",
+    "\"/path/to/repo\", \"vendor/sub\""
+);
 
 /// Look up a submodule by name.
 ///
@@ -273,7 +306,7 @@ impl SubmoduleLookup {
             let sub = repo.find_submodule(&name)?;
             Ok(SubmoduleLookupOutput {
                 name: sub.name().unwrap_or("").to_string(),
-                url: sub.url().unwrap_or("").to_string(),
+                url: redact_url(sub.url().unwrap_or("")),
                 path: sub.path().to_string_lossy().into_owned(),
                 head_id: sub.head_id().map(|o| o.to_string()),
             })
@@ -335,7 +368,7 @@ impl SubmoduleList {
                 .iter()
                 .map(|s| SubmoduleEntry {
                     name: s.name().unwrap_or("").to_string(),
-                    url: s.url().unwrap_or("").to_string(),
+                    url: redact_url(s.url().unwrap_or("")),
                     path: s.path().to_string_lossy().into_owned(),
                 })
                 .collect();

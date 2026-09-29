@@ -3,13 +3,17 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use git2::{Repository, RepositoryState};
+use git2::build::RepoBuilder;
+use git2::{FetchOptions, Repository, RepositoryState};
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::helpers::{blocking, to_value};
+use crate::helpers::{
+    GitAuth, auth_builders, blocking, blocking_authenticated, credentials_callbacks, redact_url,
+    to_value,
+};
 
 fn repo_state_label(state: RepositoryState) -> &'static str {
     match state {
@@ -167,13 +171,21 @@ impl TypedOperation for RepoOpen {
 /// Output of [`RepoClone`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoCloneOutput {
-    /// The cloned URL.
+    /// The cloned URL, with any userinfo masked as `***`.
     pub url: String,
     /// Local path of the clone.
     pub path: PathBuf,
+    /// Whether the clone is a bare repository.
+    pub bare: bool,
 }
 
 /// Clone a remote or local repository.
+///
+/// Over HTTPS, the clone authenticates with the token held in the `git_token`
+/// secret (username `oauth2`), see [`RepoClone::token_secret`] and
+/// [`RepoClone::username`]. Without that secret, it falls back to the SSH
+/// agent and the git credential helper. Any credentials embedded in the URL
+/// are masked in [`Operation::input`] and in the output.
 ///
 /// # Examples
 ///
@@ -187,6 +199,8 @@ pub struct RepoCloneOutput {
 pub struct RepoClone {
     url: String,
     path: PathBuf,
+    bare: bool,
+    auth: GitAuth,
 }
 
 impl RepoClone {
@@ -195,16 +209,48 @@ impl RepoClone {
         Self {
             url: url.into(),
             path: path.into(),
+            bare: false,
+            auth: GitAuth::default(),
         }
     }
 
+    /// Clone as a bare repository (no working directory).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_git::repository::RepoClone;
+    ///
+    /// let op = RepoClone::new("https://gitlab.com/group/repo.git", "/tmp/repo.git").bare(true);
+    /// ```
+    pub fn bare(mut self, bare: bool) -> Self {
+        self.bare = bare;
+        self
+    }
+
     /// Execute and return a typed result.
-    pub async fn run(&self, _ctx: &OperationContext) -> Result<RepoCloneOutput, OperationError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationError::Secret`] if the secret store fails, and
+    /// [`OperationError::External`] if the clone fails. Neither the token nor
+    /// URL credentials appear in the message.
+    pub async fn run(&self, ctx: &OperationContext) -> Result<RepoCloneOutput, OperationError> {
         let url = self.url.clone();
         let path = self.path.clone();
-        blocking(move || {
-            Repository::clone(&url, &path)?;
-            Ok(RepoCloneOutput { url, path })
+        let bare = self.bare;
+        blocking_authenticated(ctx, &self.auth, move |creds| {
+            let mut fetch_opts = FetchOptions::new();
+            fetch_opts.remote_callbacks(credentials_callbacks(creds));
+            RepoBuilder::new()
+                .bare(bare)
+                .fetch_options(fetch_opts)
+                .clone(&url, &path)?;
+            Ok(RepoCloneOutput {
+                url: redact_url(&url),
+                path,
+                bare,
+            })
         })
         .await
     }
@@ -221,13 +267,23 @@ impl Operation for RepoClone {
     }
 
     fn input(&self) -> Option<Value> {
-        Some(serde_json::json!({ "url": self.url, "path": self.path }))
+        Some(serde_json::json!({
+            "url": redact_url(&self.url),
+            "path": self.path,
+            "bare": self.bare,
+        }))
     }
 }
 
 impl TypedOperation for RepoClone {
     type Output = RepoCloneOutput;
 }
+
+auth_builders!(
+    RepoClone,
+    "repository",
+    "\"https://gitlab.com/group/repo.git\", \"/tmp/repo\""
+);
 
 /// Output of [`RepoDiscover`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,8 +419,10 @@ impl TypedOperation for RepoState {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
-    use crate::test_helpers::ctx;
+    use crate::test_helpers::{ctx, init_repo};
 
     #[tokio::test]
     async fn init_creates_repo() {
@@ -398,6 +456,42 @@ mod tests {
         let result = op.run(&ctx()).await.unwrap();
         assert_eq!(result.path, target);
         assert!(target.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn clone_bare_creates_repo_without_workdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        init_repo(&origin);
+
+        let target = tmp.path().join("clone.git");
+        let result = RepoClone::new(origin.to_str().unwrap(), &target)
+            .bare(true)
+            .run(&ctx())
+            .await
+            .unwrap();
+
+        assert!(result.bare);
+        let repo = Repository::open(&target).unwrap();
+        assert!(repo.is_bare());
+        assert!(target.join("HEAD").exists());
+        assert!(!target.join("file.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn clone_into_non_empty_directory_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("origin");
+        init_repo(&origin);
+        let target = tmp.path().join("busy");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep.txt"), "x").unwrap();
+
+        let result = RepoClone::new(origin.to_str().unwrap(), &target)
+            .run(&ctx())
+            .await;
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]
