@@ -89,4 +89,19 @@ describe("StatusBadge", () => {
 		expect(badge?.className).toContain("var(--status-awaiting-bg)");
 		expect(badge?.className).toContain("animate-pulse");
 	});
+
+	it('renders "Awaiting input" when status is awaiting_approval and awaitingKind is human_input', () => {
+		render(
+			<StatusBadge status="awaiting_approval" awaitingKind="human_input" />,
+		);
+		expect(screen.getByText("Awaiting input")).toBeInTheDocument();
+	});
+
+	it('still renders "Awaiting approval" when awaitingKind is a different kind or omitted', () => {
+		render(<StatusBadge status="awaiting_approval" awaitingKind="approval" />);
+		expect(screen.getByText("Awaiting Approval")).toBeInTheDocument();
+
+		render(<StatusBadge status="awaiting_approval" />);
+		expect(screen.getAllByText("Awaiting Approval")).toHaveLength(2);
+	});
 });

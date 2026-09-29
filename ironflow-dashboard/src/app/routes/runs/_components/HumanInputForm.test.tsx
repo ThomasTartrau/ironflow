@@ -1,7 +1,14 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { StepResponse } from "@/app/lib/types";
+
+vi.mock("../_actions/actions", () => ({
+	submitStepInput: vi.fn().mockResolvedValue({}),
+	rejectStepInput: vi.fn().mockResolvedValue({}),
+}));
+
+import { submitStepInput } from "../_actions/actions";
 import { HumanInputForm } from "./HumanInputForm";
 
 function stepFixture(overrides: Partial<StepResponse> = {}): StepResponse {
@@ -48,13 +55,31 @@ function submitButton(): HTMLElement {
 }
 
 describe("HumanInputForm", () => {
-	it("renders the message stored on the step", async () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("renders the message as markdown", async () => {
 		await renderForm();
 
 		expect(
 			screen.getByText("Answer the clarification questions"),
 		).toBeInTheDocument();
 		expect(screen.getByText("Expected schema")).toBeInTheDocument();
+	});
+
+	it("falls back to the JSON editor for a schema with an array property, pre-filled with a skeleton", async () => {
+		const textarea = await renderForm();
+
+		expect((textarea as HTMLTextAreaElement).value).toBe(
+			JSON.stringify({ answers: [] }, null, 2),
+		);
+		expect(
+			screen.queryByRole("button", { name: "Form" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "JSON" }),
+		).not.toBeInTheDocument();
 	});
 
 	it("disables Submit on invalid JSON", async () => {
@@ -66,8 +91,14 @@ describe("HumanInputForm", () => {
 		expect(screen.getByText(/^Invalid JSON/)).toBeInTheDocument();
 	});
 
-	it("lists schema errors and disables Submit", async () => {
-		await renderForm();
+	it("lists schema errors only after the answer is touched", async () => {
+		const textarea = await renderForm();
+
+		expect(
+			screen.queryByText('(root): missing required property "answers"'),
+		).not.toBeInTheDocument();
+
+		fireEvent.change(textarea, { target: { value: "{}" } });
 
 		expect(
 			screen.getByText('(root): missing required property "answers"'),
@@ -90,5 +121,68 @@ describe("HumanInputForm", () => {
 		await renderForm();
 
 		expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+	});
+
+	it('generates a single textarea field for a {reply: string} schema, enables Submit after typing, and submits {"reply": ...}', async () => {
+		const step = stepFixture({
+			input: {
+				message: "Please reply",
+				schema: {
+					type: "object",
+					required: ["reply"],
+					properties: { reply: { type: "string" } },
+				},
+			},
+		});
+		const router = createMemoryRouter([
+			{ path: "/", element: <HumanInputForm step={step} /> },
+		]);
+		render(<RouterProvider router={router} />);
+
+		const field = await screen.findByLabelText("reply");
+		expect(field).toBeInTheDocument();
+		expect(screen.getAllByLabelText("reply")).toHaveLength(1);
+		expect(submitButton()).toBeDisabled();
+
+		fireEvent.change(field, { target: { value: "sounds good" } });
+		expect(submitButton()).toBeEnabled();
+
+		fireEvent.click(submitButton());
+
+		await waitFor(() =>
+			expect(submitStepInput).toHaveBeenCalledWith(step.run_id, step.id, {
+				reply: "sounds good",
+			}),
+		);
+	});
+
+	it("generates radio buttons for a string enum schema", async () => {
+		const step = stepFixture({
+			input: {
+				message: "Pick an environment",
+				schema: {
+					type: "object",
+					required: ["environment"],
+					properties: {
+						environment: { type: "string", enum: ["staging", "production"] },
+					},
+				},
+			},
+		});
+		const router = createMemoryRouter([
+			{ path: "/", element: <HumanInputForm step={step} /> },
+		]);
+		render(<RouterProvider router={router} />);
+
+		const staging = await screen.findByRole("radio", { name: "staging" });
+		const production = screen.getByRole("radio", { name: "production" });
+		expect(staging).not.toBeChecked();
+		expect(production).not.toBeChecked();
+		expect(submitButton()).toBeDisabled();
+
+		fireEvent.click(staging);
+
+		expect(staging).toBeChecked();
+		expect(submitButton()).toBeEnabled();
 	});
 });

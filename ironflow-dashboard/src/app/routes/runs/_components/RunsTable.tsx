@@ -49,7 +49,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 			<Table className="table-fixed">
 				<TableHeader>
 					<TableRow>
-						<TableHead className="w-28">Status</TableHead>
+						<TableHead className="w-40">Status</TableHead>
 						<TableHead>Workflow</TableHead>
 						{hasVersions && <TableHead className="w-20">Version</TableHead>}
 						<TableHead className="w-40">Triggered by</TableHead>
@@ -75,7 +75,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 							aria-label={`View run for ${run.workflow_name}`}
 							className="cursor-pointer hover:bg-hover-bg"
 						>
-							<TableCell>
+							<TableCell className="overflow-hidden">
 								<StatusBadge status={run.status} />
 							</TableCell>
 							<TableCell className="font-mono font-medium truncate max-w-[220px]">

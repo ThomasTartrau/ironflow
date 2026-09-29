@@ -47,7 +47,7 @@ export function formatPercent(value: number, decimals = 1): string {
 }
 
 export function formatCost(usd: number): string {
-	if (usd === 0) return "$0";
+	if (usd < 0.01) return `$${usd.toFixed(4)}`;
 	return `$${usd.toFixed(2)}`;
 }
 
@@ -90,6 +90,28 @@ export function formatBytes(bytes: number): string {
 export function formatAssignee(assignee: string): string {
 	const separator = assignee.indexOf(":");
 	return separator === -1 ? assignee : assignee.slice(separator + 1);
+}
+
+/**
+ * Display label for an approval gate's escalation policy (`on_timeout`).
+ *
+ * Mirrors the serde representation of `EscalationPolicy`: unit variants as
+ * bare strings, tuple variants as `{ variant: payload }`.
+ */
+export function formatEscalationPolicy(policy: unknown): string | null {
+	if (policy === "auto_reject") return "Auto-reject";
+	if (policy === "auto_approve") return "Auto-approve";
+	if (typeof policy === "object" && policy !== null) {
+		if ("notify" in policy) return "Notification";
+		if ("escalate" in policy) {
+			const assignee = (policy as Record<string, unknown>).escalate;
+			return typeof assignee === "string"
+				? `Reassign to ${formatAssignee(assignee)}`
+				: "Reassignment";
+		}
+		if ("chain" in policy) return "Escalation chain";
+	}
+	return null;
 }
 
 /** Countdown to an SLA deadline, in seconds. Clamped at zero. */

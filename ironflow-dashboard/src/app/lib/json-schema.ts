@@ -42,6 +42,99 @@ export function buildDefaultValues(
 	return initial;
 }
 
+export interface RadioOption {
+	value: string;
+	label: string;
+}
+
+export type HumanInputFieldKind =
+	| { kind: "textarea" }
+	| { kind: "radio"; options: RadioOption[] }
+	| { kind: "checkbox" }
+	| { kind: "number"; integer: boolean; minimum?: number; maximum?: number }
+	| { kind: "unsupported" };
+
+function extractRadioOptions(schema: JSONSchema7): RadioOption[] | null {
+	if (
+		Array.isArray(schema.enum) &&
+		schema.enum.every((v) => typeof v === "string")
+	) {
+		return schema.enum.map((v) => ({ value: v as string, label: v as string }));
+	}
+	if (Array.isArray(schema.oneOf)) {
+		const options: RadioOption[] = [];
+		for (const sub of schema.oneOf) {
+			if (typeof sub === "boolean" || typeof sub.const !== "string")
+				return null;
+			options.push({
+				value: sub.const,
+				label: typeof sub.title === "string" ? sub.title : sub.const,
+			});
+		}
+		return options.length > 0 ? options : null;
+	}
+	return null;
+}
+
+/** Which widget `HumanInputField` should render for a top-level property schema. */
+export function classifyHumanInputField(
+	schema: JSONSchema7,
+): HumanInputFieldKind {
+	if (schema.type === "boolean") return { kind: "checkbox" };
+	if (schema.type === "integer" || schema.type === "number") {
+		return {
+			kind: "number",
+			integer: schema.type === "integer",
+			minimum: schema.minimum,
+			maximum: schema.maximum,
+		};
+	}
+	if (schema.type === "string") {
+		const options = extractRadioOptions(schema);
+		return options ? { kind: "radio", options } : { kind: "textarea" };
+	}
+	return { kind: "unsupported" };
+}
+
+/** Whether every top-level property can be rendered as a field (no nesting, arrays, or unsupported unions). */
+export function canRenderForm(
+	properties: Record<string, JSONSchema7>,
+): boolean {
+	return Object.values(properties).every(
+		(p) => classifyHumanInputField(p).kind !== "unsupported",
+	);
+}
+
+function emptySkeletonValue(prop: JSONSchema7 | undefined): unknown {
+	switch (prop?.type) {
+		case "boolean":
+			return false;
+		case "integer":
+		case "number":
+			return 0;
+		case "array":
+			return [];
+		case "object":
+			return {};
+		default:
+			return "";
+	}
+}
+
+/** Skeleton JSON of the required properties, e.g. `{"reply": ""}` instead of `{}`, for the JSON-editor fallback. */
+export function buildAnswerSkeleton(
+	schema: JSONSchema7 | null,
+): Record<string, unknown> {
+	const { properties, requiredFields } = extractSchemaProperties(schema);
+	const skeleton: Record<string, unknown> = {};
+	for (const key of requiredFields) {
+		const prop = properties[key];
+		skeleton[key] =
+			prop?.default !== undefined ? prop.default : emptySkeletonValue(prop);
+	}
+	return skeleton;
+}
+
 type JsonType =
 	| "object"
 	| "array"

@@ -99,7 +99,7 @@ export function ExecutionPlanGraph({ plan }: ExecutionPlanGraphProps) {
 	return (
 		<div className="space-y-2" data-testid="execution-plan">
 			<div className="flex items-baseline gap-2 text-xs text-muted-foreground">
-				<span className="font-mono">{plan.workflow}</span>
+				<span className="font-mono">Plan: {plan.workflow}</span>
 				{plan.estimated_duration_ms != null && (
 					<span>~{formatDuration(plan.estimated_duration_ms)}</span>
 				)}

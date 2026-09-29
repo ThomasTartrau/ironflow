@@ -16,6 +16,7 @@ export function StatsCards({ stats }: StatsCardsProps) {
 			<StatCard
 				label="Total Runs"
 				value={stats.total_runs}
+				hint="All time"
 				icon={Activity}
 				iconClassName="bg-chart-1/15 text-chart-1"
 			/>
