@@ -47,7 +47,7 @@ export function formatPercent(value: number, decimals = 1): string {
 }
 
 export function formatCost(usd: number): string {
-	if (usd === 0) return "$0";
+	if (usd < 0.01) return `$${usd.toFixed(4)}`;
 	return `$${usd.toFixed(2)}`;
 }
 
@@ -90,6 +90,42 @@ export function formatBytes(bytes: number): string {
 export function formatAssignee(assignee: string): string {
 	const separator = assignee.indexOf(":");
 	return separator === -1 ? assignee : assignee.slice(separator + 1);
+}
+
+/** Labels of `EscalationPolicy`'s unit variants, serialized as bare strings. */
+const ESCALATION_UNIT_LABELS = new Map([
+	["auto_reject", "Auto-reject"],
+	["auto_approve", "Auto-approve"],
+]);
+
+/** Labels of `EscalationPolicy`'s tuple variants, serialized as `{ variant: payload }`. */
+const ESCALATION_TUPLE_LABELS = new Map<string, (payload: unknown) => string>([
+	["notify", () => "Notification"],
+	[
+		"escalate",
+		(assignee) =>
+			typeof assignee === "string"
+				? `Reassign to ${formatAssignee(assignee)}`
+				: "Reassignment",
+	],
+	["chain", () => "Escalation chain"],
+]);
+
+/**
+ * Display label for an approval gate's escalation policy (`on_timeout`).
+ *
+ * Mirrors the serde representation of `EscalationPolicy`: unit variants as
+ * bare strings, tuple variants as `{ variant: payload }`.
+ */
+export function formatEscalationPolicy(policy: unknown): string | null {
+	if (typeof policy === "string") {
+		return ESCALATION_UNIT_LABELS.get(policy) ?? null;
+	}
+	if (typeof policy !== "object" || policy === null) return null;
+	const [variant, payload] = Object.entries(policy)[0] ?? [];
+	const label =
+		variant === undefined ? undefined : ESCALATION_TUPLE_LABELS.get(variant);
+	return label ? label(payload) : null;
 }
 
 /** Countdown to an SLA deadline, in seconds. Clamped at zero. */

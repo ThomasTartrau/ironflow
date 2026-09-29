@@ -4,6 +4,7 @@ import {
 	formatAssignee,
 	formatBytes,
 	formatDuration,
+	formatEscalationPolicy,
 	formatPercent,
 	formatCost,
 	formatRemaining,
@@ -202,6 +203,50 @@ describe("formatAssignee", () => {
 
 	it("returns an unprefixed value unchanged", () => {
 		expect(formatAssignee("release-managers")).toBe("release-managers");
+	});
+});
+
+describe("formatEscalationPolicy", () => {
+	it("formats auto_reject", () => {
+		expect(formatEscalationPolicy("auto_reject")).toBe("Auto-reject");
+	});
+
+	it("formats auto_approve", () => {
+		expect(formatEscalationPolicy("auto_approve")).toBe("Auto-approve");
+	});
+
+	it("formats a reassignment", () => {
+		expect(formatEscalationPolicy({ escalate: "group:sre" })).toBe(
+			"Reassign to sre",
+		);
+	});
+
+	it("formats a notification", () => {
+		expect(
+			formatEscalationPolicy({ notify: [{ webhook: { url: "https://x" } }] }),
+		).toBe("Notification");
+	});
+
+	it("formats a chain", () => {
+		expect(formatEscalationPolicy({ chain: ["auto_reject"] })).toBe(
+			"Escalation chain",
+		);
+	});
+
+	it("falls back to a generic label for a reassignment without an assignee", () => {
+		expect(formatEscalationPolicy({ escalate: null })).toBe("Reassignment");
+	});
+
+	it("returns null for undefined or an unrecognized shape", () => {
+		expect(formatEscalationPolicy(undefined)).toBeNull();
+		expect(formatEscalationPolicy({ unknown: true })).toBeNull();
+		expect(formatEscalationPolicy({})).toBeNull();
+		expect(formatEscalationPolicy(42)).toBeNull();
+	});
+
+	it("does not mix up unit and tuple variants", () => {
+		expect(formatEscalationPolicy("notify")).toBeNull();
+		expect(formatEscalationPolicy({ auto_reject: null })).toBeNull();
 	});
 });
 

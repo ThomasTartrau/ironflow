@@ -115,6 +115,7 @@ export function Component() {
 	);
 	const pendingInputs = shownSteps.filter(isPendingInput);
 	const awaitingInput = steps.some(isPendingInput);
+	const awaitingStep = steps.find((s) => s.status === "awaiting_approval");
 
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
@@ -131,7 +132,7 @@ export function Component() {
 			description={`Run ${run.id}`}
 			titleItem={
 				<div className="flex items-center gap-2">
-					<StatusBadge status={run.status} />
+					<StatusBadge status={run.status} awaitingKind={awaitingStep?.kind} />
 					<TriggerBadge trigger={run.trigger} />
 					<RunActions run={run} awaitingInput={awaitingInput} />
 				</div>

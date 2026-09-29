@@ -340,7 +340,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 				>
 					{step.kind}
 				</Badge>
-				<StatusBadge status={step.status} />
+				<StatusBadge status={step.status} awaitingKind={step.kind} />
 				<ApprovalSla step={step} />
 				<ApprovalProgress step={step} />
 				<span className="text-xs text-muted-foreground ml-auto shrink-0">
@@ -767,7 +767,7 @@ function StepRow({ step }: { step: StepResponse }) {
 				</TableCell>
 				<TableCell>
 					<div className="flex items-center gap-2">
-						<StatusBadge status={step.status} />
+						<StatusBadge status={step.status} awaitingKind={step.kind} />
 						<ApprovalSla step={step} />
 						<ApprovalProgress step={step} />
 					</div>
