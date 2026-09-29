@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.17](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.1.16...ironflow-ops-git-v0.1.17) - 2026-09-29
+
+### Fixed
+
+- #132 authenticate git network ops via secret store and mask URLs
+
 ## [0.1.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-git-v0.1.3...ironflow-ops-git-v0.1.4) - 2026-09-14
 
 ### Added
