@@ -214,6 +214,98 @@ async fn postgres_provider_account_observation_guard_and_history() {
 
 #[tokio::test]
 #[ignore]
+async fn postgres_provider_account_windows_round_trip_scope_and_status() {
+    let store = get_store().await;
+    let account = store
+        .create_provider_account(new_account(&unique("scope"), "claude_subscription"))
+        .await
+        .unwrap();
+    let at = Utc::now();
+    let scoped = NewAccountWindow {
+        status: AccountWindowStatus::AllowedWarning,
+        model_scope: Some("opus".to_string()),
+        ..window("seven_day", 0.9, at)
+    };
+    let global = NewAccountWindow {
+        status: AccountWindowStatus::Rejected,
+        ..window("seven_day", 1.0, at)
+    };
+    let windows = store
+        .record_provider_account_observation(
+            account.id,
+            NewProviderAccountObservation {
+                windows: vec![scoped, global],
+                auth_failed: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    // `model_scope = ''` is the stored form of `None` and sorts first.
+    let read: Vec<_> = windows
+        .iter()
+        .map(|w| (w.window.as_str(), w.model_scope.as_deref(), w.status))
+        .collect();
+    assert_eq!(
+        read,
+        vec![
+            ("seven_day", None, AccountWindowStatus::Rejected),
+            (
+                "seven_day",
+                Some("opus"),
+                AccountWindowStatus::AllowedWarning
+            ),
+        ]
+    );
+
+    let history = store
+        .list_provider_account_usage(account.id, at - TimeDelta::minutes(1))
+        .await
+        .unwrap();
+    let mut scopes: Vec<_> = history
+        .iter()
+        .map(|p| (p.model_scope.as_deref(), p.status))
+        .collect();
+    scopes.sort_by_key(|(scope, _)| *scope);
+    assert_eq!(
+        scopes,
+        vec![
+            (None, AccountWindowStatus::Rejected),
+            (Some("opus"), AccountWindowStatus::AllowedWarning),
+        ]
+    );
+    store.delete_provider_account(account.id).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn postgres_list_provider_accounts_total_past_the_last_page() {
+    let store = get_store().await;
+    let kind = unique("kind");
+    for _ in 0..3 {
+        store
+            .create_provider_account(new_account(&unique("paged"), &kind))
+            .await
+            .unwrap();
+    }
+    let page = store
+        .list_provider_accounts(Some(kind.clone()), 2, 2)
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.total, 3);
+
+    // The total no longer comes from the returned rows: an empty page still carries it.
+    let past = store
+        .list_provider_accounts(Some(kind), 5, 2)
+        .await
+        .unwrap();
+    assert!(past.items.is_empty());
+    assert_eq!(past.total, 3);
+}
+
+#[tokio::test]
+#[ignore]
 async fn postgres_provider_account_candidates_count_running_steps_and_delete_nulls_steps() {
     let store = get_store().await;
     let kind = unique("kind");

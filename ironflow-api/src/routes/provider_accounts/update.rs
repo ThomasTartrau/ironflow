@@ -7,7 +7,9 @@ use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
 
-use crate::entities::{ProviderAccountResponse, UpdateProviderAccountRequest};
+#[cfg(feature = "openapi")]
+use crate::entities::ProviderAccountResponse;
+use crate::entities::UpdateProviderAccountRequest;
 use crate::error::ApiError;
 use crate::provider_accounts::{self, AccountScope};
 use crate::response::ok;

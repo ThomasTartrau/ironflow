@@ -37,6 +37,11 @@ pub fn provider_account_secret_key(id: Uuid) -> String {
 /// assert_eq!(status, AccountWindowStatus::AllowedWarning);
 /// ```
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "store-postgres", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "store-postgres",
+    sqlx(type_name = "text", rename_all = "snake_case")
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]

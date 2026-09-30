@@ -4,7 +4,6 @@ import type {
 	CreateProviderAccountRequest,
 	ProviderAccountResponse,
 	ProviderAccountTestResponse,
-	ProviderAccountUsageResponse,
 	UpdateProviderAccountRequest,
 } from "@/app/lib/types";
 
@@ -50,17 +49,6 @@ export function testAccount(
 ): Promise<ProviderAccountTestResponse> {
 	return api
 		.post<ProviderAccountTestResponse>(`${accountPath(account)}/test`)
-		.then((res) => res.data);
-}
-
-export function getAccountUsage(
-	account: string,
-	days = 30,
-): Promise<ProviderAccountUsageResponse> {
-	return api
-		.get<ProviderAccountUsageResponse>(
-			`${accountPath(account)}/usage?days=${days}`,
-		)
 		.then((res) => res.data);
 }
 

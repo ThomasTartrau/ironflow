@@ -3,8 +3,13 @@ import {
 	formatCountdown,
 	formatPercent,
 	isStale,
+	kindDescription,
+	kindLabel,
+	percentToThreshold,
+	planLabel,
 	stateLabel,
 	stateTone,
+	thresholdToPercent,
 	windowTone,
 } from "./account-state";
 
@@ -43,5 +48,25 @@ describe("account state helpers", () => {
 
 	it("formats percentages", () => {
 		expect(formatPercent(0.424)).toBe("42%");
+	});
+
+	it("names a known kind and falls back to the identifier", () => {
+		expect(kindLabel("claude_subscription")).toBe("Claude subscription");
+		expect(kindLabel("other_kind")).toBe("other_kind");
+		expect(kindDescription("claude_subscription")).toContain("Pro or Max");
+		expect(kindDescription("other_kind")).toBeNull();
+	});
+
+	it("formats the plan", () => {
+		expect(planLabel("max")).toBe("Max plan");
+		expect(planLabel("")).toBe(" plan");
+	});
+
+	it("converts the alert threshold to and from a percentage", () => {
+		expect(thresholdToPercent(0.8)).toBe("80");
+		expect(thresholdToPercent(0.05)).toBe("5");
+		expect(thresholdToPercent(1)).toBe("100");
+		expect(percentToThreshold("80")).toBe(0.8);
+		expect(percentToThreshold("100")).toBe(1);
 	});
 });

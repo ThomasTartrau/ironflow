@@ -13,7 +13,6 @@ import { api } from "@/app/lib/api";
 import {
 	createAccount,
 	deleteAccount,
-	getAccountUsage,
 	listAccountKinds,
 	listAccounts,
 	testAccount,
@@ -53,7 +52,7 @@ describe("provider account actions", () => {
 		});
 	});
 
-	it("deletes, tests and reads usage", async () => {
+	it("deletes and tests", async () => {
 		mockApi.del.mockResolvedValueOnce({ data: undefined });
 		await deleteAccount("perso");
 		expect(mockApi.del).toHaveBeenCalledWith("/provider-accounts/perso");
@@ -64,12 +63,6 @@ describe("provider account actions", () => {
 		const outcome = await testAccount("perso");
 		expect(mockApi.post).toHaveBeenCalledWith("/provider-accounts/perso/test");
 		expect(outcome.result).toBe("valid");
-
-		mockApi.get.mockResolvedValueOnce({ data: { windows: [], history: [] } });
-		await getAccountUsage("perso");
-		expect(mockApi.get).toHaveBeenCalledWith(
-			"/provider-accounts/perso/usage?days=30",
-		);
 	});
 
 	it("lists kinds", async () => {

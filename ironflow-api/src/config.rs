@@ -352,22 +352,19 @@ impl ServerConfig {
         let purge_dry_run = env::var("PURGE_DRY_RUN")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let provider_account_usage_retention_days = match env::var(
-            "PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS",
-        )
-        .ok()
-        {
-            Some(raw) => match raw.parse::<u32>() {
-                Ok(days) if days >= 1 => days,
-                _ => {
-                    errors.push(format!(
+        let provider_account_usage_retention_days =
+            match env::var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS").ok() {
+                Some(raw) => match raw.parse::<u32>() {
+                    Ok(days) if days >= 1 => days,
+                    _ => {
+                        errors.push(format!(
                         "PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS must be an integer >= 1, got: {raw}"
                     ));
-                    30
-                }
-            },
-            None => 30,
-        };
+                        30
+                    }
+                },
+                None => 30,
+            };
         let purge_interval_secs = match env::var("PURGE_INTERVAL_SECS").ok() {
             Some(raw) => {
                 let parsed = raw.parse::<u64>().unwrap_or_else(|_| {

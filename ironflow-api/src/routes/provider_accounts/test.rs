@@ -5,6 +5,7 @@ use axum::response::IntoResponse;
 
 use ironflow_auth::extractor::Authenticated;
 
+#[cfg(feature = "openapi")]
 use crate::entities::ProviderAccountTestResponse;
 use crate::error::ApiError;
 use crate::provider_accounts::{self, AccountScope};

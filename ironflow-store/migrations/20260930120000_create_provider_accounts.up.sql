@@ -27,7 +27,7 @@ CREATE TABLE ironflow.provider_account_windows (
     model_scope TEXT NOT NULL DEFAULT '',
     utilization DOUBLE PRECISION NOT NULL,
     resets_at   TIMESTAMPTZ,
-    status      TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('allowed', 'allowed_warning', 'rejected')),
     observed_at TIMESTAMPTZ NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -42,7 +42,7 @@ CREATE TABLE ironflow.provider_account_usage (
     model_scope TEXT NOT NULL DEFAULT '',
     utilization DOUBLE PRECISION NOT NULL,
     resets_at   TIMESTAMPTZ,
-    status      TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('allowed', 'allowed_warning', 'rejected')),
     observed_at TIMESTAMPTZ NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()

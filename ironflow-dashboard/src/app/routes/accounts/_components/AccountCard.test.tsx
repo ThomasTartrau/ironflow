@@ -1,11 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ProviderAccountResponse } from "@/app/lib/types";
-
-vi.mock("../_actions/actions", () => ({
-	getAccountUsage: vi.fn().mockResolvedValue({ history: [], windows: [] }),
-}));
-
 import { AccountCard } from "./AccountCard";
 
 function accountFixture(
@@ -81,7 +76,7 @@ describe("AccountCard", () => {
 		const stale = screen.getByText(/observed 3h ago/);
 		expect(stale).toHaveAttribute("data-stale", "true");
 		expect(stale.className).toContain("opacity-50");
-		const fresh = screen.getByText(/observed 0m ago/);
+		const fresh = screen.getByText("observed now");
 		expect(fresh).toHaveAttribute("data-stale", "false");
 	});
 
@@ -95,5 +90,29 @@ describe("AccountCard", () => {
 			/>,
 		);
 		expect(screen.getByTestId("account-state")).toHaveTextContent("Limited");
+	});
+
+	it("labels the actions and explains the kind", () => {
+		render(
+			<AccountCard
+				account={accountFixture()}
+				onUpdate={noop}
+				onTest={noop}
+				onDelete={noop}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Edit account" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Test the token now" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: "Delete account" }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/Claude subscription, Max plan/),
+		).toBeInTheDocument();
+		expect(screen.queryByText(/claude_subscription/)).not.toBeInTheDocument();
 	});
 });

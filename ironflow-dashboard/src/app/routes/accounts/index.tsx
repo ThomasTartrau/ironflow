@@ -31,21 +31,20 @@ export function Component() {
 
 	function run<T>(promise: Promise<T>, loading: string, success: string) {
 		withToast(promise, { loading, success })
-			.then(() => revalidator.revalidate())
-			.catch(() => undefined);
+			.catch(() => undefined)
+			.finally(() => revalidator.revalidate());
 	}
 
 	return (
-		<div className="space-y-4">
-			<HeaderApp
-				title="Accounts"
-				description="AI provider accounts, their tokens and their usage limits."
-				titleItem={
-					<Button size="sm" onClick={() => navigate("/accounts/new")}>
-						<Plus className="h-4 w-4" /> Add account
-					</Button>
-				}
-			/>
+		<HeaderApp
+			title="Accounts"
+			description="AI provider accounts, their tokens and their usage limits."
+			titleItem={
+				<Button size="sm" onClick={() => navigate("/accounts/new")}>
+					<Plus className="h-4 w-4" /> Add account
+				</Button>
+			}
+		>
 			{accounts.length === 0 ? (
 				<div className="flex flex-col items-center gap-2 py-16 text-sm text-muted-foreground">
 					<Gauge className="h-8 w-8" />
@@ -66,9 +65,17 @@ export function Component() {
 							}
 							onTest={() =>
 								run(
-									testAccount(account.id),
+									testAccount(account.id).then((test) => {
+										// A rejected token is a successful call: surface it as an error toast.
+										if (test.result === "unauthorized") {
+											throw new Error(
+												"Token rejected by the provider: generate a new one and edit the account",
+											);
+										}
+										return test;
+									}),
 									"Testing token...",
-									"Token checked",
+									"Token valid",
 								)
 							}
 							onDelete={() =>
@@ -78,6 +85,6 @@ export function Component() {
 					))}
 				</div>
 			)}
-		</div>
+		</HeaderApp>
 	);
 }

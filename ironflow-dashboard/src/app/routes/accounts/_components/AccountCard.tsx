@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { FlaskConical, Pencil, Trash2 } from "lucide-react";
 import type {
 	AccountWindowResponse,
@@ -16,18 +16,29 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { getAccountUsage } from "../_actions/actions";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
 	formatCountdown,
 	formatPercent,
 	isStale,
+	kindLabel,
+	planLabel,
 	stateLabel,
 	stateTone,
 	type Tone,
 	windowTone,
 } from "./account-state";
+import {
+	AccountFormFields,
+	accountFormValues,
+	parseAccountForm,
+} from "./AccountFormFields";
 
 const TONE_CLASSES: Record<Tone, string> = {
 	success: "bg-emerald-500",
@@ -70,6 +81,7 @@ function timeAgo(observedAt: string, now: Date): string {
 		0,
 		Math.floor((now.getTime() - new Date(observedAt).getTime()) / 60_000),
 	);
+	if (minutes === 0) return "now";
 	if (minutes < 60) return `${minutes}m ago`;
 	const hours = Math.floor(minutes / 60);
 	if (hours < 48) return `${hours}h ago`;
@@ -104,31 +116,36 @@ function Gauge({ window, now }: { window: AccountWindowResponse; now: Date }) {
 	);
 }
 
-function Sparkline({ points }: { points: number[] }) {
-	if (points.length < 2) return null;
-	const width = 120;
-	const height = 24;
-	const step = width / (points.length - 1);
-	const path = points
-		.map(
-			(p, i) => `${(i * step).toFixed(1)},${(height - p * height).toFixed(1)}`,
-		)
-		.join(" ");
+function CardAction({
+	label,
+	onClick,
+	destructive,
+	children,
+}: {
+	label: string;
+	onClick: () => void;
+	destructive?: boolean;
+	children: React.ReactNode;
+}) {
 	return (
-		<svg
-			width={width}
-			height={height}
-			role="img"
-			aria-label="30-day utilization"
-			className="text-primary"
-		>
-			<polyline
-				points={path}
-				fill="none"
-				stroke="currentColor"
-				strokeWidth={1.5}
+		<Tooltip>
+			<TooltipTrigger
+				render={
+					<Button
+						size="icon-sm"
+						variant="ghost"
+						aria-label={label}
+						onClick={onClick}
+						className={destructive ? "text-destructive" : undefined}
+					>
+						{children}
+					</Button>
+				}
 			/>
-		</svg>
+			<TooltipContent side="bottom">
+				<span className="text-xs">{label}</span>
+			</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -139,75 +156,44 @@ export function AccountCard({
 	onDelete,
 }: AccountCardProps) {
 	const now = new Date(useLiveClock({ enabled: true, intervalMs: 30_000 }));
-	const [history, setHistory] = useState<number[]>([]);
 	const [editing, setEditing] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
-	const [displayName, setDisplayName] = useState(account.display_name);
-	const [tags, setTags] = useState(account.tags.join(", "));
-	const [priority, setPriority] = useState(String(account.priority));
-	const [maxConcurrency, setMaxConcurrency] = useState(
-		account.max_concurrency == null ? "" : String(account.max_concurrency),
-	);
-	const [threshold, setThreshold] = useState(String(account.alert_threshold));
-	const [token, setToken] = useState("");
-
-	useEffect(() => {
-		let cancelled = false;
-		getAccountUsage(account.id)
-			.then((usage) => {
-				if (cancelled) return;
-				// Max utilization per observation instant.
-				const byInstant = new Map<string, number>();
-				for (const point of usage.history) {
-					const current = byInstant.get(point.observed_at) ?? 0;
-					byInstant.set(
-						point.observed_at,
-						Math.max(current, point.utilization),
-					);
-				}
-				setHistory([...byInstant.values()]);
-			})
-			.catch(() => {
-				if (!cancelled) setHistory([]);
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [account.id]);
+	const [values, setValues] = useState(() => accountFormValues(account));
 
 	const tone = stateTone(account.state);
 
-	function save() {
+	function openEdit() {
+		setValues(accountFormValues(account));
+		setEditing(true);
+	}
+
+	function save(event: React.FormEvent) {
+		event.preventDefault();
 		const edit: AccountEdit = {
-			display_name: displayName,
-			tags: tags
-				.split(",")
-				.map((t) => t.trim())
-				.filter(Boolean),
-			priority: Number(priority),
-			max_concurrency: maxConcurrency === "" ? null : Number(maxConcurrency),
-			alert_threshold: Number(threshold),
+			...parseAccountForm(values),
+			display_name: values.displayName,
 		};
-		if (token !== "") edit.token = token;
+		if (values.token !== "") edit.token = values.token;
 		onUpdate(edit);
-		setToken("");
 		setEditing(false);
 	}
 
 	return (
-		<Card data-testid="account-card">
-			<CardContent className="space-y-3 pt-4">
+		<Card data-testid="account-card" className="h-full">
+			<CardContent className="flex flex-1 flex-col gap-3 pt-4">
 				<div className="flex items-start justify-between gap-2">
-					<div>
+					<div className="min-w-0">
 						<div className="font-semibold">{account.display_name}</div>
 						<div className="text-xs text-muted-foreground">
-							{account.name} - {account.kind}
-							{account.plan ? ` - ${account.plan}` : ""}
+							<span className="font-mono">{account.name}</span>
+							{" - "}
+							{kindLabel(account.kind)}
+							{account.plan ? `, ${planLabel(account.plan)}` : ""}
 						</div>
 					</div>
 					<span
 						data-testid="account-state"
-						className={`rounded-full px-2 py-0.5 text-xs font-medium ${PILL_CLASSES[tone]}`}
+						className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${PILL_CLASSES[tone]}`}
 					>
 						{stateLabel(account.state)}
 					</span>
@@ -234,8 +220,7 @@ export function AccountCard({
 						))
 					)}
 				</div>
-				<Sparkline points={history} />
-				<div className="flex items-center justify-between">
+				<div className="mt-auto flex items-center justify-between pt-2">
 					<label
 						htmlFor={`account-enabled-${account.id}`}
 						className="flex items-center gap-2 text-xs"
@@ -250,82 +235,54 @@ export function AccountCard({
 						/>
 						Enabled
 					</label>
-					<div className="flex gap-1">
-						<Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
-							<Pencil className="h-4 w-4" />
-						</Button>
-						<Button size="sm" variant="ghost" onClick={onTest}>
-							<FlaskConical className="h-4 w-4" />
-						</Button>
-						<Button
-							size="sm"
-							variant="ghost"
-							onClick={() => setConfirmDelete(true)}
-						>
-							<Trash2 className="h-4 w-4" />
-						</Button>
-					</div>
+					<TooltipProvider delay={200}>
+						<div className="flex gap-1">
+							<CardAction label="Edit account" onClick={openEdit}>
+								<Pencil />
+							</CardAction>
+							<CardAction label="Test the token now" onClick={onTest}>
+								<FlaskConical />
+							</CardAction>
+							<CardAction
+								label="Delete account"
+								destructive
+								onClick={() => setConfirmDelete(true)}
+							>
+								<Trash2 />
+							</CardAction>
+						</div>
+					</TooltipProvider>
 				</div>
 			</CardContent>
 
 			<Dialog open={editing} onOpenChange={setEditing}>
-				<DialogContent>
+				<DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
 					<DialogHeader>
-						<DialogTitle>Edit {account.name}</DialogTitle>
+						<DialogTitle>Edit {account.display_name}</DialogTitle>
 						<DialogDescription>
-							The token is write-only: leave it empty to keep the current one.
+							<span className="font-mono">{account.name}</span> -{" "}
+							{kindLabel(account.kind)}. The identifier and the kind cannot be
+							changed.
 						</DialogDescription>
 					</DialogHeader>
-					<div className="space-y-2">
-						<Input
-							aria-label="Display name"
-							value={displayName}
-							onChange={(e) => setDisplayName(e.target.value)}
+					<form className="space-y-4" onSubmit={save}>
+						<AccountFormFields
+							mode="edit"
+							idPrefix={`account-${account.id}`}
+							values={values}
+							onChange={setValues}
 						/>
-						<Input
-							aria-label="Tags"
-							placeholder="tags, comma separated"
-							value={tags}
-							onChange={(e) => setTags(e.target.value)}
-						/>
-						<Input
-							aria-label="Priority"
-							type="number"
-							value={priority}
-							onChange={(e) => setPriority(e.target.value)}
-						/>
-						<Input
-							aria-label="Max concurrency"
-							type="number"
-							min={1}
-							placeholder="unlimited"
-							value={maxConcurrency}
-							onChange={(e) => setMaxConcurrency(e.target.value)}
-						/>
-						<Input
-							aria-label="Alert threshold"
-							type="number"
-							step="0.05"
-							min={0.05}
-							max={1}
-							value={threshold}
-							onChange={(e) => setThreshold(e.target.value)}
-						/>
-						<Input
-							aria-label="New token"
-							type="password"
-							autoComplete="off"
-							placeholder="sk-ant-oat01-..."
-							value={token}
-							onChange={(e) => setToken(e.target.value)}
-						/>
-					</div>
-					<DialogFooter>
-						<Button variant="outline" onClick={() => setEditing(false)}>
-							Cancel
-						</Button>
-						<Button onClick={save}>Save</Button>
-					</DialogFooter>
+						<DialogFooter>
+							<Button
+								type="button"
+								variant="outline"
+								onClick={() => setEditing(false)}
+							>
+								Cancel
+							</Button>
+							<Button type="submit">Save</Button>
+						</DialogFooter>
+					</form>
 				</DialogContent>
 			</Dialog>
 

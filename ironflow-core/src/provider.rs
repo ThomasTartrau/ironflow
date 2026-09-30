@@ -1522,6 +1522,7 @@ mod tests {
             allow_failure: false,
             retry: None,
             trace_context: None,
+            account: None,
             _marker: PhantomData,
         }
     }
@@ -1571,6 +1572,7 @@ mod tests {
             allow_failure: false,
             retry: None,
             trace_context: None,
+            account: None,
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();

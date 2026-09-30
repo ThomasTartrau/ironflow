@@ -24,6 +24,8 @@ fn db_err(e: SqlxError) -> StoreError {
     StoreError::Database(e.to_string())
 }
 
+/// `provider_accounts` row. Only `max_concurrency` differs from [`ProviderAccount`]:
+/// Postgres has no unsigned integer, and sqlx decodes `INTEGER` as `i32` only.
 struct AccountRow {
     id: Uuid,
     name: String,
@@ -54,6 +56,7 @@ impl From<AccountRow> for ProviderAccount {
             enabled: row.enabled,
             priority: row.priority,
             tags: row.tags,
+            // The column is CHECKed `> 0`.
             max_concurrency: row.max_concurrency.map(|v| v as u32),
             alert_threshold: row.alert_threshold,
             expires_at: row.expires_at,
@@ -66,131 +69,23 @@ impl From<AccountRow> for ProviderAccount {
     }
 }
 
-struct AccountRowWithTotal {
-    id: Uuid,
-    name: String,
-    display_name: String,
-    kind: String,
-    secret_key: String,
-    enabled: bool,
-    priority: i32,
-    tags: Vec<String>,
-    max_concurrency: Option<i32>,
-    alert_threshold: f64,
-    expires_at: DateTime<Utc>,
-    plan: Option<String>,
-    auth_failed_at: Option<DateTime<Utc>>,
-    created_by: Option<Uuid>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    total_count: i64,
-}
-
-impl From<AccountRowWithTotal> for ProviderAccount {
-    fn from(row: AccountRowWithTotal) -> Self {
-        ProviderAccount::from(AccountRow {
-            id: row.id,
-            name: row.name,
-            display_name: row.display_name,
-            kind: row.kind,
-            secret_key: row.secret_key,
-            enabled: row.enabled,
-            priority: row.priority,
-            tags: row.tags,
-            max_concurrency: row.max_concurrency,
-            alert_threshold: row.alert_threshold,
-            expires_at: row.expires_at,
-            plan: row.plan,
-            auth_failed_at: row.auth_failed_at,
-            created_by: row.created_by,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        })
-    }
-}
-
-struct WindowRow {
-    account_id: Uuid,
-    window_name: String,
-    model_scope: String,
-    utilization: f64,
-    resets_at: Option<DateTime<Utc>>,
-    status: String,
-    observed_at: DateTime<Utc>,
-}
-
-fn parse_status(status: &str) -> Result<AccountWindowStatus, StoreError> {
-    status
-        .parse()
-        .map_err(|e| StoreError::Database(format!("invalid window status '{status}': {e}")))
-}
-
-fn scope_from_db(scope: String) -> Option<String> {
-    if scope.is_empty() { None } else { Some(scope) }
-}
-
-impl TryFrom<WindowRow> for ProviderAccountWindow {
-    type Error = StoreError;
-
-    fn try_from(row: WindowRow) -> Result<Self, StoreError> {
-        Ok(Self {
-            account_id: row.account_id,
-            window: row.window_name,
-            utilization: row.utilization,
-            resets_at: row.resets_at,
-            status: parse_status(&row.status)?,
-            model_scope: scope_from_db(row.model_scope),
-            observed_at: row.observed_at,
-        })
-    }
-}
-
-struct UsageRow {
-    id: Uuid,
-    account_id: Uuid,
-    window_name: String,
-    model_scope: String,
-    utilization: f64,
-    resets_at: Option<DateTime<Utc>>,
-    status: String,
-    observed_at: DateTime<Utc>,
-}
-
-impl TryFrom<UsageRow> for ProviderAccountUsagePoint {
-    type Error = StoreError;
-
-    fn try_from(row: UsageRow) -> Result<Self, StoreError> {
-        Ok(Self {
-            id: row.id,
-            account_id: row.account_id,
-            window: row.window_name,
-            utilization: row.utilization,
-            resets_at: row.resets_at,
-            status: parse_status(&row.status)?,
-            model_scope: scope_from_db(row.model_scope),
-            observed_at: row.observed_at,
-        })
-    }
-}
-
 impl PostgresStore {
     async fn fetch_windows(&self, ids: &[Uuid]) -> Result<Vec<ProviderAccountWindow>, StoreError> {
-        let rows = sqlx::query_as!(
-            WindowRow,
+        // `model_scope = ''` is stored for "every model" because it is part of the key.
+        sqlx::query_as!(
+            ProviderAccountWindow,
             r#"
-            SELECT account_id, window_name, model_scope, utilization, resets_at, status, observed_at
+            SELECT account_id, window_name AS "window", NULLIF(model_scope, '') AS "model_scope?",
+                utilization, resets_at, status AS "status: AccountWindowStatus", observed_at
             FROM ironflow.provider_account_windows
             WHERE account_id = ANY($1)
-            ORDER BY account_id, window_name, model_scope
+            ORDER BY account_id, window_name, provider_account_windows.model_scope
             "#,
             ids,
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(db_err)?;
-        rows.into_iter()
-            .map(ProviderAccountWindow::try_from)
-            .collect()
+        .map_err(db_err)
     }
 }
 
@@ -286,13 +181,23 @@ impl ProviderAccountStore for PostgresStore {
     ) -> StoreFuture<'_, Page<ProviderAccount>> {
         Box::pin(async move {
             let offset = (page.saturating_sub(1) as i64) * (per_page as i64);
-            let rows = sqlx::query_as!(
-                AccountRowWithTotal,
+            let total = sqlx::query_scalar!(
+                r#"
+                SELECT COUNT(*) AS "total!"
+                FROM ironflow.provider_accounts
+                WHERE ($1::TEXT IS NULL OR kind = $1)
+                "#,
+                kind.as_deref(),
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)? as u64;
+            let items = sqlx::query_as!(
+                AccountRow,
                 r#"
                 SELECT id, name, display_name, kind, secret_key, enabled, priority, tags,
                     max_concurrency, alert_threshold, expires_at, plan, auth_failed_at,
-                    created_by, created_at, updated_at,
-                    COUNT(*) OVER () as "total_count!: i64"
+                    created_by, created_at, updated_at
                 FROM ironflow.provider_accounts
                 WHERE ($1::TEXT IS NULL OR kind = $1)
                 ORDER BY priority ASC, name ASC
@@ -304,9 +209,10 @@ impl ProviderAccountStore for PostgresStore {
             )
             .fetch_all(&self.pool)
             .await
-            .map_err(db_err)?;
-            let total = rows.first().map_or(0u64, |r| r.total_count as u64);
-            let items = rows.into_iter().map(ProviderAccount::from).collect();
+            .map_err(db_err)?
+            .into_iter()
+            .map(ProviderAccount::from)
+            .collect();
             Ok(Page {
                 items,
                 total,
@@ -402,11 +308,12 @@ impl ProviderAccountStore for PostgresStore {
         since: DateTime<Utc>,
     ) -> StoreFuture<'_, Vec<ProviderAccountUsagePoint>> {
         Box::pin(async move {
-            let rows = sqlx::query_as!(
-                UsageRow,
+            sqlx::query_as!(
+                ProviderAccountUsagePoint,
                 r#"
-                SELECT id, account_id, window_name, model_scope, utilization, resets_at,
-                    status, observed_at
+                SELECT id, account_id, window_name AS "window",
+                    NULLIF(model_scope, '') AS "model_scope?", utilization, resets_at,
+                    status AS "status: AccountWindowStatus", observed_at
                 FROM ironflow.provider_account_usage
                 WHERE account_id = $1 AND observed_at >= $2
                 ORDER BY observed_at ASC
@@ -416,10 +323,7 @@ impl ProviderAccountStore for PostgresStore {
             )
             .fetch_all(&self.pool)
             .await
-            .map_err(db_err)?;
-            rows.into_iter()
-                .map(ProviderAccountUsagePoint::try_from)
-                .collect()
+            .map_err(db_err)
         })
     }
 

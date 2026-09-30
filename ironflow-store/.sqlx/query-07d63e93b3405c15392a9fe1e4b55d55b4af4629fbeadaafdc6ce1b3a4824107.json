@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM lib_fsm.abstract_transition t\n         JOIN lib_fsm.abstract_state f ON f.abstract_state__id = t.from_abstract_state__id\n         JOIN lib_fsm.abstract_state g ON g.abstract_state__id = t.to_abstract_state__id\n         JOIN lib_fsm.abstract_state_machine m ON m.abstract_machine__id = f.abstract_machine__id\n         WHERE m.name = 'run_lifecycle' AND $1 IN (f.name, g.name)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "07d63e93b3405c15392a9fe1e4b55d55b4af4629fbeadaafdc6ce1b3a4824107"
+}

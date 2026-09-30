@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO ironflow.provider_account_windows\n                        (account_id, window_name, model_scope, utilization, resets_at,\n                         status, observed_at)\n                    VALUES ($1, $2, $3, $4, $5, $6, $7)\n                    ON CONFLICT (account_id, window_name, model_scope) DO UPDATE\n                    SET utilization = EXCLUDED.utilization,\n                        resets_at = EXCLUDED.resets_at,\n                        status = EXCLUDED.status,\n                        observed_at = EXCLUDED.observed_at,\n                        updated_at = NOW()\n                    WHERE EXCLUDED.observed_at >= ironflow.provider_account_windows.observed_at\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Float8",
+        "Timestamptz",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bbcaf7a00f0891c47fc3cab6e37101a51148cb6f562a52985b326e6d814b6734"
+}

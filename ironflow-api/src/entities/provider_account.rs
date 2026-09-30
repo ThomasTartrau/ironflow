@@ -46,8 +46,8 @@ fn validate_tags(tags: &[String]) -> Result<(), ValidationError> {
     Err(err)
 }
 
-fn validate_threshold(threshold: &f64) -> Result<(), ValidationError> {
-    if *threshold > 0.0 && *threshold <= 1.0 {
+fn validate_threshold(threshold: f64) -> Result<(), ValidationError> {
+    if threshold > 0.0 && threshold <= 1.0 {
         return Ok(());
     }
     let mut err = ValidationError::new("invalid_threshold");

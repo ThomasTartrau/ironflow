@@ -21,6 +21,40 @@ const TONES: Record<AccountState, Tone> = {
 	never_used: "muted",
 };
 
+const KIND_LABELS: Record<string, string> = {
+	claude_subscription: "Claude subscription",
+};
+
+const KIND_DESCRIPTIONS: Record<string, string> = {
+	claude_subscription:
+		"Run agent steps on a Claude Pro or Max plan. Ironflow tracks the 5-hour and weekly usage limits and switches to another account when one is exhausted.",
+};
+
+/** Human name of an account kind, falling back to its identifier. */
+export function kindLabel(kind: string): string {
+	return KIND_LABELS[kind] ?? kind;
+}
+
+/** One-sentence explanation of an account kind, `null` when unknown. */
+export function kindDescription(kind: string): string | null {
+	return KIND_DESCRIPTIONS[kind] ?? null;
+}
+
+/** Subscription plan as shown to the user, e.g. `max` -> `Max plan`. */
+export function planLabel(plan: string): string {
+	return `${plan.charAt(0).toUpperCase()}${plan.slice(1)} plan`;
+}
+
+/** Alert threshold as a whole percentage for form inputs, e.g. `0.8` -> `"80"`. */
+export function thresholdToPercent(threshold: number): string {
+	return String(Math.round(threshold * 100));
+}
+
+/** Parse a percentage input back to a `(0, 1]` threshold. */
+export function percentToThreshold(percent: string): number {
+	return Number(percent) / 100;
+}
+
 export function stateLabel(state: AccountState): string {
 	return LABELS[state];
 }

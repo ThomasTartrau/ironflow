@@ -7,7 +7,7 @@ use std::slice;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, value_parser};
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::types::{CreateProviderAccountRequest, UpdateProviderAccountRequest};
 
@@ -45,8 +45,8 @@ pub enum AccountCommands {
         #[arg(long)]
         priority: Option<i32>,
         /// Maximum concurrent steps.
-        #[arg(long)]
-        max_concurrency: Option<u32>,
+        #[arg(long, value_parser = value_parser!(i32).range(1..))]
+        max_concurrency: Option<i32>,
         /// Utilization from which the account is shown as near its limit, in (0, 1].
         #[arg(long)]
         alert_threshold: Option<f64>,
@@ -96,8 +96,12 @@ pub enum AccountCommands {
         #[arg(long)]
         priority: Option<i32>,
         /// New maximum concurrent steps.
-        #[arg(long, conflicts_with = "clear_max_concurrency")]
-        max_concurrency: Option<u32>,
+        #[arg(
+            long,
+            conflicts_with = "clear_max_concurrency",
+            value_parser = value_parser!(i32).range(1..)
+        )]
+        max_concurrency: Option<i32>,
         /// Remove the concurrency limit.
         #[arg(long)]
         clear_max_concurrency: bool,
