@@ -3,6 +3,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(feature = "secret-store")]
+use rand::random;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -10,10 +12,14 @@ use ironflow_core::decision::DecisionProvider;
 use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider};
 use ironflow_core::providers::record_replay::RecordReplayProvider;
+#[cfg(feature = "secret-store")]
+use ironflow_store::crypto::MasterKey;
 use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{RunStatus, TriggerKind};
 use ironflow_store::store::{RunStore, Store};
+#[cfg(feature = "secret-store")]
+use ironflow_store::workflow_secrets::ScopedSecretStore;
 
 use crate::config::{HttpConfig, HumanInputConfig, ShellConfig};
 use crate::engine::{Engine, WorkflowResult};
@@ -67,6 +73,8 @@ pub struct TestEngine {
     decision_provider: Option<Arc<dyn DecisionProvider>>,
     mocks: MockInterceptor,
     engine: Option<Engine>,
+    #[cfg(feature = "secret-store")]
+    secrets: Vec<(String, String)>,
 }
 
 impl Default for TestEngine {
@@ -88,6 +96,11 @@ impl fmt::Debug for TestEngine {
 impl TestEngine {
     /// A harness with no handler and no mock.
     ///
+    /// With the `secret-store` feature the store gets a freshly generated
+    /// master key, so reading a secret that was never set resolves to `None`
+    /// instead of failing with "no master key configured". Seed values with
+    /// `with_secret`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -97,14 +110,23 @@ impl TestEngine {
     /// assert!(format!("{harness:?}").contains("TestEngine"));
     /// ```
     pub fn new() -> Self {
+        #[cfg_attr(not(feature = "secret-store"), allow(unused_mut))]
+        let mut store = InMemoryStore::new();
+        #[cfg(feature = "secret-store")]
+        store.set_master_key(
+            MasterKey::from_bytes(&random::<[u8; 32]>())
+                .expect("32 bytes is a valid master key length"),
+        );
         Self {
-            store: Arc::new(InMemoryStore::new()),
+            store: Arc::new(store),
             handlers: Vec::new(),
             primary: None,
             provider: None,
             decision_provider: None,
             mocks: MockInterceptor::new(),
             engine: None,
+            #[cfg(feature = "secret-store")]
+            secrets: Vec::new(),
         }
     }
 
@@ -368,6 +390,32 @@ impl TestEngine {
         self
     }
 
+    /// Seed a secret readable by the workflow under test.
+    ///
+    /// The secret is written in the scope of the workflow being run, the same
+    /// scope as `ctx.secrets()` and as the operations run through
+    /// `ctx.operation`. Setting the same key twice keeps the last value.
+    /// Requires the `secret-store` feature.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called after the first run.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::testing::TestEngine;
+    ///
+    /// let harness = TestEngine::new().with_secret("git_token", "ghp_test");
+    /// # let _ = harness;
+    /// ```
+    #[cfg(feature = "secret-store")]
+    pub fn with_secret(mut self, key: &str, value: &str) -> Self {
+        assert!(self.engine.is_none(), "{CONFIGURE_BEFORE_RUN}");
+        self.secrets.push((key.to_string(), value.to_string()));
+        self
+    }
+
     /// The store backing this harness, for assertions the accessors do not
     /// cover (child runs, step dependencies, logs).
     ///
@@ -487,6 +535,18 @@ impl TestEngine {
         payload: Value,
     ) -> Result<TestResult, EngineError> {
         self.ensure_engine()?;
+
+        #[cfg(feature = "secret-store")]
+        {
+            let scoped = ScopedSecretStore::for_workflow(
+                Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()),
+                self.store.clone(),
+            );
+            for (key, value) in &self.secrets {
+                scoped.set(key, value).await?;
+            }
+        }
+
         let engine = self.engine.as_ref().expect("ensure_engine built it");
 
         // Enqueue then execute, the way the worker does, so the run id is known
@@ -558,5 +618,147 @@ impl TestEngine {
         };
 
         Ok(TestResult::new(run, steps, step_results, error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use serde_json::json;
+    use tokio::time::timeout;
+
+    use ironflow_core::operation::{Operation, OperationContext};
+
+    use crate::context::WorkflowContext;
+    use crate::handler::HandlerFuture;
+
+    use super::*;
+
+    /// Reads `git_token` through the operation context.
+    struct ReadsToken;
+
+    #[async_trait]
+    impl Operation for ReadsToken {
+        fn kind(&self) -> &str {
+            "reads-token"
+        }
+
+        async fn execute(&self, ctx: &OperationContext) -> Result<Value, OperationError> {
+            let token = ctx.secrets().get("git_token").await?;
+            Ok(json!({"token": token.map(|secret| secret.value)}))
+        }
+    }
+
+    /// Runs [`ReadsToken`] through `ctx.operation`.
+    struct UsesSecretOp;
+
+    impl WorkflowHandler for UsesSecretOp {
+        fn name(&self) -> &str {
+            "uses-secret-op"
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                ctx.operation("read-token", &ReadsToken).await?;
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn operation_reading_absent_secret_completes_under_test_engine() {
+        timeout(Duration::from_secs(10), async {
+            let result = TestEngine::new()
+                .with_handler(UsesSecretOp)
+                .run(json!({}))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                result.status(),
+                RunStatus::Completed,
+                "{:?}",
+                result.error()
+            );
+            assert!(result.step("read-token").output()["token"].is_null());
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[cfg(feature = "secret-store")]
+    #[tokio::test]
+    async fn with_secret_value_reaches_operation_via_ctx_operation() {
+        timeout(Duration::from_secs(10), async {
+            let result = TestEngine::new()
+                .with_handler(UsesSecretOp)
+                .with_secret("git_token", "ghp_test")
+                .run(json!({}))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                result.status(),
+                RunStatus::Completed,
+                "{:?}",
+                result.error()
+            );
+            assert_eq!(result.step("read-token").output()["token"], "ghp_test");
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[cfg(feature = "secret-store")]
+    #[tokio::test]
+    async fn with_secret_last_value_wins() {
+        timeout(Duration::from_secs(10), async {
+            let result = TestEngine::new()
+                .with_handler(UsesSecretOp)
+                .with_secret("git_token", "first")
+                .with_secret("git_token", "second")
+                .run(json!({}))
+                .await
+                .unwrap();
+
+            assert_eq!(result.step("read-token").output()["token"], "second");
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[cfg(feature = "secret-store")]
+    #[tokio::test]
+    async fn with_secret_is_readable_through_ctx_secrets() {
+        timeout(Duration::from_secs(10), async {
+            let mut harness = TestEngine::new()
+                .with_handler(UsesSecretOp)
+                .with_secret("k", "v");
+            harness.run(json!({})).await.unwrap();
+
+            let store = harness.store();
+            let scope = |name: &str| {
+                ScopedSecretStore::for_workflow(
+                    Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()),
+                    store.clone(),
+                )
+            };
+            let own = scope("uses-secret-op").get("k").await.unwrap();
+            assert_eq!(own.unwrap().value, "v");
+            assert!(scope("other-workflow").get("k").await.unwrap().is_none());
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[cfg(feature = "secret-store")]
+    #[tokio::test]
+    #[should_panic(expected = "configure the TestEngine before its first run")]
+    async fn with_secret_after_first_run_panics() {
+        let mut harness = TestEngine::new().with_handler(UsesSecretOp);
+        harness.run(json!({})).await.unwrap();
+        let _ = harness.with_secret("git_token", "late");
     }
 }

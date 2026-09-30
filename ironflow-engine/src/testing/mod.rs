@@ -49,6 +49,7 @@
 //! | `ctx.agent` | [`TestEngine::with_mock_agent`] or [`TestEngine::with_recorded_agent`] |
 //! | `ctx.approval` | [`TestEngine::with_mock_approval`], or [`TestEngine::resume`] |
 //! | `ctx.human_input` | [`TestEngine::with_mock_human_input`], or [`TestEngine::resume`] after writing the answer on the step |
+//! | `ctx.secrets`, secrets read by operations | `TestEngine::with_secret` (`secret-store` feature) |
 //! | `ctx.parallel`, `ctx.workflow`, `on_error` | the mocks above apply to the steps inside them |
 //!
 //! # Limitations

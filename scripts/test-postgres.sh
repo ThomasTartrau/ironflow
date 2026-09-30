@@ -19,7 +19,8 @@ if [ -z "${DATABASE_URL:-}" ]; then
   container="ironflow-test-postgres-$$"
   docker run -d --rm --name "$container" \
     -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ironflow \
-    -p 127.0.0.1::5432 "${POSTGRES_IMAGE:-postgres:17-alpine}" >/dev/null
+    -p 127.0.0.1::5432 "${POSTGRES_IMAGE:-postgres:17-alpine}" \
+    postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off >/dev/null
   trap 'docker rm -f "$container" >/dev/null 2>&1' EXIT
 
   # Wait on TCP: the image first runs a setup server on the unix socket only,
