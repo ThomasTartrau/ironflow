@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.32](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.31...ironflow-sdk-v0.1.32) - 2026-09-30
+
+### Added
+
+- #135 add Provider Accounts for live-managed Claude subscriptions with usage windows
+
+- #135 add Provider Accounts for live-managed Claude subscriptions with usage windows
+
 ## [0.1.31](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.30...ironflow-sdk-v0.1.31) - 2026-09-27
 
 ### Fixed
