@@ -14,7 +14,8 @@ use tracing::error;
 #[cfg(feature = "secret-store")]
 use crate::crypto::{decrypt, encrypt, join_versions};
 use crate::entities::{
-    KeyVersionStatus, Page, RotationBatch, RotationRequest, Secret, SecretMetadata,
+    KeyVersionStatus, PROVIDER_ACCOUNT_SECRET_PREFIX, Page, RotationBatch, RotationRequest, Secret,
+    SecretMetadata,
 };
 use crate::error::StoreError;
 use crate::secret_store::SecretStore;
@@ -169,6 +170,7 @@ impl SecretStore for InMemoryStore {
                 .secrets
                 .values()
                 .filter(|s| s.key.starts_with(&prefix))
+                .filter(|s| !s.key.starts_with(PROVIDER_ACCOUNT_SECRET_PREFIX))
                 .map(|s| SecretMetadata {
                     id: s.id,
                     key: s.key.clone(),

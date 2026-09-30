@@ -13,6 +13,7 @@ use clap_mangen::Man;
 use ironflow_sdk::IronflowClient;
 
 use crate::commands;
+use crate::commands::account::AccountArgs;
 use crate::commands::api_key::ApiKeyArgs;
 use crate::commands::audit_log::AuditLogArgs;
 use crate::commands::dashboard::DashboardArgs;
@@ -80,6 +81,9 @@ pub enum Commands {
     Stats(StatsArgs),
     /// Manage secrets (admin only).
     Secret(SecretArgs),
+    /// Manage Provider Accounts (admin only).
+    #[command(name = "accounts")]
+    Accounts(AccountArgs),
     /// Manage API keys.
     #[command(name = "api-key")]
     ApiKey(ApiKeyArgs),
@@ -165,6 +169,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::Logs(args) => commands::logs::execute(client, args, cli.json).await,
         Commands::Stats(args) => commands::stats::execute(client, args, cli.json).await,
         Commands::Secret(args) => commands::secret::execute(client, args, cli.json).await,
+        Commands::Accounts(args) => commands::account::execute(client, args, cli.json).await,
         Commands::ApiKey(args) => commands::api_key::execute(client, args, cli.json).await,
         Commands::User(args) => commands::user::execute(client, args, cli.json).await,
         Commands::AuditLog(args) => commands::audit_log::execute(client, args, cli.json).await,
@@ -182,6 +187,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
 mod tests {
     use clap::Parser;
 
+    use crate::commands::account::AccountCommands;
     use crate::commands::api_key::ApiKeyCommands;
     use crate::commands::audit_log::AuditLogCommands;
     use crate::commands::delegation::DelegationCommands;
@@ -361,6 +367,65 @@ mod tests {
     #[test]
     fn parse_no_command_fails() {
         assert!(Cli::try_parse_from(["ironflow-cli"]).is_err());
+    }
+
+    // -- Provider Accounts --
+
+    #[test]
+    fn parse_accounts_add_with_token_stdin() {
+        let cli = parse(&["ironflow-cli", "accounts", "add", "perso", "--token-stdin"]);
+        let Commands::Accounts(args) = &cli.command else {
+            panic!("expected Accounts command");
+        };
+        let AccountCommands::Add {
+            name,
+            kind,
+            token_stdin,
+            ..
+        } = &args.command
+        else {
+            panic!("expected Add subcommand");
+        };
+        assert_eq!(name, "perso");
+        assert_eq!(kind, "claude_subscription");
+        assert!(*token_stdin);
+    }
+
+    #[test]
+    fn parse_accounts_add_requires_token_stdin() {
+        assert!(Cli::try_parse_from(["ironflow-cli", "accounts", "add", "perso"]).is_err());
+    }
+
+    #[test]
+    fn parse_accounts_remove_with_yes() {
+        let cli = parse(&["ironflow-cli", "accounts", "remove", "perso", "--yes"]);
+        let Commands::Accounts(args) = &cli.command else {
+            panic!("expected Accounts command");
+        };
+        let AccountCommands::Remove { account, yes } = &args.command else {
+            panic!("expected Remove subcommand");
+        };
+        assert_eq!(account, "perso");
+        assert!(*yes);
+    }
+
+    #[test]
+    fn parse_accounts_list() {
+        let cli = parse(&["ironflow-cli", "accounts", "list"]);
+        assert!(matches!(cli.command, Commands::Accounts(_)));
+    }
+
+    #[test]
+    fn parse_accounts_update_rejects_enable_and_disable() {
+        let args = [
+            "ironflow-cli",
+            "accounts",
+            "update",
+            "perso",
+            "--enable",
+            "--disable",
+        ];
+        assert!(Cli::try_parse_from(args).is_err());
     }
 
     // ── Secrets ────────────────────────────────────────────────────

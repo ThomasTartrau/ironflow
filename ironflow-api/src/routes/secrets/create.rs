@@ -11,6 +11,7 @@ use ironflow_auth::extractor::Authenticated;
 use crate::entities::{SecretResponse, SetSecretRequest};
 use crate::error::ApiError;
 use crate::response::ok;
+use crate::routes::secrets::reject_provider_account_key;
 use crate::state::AppState;
 
 /// Create or update a secret. Admin only.
@@ -41,6 +42,7 @@ pub async fn create_secret(
     if !auth.is_admin() {
         return Err(ApiError::Forbidden);
     }
+    reject_provider_account_key(&req.key)?;
 
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -338,5 +340,73 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["data"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn create_secret_rejects_accounts_prefix() {
+        let state = test_state();
+        let auth = make_auth_header(true, &state);
+        let key = format!("accounts/{}/credential", Uuid::now_v7());
+
+        let app = secrets_router(state.clone());
+        let req = Request::builder()
+            .uri("/secrets")
+            .method("POST")
+            .header("content-type", "application/json")
+            .header("authorization", &auth)
+            .body(Body::from(
+                to_string(&json!({"key": key, "value": "sk-ant-oat01-x"})).unwrap(),
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(state.store.get_secret(&key).await.unwrap().is_none());
+
+        state
+            .store
+            .set_secret(&key, "sk-ant-oat01-x")
+            .await
+            .unwrap();
+        for method in ["PUT", "DELETE"] {
+            let app = secrets_router(state.clone());
+            let req = Request::builder()
+                .uri(format!("/secrets/{key}"))
+                .method(method)
+                .header("content-type", "application/json")
+                .header("authorization", &auth)
+                .body(Body::from(to_string(&json!({"value": "other"})).unwrap()))
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{method}");
+        }
+        let stored = state.store.get_secret(&key).await.unwrap().unwrap();
+        assert_eq!(stored.value, "sk-ant-oat01-x");
+    }
+
+    #[tokio::test]
+    async fn list_secrets_hides_provider_account_credentials() {
+        let state = test_state();
+        let auth = make_auth_header(true, &state);
+        state
+            .store
+            .set_secret(
+                &format!("accounts/{}/credential", Uuid::now_v7()),
+                "sk-ant-oat01-x",
+            )
+            .await
+            .unwrap();
+        state.store.set_secret("github/token", "v").await.unwrap();
+
+        let app = secrets_router(state);
+        let req = Request::builder()
+            .uri("/secrets")
+            .header("authorization", &auth)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains("accounts/"));
+        assert!(text.contains("github/token"));
     }
 }

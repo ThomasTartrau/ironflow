@@ -22,8 +22,13 @@ use ironflow_store::entities::{
     Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step,
     StepApproval, StepDependency, StepUpdate, User,
 };
+use ironflow_store::entities::{
+    NewProviderAccount, NewProviderAccountObservation, ProviderAccount, ProviderAccountCandidate,
+    ProviderAccountUpdate, ProviderAccountUsagePoint, ProviderAccountWindow,
+};
 use ironflow_store::error::StoreError;
 use ironflow_store::log_store::LogStore;
+use ironflow_store::provider_account_store::ProviderAccountStore;
 use ironflow_store::schedule_store::ScheduleStore;
 use ironflow_store::secret_store::SecretStore;
 use ironflow_store::store::RunStore;
@@ -842,6 +847,127 @@ impl ApprovalDelegationStore for ApiRunStore {
             Err(StoreError::Database(
                 "ApprovalDelegationStore not available in worker".to_string(),
             ))
+        })
+    }
+}
+
+/// Error for the account administration methods the worker never needs.
+fn account_method_unavailable(method: &str) -> StoreError {
+    StoreError::Database(format!(
+        "ProviderAccountStore::{method} not available in worker"
+    ))
+}
+
+impl ProviderAccountStore for ApiRunStore {
+    fn create_provider_account(
+        &self,
+        _req: NewProviderAccount,
+    ) -> StoreFuture<'_, ProviderAccount> {
+        Box::pin(async { Err(account_method_unavailable("create_provider_account")) })
+    }
+
+    fn get_provider_account(&self, _id: Uuid) -> StoreFuture<'_, Option<ProviderAccount>> {
+        Box::pin(async { Err(account_method_unavailable("get_provider_account")) })
+    }
+
+    fn find_provider_account_by_name(
+        &self,
+        _name: &str,
+    ) -> StoreFuture<'_, Option<ProviderAccount>> {
+        Box::pin(async { Err(account_method_unavailable("find_provider_account_by_name")) })
+    }
+
+    fn list_provider_accounts(
+        &self,
+        _kind: Option<String>,
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<ProviderAccount>> {
+        Box::pin(async { Err(account_method_unavailable("list_provider_accounts")) })
+    }
+
+    fn update_provider_account(
+        &self,
+        _id: Uuid,
+        _update: ProviderAccountUpdate,
+    ) -> StoreFuture<'_, ProviderAccount> {
+        Box::pin(async { Err(account_method_unavailable("update_provider_account")) })
+    }
+
+    fn delete_provider_account(&self, _id: Uuid) -> StoreFuture<'_, bool> {
+        Box::pin(async { Err(account_method_unavailable("delete_provider_account")) })
+    }
+
+    fn list_provider_account_windows(
+        &self,
+        _ids: Vec<Uuid>,
+    ) -> StoreFuture<'_, Vec<ProviderAccountWindow>> {
+        Box::pin(async { Err(account_method_unavailable("list_provider_account_windows")) })
+    }
+
+    fn list_provider_account_usage(
+        &self,
+        _id: Uuid,
+        _since: DateTime<Utc>,
+    ) -> StoreFuture<'_, Vec<ProviderAccountUsagePoint>> {
+        Box::pin(async { Err(account_method_unavailable("list_provider_account_usage")) })
+    }
+
+    fn record_provider_account_observation(
+        &self,
+        id: Uuid,
+        observation: NewProviderAccountObservation,
+    ) -> StoreFuture<'_, Vec<ProviderAccountWindow>> {
+        Box::pin(async move {
+            let resp = self
+                .client
+                .post(self.internal(&format!("/provider-accounts/{id}/observations")))
+                .bearer_auth(&self.token)
+                .json(&observation)
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if resp.status() == StatusCode::NOT_FOUND {
+                return Err(StoreError::ProviderAccountNotFound(id));
+            }
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<Vec<ProviderAccountWindow>> =
+                resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
+        })
+    }
+
+    fn purge_provider_account_usage(&self, _before: DateTime<Utc>) -> StoreFuture<'_, u64> {
+        Box::pin(async { Err(account_method_unavailable("purge_provider_account_usage")) })
+    }
+
+    fn list_provider_account_candidates(
+        &self,
+        kind: String,
+    ) -> StoreFuture<'_, Vec<ProviderAccountCandidate>> {
+        Box::pin(async move {
+            let resp = self
+                .client
+                .get(self.internal("/provider-accounts/candidates"))
+                .bearer_auth(&self.token)
+                .query(&[("kind", kind)])
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<Vec<ProviderAccountCandidate>> =
+                resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
         })
     }
 }

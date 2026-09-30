@@ -136,6 +136,7 @@ impl HumanInputOutcome {
 ///                 model: None,
 ///                 debug_messages: None,
 ///                 artifacts: StepArtifacts::default(),
+///                 account_id: None,
 ///             })),
 ///             _ => None,
 ///         }

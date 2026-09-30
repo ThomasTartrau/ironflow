@@ -22,6 +22,7 @@ use crate::entities::{
 };
 use crate::error::StoreError;
 use crate::log_store::LogStore;
+use crate::provider_account_store::ProviderAccountStore;
 use crate::schedule_store::ScheduleStore;
 use crate::secret_store::SecretStore;
 use crate::user_store::UserStore;
@@ -379,6 +380,7 @@ pub trait Store:
     + LogStore
     + ScheduleStore
     + ApprovalDelegationStore
+    + ProviderAccountStore
 {
 }
 
@@ -391,7 +393,8 @@ impl<
         + ArtifactStore
         + LogStore
         + ScheduleStore
-        + ApprovalDelegationStore,
+        + ApprovalDelegationStore
+        + ProviderAccountStore,
 > Store for T
 {
 }

@@ -238,6 +238,8 @@ impl SecretStore for PostgresStore {
                 SELECT id, key, created_at, updated_at, COUNT(*) OVER() as "total_count!: i64"
                 FROM ironflow.secrets
                 WHERE key LIKE $1 ESCAPE '\'
+                  -- Provider Account credentials are managed through /provider-accounts.
+                  AND key NOT LIKE 'accounts/%'
                 ORDER BY key ASC
                 LIMIT $2 OFFSET $3
                 "#,

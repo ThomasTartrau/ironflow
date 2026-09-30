@@ -105,6 +105,9 @@ pub struct StepResponse {
     /// approval step without rules, `None` for any other step kind.
     #[serde(default)]
     pub approvals_required: Option<u32>,
+    /// Provider Account the agent step ran under, if any.
+    #[serde(default)]
+    pub account_id: Option<Uuid>,
 }
 
 impl StepResponse {
@@ -166,6 +169,7 @@ impl StepResponse {
             approval_requirement: step.approval_requirement,
             approvals: step.approvals,
             approvals_required,
+            account_id: step.account_id,
         }
     }
 }

@@ -120,6 +120,14 @@ pub enum ApiError {
     #[error("approval delegation not found")]
     DelegationNotFound(Uuid),
 
+    /// Provider Account not found (404), by id or name.
+    #[error("provider account not found: {0}")]
+    ProviderAccountNotFound(String),
+
+    /// The account credential was rejected, by format or by the provider (422).
+    #[error("{0}")]
+    AccountCredentialRejected(String),
+
     /// Store operation failed (500).
     #[error("database error")]
     Store(StoreError),
@@ -153,6 +161,12 @@ impl From<StoreError> for ApiError {
         match e {
             StoreError::ScheduleNotFound(id) => ApiError::ScheduleNotFound(id),
             StoreError::DelegationNotFound(id) => ApiError::DelegationNotFound(id),
+            StoreError::ProviderAccountNotFound(id) => {
+                ApiError::ProviderAccountNotFound(id.to_string())
+            }
+            StoreError::DuplicateProviderAccount(name) => {
+                ApiError::Conflict(format!("provider account '{name}' already exists"))
+            }
             other => ApiError::Store(other),
         }
     }
@@ -183,6 +197,8 @@ impl ApiError {
             ApiError::ArtifactTooLarge => "ARTIFACT_TOO_LARGE",
             ApiError::ScheduleNotFound(_) => "SCHEDULE_NOT_FOUND",
             ApiError::DelegationNotFound(_) => "DELEGATION_NOT_FOUND",
+            ApiError::ProviderAccountNotFound(_) => "PROVIDER_ACCOUNT_NOT_FOUND",
+            ApiError::AccountCredentialRejected(_) => "ACCOUNT_CREDENTIAL_REJECTED",
             ApiError::Store(StoreError::Crypto(_)) => "SECRET_STORE_UNAVAILABLE",
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => "DUPLICATE_ARTIFACT",
             ApiError::Store(StoreError::LeaseLost { .. }) => "LEASE_LOST",
@@ -219,6 +235,8 @@ impl ApiError {
             ApiError::ArtifactTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ApiError::ScheduleNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::DelegationNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::ProviderAccountNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::AccountCredentialRejected(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::Store(StoreError::Crypto(_)) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Store(StoreError::DuplicateArtifact { .. }) => StatusCode::CONFLICT,
             ApiError::Store(StoreError::LeaseLost { .. }) => StatusCode::CONFLICT,
@@ -406,6 +424,30 @@ mod tests {
         let err = ApiError::DelegationNotFound(Uuid::nil());
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
         assert_eq!(err.code(), "DELEGATION_NOT_FOUND");
+    }
+
+    #[test]
+    fn provider_account_errors_status_and_code() {
+        let err = ApiError::ProviderAccountNotFound("perso".to_string());
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert_eq!(err.code(), "PROVIDER_ACCOUNT_NOT_FOUND");
+
+        let err = ApiError::AccountCredentialRejected("token rejected".to_string());
+        assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(err.code(), "ACCOUNT_CREDENTIAL_REJECTED");
+        assert_eq!(err.to_string(), "token rejected");
+    }
+
+    #[test]
+    fn provider_account_store_errors_map_to_http() {
+        let id = Uuid::now_v7();
+        let err = ApiError::from(StoreError::ProviderAccountNotFound(id));
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert!(err.to_string().contains(&id.to_string()));
+
+        let err = ApiError::from(StoreError::DuplicateProviderAccount("perso".to_string()));
+        assert_eq!(err.status(), StatusCode::CONFLICT);
+        assert!(err.to_string().contains("perso"));
     }
 
     #[test]

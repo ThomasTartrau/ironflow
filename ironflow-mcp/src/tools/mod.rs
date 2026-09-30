@@ -17,6 +17,7 @@ pub mod api_keys;
 pub mod artifacts;
 pub mod audit_logs;
 pub mod delegations;
+pub mod provider_accounts;
 pub mod runs;
 pub mod schedules;
 pub mod secrets;
@@ -33,6 +34,11 @@ pub use artifacts::DownloadArtifactTool;
 pub use audit_logs::ListAuditLogsTool;
 pub use delegations::{
     CreateApprovalDelegationTool, DeleteApprovalDelegationTool, ListApprovalDelegationsTool,
+};
+pub use provider_accounts::{
+    CreateProviderAccountTool, DeleteProviderAccountTool, GetProviderAccountTool,
+    ListProviderAccountsTool, ProviderAccountUsageTool, TestProviderAccountTool,
+    UpdateProviderAccountTool,
 };
 pub use runs::{CreateRunTool, GetRunLogsTool, GetRunTool, ListRunsTool, SearchRunsTool};
 pub use schedules::{
@@ -71,6 +77,13 @@ rust_mcp_sdk::tool_box!(
         UpdateSecretTool,
         DeleteSecretTool,
         RotateSecretKeyTool,
+        ListProviderAccountsTool,
+        GetProviderAccountTool,
+        CreateProviderAccountTool,
+        UpdateProviderAccountTool,
+        DeleteProviderAccountTool,
+        TestProviderAccountTool,
+        ProviderAccountUsageTool,
         ListApiKeysTool,
         CreateApiKeyTool,
         DeleteApiKeyTool,
@@ -366,6 +379,37 @@ mod tests {
                     let _ = key;
                     StatusCode::NO_CONTENT
                 }),
+            )
+            // Provider Accounts
+            .route(
+                "/api/v1/provider-accounts",
+                get(|| async {
+                    Json(json!({
+                        "data": [
+                            { "id": "a1", "name": "perso-max", "kind": "claude_subscription", "state": "ok", "windows": [] }
+                        ]
+                    }))
+                })
+                .post(|Json(body): Json<Value>| async move {
+                    (StatusCode::CREATED, Json(json!({
+                        "data": {
+                            "id": "a2",
+                            "name": body["name"],
+                            "kind": body["kind"],
+                            "received_token": body["token"].is_string(),
+                        }
+                    })))
+                }),
+            )
+            .route(
+                "/api/v1/provider-accounts/{id}",
+                get(|Path(id): Path<String>| async move {
+                    Json(json!({ "data": { "id": "a1", "name": id } }))
+                })
+                .patch(|Json(body): Json<Value>| async move {
+                    Json(json!({ "data": { "id": "a1", "sent": body } }))
+                })
+                .delete(|| async { StatusCode::NO_CONTENT }),
             )
             // API Keys
             .route(
@@ -1095,6 +1139,85 @@ mod tests {
         let err = tool.run(&client).await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("attente"), "got: {msg}");
+    }
+
+    // ---------------------------------------------------------------
+    // Provider Account tools
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn create_provider_account_sends_token() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateProviderAccountTool {
+            name: "perso-max".to_string(),
+            kind: None,
+            token: "sk-ant-oat01-mcp-test".to_string(),
+            display_name: None,
+            tags: None,
+            priority: None,
+            max_concurrency: None,
+            plan: None,
+        };
+        assert!(!format!("{tool:?}").contains("sk-ant-"));
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+        assert_eq!(parsed["name"], "perso-max");
+        assert_eq!(parsed["kind"], "claude_subscription");
+        assert_eq!(parsed["received_token"], true);
+    }
+
+    #[tokio::test]
+    async fn list_provider_accounts_output_has_no_token() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let result = ListProviderAccountsTool {}.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+        assert_eq!(parsed[0]["name"], "perso-max");
+        assert!(!parsed.to_string().contains("sk-ant-"));
+    }
+
+    #[tokio::test]
+    async fn update_provider_account_sends_only_given_fields() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = UpdateProviderAccountTool {
+            account: "perso-max".to_string(),
+            display_name: None,
+            enabled: Some(false),
+            priority: None,
+            tags: None,
+            max_concurrency: None,
+            alert_threshold: None,
+            plan: None,
+            token: Some("sk-ant-oat01-new".to_string()),
+        };
+        assert!(!format!("{tool:?}").contains("sk-ant-"));
+        let parsed = extract_json(&tool.run(&client).await.unwrap());
+        assert_eq!(parsed["sent"]["enabled"], false);
+        assert!(parsed["sent"].get("priority").is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_account_tools_reject_path_traversal() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = DeleteProviderAccountTool {
+            account: "../secrets".to_string(),
+        };
+        assert!(tool.run(&client).await.is_err());
+        let tool = GetProviderAccountTool {
+            account: "perso-max".to_string(),
+        };
+        let parsed = extract_json(&tool.run(&client).await.unwrap());
+        assert_eq!(parsed["name"], "perso-max");
+        let deleted = DeleteProviderAccountTool {
+            account: "perso-max".to_string(),
+        }
+        .run(&client)
+        .await;
+        assert!(deleted.is_ok());
     }
 
     // ---------------------------------------------------------------

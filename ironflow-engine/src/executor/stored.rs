@@ -40,6 +40,7 @@ impl From<&Step> for StepOutput {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: step.account_id,
         }
     }
 }

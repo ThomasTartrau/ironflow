@@ -77,6 +77,7 @@ pub mod escalator;
 pub mod middleware;
 #[cfg(feature = "openapi")]
 pub mod openapi;
+pub mod provider_accounts;
 pub mod purger;
 pub mod rate_limit;
 pub mod reaper;

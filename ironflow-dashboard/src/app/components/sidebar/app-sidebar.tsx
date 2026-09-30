@@ -2,6 +2,7 @@ import {
 	BarChart3,
 	BookOpen,
 	CalendarClock,
+	Gauge,
 	KeyRound,
 	LayoutDashboard,
 	LockKeyhole,
@@ -85,6 +86,24 @@ const baseNavItems: NavItem[] = [
 	},
 ];
 
+/** Settings entry only admins see, right after "Secrets". */
+const accountsNavItem = {
+	title: "Accounts",
+	url: "/accounts",
+	icon: Gauge,
+};
+
+/** Insert the admin-only "Accounts" entry after "Secrets" in the Settings group. */
+function withAccounts(items: NavItem[]): NavItem[] {
+	return items.map((item) => {
+		if (item.title !== "Settings" || !item.items) return item;
+		const index = item.items.findIndex((sub) => sub.url === "/secrets");
+		const subItems = [...item.items];
+		subItems.splice(index + 1, 0, accountsNavItem);
+		return { ...item, items: subItems };
+	});
+}
+
 const adminNavItem: NavItem = {
 	title: "Administration",
 	url: "/users",
@@ -109,7 +128,9 @@ export function AppSidebar() {
 	const logoUrl = useBrandLogo();
 	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
 
-	const navItems = isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
+	const navItems = isAdmin
+		? [...withAccounts(baseNavItems), adminNavItem]
+		: baseNavItems;
 
 	return (
 		<Sidebar collapsible="icon">

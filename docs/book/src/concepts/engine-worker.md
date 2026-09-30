@@ -73,6 +73,10 @@ Workflows that use `ctx.decision(...)` need a decision provider on the worker to
 `.decision_provider(Arc::new(TypeSafeProvider::new(api_key)))`. See
 [Decisions](decision.md).
 
+When [Provider Accounts](provider-accounts.md) exist, the worker picks one for
+every agent step and injects its credential; `WorkerBuilder::account_strategy`
+chooses how.
+
 ## Lease & Reaper
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.

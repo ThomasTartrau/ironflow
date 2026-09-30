@@ -63,6 +63,7 @@ pub(super) fn allowed_failure_output(
         model: None,
         debug_messages: None,
         artifacts: StepArtifacts::default(),
+        account_id: None,
     }
 }
 

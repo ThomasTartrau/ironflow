@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT s.account_id as \"account_id!\", COUNT(*) as \"running!: i64\"\n                FROM ironflow.steps s\n                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = s.state_machine__id\n                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id\n                JOIN ironflow.runs r ON r.id = s.run_id\n                WHERE s.account_id = ANY($1)\n                  AND ast.name = 'running'\n                  AND r.lease_expires_at > NOW()\n                GROUP BY s.account_id\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "account_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "running!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "693f5912411b31f4fe7184f646270a2d3216a0269ea6a5c3af6a3dbd0ecd1890"
+}

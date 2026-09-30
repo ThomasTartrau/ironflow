@@ -31,6 +31,8 @@ export const ALL_EVENT_KINDS = [
 	"user_signed_up",
 	"user_signed_out",
 	"retry_forced",
+	"provider_account.updated",
+	"provider_account.usage_updated",
 ] as const satisfies readonly StreamedEventKind[];
 
 // Exhaustiveness check: fails to compile if a new Event variant is added to the

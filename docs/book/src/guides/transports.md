@@ -41,6 +41,14 @@ runs each agent in a hardened pod: non-root, read-only root filesystem, secrets
 read from Kubernetes Secrets, managed-settings presets and egress profiles. See
 [Kubernetes Sandbox](k8s-sandbox.md).
 
+## Provider Account credentials
+
+The local, Docker and SSH transports inject the credential of the
+[Provider Account](../concepts/provider-accounts.md) the worker selected:
+through the process environment, the Docker exec environment, or the first line
+of stdin over SSH. The token never appears on a command line. The Kubernetes
+transports do not inject accounts yet and keep using the pod environment.
+
 ## Choosing a transport
 
 - **Development**: use `ClaudeCodeProvider` (local). No setup needed.

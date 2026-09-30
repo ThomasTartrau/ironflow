@@ -313,6 +313,120 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/provider-accounts": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List Provider Accounts with their latest windows. Admin only.
+		 * @description The response never includes the credential.
+		 */
+		get: operations["list_provider_accounts"];
+		put?: never;
+		/**
+		 * Add a Provider Account. Admin only.
+		 * @description The token is checked against the provider before anything is stored: a
+		 *     malformed or rejected token gets 422 and leaves nothing behind. A token
+		 *     answered with 429 is stored and shown as limited until its window resets.
+		 *     The response never includes the token.
+		 */
+		post: operations["create_provider_account"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/provider-accounts/kinds": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List the account kinds this server supports, with their form fields. Admin only. */
+		get: operations["list_account_kinds"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/provider-accounts/{id}": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get a Provider Account by UUID or name. Admin only. */
+		get: operations["get_provider_account"];
+		put?: never;
+		post?: never;
+		/**
+		 * Delete a Provider Account and its credential. Admin only.
+		 * @description Its windows and usage history go with it; the steps that ran under it
+		 *     keep their history but lose the link to the account.
+		 */
+		delete: operations["delete_provider_account"];
+		options?: never;
+		head?: never;
+		/**
+		 * Update a Provider Account. Admin only.
+		 * @description `name` and `kind` are immutable. A new `token` is checked against the
+		 *     provider before it replaces the stored one. The response never includes
+		 *     the token.
+		 */
+		patch: operations["update_provider_account"];
+		trace?: never;
+	};
+	"/api/v1/provider-accounts/{id}/test": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Check the stored credential against the provider and record the windows
+		 *     it reports. Admin only.
+		 * @description `result` is `valid`, `limited` or `unauthorized`; an `unauthorized`
+		 *     account is marked as having an invalid token until it is replaced.
+		 */
+		post: operations["test_provider_account"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/provider-accounts/{id}/usage": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Current windows of a Provider Account and their history over `days`
+		 *     (default 30, at most 90). Admin only.
+		 */
+		get: operations["provider_account_usage"];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/runs": {
 		parameters: {
 			query?: never;
@@ -1125,6 +1239,103 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
 	schemas: {
+		/** @description A form field of an account kind. */
+		AccountFormFieldResponse: {
+			/** @description Help text. */
+			help: string;
+			/** @description Label. */
+			label: string;
+			/** @description Field identifier. */
+			name: string;
+			/** @description Whether the field is a secret (write-only). */
+			secret: boolean;
+		};
+		/** @description A supported account kind. */
+		AccountKindResponse: {
+			/** @description Human-readable name. */
+			display_name: string;
+			/** @description Fields of the add form. */
+			fields: components["schemas"]["AccountFormFieldResponse"][];
+			/** @description Kind identifier. */
+			id: string;
+		};
+		/**
+		 * @description Derived state of an account, for display.
+		 * @enum {string}
+		 */
+		AccountState:
+			| "ok"
+			| "near_limit"
+			| "limited"
+			| "token_invalid"
+			| "never_used";
+		/**
+		 * @description Outcome of a live credential test.
+		 * @enum {string}
+		 */
+		AccountTestResult: "valid" | "limited" | "unauthorized";
+		/** @description One historical observation of a window. */
+		AccountUsagePointResponse: {
+			/** @description Model scope. */
+			model_scope?: string | null;
+			/**
+			 * Format: date-time
+			 * @description When the window was observed.
+			 */
+			observed_at: string;
+			/**
+			 * Format: date-time
+			 * @description When the window resets.
+			 */
+			resets_at?: string | null;
+			/** @description Provider status. */
+			status: components["schemas"]["AccountWindowStatus"];
+			/**
+			 * Format: double
+			 * @description Fraction used.
+			 */
+			utilization: number;
+			/** @description Window name. */
+			window: string;
+		};
+		/** @description One usage window of an account. */
+		AccountWindowResponse: {
+			/** @description Model family the window applies to, `null` for every model. */
+			model_scope?: string | null;
+			/**
+			 * Format: date-time
+			 * @description When the window was observed.
+			 */
+			observed_at: string;
+			/**
+			 * Format: date-time
+			 * @description When the window resets.
+			 */
+			resets_at?: string | null;
+			/** @description Provider status. */
+			status: components["schemas"]["AccountWindowStatus"];
+			/**
+			 * Format: double
+			 * @description Fraction used, `0.0..=1.0`.
+			 */
+			utilization: number;
+			/** @description Window name (`five_hour`, `seven_day`). */
+			window: string;
+		};
+		/**
+		 * @description Status of a usage window, as reported by the provider.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::AccountWindowStatus;
+		 *
+		 *     let status: AccountWindowStatus = "allowed_warning".parse().unwrap();
+		 *     assert_eq!(status, AccountWindowStatus::AllowedWarning);
+		 *     ```
+		 * @enum {string}
+		 */
+		AccountWindowStatus: "allowed" | "allowed_warning" | "rejected";
 		/** @description API key summary (never includes the hash or raw key). */
 		ApiKeyResponse: {
 			/**
@@ -1174,6 +1385,8 @@ export interface components {
 			| "runs_write"
 			| "runs_manage"
 			| "stats_read"
+			| "accounts_read"
+			| "accounts_manage"
 			| "admin";
 		/** @description Approval delegation response. */
 		ApprovalDelegationResponse: {
@@ -1655,6 +1868,43 @@ export interface components {
 			/** @description Optional glob on the workflow name, e.g. `"deploy-*"`. `None` = all workflows. */
 			workflow_filter?: string | null;
 		};
+		/** @description Request body to add a Provider Account. Admin only. */
+		CreateProviderAccountRequest: {
+			/**
+			 * Format: double
+			 * @description Utilization from which the account is shown as near its limit, in `(0, 1]` (default 0.8).
+			 */
+			alert_threshold?: number | null;
+			/** @description Human-readable name, defaults to `name`. */
+			display_name?: string | null;
+			/** @description Whether the account may be selected (default `true`). */
+			enabled?: boolean | null;
+			/**
+			 * Format: date-time
+			 * @description When the credential expires (default: now + 365 days).
+			 */
+			expires_at?: string | null;
+			/** @description Account kind (see `GET /provider-accounts/kinds`). */
+			kind: string;
+			/**
+			 * Format: int32
+			 * @description Maximum concurrent steps (>= 1).
+			 */
+			max_concurrency?: number | null;
+			/** @description Unique slug, immutable (`^[a-z0-9][a-z0-9-]{0,62}$`). */
+			name: string;
+			/** @description Subscription plan, informative (`pro`, `max`). */
+			plan?: string | null;
+			/**
+			 * Format: int32
+			 * @description Priority, lower is preferred (default 100).
+			 */
+			priority?: number | null;
+			/** @description Tags, each a slug. */
+			tags?: string[] | null;
+			/** @description Credential, write-only (e.g. a `claude setup-token` token). */
+			token: string;
+		};
 		/**
 		 * @description Request to trigger a workflow.
 		 *
@@ -1869,6 +2119,14 @@ export interface components {
 			| (components["schemas"]["UserSignedOutEvent"] & {
 					/** @enum {string} */
 					type: "user_signed_out";
+			  })
+			| (components["schemas"]["ProviderAccountUpdatedEvent"] & {
+					/** @enum {string} */
+					type: "provider_account.updated";
+			  })
+			| (components["schemas"]["ProviderAccountUsageUpdatedEvent"] & {
+					/** @enum {string} */
+					type: "provider_account.usage_updated";
 			  });
 		/**
 		 * @description Strongly-typed event kind matching domain event variants.
@@ -1902,7 +2160,9 @@ export interface components {
 			| "user_signed_up"
 			| "user_signed_out"
 			| "secrets_rotated"
-			| "retry_forced";
+			| "retry_forced"
+			| "provider_account.updated"
+			| "provider_account.usage_updated";
 		/** @description The execution plan of one workflow for one input payload. */
 		ExecutionPlanResponse: {
 			/**
@@ -2301,6 +2561,206 @@ export interface components {
 			parallel_group?: string | null;
 			/** @description Workflow that owns this step. */
 			workflow: string;
+		};
+		/**
+		 * @description What happened to a Provider Account in a
+		 *     [`ProviderAccountUpdatedEvent`].
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::ProviderAccountChange;
+		 *
+		 *     assert_eq!(ProviderAccountChange::TokenReplaced.as_str(), "token_replaced");
+		 *     ```
+		 * @enum {string}
+		 */
+		ProviderAccountChange: "created" | "updated" | "deleted" | "token_replaced";
+		/** @description A Provider Account, without its credential. */
+		ProviderAccountResponse: {
+			/**
+			 * Format: double
+			 * @description Alert threshold.
+			 */
+			alert_threshold: number;
+			/**
+			 * Format: date-time
+			 * @description When the provider last rejected the credential.
+			 */
+			auth_failed_at?: string | null;
+			/**
+			 * Format: date-time
+			 * @description Creation timestamp.
+			 */
+			created_at: string;
+			/**
+			 * Format: uuid
+			 * @description Creating user.
+			 */
+			created_by?: string | null;
+			/** @description Human-readable name. */
+			display_name: string;
+			/** @description Whether the account may be selected. */
+			enabled: boolean;
+			/**
+			 * Format: date-time
+			 * @description When the credential expires.
+			 */
+			expires_at: string;
+			/**
+			 * Format: uuid
+			 * @description Account ID.
+			 */
+			id: string;
+			/** @description Account kind. */
+			kind: string;
+			/**
+			 * Format: int32
+			 * @description Maximum concurrent steps, `null` for unlimited.
+			 */
+			max_concurrency?: number | null;
+			/** @description Unique slug. */
+			name: string;
+			/** @description Subscription plan. */
+			plan?: string | null;
+			/**
+			 * Format: int32
+			 * @description Priority, lower is preferred.
+			 */
+			priority: number;
+			/** @description Derived state. */
+			state: components["schemas"]["AccountState"];
+			/** @description Tags. */
+			tags: string[];
+			/**
+			 * Format: date-time
+			 * @description Last update timestamp.
+			 */
+			updated_at: string;
+			/** @description Latest windows. */
+			windows: components["schemas"]["AccountWindowResponse"][];
+		};
+		/** @description Response of `POST /provider-accounts/{id}/test`. */
+		ProviderAccountTestResponse: {
+			/** @description Outcome. */
+			result: components["schemas"]["AccountTestResult"];
+			/** @description Windows reported by the provider. */
+			windows: components["schemas"]["AccountWindowResponse"][];
+		};
+		/**
+		 * @description Payload of the `Event::ProviderAccountUpdated` event.
+		 *
+		 *     Never carries the credential.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::{ProviderAccountChange, ProviderAccountUpdatedEvent};
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = ProviderAccountUpdatedEvent {
+		 *         account_id: Uuid::now_v7(),
+		 *         name: "perso".to_string(),
+		 *         change: ProviderAccountChange::Created,
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.name, "perso");
+		 *     ```
+		 */
+		ProviderAccountUpdatedEvent: {
+			/**
+			 * Format: uuid
+			 * @description Account identifier.
+			 */
+			account_id: string;
+			/**
+			 * Format: date-time
+			 * @description When the change happened.
+			 */
+			at: string;
+			/** @description What changed. */
+			change: components["schemas"]["ProviderAccountChange"];
+			/** @description Account name. */
+			name: string;
+		};
+		/** @description Current windows and history of an account. */
+		ProviderAccountUsageResponse: {
+			/**
+			 * Format: uuid
+			 * @description Account ID.
+			 */
+			account_id: string;
+			/** @description Observations over the requested period, oldest first. */
+			history: components["schemas"]["AccountUsagePointResponse"][];
+			/** @description Account name. */
+			name: string;
+			/** @description Latest windows. */
+			windows: components["schemas"]["AccountWindowResponse"][];
+		};
+		/**
+		 * @description Payload of the `Event::ProviderAccountUsageUpdated` event.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::ProviderAccountUsageUpdatedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = ProviderAccountUsageUpdatedEvent {
+		 *         account_id: Uuid::now_v7(),
+		 *         name: "perso".to_string(),
+		 *         windows: Vec::new(),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert!(payload.windows.is_empty());
+		 *     ```
+		 */
+		ProviderAccountUsageUpdatedEvent: {
+			/**
+			 * Format: uuid
+			 * @description Account identifier.
+			 */
+			account_id: string;
+			/**
+			 * Format: date-time
+			 * @description When the windows were recorded.
+			 */
+			at: string;
+			/** @description Account name. */
+			name: string;
+			/** @description Current windows of the account. */
+			windows: components["schemas"]["ProviderAccountWindow"][];
+		};
+		/** @description Latest reading of one usage window of an account. */
+		ProviderAccountWindow: {
+			/**
+			 * Format: uuid
+			 * @description Account the window belongs to.
+			 */
+			account_id: string;
+			/** @description Model family the window applies to, `None` for every model. */
+			model_scope?: string | null;
+			/**
+			 * Format: date-time
+			 * @description When the window was observed.
+			 */
+			observed_at: string;
+			/**
+			 * Format: date-time
+			 * @description When the window resets.
+			 */
+			resets_at?: string | null;
+			/** @description Provider status. */
+			status: components["schemas"]["AccountWindowStatus"];
+			/**
+			 * Format: double
+			 * @description Fraction used, `0.0..=1.0`.
+			 */
+			utilization: number;
+			/** @description Window name (`five_hour`, `seven_day`). */
+			window: string;
 		};
 		/** @description Request body for rejecting a human input step. */
 		RejectHumanInputRequest: {
@@ -3173,6 +3633,11 @@ export interface components {
 		 */
 		StepResponse: {
 			/**
+			 * Format: uuid
+			 * @description Provider Account the agent step ran under, if any.
+			 */
+			account_id?: string | null;
+			/**
 			 * @description Who the approval is currently assigned to.
 			 *
 			 *     Serialized as a prefixed string: `user:{name}` or `group:{name}`.
@@ -3419,6 +3884,42 @@ export interface components {
 					/** @description Name of the probe that fired (e.g. `"http"`, `"sql"`). */
 					probe: string;
 			  };
+		/**
+		 * @description Request body to update a Provider Account. All fields optional; `name`
+		 *     and `kind` are immutable.
+		 */
+		UpdateProviderAccountRequest: {
+			/**
+			 * Format: double
+			 * @description New alert threshold in `(0, 1]`.
+			 */
+			alert_threshold?: number | null;
+			/** @description New display name. */
+			display_name?: string | null;
+			/** @description Enable or disable. */
+			enabled?: boolean | null;
+			/**
+			 * Format: date-time
+			 * @description New expiry of the credential.
+			 */
+			expires_at?: string | null;
+			/**
+			 * Format: int32
+			 * @description New max concurrency; `null` removes the limit.
+			 */
+			max_concurrency?: number | null;
+			/** @description New plan; `null` clears it. */
+			plan?: string | null;
+			/**
+			 * Format: int32
+			 * @description New priority.
+			 */
+			priority?: number | null;
+			/** @description New tags (replaces the list). */
+			tags?: string[] | null;
+			/** @description Replacement credential, write-only. Checked against the provider. */
+			token?: string | null;
+		};
 		/** @description Request body for updating a user's role (admin only). */
 		UpdateRoleRequest: {
 			/** @description New admin status. */
@@ -4376,6 +4877,409 @@ export interface operations {
 		responses: {
 			/** @description Service is healthy */
 			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_provider_accounts: {
+		parameters: {
+			query?: {
+				/** @description Only accounts of this kind. */
+				kind?: string | null;
+				/** @description Page number (1-based). */
+				page?: number | null;
+				/** @description Items per page (max 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Provider accounts listed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ProviderAccountResponse"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	create_provider_account: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Account and its credential */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["CreateProviderAccountRequest"];
+			};
+		};
+		responses: {
+			/** @description Provider account created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ProviderAccountResponse"];
+				};
+			};
+			/** @description Invalid input or unknown kind */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Name already taken */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Credential rejected */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider unreachable */
+			502: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_account_kinds: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Supported kinds */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["AccountKindResponse"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	get_provider_account: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Account UUID or name */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Provider account */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ProviderAccountResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider account not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	delete_provider_account: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Account UUID or name */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Provider account deleted */
+			204: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider account not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	update_provider_account: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Account UUID or name */
+				id: string;
+			};
+			cookie?: never;
+		};
+		/** @description Fields to change */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["UpdateProviderAccountRequest"];
+			};
+		};
+		responses: {
+			/** @description Provider account updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ProviderAccountResponse"];
+				};
+			};
+			/** @description Invalid input */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider account not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Credential rejected */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider unreachable */
+			502: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	test_provider_account: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Account UUID or name */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Credential checked */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ProviderAccountTestResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider account not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description No credential stored */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider unreachable */
+			502: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	provider_account_usage: {
+		parameters: {
+			query?: {
+				/** @description History depth in days, 1 to 90 (default 30). */
+				days?: number | null;
+			};
+			header?: never;
+			path: {
+				/** @description Account UUID or name */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Usage of the account */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ProviderAccountUsageResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Provider account not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

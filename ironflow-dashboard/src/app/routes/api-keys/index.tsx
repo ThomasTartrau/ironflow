@@ -37,6 +37,8 @@ const SCOPE_LABELS: Record<ApiKeyScope, string> = {
 	runs_write: "Runs Write",
 	runs_manage: "Runs Manage",
 	stats_read: "Stats Read",
+	accounts_read: "Accounts Read",
+	accounts_manage: "Accounts Manage",
 	admin: "Admin",
 };
 

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE ironflow.provider_accounts SET auth_failed_at = NULL WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9ade0f27234d3422eca172f5e1371db121e164dfed3792fa4c2efa9709ef8e8f"
+}

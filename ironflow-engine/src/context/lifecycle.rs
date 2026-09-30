@@ -359,6 +359,7 @@ impl WorkflowContext {
                     model: None,
                     debug_messages: None,
                     artifacts: StepArtifacts::default(),
+                    account_id: None,
                 });
             }
             return Err(err);
@@ -418,6 +419,7 @@ impl WorkflowContext {
                             output_tokens: output.output_tokens,
                             completed_at: Some(completed_at),
                             debug_messages: debug_messages_json,
+                            account_id: output.account_id,
                             ..StepUpdate::default()
                         },
                     )

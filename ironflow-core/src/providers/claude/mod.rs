@@ -12,6 +12,7 @@
 
 pub mod common;
 pub mod local;
+pub mod rate_limit_event;
 
 #[cfg(feature = "transport-ssh")]
 pub mod ssh;

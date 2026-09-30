@@ -289,6 +289,7 @@ mod tests {
             model: Some("claude-sonnet".to_string()),
             duration_ms: 100,
             debug_messages: None,
+            account_id: None,
         }
     }
 
@@ -552,6 +553,7 @@ mod tests {
             model: Some("claude-sonnet".to_string()),
             duration_ms: 500,
             debug_messages: None,
+            account_id: None,
         };
 
         let provider = replay_provider(&dir);

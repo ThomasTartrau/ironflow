@@ -271,6 +271,7 @@ impl WorkflowContext {
             model: execution.output.model.as_ref().map(ToString::to_string),
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         let completed_at = Utc::now();

@@ -11,8 +11,9 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::client::ApiResponse;
 use ironflow_sdk::types::{
-    ApiKeyResponse, ApiKeyScope, ArtifactResponse, AuditLogEntry, CreateApiKeyResponse,
-    ExecutionPlanResponse, KeyVersionsResponse, PlannedStepResponse, RunDetailResponse,
+    AccountState, AccountWindowResponse, AccountWindowStatus, ApiKeyResponse, ApiKeyScope,
+    ArtifactResponse, AuditLogEntry, CreateApiKeyResponse, ExecutionPlanResponse,
+    KeyVersionsResponse, PlannedStepResponse, ProviderAccountResponse, RunDetailResponse,
     RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsHistoryResponse, StatsResponse,
     StepResponse, StepStatus, UserGroupsResponse, UserResponse, WorkflowDetailResponse,
     WorkflowSummary,
@@ -767,6 +768,80 @@ pub fn secrets_table(secrets: &[SecretResponse]) -> Table {
             Cell::new(&secret.key),
             Cell::new(format_datetime(&secret.created_at)),
             Cell::new(format_datetime(&secret.updated_at)),
+        ]);
+    }
+
+    table
+}
+
+/// Utilization of the unscoped window `name`, as a percentage, `-` when absent.
+fn window_percent(windows: &[AccountWindowResponse], name: &str) -> String {
+    windows
+        .iter()
+        .find(|w| w.window == name && w.model_scope.is_none())
+        .map_or_else(
+            || "-".to_string(),
+            |w| format!("{:.0}%", w.utilization * 100.0),
+        )
+}
+
+/// Colour of an account state.
+fn account_state_color(state: &AccountState) -> Color {
+    match state {
+        AccountState::Ok => Color::Green,
+        AccountState::NearLimit => Color::Yellow,
+        AccountState::Limited | AccountState::TokenInvalid => Color::Red,
+        AccountState::NeverUsed => Color::Grey,
+    }
+}
+
+/// Render Provider Accounts as a table. The credential is never part of the response.
+pub fn provider_accounts_table(accounts: &[ProviderAccountResponse]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        "Name", "Kind", "State", "Enabled", "Priority", "Tags", "5h", "7d", "Expires",
+    ]);
+
+    for account in accounts {
+        table.add_row(vec![
+            Cell::new(&account.name),
+            Cell::new(&account.kind),
+            Cell::new(account.state.to_string()).fg(account_state_color(&account.state)),
+            Cell::new(if account.enabled { "yes" } else { "no" }),
+            Cell::new(account.priority).set_alignment(CellAlignment::Right),
+            Cell::new(account.tags.join(", ")),
+            Cell::new(window_percent(&account.windows, "five_hour"))
+                .set_alignment(CellAlignment::Right),
+            Cell::new(window_percent(&account.windows, "seven_day"))
+                .set_alignment(CellAlignment::Right),
+            Cell::new(format_datetime(&account.expires_at)),
+        ]);
+    }
+
+    table
+}
+
+/// Render the usage windows of one account as a table.
+pub fn provider_account_windows_table(windows: &[AccountWindowResponse]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        "Window", "Scope", "Used", "Status", "Resets", "Observed",
+    ]);
+
+    for window in windows {
+        let color = match window.status {
+            AccountWindowStatus::Allowed => Color::Green,
+            AccountWindowStatus::AllowedWarning => Color::Yellow,
+            AccountWindowStatus::Rejected => Color::Red,
+        };
+        table.add_row(vec![
+            Cell::new(&window.window),
+            Cell::new(window.model_scope.as_deref().unwrap_or("-")),
+            Cell::new(format!("{:.0}%", window.utilization * 100.0))
+                .set_alignment(CellAlignment::Right),
+            Cell::new(window.status.to_string()).fg(color),
+            Cell::new(format_optional_datetime(&window.resets_at)),
+            Cell::new(format_datetime(&window.observed_at)),
         ]);
     }
 

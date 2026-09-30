@@ -11,6 +11,7 @@ use ironflow_auth::extractor::Authenticated;
 use crate::entities::SecretResponse;
 use crate::error::ApiError;
 use crate::response::ok;
+use crate::routes::secrets::reject_provider_account_key;
 use crate::state::AppState;
 
 /// Request body for updating a secret value.
@@ -59,6 +60,7 @@ pub async fn update_secret(
     if !auth.is_admin() {
         return Err(ApiError::Forbidden);
     }
+    reject_provider_account_key(&key)?;
 
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;

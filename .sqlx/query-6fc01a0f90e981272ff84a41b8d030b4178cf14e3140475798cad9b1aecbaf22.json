@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO ironflow.provider_account_usage\n                        (id, account_id, window_name, model_scope, utilization, resets_at,\n                         status, observed_at)\n                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Float8",
+        "Timestamptz",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6fc01a0f90e981272ff84a41b8d030b4178cf14e3140475798cad9b1aecbaf22"
+}

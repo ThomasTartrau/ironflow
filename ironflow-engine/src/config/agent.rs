@@ -59,6 +59,7 @@ pub type AgentStepConfig = AgentConfig;
 ///     model: None,
 ///     debug_messages: None,
 ///     artifacts: StepArtifacts::default(),
+///     account_id: None,
 /// };
 /// # fn answer<C: AgentStep>(_config: &C, output: StepOutput) -> Result<C::Answer, ironflow_engine::error::EngineError> {
 /// #     C::answer(output)
@@ -152,6 +153,7 @@ mod tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         }
     }
 

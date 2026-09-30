@@ -44,6 +44,7 @@ mod approval_delegation_store;
 mod artifact_store;
 mod audit_log_store;
 mod log_store;
+mod provider_account_store;
 mod run_store;
 mod schedule_store;
 mod secret_store;
@@ -68,6 +69,11 @@ pub(super) struct State {
     pub(super) approval_delegations: HashMap<Uuid, crate::entities::ApprovalDelegation>,
     pub(super) audit_logs: Vec<crate::entities::AuditLogEntry>,
     pub(super) log_entries: Vec<crate::entities::LogEntry>,
+    pub(super) provider_accounts: HashMap<Uuid, crate::entities::ProviderAccount>,
+    /// Latest window per `(account_id, window, model_scope)`, `""` for no scope.
+    pub(super) provider_account_windows:
+        HashMap<(Uuid, String, String), crate::entities::ProviderAccountWindow>,
+    pub(super) provider_account_usage: Vec<crate::entities::ProviderAccountUsagePoint>,
 }
 
 #[derive(Debug, Clone)]

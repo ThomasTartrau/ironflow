@@ -919,6 +919,26 @@ impl AgentResult {
     pub fn debug_messages(&self) -> Option<&[DebugMessage]> {
         self.output.debug_messages.as_deref()
     }
+
+    /// Return the identifier of the Provider Account the invocation ran under.
+    ///
+    /// `None` when the worker environment credentials were used.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let result = Agent::new().prompt("Summarize the README").run(&provider).await?;
+    /// println!("account: {:?}", result.account_id());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn account_id(&self) -> Option<&str> {
+        self.output.account_id.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -946,6 +966,7 @@ mod tests {
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
+                    account_id: None,
                 })
             })
         }
@@ -970,6 +991,7 @@ mod tests {
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
+                    account_id: None,
                 })
             })
         }
@@ -987,6 +1009,7 @@ mod tests {
             model: Some("sonnet".to_string()),
             duration_ms: 1500,
             debug_messages: None,
+            account_id: None,
         }
     }
 
@@ -1199,6 +1222,7 @@ mod tests {
                 model: Some("opus".to_string()),
                 duration_ms: 2000,
                 debug_messages: None,
+                account_id: None,
             },
         };
         let result = Agent::new().prompt("test").run(&provider).await.unwrap();
@@ -1472,6 +1496,7 @@ mod tests {
                         model: self.output.model.clone(),
                         duration_ms: self.output.duration_ms,
                         debug_messages: None,
+                        account_id: None,
                     })
                 }
             })
@@ -1694,6 +1719,7 @@ mod tests {
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
+                    account_id: None,
                 })
             })
         }

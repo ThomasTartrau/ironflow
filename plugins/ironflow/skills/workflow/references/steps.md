@@ -98,6 +98,11 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 Either tools or a structured output, never both (enforced by the type state).
 
+Agent steps on the Claude process providers (local, Docker, SSH) draw a Provider
+Account automatically when an admin has registered accounts: the worker picks one,
+injects its token and records its usage. Without accounts they fall back to the
+worker environment. Nothing changes in the workflow code.
+
 ```rust,no_run
 use ironflow_core::operations::agent::Model;
 use ironflow_engine::config::{AgentStepConfig, Tool};

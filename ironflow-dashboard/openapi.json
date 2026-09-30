@@ -636,6 +636,435 @@
         }
       }
     },
+    "/api/v1/provider-accounts": {
+      "get": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "List Provider Accounts with their latest windows. Admin only.",
+        "description": "The response never includes the credential.",
+        "operationId": "list_provider_accounts",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only accounts of this kind.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-based).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page (max 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider accounts listed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderAccountResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "Add a Provider Account. Admin only.",
+        "description": "The token is checked against the provider before anything is stored: a\nmalformed or rejected token gets 422 and leaves nothing behind. A token\nanswered with 429 is stored and shown as limited until its window resets.\nThe response never includes the token.",
+        "operationId": "create_provider_account",
+        "requestBody": {
+          "description": "Account and its credential",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProviderAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Provider account created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or unknown kind"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "Name already taken"
+          },
+          "422": {
+            "description": "Credential rejected"
+          },
+          "502": {
+            "description": "Provider unreachable"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/provider-accounts/kinds": {
+      "get": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "List the account kinds this server supports, with their form fields. Admin only.",
+        "operationId": "list_account_kinds",
+        "responses": {
+          "200": {
+            "description": "Supported kinds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccountKindResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/provider-accounts/{id}": {
+      "get": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "Get a Provider Account by UUID or name. Admin only.",
+        "operationId": "get_provider_account",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account UUID or name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Provider account not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "Delete a Provider Account and its credential. Admin only.",
+        "description": "Its windows and usage history go with it; the steps that ran under it\nkeep their history but lose the link to the account.",
+        "operationId": "delete_provider_account",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account UUID or name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Provider account deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Provider account not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "Update a Provider Account. Admin only.",
+        "description": "`name` and `kind` are immutable. A new `token` is checked against the\nprovider before it replaces the stored one. The response never includes\nthe token.",
+        "operationId": "update_provider_account",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account UUID or name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Fields to change",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProviderAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Provider account updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Provider account not found"
+          },
+          "422": {
+            "description": "Credential rejected"
+          },
+          "502": {
+            "description": "Provider unreachable"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/provider-accounts/{id}/test": {
+      "post": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "Check the stored credential against the provider and record the windows\nit reports. Admin only.",
+        "description": "`result` is `valid`, `limited` or `unauthorized`; an `unauthorized`\naccount is marked as having an invalid token until it is replaced.",
+        "operationId": "test_provider_account",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account UUID or name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Credential checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccountTestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Provider account not found"
+          },
+          "422": {
+            "description": "No credential stored"
+          },
+          "502": {
+            "description": "Provider unreachable"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/provider-accounts/{id}/usage": {
+      "get": {
+        "tags": [
+          "provider-accounts"
+        ],
+        "summary": "Current windows of a Provider Account and their history over `days`\n(default 30, at most 90). Admin only.",
+        "operationId": "provider_account_usage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account UUID or name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "description": "History depth in days, 1 to 90 (default 30).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage of the account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccountUsageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Provider account not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/runs": {
       "get": {
         "tags": [
@@ -2888,6 +3317,179 @@
   },
   "components": {
     "schemas": {
+      "AccountFormFieldResponse": {
+        "type": "object",
+        "description": "A form field of an account kind.",
+        "required": [
+          "name",
+          "label",
+          "secret",
+          "help"
+        ],
+        "properties": {
+          "help": {
+            "type": "string",
+            "description": "Help text."
+          },
+          "label": {
+            "type": "string",
+            "description": "Label."
+          },
+          "name": {
+            "type": "string",
+            "description": "Field identifier."
+          },
+          "secret": {
+            "type": "boolean",
+            "description": "Whether the field is a secret (write-only)."
+          }
+        }
+      },
+      "AccountKindResponse": {
+        "type": "object",
+        "description": "A supported account kind.",
+        "required": [
+          "id",
+          "display_name",
+          "fields"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "Human-readable name."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountFormFieldResponse"
+            },
+            "description": "Fields of the add form."
+          },
+          "id": {
+            "type": "string",
+            "description": "Kind identifier."
+          }
+        }
+      },
+      "AccountState": {
+        "type": "string",
+        "description": "Derived state of an account, for display.",
+        "enum": [
+          "ok",
+          "near_limit",
+          "limited",
+          "token_invalid",
+          "never_used"
+        ]
+      },
+      "AccountTestResult": {
+        "type": "string",
+        "description": "Outcome of a live credential test.",
+        "enum": [
+          "valid",
+          "limited",
+          "unauthorized"
+        ]
+      },
+      "AccountUsagePointResponse": {
+        "type": "object",
+        "description": "One historical observation of a window.",
+        "required": [
+          "window",
+          "utilization",
+          "status",
+          "observed_at"
+        ],
+        "properties": {
+          "model_scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model scope."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the window was observed."
+          },
+          "resets_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the window resets."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountWindowStatus",
+            "description": "Provider status."
+          },
+          "utilization": {
+            "type": "number",
+            "format": "double",
+            "description": "Fraction used."
+          },
+          "window": {
+            "type": "string",
+            "description": "Window name."
+          }
+        }
+      },
+      "AccountWindowResponse": {
+        "type": "object",
+        "description": "One usage window of an account.",
+        "required": [
+          "window",
+          "utilization",
+          "status",
+          "observed_at"
+        ],
+        "properties": {
+          "model_scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model family the window applies to, `null` for every model."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the window was observed."
+          },
+          "resets_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the window resets."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountWindowStatus",
+            "description": "Provider status."
+          },
+          "utilization": {
+            "type": "number",
+            "format": "double",
+            "description": "Fraction used, `0.0..=1.0`."
+          },
+          "window": {
+            "type": "string",
+            "description": "Window name (`five_hour`, `seven_day`)."
+          }
+        }
+      },
+      "AccountWindowStatus": {
+        "type": "string",
+        "description": "Status of a usage window, as reported by the provider.\n\n# Examples\n\n```\nuse ironflow_store::entities::AccountWindowStatus;\n\nlet status: AccountWindowStatus = \"allowed_warning\".parse().unwrap();\nassert_eq!(status, AccountWindowStatus::AllowedWarning);\n```",
+        "enum": [
+          "allowed",
+          "allowed_warning",
+          "rejected"
+        ]
+      },
       "ApiKeyResponse": {
         "type": "object",
         "description": "API key summary (never includes the hash or raw key).",
@@ -2965,6 +3567,8 @@
           "runs_write",
           "runs_manage",
           "stats_read",
+          "accounts_read",
+          "accounts_manage",
           "admin"
         ]
       },
@@ -3536,6 +4140,93 @@
           }
         }
       },
+      "CreateProviderAccountRequest": {
+        "type": "object",
+        "description": "Request body to add a Provider Account. Admin only.",
+        "required": [
+          "name",
+          "kind",
+          "token"
+        ],
+        "properties": {
+          "alert_threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Utilization from which the account is shown as near its limit, in `(0, 1]` (default 0.8)."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable name, defaults to `name`."
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the account may be selected (default `true`)."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the credential expires (default: now + 365 days)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Account kind (see `GET /provider-accounts/kinds`)."
+          },
+          "max_concurrency": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Maximum concurrent steps (>= 1).",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique slug, immutable (`^[a-z0-9][a-z0-9-]{0,62}$`)."
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subscription plan, informative (`pro`, `max`)."
+          },
+          "priority": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Priority, lower is preferred (default 100)."
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags, each a slug."
+          },
+          "token": {
+            "type": "string",
+            "description": "Credential, write-only (e.g. a `claude setup-token` token)."
+          }
+        }
+      },
       "CreateRunRequest": {
         "type": "object",
         "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
@@ -4028,6 +4719,52 @@
               }
             ],
             "description": "A user signed out."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProviderAccountUpdatedEvent",
+                "description": "A Provider Account was created, updated, deleted or had its token replaced."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "provider_account.updated"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A Provider Account was created, updated, deleted or had its token replaced."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProviderAccountUsageUpdatedEvent",
+                "description": "New usage windows were recorded for a Provider Account."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "provider_account.usage_updated"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "New usage windows were recorded for a Provider Account."
           }
         ],
         "description": "A domain event emitted by the ironflow system.\n\nCovers the full lifecycle: runs, steps, approvals, and authentication.\nSubscribers receive these via [`EventPublisher`](super::EventPublisher)\nand pattern-match on the variants they care about.\n\nEach variant wraps a dedicated payload struct. The serialized form stays\nflat: the `type` discriminant sits next to the payload fields, so\n`{\"type\":\"run_created\",\"run_id\":...}` round-trips unchanged.\n\n# Examples\n\n```\nuse std::collections::HashMap;\nuse ironflow_engine::notify::{Event, RunStatusChangedEvent};\nuse ironflow_store::models::RunStatus;\nuse uuid::Uuid;\n\nlet event = Event::RunStatusChanged(RunStatusChangedEvent {\n    run_id: Uuid::now_v7(),\n    workflow_name: \"deploy\".to_string(),\n    from: RunStatus::Running,\n    to: RunStatus::Completed,\n    error: None,\n    cost_usd: rust_decimal::Decimal::ZERO,\n    duration_ms: 5000,\n    labels: HashMap::new(),\n    at: chrono::Utc::now(),\n});\nassert_eq!(event.event_type(), \"run_status_changed\");\n```"
@@ -4051,7 +4788,9 @@
           "user_signed_up",
           "user_signed_out",
           "secrets_rotated",
-          "retry_forced"
+          "retry_forced",
+          "provider_account.updated",
+          "provider_account.usage_updated"
         ]
       },
       "ExecutionPlanResponse": {
@@ -4674,6 +5413,303 @@
           "workflow": {
             "type": "string",
             "description": "Workflow that owns this step."
+          }
+        }
+      },
+      "ProviderAccountChange": {
+        "type": "string",
+        "description": "What happened to a Provider Account in a\n[`ProviderAccountUpdatedEvent`].\n\n# Examples\n\n```\nuse ironflow_engine::notify::ProviderAccountChange;\n\nassert_eq!(ProviderAccountChange::TokenReplaced.as_str(), \"token_replaced\");\n```",
+        "enum": [
+          "created",
+          "updated",
+          "deleted",
+          "token_replaced"
+        ]
+      },
+      "ProviderAccountResponse": {
+        "type": "object",
+        "description": "A Provider Account, without its credential.",
+        "required": [
+          "id",
+          "name",
+          "display_name",
+          "kind",
+          "enabled",
+          "priority",
+          "tags",
+          "alert_threshold",
+          "expires_at",
+          "created_at",
+          "updated_at",
+          "state",
+          "windows"
+        ],
+        "properties": {
+          "alert_threshold": {
+            "type": "number",
+            "format": "double",
+            "description": "Alert threshold."
+          },
+          "auth_failed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the provider last rejected the credential."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Creation timestamp."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Creating user."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Human-readable name."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the account may be selected."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the credential expires."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Account ID."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Account kind."
+          },
+          "max_concurrency": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Maximum concurrent steps, `null` for unlimited.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique slug."
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subscription plan."
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Priority, lower is preferred."
+          },
+          "state": {
+            "$ref": "#/components/schemas/AccountState",
+            "description": "Derived state."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last update timestamp."
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountWindowResponse"
+            },
+            "description": "Latest windows."
+          }
+        }
+      },
+      "ProviderAccountTestResponse": {
+        "type": "object",
+        "description": "Response of `POST /provider-accounts/{id}/test`.",
+        "required": [
+          "result",
+          "windows"
+        ],
+        "properties": {
+          "result": {
+            "$ref": "#/components/schemas/AccountTestResult",
+            "description": "Outcome."
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountWindowResponse"
+            },
+            "description": "Windows reported by the provider."
+          }
+        }
+      },
+      "ProviderAccountUpdatedEvent": {
+        "type": "object",
+        "description": "Payload of the `Event::ProviderAccountUpdated` event.\n\nNever carries the credential.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::{ProviderAccountChange, ProviderAccountUpdatedEvent};\nuse uuid::Uuid;\n\nlet payload = ProviderAccountUpdatedEvent {\n    account_id: Uuid::now_v7(),\n    name: \"perso\".to_string(),\n    change: ProviderAccountChange::Created,\n    at: Utc::now(),\n};\nassert_eq!(payload.name, \"perso\");\n```",
+        "required": [
+          "account_id",
+          "name",
+          "change",
+          "at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Account identifier."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the change happened."
+          },
+          "change": {
+            "$ref": "#/components/schemas/ProviderAccountChange",
+            "description": "What changed."
+          },
+          "name": {
+            "type": "string",
+            "description": "Account name."
+          }
+        }
+      },
+      "ProviderAccountUsageResponse": {
+        "type": "object",
+        "description": "Current windows and history of an account.",
+        "required": [
+          "account_id",
+          "name",
+          "windows",
+          "history"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Account ID."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountUsagePointResponse"
+            },
+            "description": "Observations over the requested period, oldest first."
+          },
+          "name": {
+            "type": "string",
+            "description": "Account name."
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountWindowResponse"
+            },
+            "description": "Latest windows."
+          }
+        }
+      },
+      "ProviderAccountUsageUpdatedEvent": {
+        "type": "object",
+        "description": "Payload of the `Event::ProviderAccountUsageUpdated` event.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::ProviderAccountUsageUpdatedEvent;\nuse uuid::Uuid;\n\nlet payload = ProviderAccountUsageUpdatedEvent {\n    account_id: Uuid::now_v7(),\n    name: \"perso\".to_string(),\n    windows: Vec::new(),\n    at: Utc::now(),\n};\nassert!(payload.windows.is_empty());\n```",
+        "required": [
+          "account_id",
+          "name",
+          "windows",
+          "at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Account identifier."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the windows were recorded."
+          },
+          "name": {
+            "type": "string",
+            "description": "Account name."
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderAccountWindow"
+            },
+            "description": "Current windows of the account."
+          }
+        }
+      },
+      "ProviderAccountWindow": {
+        "type": "object",
+        "description": "Latest reading of one usage window of an account.",
+        "required": [
+          "account_id",
+          "window",
+          "utilization",
+          "status",
+          "observed_at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Account the window belongs to."
+          },
+          "model_scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model family the window applies to, `None` for every model."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the window was observed."
+          },
+          "resets_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the window resets."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountWindowStatus",
+            "description": "Provider status."
+          },
+          "utilization": {
+            "type": "number",
+            "format": "double",
+            "description": "Fraction used, `0.0..=1.0`."
+          },
+          "window": {
+            "type": "string",
+            "description": "Window name (`five_hour`, `seven_day`)."
           }
         }
       },
@@ -5702,6 +6738,14 @@
           "dependencies"
         ],
         "properties": {
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Provider Account the agent step ran under, if any."
+          },
           "approval_assignee": {
             "type": [
               "string",
@@ -6148,6 +7192,84 @@
           }
         ],
         "description": "How a run was triggered.\n\n# Examples\n\n```\nuse ironflow_store::entities::TriggerKind;\n\nlet trigger = TriggerKind::Manual;\nlet json = serde_json::to_string(&trigger).unwrap();\nassert!(json.contains(\"manual\"));\n```"
+      },
+      "UpdateProviderAccountRequest": {
+        "type": "object",
+        "description": "Request body to update a Provider Account. All fields optional; `name`\nand `kind` are immutable.",
+        "properties": {
+          "alert_threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "New alert threshold in `(0, 1]`."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New display name."
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Enable or disable."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "New expiry of the credential."
+          },
+          "max_concurrency": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "New max concurrency; `null` removes the limit.",
+            "minimum": 0
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New plan; `null` clears it."
+          },
+          "priority": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "New priority."
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "New tags (replaces the list)."
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replacement credential, write-only. Checked against the provider."
+          }
+        },
+        "additionalProperties": false
       },
       "UpdateRoleRequest": {
         "type": "object",
@@ -6826,6 +7948,10 @@
     {
       "name": "secrets",
       "description": "Encrypted secret management (admin only)"
+    },
+    {
+      "name": "provider-accounts",
+      "description": "Provider Accounts: AI provider credentials and usage limits (admin only)"
     },
     {
       "name": "audit",
