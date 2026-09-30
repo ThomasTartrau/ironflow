@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.42.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.41.5...ironflow-engine-v2.42.0) - 2026-09-30
+
+### Added
+
+- #138 shell step option to treat a non-zero exit code as output
+
 ## [2.41.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.41.4...ironflow-engine-v2.41.5) - 2026-09-29
 
 ### Fixed

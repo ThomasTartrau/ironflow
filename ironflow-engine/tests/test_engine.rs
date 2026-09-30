@@ -328,6 +328,52 @@ async fn test_engine_shell_mock_failure_with_allow_failure_warns() {
     assert_eq!(result.step("deploy").output()["stdout"], "shipped");
 }
 
+/// A shell step whose non-zero exit code is data the handler branches on.
+struct MergeProbe;
+
+impl WorkflowHandler for MergeProbe {
+    fn name(&self) -> &str {
+        "merge-probe"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let merge = ctx
+                .shell(
+                    "merge",
+                    ShellConfig::new("git merge feature").exit_code_as_output(),
+                )
+                .await?;
+            if !merge.is_success() {
+                ctx.shell("abort", ShellConfig::new("git merge --abort"))
+                    .await?;
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_engine_shell_mock_exit_code_as_output_completes_the_run() {
+    let result = TestEngine::new()
+        .with_handler(MergeProbe)
+        .with_mock_shell(|cfg| {
+            if cfg.command == "git merge feature" {
+                Ok(MockShellOutput::failed(1, "CONFLICT"))
+            } else {
+                Ok(MockShellOutput::ok("aborted"))
+            }
+        })
+        .run(json!({}))
+        .await
+        .expect("the harness ran the handler");
+
+    assert_eq!(result.status(), RunStatus::Completed);
+    assert_eq!(result.step("merge").status(), StepStatus::Completed);
+    assert_eq!(result.step("merge").output()["exit_code"], 1);
+    assert_eq!(result.step("abort").output()["stdout"], "aborted");
+}
+
 // ---------------------------------------------------------------------------
 // HTTP mocks
 // ---------------------------------------------------------------------------

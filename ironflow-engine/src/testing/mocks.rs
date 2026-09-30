@@ -93,10 +93,14 @@ impl MockShellOutput {
     /// Convert to what the step lifecycle expects.
     ///
     /// Mirrors [`ShellExecutor`](crate::executor::ShellExecutor): a non-zero
-    /// exit code is an error, not an output. `allow_failure`, step retry
-    /// policies and run failure all key off that error.
-    pub(crate) fn into_step_result(self) -> Result<StepOutput, EngineError> {
-        if self.exit_code != 0 {
+    /// exit code is an error, not an output, unless the step set
+    /// `exit_code_as_output`. `allow_failure`, step retry policies and run
+    /// failure all key off that error.
+    pub(crate) fn into_step_result(
+        self,
+        exit_code_as_output: bool,
+    ) -> Result<StepOutput, EngineError> {
+        if self.exit_code != 0 && !exit_code_as_output {
             return Err(EngineError::Operation(OperationError::Shell {
                 exit_code: self.exit_code,
                 stderr: self.stderr,
@@ -409,7 +413,7 @@ impl StepInterceptor for MockInterceptor {
             StepConfig::Shell(cfg) => {
                 let mock = self.shell.as_ref()?;
                 Some(match mock(cfg) {
-                    Ok(out) => out.into_step_result(),
+                    Ok(out) => out.into_step_result(cfg.exit_code_as_output),
                     Err(err) => Err(EngineError::Operation(err)),
                 })
             }
@@ -531,7 +535,7 @@ mod tests {
     #[test]
     fn shell_ok_maps_to_the_real_executor_output_shape() {
         let output = MockShellOutput::ok("hello\n")
-            .into_step_result()
+            .into_step_result(false)
             .expect("exit code 0 succeeds");
 
         assert_eq!(output.output["stdout"], "hello\n");
@@ -551,7 +555,7 @@ mod tests {
     #[test]
     fn shell_non_zero_exit_is_an_operation_error() {
         let err = MockShellOutput::failed(2, "x")
-            .into_step_result()
+            .into_step_result(false)
             .expect_err("a non-zero exit code fails the step");
 
         match err {
@@ -561,6 +565,37 @@ mod tests {
             }
             other => panic!("expected a shell operation error, got {other}"),
         }
+    }
+
+    #[test]
+    fn shell_non_zero_exit_with_option_is_an_output() {
+        let output = MockShellOutput::failed(2, "x")
+            .into_step_result(true)
+            .expect("the option turns a non-zero exit into an output");
+
+        assert_eq!(output.output["exit_code"], 2);
+        assert_eq!(output.output["stderr"], "x");
+        assert!(!output.is_success());
+    }
+
+    #[test]
+    fn intercept_shell_non_zero_with_option_completes() {
+        let interceptor = MockInterceptor::new().shell(|_| Ok(MockShellOutput::failed(2, "x")));
+        let config = StepConfig::Shell(ShellConfig::new("x").exit_code_as_output());
+
+        let output = interceptor
+            .intercept(&config)
+            .expect("the shell mock answers")
+            .expect("the step completes");
+        assert_eq!(output.exit_code(), Some(2));
+
+        let plain = StepConfig::Shell(ShellConfig::new("x"));
+        assert!(
+            interceptor
+                .intercept(&plain)
+                .expect("the shell mock answers")
+                .is_err()
+        );
     }
 
     #[test]
