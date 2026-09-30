@@ -144,7 +144,8 @@ impl TestEngine {
     /// Answer every shell step with `f` instead of spawning a process.
     ///
     /// Returning `Err` reproduces a shell failure the same way a non-zero
-    /// [`MockShellOutput::exit_code`] does.
+    /// [`MockShellOutput::exit_code`] does: a non-zero exit code is an error
+    /// unless the step set `exit_code_as_output`.
     ///
     /// # Panics
     ///

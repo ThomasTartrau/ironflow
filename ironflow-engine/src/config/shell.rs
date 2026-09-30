@@ -40,6 +40,11 @@ pub struct ShellConfig {
     /// [`RunStatus::Warning`] instead of `Failed`.
     #[serde(default)]
     pub allow_failure: bool,
+    /// When `true`, a non-zero exit code is a normal output instead of an
+    /// error: the step is `Completed` and its output carries the real code.
+    /// Timeout, spawn and input-preparation failures stay errors.
+    #[serde(default)]
+    pub exit_code_as_output: bool,
     /// Optional step-level retry policy. When set, a transient failure retries
     /// the step locally with exponential backoff before propagating the error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,6 +72,7 @@ impl ShellConfig {
             outputs: Vec::new(),
             inputs: Vec::new(),
             allow_failure: false,
+            exit_code_as_output: false,
             retry: None,
         }
     }
@@ -169,6 +175,29 @@ impl ShellConfig {
     /// ```
     pub fn allow_failure(mut self) -> Self {
         self.allow_failure = true;
+        self
+    }
+
+    /// Treat a non-zero exit code as data instead of a failure.
+    ///
+    /// The step is `Completed`: `StepOutput::is_success()` is `false` and
+    /// `exit_code()` returns the real code, so the handler can branch on it
+    /// (a conflicting `git merge`, red tests). The run is not degraded and
+    /// [`allow_failure`](Self::allow_failure) is not triggered. A non-zero
+    /// exit is no longer an error, so a retry policy does not retry it.
+    /// Timeout, spawn failure and input-preparation failure remain errors and
+    /// follow `allow_failure`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::ShellConfig;
+    ///
+    /// let config = ShellConfig::new("git merge feature").exit_code_as_output();
+    /// assert!(config.exit_code_as_output);
+    /// ```
+    pub fn exit_code_as_output(mut self) -> Self {
+        self.exit_code_as_output = true;
         self
     }
 
@@ -283,6 +312,26 @@ mod tests {
         .expect("deserialize");
 
         assert!(config.retry.is_none());
+    }
+
+    #[test]
+    fn a_config_predating_exit_code_as_output_still_deserializes() {
+        let config: ShellConfig = serde_json::from_str(
+            r#"{"command":"echo hi","timeout_secs":null,"dir":null,"env":[],"clean_env":false,"allow_failure":false}"#,
+        )
+        .expect("deserialize");
+
+        assert!(!config.exit_code_as_output);
+    }
+
+    #[test]
+    fn exit_code_as_output_roundtrip() {
+        assert!(!ShellConfig::new("x").exit_code_as_output);
+
+        let config = ShellConfig::new("git merge x").exit_code_as_output();
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: ShellConfig = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.exit_code_as_output);
     }
 
     #[test]
