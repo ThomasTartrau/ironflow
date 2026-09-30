@@ -63,6 +63,7 @@ as `Err`.
 | `with_agent_provider(p)` | Uses an arbitrary `AgentProvider`. |
 | `with_decision_provider(p)` | Wires a `DecisionProvider` for `ctx.decision(...)`. |
 | `with_mock_approval(outcome)` | Resolves every approval gate with `outcome`. |
+| `with_secret(key, value)` | Seeds a secret for the workflow under test (`secret-store` feature). |
 | `store()` | The `InMemoryStore`, for assertions the accessors do not cover. |
 
 Every `with_*` method panics if called after the first run: the engine is built
