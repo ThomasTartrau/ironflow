@@ -20,7 +20,7 @@ if [ -z "${DATABASE_URL:-}" ]; then
   docker run -d --rm --name "$container" \
     -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ironflow \
     -p 127.0.0.1::5432 "${POSTGRES_IMAGE:-postgres:17-alpine}" \
-    -c fsync=off -c synchronous_commit=off -c full_page_writes=off >/dev/null
+    postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off >/dev/null
   trap 'docker rm -f "$container" >/dev/null 2>&1' EXIT
 
   # Wait on TCP: the image first runs a setup server on the unix socket only,
@@ -43,10 +43,7 @@ export SQLX_OFFLINE=true
 if [ "$#" -gt 0 ]; then
   cargo test "$@"
 else
-  # One test at a time: suites that create, migrate and drop blank databases
-  # would otherwise starve the others of connections past the pool timeout.
-  cargo test -p ironflow-store --features store-postgres,secret-store -- --ignored \
-    --test-threads=1
+  cargo test -p ironflow-store --features store-postgres,secret-store -- --ignored
   cargo test -p ironflow-api --features store-postgres --test postgres_schedule_sync \
-    -- --ignored --test-threads=1
+    -- --ignored
 fi
