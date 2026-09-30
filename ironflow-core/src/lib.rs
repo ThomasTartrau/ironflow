@@ -67,6 +67,8 @@
 //! # }
 //! ```
 
+pub mod account;
+pub mod account_strategy;
 pub mod decision;
 pub mod dry_run;
 pub mod error;
@@ -95,6 +97,11 @@ pub mod operations {
 
 /// Re-exports of the most commonly used types.
 pub mod prelude {
+    pub use crate::account::{
+        AccountCredential, AccountKind, AccountSession, AccountWindow, ClaudeSubscriptionKind,
+        RateLimitRecorder, WindowStatus,
+    };
+    pub use crate::account_strategy::{AccountCandidate, AccountStrategy, select_account};
     pub use crate::decision::{
         ChoiceAnswer, DecisionAnswer, DecisionOutput, DecisionProvider, DecisionQuestion,
         DecisionRequest, DecisionUsage, NoulAnswer, NoulCriteria, ScoreAnswer,

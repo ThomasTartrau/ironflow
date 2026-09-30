@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use rust_decimal::Decimal;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use ironflow_core::operations::agent::Agent;
 use ironflow_core::pricing::{CostBreakdown, StaticPricing, spawn_log};
@@ -146,6 +147,16 @@ impl StepExecutor for AgentExecutor<'_> {
         }
 
         let debug_messages = result.debug_messages().map(|msgs| msgs.to_vec());
+        let account_id = match result.account_id() {
+            Some(raw) => match Uuid::parse_str(raw) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    warn!(account_id = raw, error = %e, "agent output carries an invalid account id");
+                    None
+                }
+            },
+            None => None,
+        };
 
         Ok(StepOutput {
             output: result.value().clone(),
@@ -158,6 +169,7 @@ impl StepExecutor for AgentExecutor<'_> {
             model: result.model().map(String::from),
             debug_messages,
             artifacts: StepArtifacts::default(),
+            account_id,
         })
     }
 }
@@ -171,6 +183,7 @@ mod tests {
     use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture};
     use serde_json::json;
     use tokio::time::timeout;
+    use uuid::Uuid;
 
     use super::{AgentExecutor, StepExecutor};
 
@@ -213,6 +226,35 @@ mod tests {
             assert_eq!(step.cache_creation_input_tokens, Some(200));
             assert_eq!(step.output_tokens, Some(50));
             assert_eq!(step.total_tokens(), 5350);
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_executor_propagates_account_id() {
+        timeout(Duration::from_secs(10), async {
+            let account_id = Uuid::now_v7();
+            let mut output = AgentOutput::new(json!("ok"));
+            output.cost_usd = Some(0.02);
+            output.account_id = Some(account_id.to_string());
+            let provider: Arc<dyn AgentProvider> = Arc::new(FixedUsageProvider { output });
+
+            let step = AgentExecutor::new(&budget_config())
+                .execute(&provider)
+                .await
+                .expect("agent step succeeds");
+            assert_eq!(step.account_id, Some(account_id));
+
+            let mut invalid = AgentOutput::new(json!("ok"));
+            invalid.cost_usd = Some(0.02);
+            invalid.account_id = Some("not-a-uuid".to_string());
+            let provider: Arc<dyn AgentProvider> = Arc::new(FixedUsageProvider { output: invalid });
+            let step = AgentExecutor::new(&budget_config())
+                .execute(&provider)
+                .await
+                .expect("agent step succeeds");
+            assert_eq!(step.account_id, None);
         })
         .await
         .expect("test timed out");

@@ -15,6 +15,7 @@ mod fsm_state;
 mod log_entry;
 mod log_stream;
 mod page;
+mod provider_account;
 mod run;
 mod run_actor;
 mod run_status;
@@ -43,6 +44,12 @@ pub use fsm_state::FsmState;
 pub use log_entry::{LogEntry, LogFilter, NewLogEntries};
 pub use log_stream::LogStream;
 pub use page::Page;
+pub use provider_account::{
+    AccountWindowStatus, NewAccountWindow, NewProviderAccount, NewProviderAccountObservation,
+    PROVIDER_ACCOUNT_SECRET_PREFIX, ProviderAccount, ProviderAccountCandidate,
+    ProviderAccountUpdate, ProviderAccountUsagePoint, ProviderAccountWindow,
+    provider_account_secret_key,
+};
 pub use run::{
     IDEMPOTENCY_WINDOW, LeaseRequest, MAX_IDEMPOTENCY_KEY_LEN, NewRun, PurgePolicy, PurgeReason,
     PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunUpdate,

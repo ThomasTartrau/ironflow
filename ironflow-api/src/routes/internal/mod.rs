@@ -14,6 +14,7 @@ pub mod get_run;
 pub mod get_secret;
 pub mod list_artifacts;
 pub mod pick_next_run;
+pub mod provider_accounts;
 pub mod push_logs;
 pub mod renew_lease;
 pub mod update_run;

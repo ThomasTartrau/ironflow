@@ -584,6 +584,7 @@ impl RunStore for InMemoryStore {
                 approval_assignee: None,
                 approval_requirement: None,
                 approvals: Vec::new(),
+                account_id: None,
             };
 
             state.steps.insert(step.id, step.clone());
@@ -641,6 +642,9 @@ impl RunStore for InMemoryStore {
             }
             if let Some(tokens) = update.cache_creation_input_tokens {
                 step.cache_creation_input_tokens = Some(tokens);
+            }
+            if let Some(account_id) = update.account_id {
+                step.account_id = Some(account_id);
             }
             if let Some(tokens) = update.output_tokens {
                 step.output_tokens = Some(tokens);

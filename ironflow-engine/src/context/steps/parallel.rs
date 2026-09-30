@@ -355,6 +355,7 @@ impl WorkflowContext {
                                 output_tokens: output.output_tokens,
                                 completed_at: Some(completed_at),
                                 debug_messages: debug_messages_json,
+                                account_id: output.account_id,
                                 ..StepUpdate::default()
                             },
                         )

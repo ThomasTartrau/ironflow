@@ -65,6 +65,14 @@ pub enum EventKind {
     SecretsRotated,
     /// A retry was forced despite a handler version mismatch.
     RetryForced,
+    /// A Provider Account was created, updated, deleted or had its token replaced.
+    #[serde(rename = "provider_account.updated")]
+    #[strum(serialize = "provider_account.updated")]
+    ProviderAccountUpdated,
+    /// New usage windows were observed for a Provider Account.
+    #[serde(rename = "provider_account.usage_updated")]
+    #[strum(serialize = "provider_account.usage_updated")]
+    ProviderAccountUsageUpdated,
 }
 
 impl EventKind {
@@ -86,6 +94,8 @@ impl EventKind {
         Self::UserSignedOut,
         Self::SecretsRotated,
         Self::RetryForced,
+        Self::ProviderAccountUpdated,
+        Self::ProviderAccountUsageUpdated,
     ];
 
     /// Returns the wire-format string for this kind.
@@ -118,7 +128,25 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 16);
+        assert_eq!(EventKind::ALL.len(), 18);
+    }
+
+    #[test]
+    fn provider_account_events_use_dotted_wire_format() {
+        assert_eq!(
+            EventKind::ProviderAccountUpdated.as_str(),
+            "provider_account.updated"
+        );
+        assert_eq!(
+            "provider_account.usage_updated"
+                .parse::<EventKind>()
+                .unwrap(),
+            EventKind::ProviderAccountUsageUpdated
+        );
+        assert_eq!(
+            serde_json::to_string(&EventKind::ProviderAccountUpdated).unwrap(),
+            "\"provider_account.updated\""
+        );
     }
 
     #[test]

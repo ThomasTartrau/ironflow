@@ -696,6 +696,7 @@ pub fn parse_response(
         model: model_name,
         duration_ms: parsed.duration_ms.unwrap_or(fallback_duration_ms),
         debug_messages: None,
+        account_id: None,
     })
 }
 
@@ -932,6 +933,9 @@ pub fn parse_stream_response(
             Some("result") => {
                 result_line = Some(trimmed);
             }
+            // Usage windows are not part of the agent output: providers record
+            // them through `rate_limit_event::record_rate_limits`.
+            Some("rate_limit_event") => {}
             _ => {}
         }
     }

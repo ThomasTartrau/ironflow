@@ -330,6 +330,7 @@ impl LoopState {
             } else {
                 None
             },
+            account_id: None,
         }
     }
 }

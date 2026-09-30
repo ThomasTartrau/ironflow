@@ -23,6 +23,7 @@
 //! | `PURGE_MAX_RUNS_PER_WORKFLOW` | no | `1000` | Max terminal runs kept per workflow |
 //! | `PURGE_DRY_RUN` | no | `false` | Log what would be purged without deleting |
 //! | `PURGE_INTERVAL_SECS` | no | `86400` | Seconds between purge ticks (min 60) |
+//! | `PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS` | no | `30` | Days of Provider Account usage history kept (min 1) |
 //! | `ARTIFACT_BACKEND` | no | `local` | Blob storage backend: `local` or `s3` |
 //! | `ARTIFACT_S3_BUCKET` | **if s3** | - | S3 bucket name |
 //! | `ARTIFACT_S3_REGION` | no | `eu-west-1` | S3 region |
@@ -110,6 +111,10 @@ pub struct ServerConfig {
     ///
     /// Read from `PURGE_INTERVAL_SECS`, defaulting to 86400 (once per day).
     pub purge_interval_secs: u64,
+    /// Days of Provider Account usage history kept by the purger.
+    ///
+    /// Read from `PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS`, defaulting to 30.
+    pub provider_account_usage_retention_days: u32,
     /// Whether the server is running in production mode.
     pub is_production: bool,
     /// Rate limit for auth credential routes (sign-in, sign-up) in requests
@@ -347,6 +352,22 @@ impl ServerConfig {
         let purge_dry_run = env::var("PURGE_DRY_RUN")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
+        let provider_account_usage_retention_days = match env::var(
+            "PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS",
+        )
+        .ok()
+        {
+            Some(raw) => match raw.parse::<u32>() {
+                Ok(days) if days >= 1 => days,
+                _ => {
+                    errors.push(format!(
+                        "PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS must be an integer >= 1, got: {raw}"
+                    ));
+                    30
+                }
+            },
+            None => 30,
+        };
         let purge_interval_secs = match env::var("PURGE_INTERVAL_SECS").ok() {
             Some(raw) => {
                 let parsed = raw.parse::<u64>().unwrap_or_else(|_| {
@@ -434,6 +455,7 @@ impl ServerConfig {
             purge_max_runs_per_workflow,
             purge_dry_run,
             purge_interval_secs,
+            provider_account_usage_retention_days,
             artifact_backend,
             artifact_s3_bucket,
             artifact_s3_region,
@@ -474,6 +496,7 @@ mod tests {
             env::remove_var("PURGE_MAX_RUNS_PER_WORKFLOW");
             env::remove_var("PURGE_DRY_RUN");
             env::remove_var("PURGE_INTERVAL_SECS");
+            env::remove_var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS");
             env::remove_var("ARTIFACT_BACKEND");
             env::remove_var("ARTIFACT_S3_BUCKET");
             env::remove_var("ARTIFACT_S3_REGION");
@@ -624,6 +647,21 @@ mod tests {
         assert_eq!(config.purge_max_runs_per_workflow, 1000);
         assert!(!config.purge_dry_run);
         assert_eq!(config.purge_interval_secs, 86400);
+        assert_eq!(config.provider_account_usage_retention_days, 30);
+    }
+
+    #[test]
+    fn provider_account_usage_retention_days_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { clear_env() };
+        unsafe { env::set_var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS", "7") };
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.provider_account_usage_retention_days, 7);
+
+        unsafe { env::set_var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS", "0") };
+        assert!(ServerConfig::from_env().is_err());
+        unsafe { clear_env() };
     }
 
     #[test]

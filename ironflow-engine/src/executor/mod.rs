@@ -72,6 +72,9 @@ pub struct StepOutput {
     /// Artifacts the step can hand out through [`artifact`](Self::artifact).
     /// Filled by the workflow context; executors leave the default.
     pub artifacts: StepArtifacts,
+    /// Provider Account the agent step ran under, `None` for other steps and
+    /// agent steps that used the worker environment.
+    pub account_id: Option<Uuid>,
 }
 
 impl StepOutput {
@@ -96,6 +99,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert_eq!(output.total_tokens(), 5350);
     /// ```
@@ -142,6 +146,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert_eq!(output.exit_code(), Some(0));
     /// ```
@@ -169,6 +174,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert!(output.stdout().contains("42 tests"));
     /// ```
@@ -199,6 +205,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert_eq!(output.stderr(), "warning: unused");
     /// ```
@@ -231,6 +238,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert_eq!(output.status(), Some(204));
     /// ```
@@ -261,6 +269,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert_eq!(output.body(), "{\"ok\":true}");
     /// ```
@@ -292,6 +301,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert_eq!(answer.text(), "Looks good.");
     /// assert_eq!(StepOutput { output: json!({"stdout": "x"}), ..answer }.text(), "");
@@ -327,6 +337,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// assert!(!shell.is_success());
     ///
@@ -376,6 +387,7 @@ impl StepOutput {
     ///     model: None,
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
     /// };
     /// let review: Review = output.json()?;
     /// assert_eq!(review.score, 8);
@@ -688,6 +700,7 @@ mod tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         assert_eq!(output.debug_messages_json(), None);
@@ -706,6 +719,7 @@ mod tests {
             model: None,
             debug_messages: Some(Vec::new()),
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         let json_val = output.debug_messages_json();
@@ -754,6 +768,7 @@ mod tests {
             model: None,
             debug_messages: Some(messages),
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         let json_val = output.debug_messages_json();
@@ -780,6 +795,7 @@ mod tests {
             model: Some("claude-sonnet".to_string()),
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         assert_eq!(output.duration_ms, 5000);
@@ -802,6 +818,7 @@ mod tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         assert!(output.input_tokens.is_none());
@@ -823,6 +840,7 @@ mod tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         let result = ParallelStepResult {
@@ -859,6 +877,7 @@ mod tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         assert_eq!(output.output, complex_output);
@@ -881,6 +900,7 @@ mod tests {
             model: Some("claude-sonnet".to_string()),
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         let result = StepResult::from_success(trace_id, "build", &output);
@@ -925,6 +945,7 @@ mod tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         };
 
         let result = StepResult::from_success(Uuid::nil(), "test", &output);
@@ -1001,6 +1022,7 @@ mod tests {
                     model: None,
                     debug_messages: None,
                     artifacts: StepArtifacts::default(),
+                    account_id: None,
                 })),
                 _ => None,
             }
@@ -1077,6 +1099,7 @@ mod output_helper_tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         }
     }
 

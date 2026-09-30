@@ -80,6 +80,16 @@ export const router = createBrowserRouter([
 				errorElement: <ErrorBoundary />,
 			},
 			{
+				path: "/accounts",
+				lazy: () => import("./routes/accounts"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
+				path: "/accounts/new",
+				lazy: () => import("./routes/accounts/new"),
+				errorElement: <ErrorBoundary />,
+			},
+			{
 				path: "/audit-logs",
 				lazy: () => import("./routes/audit-logs"),
 				errorElement: <ErrorBoundary />,

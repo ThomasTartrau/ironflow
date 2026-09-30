@@ -11,10 +11,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::account_strategy::{AccountStrategy, LeastUtilized};
 use ironflow_core::decision::DecisionProvider;
 #[cfg(feature = "prometheus")]
 use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
+use ironflow_engine::accounts::AccountAwareProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
@@ -75,6 +77,7 @@ pub struct WorkerBuilder {
     worker_id: String,
     provider: Option<Arc<dyn AgentProvider>>,
     decision_provider: Option<Arc<dyn DecisionProvider>>,
+    account_strategy: Option<Arc<dyn AccountStrategy>>,
     handlers: Vec<Box<dyn WorkflowHandler>>,
     concurrency: usize,
     poll_interval: Duration,
@@ -98,6 +101,7 @@ impl WorkerBuilder {
             worker_id: format!("worker-{}", Uuid::now_v7()),
             provider: None,
             decision_provider: None,
+            account_strategy: None,
             handlers: Vec::new(),
             concurrency: DEFAULT_CONCURRENCY,
             poll_interval: DEFAULT_POLL_INTERVAL,
@@ -146,6 +150,33 @@ impl WorkerBuilder {
     /// ```
     pub fn decision_provider(mut self, provider: Arc<dyn DecisionProvider>) -> Self {
         self.decision_provider = Some(provider);
+        self
+    }
+
+    /// Set the strategy picking a Provider Account for each agent step.
+    ///
+    /// Defaults to [`LeastUtilized`]. Only used when Provider Accounts of the
+    /// provider's kind exist; otherwise agent steps run with the worker
+    /// environment.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::account_strategy::Priority;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() -> Result<(), ironflow_worker::WorkerError> {
+    /// let worker = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .provider(Arc::new(ClaudeCodeProvider::new()))
+    ///     .account_strategy(Arc::new(Priority))
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn account_strategy(mut self, strategy: Arc<dyn AccountStrategy>) -> Self {
+        self.account_strategy = Some(strategy);
         self
     }
 
@@ -354,6 +385,11 @@ impl WorkerBuilder {
             .ok_or_else(|| WorkerError::Internal("WorkerBuilder: provider is required".into()))?;
 
         let store: Arc<dyn Store> = Arc::new(ApiRunStore::new(&self.api_url, &self.worker_token));
+        let strategy = self
+            .account_strategy
+            .unwrap_or_else(|| Arc::new(LeastUtilized));
+        let provider: Arc<dyn AgentProvider> =
+            Arc::new(AccountAwareProvider::new(provider, store.clone()).with_strategy(strategy));
 
         let mut engine = Engine::new(store, provider);
         if let Some(decision_provider) = self.decision_provider {
@@ -892,6 +928,7 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ironflow_core::account_strategy::Priority;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay_decision::RecordReplayDecisionProvider;
 
@@ -923,6 +960,17 @@ mod tests {
         let builder =
             WorkerBuilder::new("http://localhost:3000", "token").provider(provider.clone());
         assert!(builder.provider.is_some());
+    }
+
+    #[test]
+    fn builder_account_strategy_sets_strategy() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token");
+        assert!(builder.account_strategy.is_none());
+        let builder = builder.account_strategy(Arc::new(Priority));
+        assert_eq!(
+            builder.account_strategy.as_ref().map(|s| s.name()),
+            Some("priority")
+        );
     }
 
     #[test]

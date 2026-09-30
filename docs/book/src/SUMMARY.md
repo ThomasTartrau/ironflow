@@ -14,6 +14,7 @@
 - [Steps](concepts/steps.md)
 - [Operations](concepts/operations.md)
 - [Engine & Worker](concepts/engine-worker.md)
+- [Provider Accounts](concepts/provider-accounts.md)
 - [Approval Gates](concepts/approval-gates.md)
 - [Human Input](concepts/human-input.md)
 - [Decisions](concepts/decision.md)

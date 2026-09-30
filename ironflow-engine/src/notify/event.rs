@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use ironflow_store::entities::LogStream;
-use ironflow_store::models::{ApprovalRequirement, Assignee, RunStatus, StepKind};
+use ironflow_store::models::{
+    ApprovalRequirement, Assignee, ProviderAccountWindow, RunStatus, StepKind,
+};
 
 /// Vote counts assumed for approval events serialized before multi-approver
 /// gates existed: one approval was always enough.
@@ -584,6 +586,104 @@ pub struct UserSignedOutEvent {
     pub at: DateTime<Utc>,
 }
 
+/// What happened to a Provider Account in a
+/// [`ProviderAccountUpdatedEvent`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::notify::ProviderAccountChange;
+///
+/// assert_eq!(ProviderAccountChange::TokenReplaced.as_str(), "token_replaced");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAccountChange {
+    /// The account was created.
+    Created,
+    /// Settings of the account changed.
+    Updated,
+    /// The account was deleted.
+    Deleted,
+    /// The credential was replaced.
+    TokenReplaced,
+}
+
+impl ProviderAccountChange {
+    /// Wire name of the change, as stored in audit payloads.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Deleted => "deleted",
+            Self::TokenReplaced => "token_replaced",
+        }
+    }
+}
+
+/// Payload of the `Event::ProviderAccountUpdated` event.
+///
+/// Never carries the credential.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::{ProviderAccountChange, ProviderAccountUpdatedEvent};
+/// use uuid::Uuid;
+///
+/// let payload = ProviderAccountUpdatedEvent {
+///     account_id: Uuid::now_v7(),
+///     name: "perso".to_string(),
+///     change: ProviderAccountChange::Created,
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.name, "perso");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ProviderAccountUpdatedEvent {
+    /// Account identifier.
+    pub account_id: Uuid,
+    /// Account name.
+    pub name: String,
+    /// What changed.
+    pub change: ProviderAccountChange,
+    /// When the change happened.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::ProviderAccountUsageUpdated` event.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::ProviderAccountUsageUpdatedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = ProviderAccountUsageUpdatedEvent {
+///     account_id: Uuid::now_v7(),
+///     name: "perso".to_string(),
+///     windows: Vec::new(),
+///     at: Utc::now(),
+/// };
+/// assert!(payload.windows.is_empty());
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ProviderAccountUsageUpdatedEvent {
+    /// Account identifier.
+    pub account_id: Uuid,
+    /// Account name.
+    pub name: String,
+    /// Current windows of the account.
+    pub windows: Vec<ProviderAccountWindow>,
+    /// When the windows were recorded.
+    pub at: DateTime<Utc>,
+}
+
 /// A domain event emitted by the ironflow system.
 ///
 /// Covers the full lifecycle: runs, steps, approvals, and authentication.
@@ -686,6 +786,15 @@ pub enum Event {
 
     /// A user signed out.
     UserSignedOut(UserSignedOutEvent),
+
+    // -- Provider Accounts --
+    /// A Provider Account was created, updated, deleted or had its token replaced.
+    #[serde(rename = "provider_account.updated")]
+    ProviderAccountUpdated(ProviderAccountUpdatedEvent),
+
+    /// New usage windows were recorded for a Provider Account.
+    #[serde(rename = "provider_account.usage_updated")]
+    ProviderAccountUsageUpdated(ProviderAccountUsageUpdatedEvent),
 }
 
 impl Event {
@@ -719,6 +828,11 @@ impl Event {
     pub const USER_SIGNED_UP: &'static str = "user_signed_up";
     /// Event type constant for [`UserSignedOut`](Event::UserSignedOut).
     pub const USER_SIGNED_OUT: &'static str = "user_signed_out";
+    /// Event type constant for [`ProviderAccountUpdated`](Event::ProviderAccountUpdated).
+    pub const PROVIDER_ACCOUNT_UPDATED: &'static str = "provider_account.updated";
+    /// Event type constant for
+    /// [`ProviderAccountUsageUpdated`](Event::ProviderAccountUsageUpdated).
+    pub const PROVIDER_ACCOUNT_USAGE_UPDATED: &'static str = "provider_account.usage_updated";
 
     /// All event types. Pass this to
     /// [`EventPublisher::subscribe`](super::EventPublisher::subscribe) to
@@ -751,6 +865,8 @@ impl Event {
         Self::USER_SIGNED_UP,
         Self::USER_SIGNED_OUT,
         Self::RETRY_FORCED,
+        Self::PROVIDER_ACCOUNT_UPDATED,
+        Self::PROVIDER_ACCOUNT_USAGE_UPDATED,
     ];
 
     /// Returns the event type as a static string (e.g. `"run_status_changed"`).
@@ -789,6 +905,8 @@ impl Event {
             Event::UserSignedIn(_) => Self::USER_SIGNED_IN,
             Event::UserSignedUp(_) => Self::USER_SIGNED_UP,
             Event::UserSignedOut(_) => Self::USER_SIGNED_OUT,
+            Event::ProviderAccountUpdated(_) => Self::PROVIDER_ACCOUNT_UPDATED,
+            Event::ProviderAccountUsageUpdated(_) => Self::PROVIDER_ACCOUNT_USAGE_UPDATED,
         }
     }
 
@@ -829,7 +947,11 @@ impl Event {
             Event::ApprovalRejected(e) => Some(e.run_id),
             Event::ApprovalEscalated(e) => Some(e.run_id),
             Event::LogLine(e) => Some(e.run_id),
-            Event::UserSignedIn(_) | Event::UserSignedUp(_) | Event::UserSignedOut(_) => None,
+            Event::UserSignedIn(_)
+            | Event::UserSignedUp(_)
+            | Event::UserSignedOut(_)
+            | Event::ProviderAccountUpdated(_)
+            | Event::ProviderAccountUsageUpdated(_) => None,
         }
     }
 
@@ -879,7 +1001,9 @@ impl Event {
             | Event::LogLine(_)
             | Event::UserSignedIn(_)
             | Event::UserSignedUp(_)
-            | Event::UserSignedOut(_) => None,
+            | Event::UserSignedOut(_)
+            | Event::ProviderAccountUpdated(_)
+            | Event::ProviderAccountUsageUpdated(_) => None,
         }
     }
 
@@ -922,7 +1046,9 @@ impl Event {
             | Event::ApprovalGranted(_)
             | Event::ApprovalRejected(_)
             | Event::ApprovalEscalated(_)
-            | Event::LogLine(_) => None,
+            | Event::LogLine(_)
+            | Event::ProviderAccountUpdated(_)
+            | Event::ProviderAccountUsageUpdated(_) => None,
         }
     }
 }
@@ -1689,6 +1815,24 @@ mod tests {
                     at: now,
                 }),
                 "user_signed_out",
+            ),
+            (
+                Event::ProviderAccountUpdated(ProviderAccountUpdatedEvent {
+                    account_id: id,
+                    name: "perso".to_string(),
+                    change: ProviderAccountChange::TokenReplaced,
+                    at: now,
+                }),
+                "provider_account.updated",
+            ),
+            (
+                Event::ProviderAccountUsageUpdated(ProviderAccountUsageUpdatedEvent {
+                    account_id: id,
+                    name: "perso".to_string(),
+                    windows: Vec::new(),
+                    at: now,
+                }),
+                "provider_account.usage_updated",
             ),
         ];
 

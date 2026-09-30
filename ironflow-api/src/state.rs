@@ -2,6 +2,7 @@
 //!
 //! [`AppState`] holds the shared [`Store`] and [`Engine`] used by all handlers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(feature = "prometheus")]
 use std::sync::OnceLock;
@@ -17,6 +18,7 @@ use tracing::warn;
 
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_auth::jwt::JwtConfig;
+use ironflow_core::account::{AccountKind, ClaudeSubscriptionKind};
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::{Event, WorkflowEventBus};
 use ironflow_store::entities::Run;
@@ -82,9 +84,17 @@ pub struct AppState {
     /// `None` on a deployment that has not configured artifact storage: the
     /// artifact routes answer `501` and every other endpoint is unaffected.
     pub blob_store: Option<Arc<dyn BlobStore>>,
+    /// Registered Provider Account kinds, by id.
+    pub account_kinds: Arc<HashMap<&'static str, Arc<dyn AccountKind>>>,
     /// Prometheus metrics handle (only when `prometheus` feature is enabled).
     #[cfg(feature = "prometheus")]
     pub prometheus_handle: PrometheusHandle,
+}
+
+/// The kinds every server supports.
+fn default_account_kinds() -> HashMap<&'static str, Arc<dyn AccountKind>> {
+    let claude: Arc<dyn AccountKind> = Arc::new(ClaudeSubscriptionKind::new());
+    HashMap::from([(claude.id(), claude)])
 }
 
 impl FromRef<AppState> for Arc<dyn Store> {
@@ -131,6 +141,7 @@ impl AppState {
             event_sender,
             event_bus: None,
             blob_store: None,
+            account_kinds: Arc::new(default_account_kinds()),
             #[cfg(feature = "prometheus")]
             prometheus_handle: Self::global_prometheus_handle(),
         }
@@ -154,6 +165,29 @@ impl AppState {
     /// ```
     pub fn with_blob_store(mut self, blob_store: Arc<dyn BlobStore>) -> Self {
         self.blob_store = Some(blob_store);
+        self
+    }
+
+    /// Register a Provider Account kind, replacing one with the same id.
+    ///
+    /// Tests use it to point the Claude kind at a local stub server.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use ironflow_api::state::AppState;
+    /// use ironflow_core::account::ClaudeSubscriptionKind;
+    ///
+    /// # fn example(state: AppState) -> AppState {
+    /// state.with_account_kind(Arc::new(ClaudeSubscriptionKind::with_api_base("http://127.0.0.1:9999")))
+    /// # }
+    /// ```
+    pub fn with_account_kind(mut self, kind: Arc<dyn AccountKind>) -> Self {
+        let mut kinds = (*self.account_kinds).clone();
+        kinds.insert(kind.id(), kind);
+        self.account_kinds = Arc::new(kinds);
         self
     }
 

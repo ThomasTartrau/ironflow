@@ -65,6 +65,11 @@ fn scope_metadata(scope: &ApiKeyScope) -> (&'static str, &'static str) {
         ApiKeyScope::RunsWrite => ("Runs Write", "Create new runs"),
         ApiKeyScope::RunsManage => ("Runs Manage", "Cancel, approve, reject, retry runs"),
         ApiKeyScope::StatsRead => ("Stats Read", "Read aggregated statistics"),
+        ApiKeyScope::AccountsRead => ("Accounts Read", "Read provider accounts and their usage"),
+        ApiKeyScope::AccountsManage => (
+            "Accounts Manage",
+            "Create, update, delete and test provider accounts",
+        ),
         ApiKeyScope::Admin => ("Admin", "Full access to all operations"),
     }
 }
@@ -159,7 +164,7 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: JsonValue = serde_json::from_slice(&body).unwrap();
         let scopes = json["data"].as_array().unwrap();
-        assert_eq!(scopes.len(), 5);
+        assert_eq!(scopes.len(), 7);
 
         let values: Vec<&str> = scopes
             .iter()
@@ -167,6 +172,8 @@ mod tests {
             .collect();
         assert!(values.contains(&"runs_write"));
         assert!(values.contains(&"runs_manage"));
+        assert!(values.contains(&"accounts_read"));
+        assert!(values.contains(&"accounts_manage"));
     }
 
     #[tokio::test]

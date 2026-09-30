@@ -23,6 +23,7 @@ pub mod list_workflows;
 pub mod metrics;
 pub mod openapi_spec;
 pub mod plan_workflow;
+pub mod provider_accounts;
 pub mod replay_run;
 pub mod retry_run;
 pub mod run_events;
@@ -167,6 +168,14 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             post(internal::create_step_dependencies::create_step_dependencies),
         )
         .route("/secrets/{*key}", get(internal::get_secret::get_secret))
+        .route(
+            "/provider-accounts/candidates",
+            get(internal::provider_accounts::list_candidates),
+        )
+        .route(
+            "/provider-accounts/{id}/observations",
+            post(internal::provider_accounts::record_observation),
+        )
         .layer(axum_mw::from_fn(worker_token_auth))
         .layer(Extension(WorkerToken(state.worker_token.clone())))
         .with_state(state.clone());
@@ -288,6 +297,31 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route(
             "/secrets/{*key}",
             put(secrets::update::update_secret).delete(secrets::delete::delete_secret),
+        )
+        .route(
+            "/provider-accounts",
+            get(provider_accounts::list::list_provider_accounts)
+                .post(provider_accounts::create::create_provider_account),
+        )
+        // Registered before `{id}`: a static segment wins, so `kinds` is never
+        // read as an account name.
+        .route(
+            "/provider-accounts/kinds",
+            get(provider_accounts::kinds::list_account_kinds),
+        )
+        .route(
+            "/provider-accounts/{id}",
+            get(provider_accounts::get::get_provider_account)
+                .patch(provider_accounts::update::update_provider_account)
+                .delete(provider_accounts::delete::delete_provider_account),
+        )
+        .route(
+            "/provider-accounts/{id}/test",
+            post(provider_accounts::test::test_provider_account),
+        )
+        .route(
+            "/provider-accounts/{id}/usage",
+            get(provider_accounts::usage::provider_account_usage),
         )
         .route(
             "/approval-delegations",

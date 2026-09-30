@@ -5,16 +5,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
 use clap::Args;
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_artifacts::local::LocalBlobStore;
 use ironflow_artifacts::stream_from_bytes;
 use ironflow_auth::password;
 use ironflow_store::entities::{
-    ApiKeyScope, EventKind, NewApiKey, NewArtifact, NewAuditLogEntry, NewRun, NewStep, NewUser,
-    RunActor, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind, step_trace_id,
+    AccountWindowStatus, ApiKeyScope, EventKind, NewAccountWindow, NewApiKey, NewArtifact,
+    NewAuditLogEntry, NewProviderAccount, NewProviderAccountObservation, NewRun, NewStep, NewUser,
+    RunActor, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind,
+    provider_account_secret_key, step_trace_id,
 };
+use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
 use rust_decimal::Decimal;
@@ -88,6 +91,8 @@ async fn seed_postgres(url: &str, opts: &SeedOptions) -> anyhow::Result<()> {
             .context("failed to connect for truncate")?;
         sqlx::query(
             "TRUNCATE ironflow.step_artifacts, ironflow.step_dependencies, \
+             ironflow.provider_account_usage, ironflow.provider_account_windows, \
+             ironflow.provider_accounts, \
              ironflow.steps, ironflow.runs, ironflow.secrets, ironflow.audit_logs, \
              iam.api_keys, iam.users CASCADE",
         )
@@ -127,6 +132,7 @@ pub async fn seed_store(store: &dyn Store, opts: &SeedOptions) -> anyhow::Result
     let runs = seed_runs(store, &users).await?;
     seed_api_keys(store, &users).await?;
     seed_secrets(store).await?;
+    seed_provider_accounts(store, &users).await?;
     seed_audit_logs(store, &users, &runs).await?;
 
     if let Some(ref dir) = opts.artifacts_dir {
@@ -688,6 +694,124 @@ async fn seed_secrets(store: &dyn Store) -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Provider Accounts
+// ---------------------------------------------------------------------------
+
+async fn seed_provider_accounts(store: &dyn Store, users: &[SeededUser]) -> anyhow::Result<()> {
+    let admin = &users[0];
+    let now = Utc::now();
+    let specs = [
+        ("perso-max", "Perso Max", "max", "perso", 10, None),
+        ("team-pro", "Team Pro", "pro", "team", 20, Some(2)),
+    ];
+
+    let mut ids = HashMap::new();
+    for (name, display_name, plan, tag, priority, max_concurrency) in specs {
+        let id = Uuid::now_v7();
+        let secret_key = provider_account_secret_key(id);
+        let token = format!("sk-ant-oat01-seed-{name}-0000000000000000000000");
+        match store.set_secret(&secret_key, &token).await {
+            Ok(_) => {}
+            Err(StoreError::Crypto(msg)) => {
+                info!(
+                    reason = msg.as_str(),
+                    account = name,
+                    "provider account credential not stored (no key ring configured)"
+                );
+            }
+            Err(e) => return Err(e.into()),
+        }
+        store
+            .create_provider_account(NewProviderAccount {
+                id,
+                name: name.to_string(),
+                display_name: display_name.to_string(),
+                kind: "claude_subscription".to_string(),
+                secret_key,
+                enabled: true,
+                priority,
+                tags: vec![tag.to_string()],
+                max_concurrency,
+                alert_threshold: 0.8,
+                expires_at: now + TimeDelta::days(365),
+                plan: Some(plan.to_string()),
+                created_by: Some(admin.id),
+            })
+            .await?;
+        info!(account = name, "created provider account");
+        ids.insert(name, id);
+    }
+
+    // Thirty days of history, one observation every 12 hours.
+    let perso = ids["perso-max"];
+    let history: Vec<NewAccountWindow> = (1..=60)
+        .rev()
+        .flat_map(|i: i64| {
+            let observed_at = now - TimeDelta::hours(12 * i);
+            let five_hour = (i % 10) as f64 / 10.0;
+            let seven_day = ((60 - i) % 30) as f64 / 30.0;
+            [
+                seed_window("five_hour", five_hour, TimeDelta::hours(5), observed_at),
+                seed_window("seven_day", seven_day, TimeDelta::days(7), observed_at),
+            ]
+        })
+        .collect();
+    store
+        .record_provider_account_observation(
+            perso,
+            NewProviderAccountObservation {
+                windows: history,
+                auth_failed: false,
+            },
+        )
+        .await?;
+    store
+        .record_provider_account_observation(
+            perso,
+            NewProviderAccountObservation {
+                windows: vec![
+                    seed_window("five_hour", 0.42, TimeDelta::hours(2), now),
+                    seed_window("seven_day", 0.61, TimeDelta::days(3), now),
+                ],
+                auth_failed: false,
+            },
+        )
+        .await?;
+
+    store
+        .record_provider_account_observation(
+            ids["team-pro"],
+            NewProviderAccountObservation {
+                windows: vec![NewAccountWindow {
+                    status: AccountWindowStatus::Rejected,
+                    ..seed_window("five_hour", 1.0, TimeDelta::hours(1), now)
+                }],
+                auth_failed: false,
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// An allowed, unscoped window observed at `observed_at`.
+fn seed_window(
+    name: &str,
+    utilization: f64,
+    resets_in: TimeDelta,
+    observed_at: DateTime<Utc>,
+) -> NewAccountWindow {
+    NewAccountWindow {
+        window: name.to_string(),
+        utilization,
+        resets_at: Some(observed_at + resets_in),
+        status: AccountWindowStatus::Allowed,
+        model_scope: None,
+        observed_at,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Artifacts
 // ---------------------------------------------------------------------------
 
@@ -1181,6 +1305,7 @@ mod tests {
     use ironflow_store::api_key_store::ApiKeyStore;
     use ironflow_store::artifact_store::ArtifactStore;
     use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::provider_account_store::ProviderAccountStore;
     use ironflow_store::secret_store::SecretStore;
     use ironflow_store::store::{RunStore, Store};
     use ironflow_store::user_store::UserStore;
@@ -1298,6 +1423,45 @@ mod tests {
         assert!(total_steps >= 8, "should have many steps across all runs");
         assert!(steps_with_output > 0, "some steps should have outputs");
         assert!(steps_with_error > 0, "some steps should have errors");
+    }
+
+    #[tokio::test]
+    async fn seed_creates_provider_accounts() {
+        let store = empty_store().await;
+        let opts = SeedOptions {
+            force: false,
+            artifacts_dir: None,
+        };
+        seed_store(&*store as &dyn Store, &opts).await.unwrap();
+
+        let perso = store
+            .find_provider_account_by_name("perso-max")
+            .await
+            .unwrap()
+            .expect("perso-max should exist");
+        let windows = store
+            .list_provider_account_windows(vec![perso.id])
+            .await
+            .unwrap();
+        let names: Vec<&str> = windows.iter().map(|w| w.window.as_str()).collect();
+        assert!(names.contains(&"five_hour"));
+        assert!(names.contains(&"seven_day"));
+        let five = windows.iter().find(|w| w.window == "five_hour").unwrap();
+        assert!((five.utilization - 0.42).abs() < 1e-9);
+
+        let since = Utc::now() - TimeDelta::days(31);
+        let history = store
+            .list_provider_account_usage(perso.id, since)
+            .await
+            .unwrap();
+        assert!(history.len() > 100);
+
+        let team = store
+            .find_provider_account_by_name("team-pro")
+            .await
+            .unwrap()
+            .expect("team-pro should exist");
+        assert_eq!(team.max_concurrency, Some(2));
     }
 
     #[tokio::test]

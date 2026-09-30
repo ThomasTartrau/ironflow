@@ -39,10 +39,12 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg, check_known_hosts_path};
 use tokio::time;
 use tracing::{debug, warn};
 
+use crate::account::ClaudeSubscriptionKind;
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
 
 use super::common::{self, DEFAULT_TIMEOUT};
+use super::rate_limit_event;
 
 /// SSH authentication method.
 #[derive(Clone)]
@@ -388,6 +390,8 @@ impl SshProvider {
                 ctx.to_traceparent()
             );
         }
+        let credential = config.account.as_ref().map(|session| session.credential());
+        let env_prefix = with_credential_prefix(env_prefix, credential.map(|c| c.env_var()));
         let remote_cmd = match (&self.working_dir, &config.working_dir) {
             (_, Some(dir)) | (Some(dir), None) => {
                 format!(
@@ -455,6 +459,19 @@ impl SshProvider {
                 stderr: format!("failed to exec remote command: {e}"),
             })?;
 
+        // The credential goes first on stdin, read by the `read -r` of the
+        // remote prefix, so it never appears on the remote command line.
+        if let Some(credential) = credential {
+            let line = format!("{}\n", credential.expose());
+            channel
+                .data(Cursor::new(line.as_bytes()))
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to write credential to SSH stdin: {e}"),
+                })?;
+        }
+
         if let Some(ref prompt) = built.stdin_prompt {
             let cursor = Cursor::new(prompt.as_bytes());
             channel
@@ -516,6 +533,7 @@ impl SshProvider {
         let code = exit_code.unwrap_or(1) as i32;
 
         let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+        rate_limit_event::record_rate_limits(config, &stdout);
         let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
 
         if code != 0 {
@@ -528,7 +546,26 @@ impl SshProvider {
     }
 }
 
+/// Shell fragment reading the credential from the first stdin line into
+/// `env_var` and exporting it. It carries the variable name only.
+fn ssh_credential_prefix(env_var: &str) -> String {
+    format!("IFS= read -r {env_var} && export {env_var} && ")
+}
+
+/// Append the credential prefix after `env_prefix`, which unsets every
+/// `CLAUDE*` variable and would otherwise drop the credential again.
+fn with_credential_prefix(env_prefix: String, credential_env: Option<&str>) -> String {
+    match credential_env {
+        Some(env_var) => format!("{env_prefix}{}", ssh_credential_prefix(env_var)),
+        None => env_prefix,
+    }
+}
+
 impl AgentProvider for SshProvider {
+    fn account_kind(&self) -> Option<&'static str> {
+        Some(ClaudeSubscriptionKind::ID)
+    }
+
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(self.invoke_inner(config, None))
     }
@@ -551,6 +588,31 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    #[test]
+    fn ssh_credential_prefix_reads_stdin_without_token() {
+        let prefix = ssh_credential_prefix("CLAUDE_CODE_OAUTH_TOKEN");
+        assert_eq!(
+            prefix,
+            "IFS= read -r CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN && "
+        );
+        assert!(!prefix.contains("sk-ant-"));
+    }
+
+    #[test]
+    fn ssh_credential_prefix_comes_after_unset_prefix() {
+        let unset = "unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null; ".to_string();
+        let composed = with_credential_prefix(unset.clone(), Some("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(composed.starts_with(&unset));
+        assert!(composed.ends_with("export CLAUDE_CODE_OAUTH_TOKEN && "));
+        assert_eq!(with_credential_prefix(unset.clone(), None), unset);
+    }
+
+    #[test]
+    fn ssh_provider_supports_claude_subscription_accounts() {
+        let provider = SshProvider::new("host", "user");
+        assert_eq!(provider.account_kind(), Some(ClaudeSubscriptionKind::ID));
+    }
 
     #[test]
     fn ssh_provider_defaults() {

@@ -52,6 +52,7 @@ pub mod builder;
 pub mod client;
 mod delegation_methods;
 pub mod error;
+mod provider_account_methods;
 pub mod rate_limit;
 pub mod retry;
 mod schedule_methods;

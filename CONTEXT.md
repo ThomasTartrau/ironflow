@@ -78,6 +78,10 @@ _Avoid_: permission, role, grant
 An encrypted key-value pair stored in the database, namespaced by Workflow. Decrypted at read time, injected into Steps at execution.
 _Avoid_: credential, env var, config value
 
+**Provider Account**:
+An account at an AI provider (v1: a Claude Pro/Max subscription), its credential (stored as the system Secret `accounts/<id>/credential`) and its usage limits (windows). Managed live from the dashboard, API, CLI and MCP; the Worker picks one per agent Step.
+_Avoid_: account (reserved for User), subscription, seat
+
 ### Observability
 
 **Event**:

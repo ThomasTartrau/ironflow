@@ -28,6 +28,7 @@ const EVENT_KINDS: EventKind[] = [
 	"user_signed_out",
 	"secrets_rotated",
 	"retry_forced",
+	"provider_account.updated",
 ];
 
 interface FilterValues {

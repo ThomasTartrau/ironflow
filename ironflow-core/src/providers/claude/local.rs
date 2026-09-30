@@ -37,11 +37,13 @@ use tokio::process::Command;
 use tokio::time;
 use tracing::{debug, warn};
 
+use crate::account::ClaudeSubscriptionKind;
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentInput, AgentProvider, InvokeFuture};
 use crate::utils::truncate_output;
 
 use super::common::{self, DEFAULT_TIMEOUT};
+use super::rate_limit_event;
 
 /// Download every declared input to its `mount_path` on the local filesystem.
 ///
@@ -158,6 +160,10 @@ impl Default for ClaudeCodeProvider {
 }
 
 impl AgentProvider for ClaudeCodeProvider {
+    fn account_kind(&self) -> Option<&'static str> {
+        Some(ClaudeSubscriptionKind::ID)
+    }
+
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             common::validate_prompt_size(config)?;
@@ -192,6 +198,13 @@ impl AgentProvider for ClaudeCodeProvider {
 
             for var in common::env_vars_to_remove() {
                 cmd.env_remove(&var);
+            }
+
+            if let Some(session) = &config.account {
+                cmd.env(
+                    session.credential().env_var(),
+                    session.credential().expose(),
+                );
             }
 
             if let Some(ref ctx) = config.trace_context {
@@ -241,6 +254,7 @@ impl AgentProvider for ClaudeCodeProvider {
 
                 let duration_ms = start.elapsed().as_millis() as u64;
                 let stdout = truncate_output(&output.stdout, "claude stdout");
+                rate_limit_event::record_rate_limits(config, &stdout);
 
                 if !output.status.success() {
                     let exit_code = output.status.code().unwrap_or(-1);
@@ -275,6 +289,7 @@ impl AgentProvider for ClaudeCodeProvider {
             let duration_ms = start.elapsed().as_millis() as u64;
 
             let stdout = truncate_output(&output.stdout, "claude stdout");
+            rate_limit_event::record_rate_limits(config, &stdout);
 
             if !output.status.success() {
                 let exit_code = output.status.code().unwrap_or(-1);
@@ -299,6 +314,14 @@ impl AgentProvider for ClaudeCodeProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_supports_claude_subscription_accounts() {
+        assert_eq!(
+            ClaudeCodeProvider::new().account_kind(),
+            Some(ClaudeSubscriptionKind::ID)
+        );
+    }
 
     #[test]
     fn provider_default_timeout() {

@@ -108,6 +108,31 @@ export function describeApprovalReason(
 }
 
 /**
+ * Provider Account an agent step ran under, e.g. `account 0192f0c1`, with
+ * the full id in a tooltip. Renders nothing when the step used the worker
+ * environment.
+ */
+export function AccountBadge({ step }: { step: StepResponse }) {
+	if (!step.account_id) return null;
+	return (
+		<TooltipProvider delay={200}>
+			<Tooltip>
+				<TooltipTrigger
+					render={
+						<span className="shrink-0">
+							<Badge variant="outline" className="text-[10px] font-medium">
+								{`account ${step.account_id.slice(0, 8)}`}
+							</Badge>
+						</span>
+					}
+				/>
+				<TooltipContent side="bottom">{step.account_id}</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
+	);
+}
+
+/**
  * Vote counter for an approval gate, e.g. `1/2 approvals`.
  *
  * When the gate carries an approval requirement, a tooltip explains why the
@@ -343,6 +368,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 				<StatusBadge status={step.status} awaitingKind={step.kind} />
 				<ApprovalSla step={step} />
 				<ApprovalProgress step={step} />
+				<AccountBadge step={step} />
 				<span className="text-xs text-muted-foreground ml-auto shrink-0">
 					{formatDuration(step.duration_ms)}
 				</span>
@@ -770,6 +796,7 @@ function StepRow({ step }: { step: StepResponse }) {
 						<StatusBadge status={step.status} awaitingKind={step.kind} />
 						<ApprovalSla step={step} />
 						<ApprovalProgress step={step} />
+						<AccountBadge step={step} />
 					</div>
 				</TableCell>
 				<TableCell>{formatDuration(step.duration_ms)}</TableCell>

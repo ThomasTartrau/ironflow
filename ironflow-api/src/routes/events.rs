@@ -79,11 +79,13 @@ pub struct EventsQuery {
 ///
 /// Returns 401 if the request is not authenticated.
 pub async fn events(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
     let receiver = state.event_sender.subscribe();
+    // Provider Account events describe admin-only resources.
+    let is_admin = auth.is_admin();
     let type_filter = query.types;
 
     let stream = BroadcastStream::new(receiver).filter_map(move |result: Result<Event, _>| {
@@ -91,6 +93,15 @@ pub async fn events(
         let run_id_filter = query.run_id;
         async move {
             let event = result.ok()?;
+
+            if !is_admin
+                && matches!(
+                    event,
+                    Event::ProviderAccountUpdated(_) | Event::ProviderAccountUsageUpdated(_)
+                )
+            {
+                return None;
+            }
 
             if let Some(ref rid) = run_id_filter
                 && event.run_id() != Some(*rid)

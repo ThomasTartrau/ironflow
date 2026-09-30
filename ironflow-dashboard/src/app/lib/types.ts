@@ -108,3 +108,25 @@ export interface ApiResponse<T> {
 	data: T;
 	meta: { page: number; per_page: number; total: number } | null;
 }
+
+// -- Provider Accounts --
+export type AccountFormFieldResponse =
+	components["schemas"]["AccountFormFieldResponse"];
+export type AccountKindResponse = components["schemas"]["AccountKindResponse"];
+export type AccountState = components["schemas"]["AccountState"];
+export type AccountTestResult = components["schemas"]["AccountTestResult"];
+export type AccountUsagePointResponse =
+	components["schemas"]["AccountUsagePointResponse"];
+export type AccountWindowResponse =
+	components["schemas"]["AccountWindowResponse"];
+export type AccountWindowStatus = components["schemas"]["AccountWindowStatus"];
+export type CreateProviderAccountRequest =
+	components["schemas"]["CreateProviderAccountRequest"];
+export type ProviderAccountResponse =
+	components["schemas"]["ProviderAccountResponse"];
+export type ProviderAccountTestResponse =
+	components["schemas"]["ProviderAccountTestResponse"];
+export type ProviderAccountUsageResponse =
+	components["schemas"]["ProviderAccountUsageResponse"];
+export type UpdateProviderAccountRequest =
+	components["schemas"]["UpdateProviderAccountRequest"];

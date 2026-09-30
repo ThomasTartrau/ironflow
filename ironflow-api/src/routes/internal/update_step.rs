@@ -214,6 +214,7 @@ mod tests {
             approval_assignee: None,
             approval_requirement: None,
             clear_approval_deadline: false,
+            account_id: None,
         };
 
         let req = Request::builder()
@@ -483,6 +484,7 @@ mod tests {
             approval_assignee: None,
             approval_requirement: None,
             clear_approval_deadline: false,
+            account_id: None,
         };
 
         let req = Request::builder()

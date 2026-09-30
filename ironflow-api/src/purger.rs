@@ -11,6 +11,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{TimeDelta, Utc};
+
 use uuid::Uuid;
 
 use ironflow_artifacts::blob_store::BlobStore;
@@ -30,6 +32,9 @@ pub const DEFAULT_PURGE_INTERVAL: Duration = Duration::from_secs(86400);
 
 /// How many runs a single tick processes.
 pub const DEFAULT_PURGE_BATCH_SIZE: u32 = 100;
+
+/// Default days of Provider Account usage history kept.
+pub const DEFAULT_USAGE_RETENTION_DAYS: u32 = 30;
 
 /// Periodic task that purges terminal runs exceeding the retention policy.
 ///
@@ -63,6 +68,7 @@ pub struct RunPurger {
     policy: PurgePolicy,
     interval: Duration,
     batch_size: u32,
+    usage_retention_days: u32,
 }
 
 impl RunPurger {
@@ -74,6 +80,7 @@ impl RunPurger {
             policy,
             interval: DEFAULT_PURGE_INTERVAL,
             batch_size: DEFAULT_PURGE_BATCH_SIZE,
+            usage_retention_days: DEFAULT_USAGE_RETENTION_DAYS,
         }
     }
 
@@ -95,6 +102,25 @@ impl RunPurger {
     /// Set how many runs a single tick processes.
     pub fn batch_size(mut self, batch_size: u32) -> Self {
         self.batch_size = batch_size;
+        self
+    }
+
+    /// Set how many days of Provider Account usage history to keep.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_api::purger::RunPurger;
+    /// use ironflow_store::entities::PurgePolicy;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let policy = PurgePolicy { max_age_days: 90, max_runs_per_workflow: 1000, dry_run: false };
+    /// let purger = RunPurger::new(Arc::new(InMemoryStore::new()), policy).usage_retention_days(7);
+    /// # let _ = purger;
+    /// ```
+    pub fn usage_retention_days(mut self, days: u32) -> Self {
+        self.usage_retention_days = days;
         self
     }
 
@@ -125,10 +151,25 @@ impl RunPurger {
         }
     }
 
+    /// Delete Provider Account usage history older than the retention.
+    async fn purge_account_usage(&self) {
+        if self.policy.dry_run {
+            return;
+        }
+        let before = Utc::now() - TimeDelta::days(i64::from(self.usage_retention_days));
+        match self.store.purge_provider_account_usage(before).await {
+            Ok(0) => {}
+            Ok(deleted) => info!(deleted, "purged provider account usage history"),
+            Err(err) => error!(error = %err, "failed to purge provider account usage history"),
+        }
+    }
+
     /// Purge one batch of eligible runs.
     ///
     /// Exposed for tests and for callers that drive the schedule themselves.
     pub async fn tick(&self) {
+        self.purge_account_usage().await;
+
         let purgeable = match self
             .store
             .list_purgeable_runs(&self.policy, self.batch_size)
@@ -237,8 +278,12 @@ mod tests {
     use std::time::Duration;
 
     use chrono::{TimeDelta, Utc};
-    use ironflow_store::entities::{NewRun, PurgePolicy, RunStatus, TriggerKind};
+    use ironflow_store::entities::{
+        AccountWindowStatus, NewAccountWindow, NewProviderAccount, NewProviderAccountObservation,
+        NewRun, PurgePolicy, RunStatus, TriggerKind, provider_account_secret_key,
+    };
     use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::provider_account_store::ProviderAccountStore;
     use ironflow_store::store::RunStore;
     use serde_json::json;
     use uuid::Uuid;
@@ -279,6 +324,64 @@ mod tests {
     fn build(store: Arc<InMemoryStore>, policy: PurgePolicy) -> RunPurger {
         let store_dyn: Arc<dyn Store> = store;
         RunPurger::new(store_dyn, policy)
+    }
+
+    #[tokio::test]
+    async fn purger_purges_old_provider_account_usage() {
+        let store = Arc::new(InMemoryStore::new());
+        let id = Uuid::now_v7();
+        store
+            .create_provider_account(NewProviderAccount {
+                id,
+                name: "perso".to_string(),
+                display_name: "Perso".to_string(),
+                kind: "claude_subscription".to_string(),
+                secret_key: provider_account_secret_key(id),
+                enabled: true,
+                priority: 100,
+                tags: Vec::new(),
+                max_concurrency: None,
+                alert_threshold: 0.8,
+                expires_at: Utc::now() + TimeDelta::days(365),
+                plan: None,
+                created_by: None,
+            })
+            .await
+            .unwrap();
+        let window = |days_ago: i64| NewAccountWindow {
+            window: "five_hour".to_string(),
+            utilization: 0.5,
+            resets_at: None,
+            status: AccountWindowStatus::Allowed,
+            model_scope: None,
+            observed_at: Utc::now() - TimeDelta::days(days_ago),
+        };
+        store
+            .record_provider_account_observation(
+                id,
+                NewProviderAccountObservation {
+                    windows: vec![window(40), window(1)],
+                    auth_failed: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        let policy = PurgePolicy {
+            max_age_days: 90,
+            max_runs_per_workflow: 10000,
+            dry_run: false,
+        };
+        build(store.clone(), policy)
+            .usage_retention_days(30)
+            .tick()
+            .await;
+
+        let history = store
+            .list_provider_account_usage(id, Utc::now() - TimeDelta::days(90))
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
     }
 
     #[tokio::test]

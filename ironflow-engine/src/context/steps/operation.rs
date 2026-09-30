@@ -155,6 +155,7 @@ impl WorkflowContext {
                     // An operation declares no output; its record is what
                     // `put_artifact` attaches bytes to.
                     artifacts: StepArtifacts::new(name, Some(step.id), &[]),
+                    account_id: None,
                 })
             }
             Err(err) => {

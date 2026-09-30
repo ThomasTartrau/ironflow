@@ -22,6 +22,10 @@ pub enum ApiKeyScope {
     RunsManage,
     /// Read aggregated statistics.
     StatsRead,
+    /// Read Provider Accounts and their usage.
+    AccountsRead,
+    /// Create, update, delete and test Provider Accounts.
+    AccountsManage,
     /// Full access to all operations.
     Admin,
 }
@@ -48,6 +52,8 @@ impl ApiKeyScope {
             ApiKeyScope::RunsWrite,
             ApiKeyScope::RunsManage,
             ApiKeyScope::StatsRead,
+            ApiKeyScope::AccountsRead,
+            ApiKeyScope::AccountsManage,
         ]
     }
 
@@ -115,6 +121,8 @@ mod tests {
             ApiKeyScope::RunsWrite,
             ApiKeyScope::RunsManage,
             ApiKeyScope::StatsRead,
+            ApiKeyScope::AccountsRead,
+            ApiKeyScope::AccountsManage,
             ApiKeyScope::Admin,
         ];
         for scope in scopes {
@@ -143,7 +151,7 @@ mod tests {
     fn all_non_admin_excludes_admin() {
         let scopes = ApiKeyScope::all_non_admin();
         assert!(!scopes.contains(&ApiKeyScope::Admin));
-        assert_eq!(scopes.len(), 5);
+        assert_eq!(scopes.len(), 7);
     }
 
     #[test]
@@ -155,6 +163,8 @@ mod tests {
         assert!(!allowed.contains(&ApiKeyScope::RunsWrite));
         assert!(!allowed.contains(&ApiKeyScope::RunsManage));
         assert!(!allowed.contains(&ApiKeyScope::Admin));
+        assert!(!allowed.contains(&ApiKeyScope::AccountsRead));
+        assert!(!allowed.contains(&ApiKeyScope::AccountsManage));
     }
 
     #[test]

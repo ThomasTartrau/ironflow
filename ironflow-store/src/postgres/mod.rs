@@ -23,6 +23,7 @@ mod artifact_store;
 mod audit_log_store;
 mod helpers;
 mod log_store;
+mod provider_account_store;
 mod run_store;
 mod schedule_store;
 mod secret_store;

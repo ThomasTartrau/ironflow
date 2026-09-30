@@ -9,6 +9,7 @@ mod auth;
 mod create_run;
 mod created_by;
 pub mod lease;
+mod provider_account;
 mod run;
 mod schedule;
 mod secret;
@@ -26,6 +27,12 @@ pub use created_by::{CreatedBy, CreatedByKind};
 pub use lease::{
     DEFAULT_LEASE_TTL_SECS, MAX_LEASE_TTL_SECS, RenewLeaseRequest, RenewLeaseResponse,
     validate_lease_ttl,
+};
+pub use provider_account::{
+    AccountFormFieldResponse, AccountKindResponse, AccountState, AccountTestResult,
+    AccountUsagePointResponse, AccountWindowResponse, CreateProviderAccountRequest,
+    ListProviderAccountsQuery, ProviderAccountResponse, ProviderAccountTestResponse,
+    ProviderAccountUsageResponse, UpdateProviderAccountRequest, UsageQuery,
 };
 pub use run::{ListRunsQuery, RunDetailResponse, RunResponse};
 pub use schedule::{CreateScheduleRequest, ScheduleResponse, UpdateScheduleRequest};

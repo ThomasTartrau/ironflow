@@ -1,6 +1,9 @@
 //! Integration tests for InMemoryStore covering all RunStore operations.
 
 use std::collections::HashMap;
+use std::time::Duration;
+
+use chrono::{DateTime, TimeDelta, Utc};
 
 use ironflow_store::prelude::*;
 use rust_decimal::Decimal;
@@ -145,8 +148,6 @@ async fn list_runs_filters_by_status() {
 
 #[tokio::test]
 async fn list_runs_filters_by_created_after() {
-    use chrono::Utc;
-
     let store = InMemoryStore::new();
     let before_time = Utc::now();
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1236,4 +1237,431 @@ async fn unicode_key_is_stored_verbatim() {
     let found = store.find_run_by_idempotency_key("clé-🚀").await.unwrap();
 
     assert_eq!(found.expect("run bound to the key").id, created.id);
+}
+
+// ─── Provider Accounts ──────────────────────────────────────────
+
+fn new_account(name: &str, priority: i32) -> NewProviderAccount {
+    let id = Uuid::now_v7();
+    NewProviderAccount {
+        id,
+        name: name.to_string(),
+        display_name: name.to_uppercase(),
+        kind: "claude_subscription".to_string(),
+        secret_key: provider_account_secret_key(id),
+        enabled: true,
+        priority,
+        tags: vec!["team".to_string()],
+        max_concurrency: None,
+        alert_threshold: 0.8,
+        expires_at: Utc::now() + TimeDelta::days(365),
+        plan: Some("max".to_string()),
+        created_by: None,
+    }
+}
+
+fn account_window(name: &str, utilization: f64, observed_at: DateTime<Utc>) -> NewAccountWindow {
+    NewAccountWindow {
+        window: name.to_string(),
+        utilization,
+        resets_at: Some(observed_at + TimeDelta::hours(2)),
+        status: AccountWindowStatus::Allowed,
+        model_scope: None,
+        observed_at,
+    }
+}
+
+#[tokio::test]
+async fn provider_account_crud_and_duplicate_name() {
+    let store = InMemoryStore::new();
+    let created = store
+        .create_provider_account(new_account("perso", 10))
+        .await
+        .unwrap();
+    assert_eq!(created.name, "perso");
+    assert!(created.auth_failed_at.is_none());
+
+    let err = store
+        .create_provider_account(new_account("perso", 20))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StoreError::DuplicateProviderAccount(ref n) if n == "perso"));
+
+    let by_id = store.get_provider_account(created.id).await.unwrap();
+    assert_eq!(by_id.as_ref().map(|a| a.id), Some(created.id));
+    let by_name = store.find_provider_account_by_name("perso").await.unwrap();
+    assert_eq!(by_name.map(|a| a.id), Some(created.id));
+    assert!(
+        store
+            .find_provider_account_by_name("missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    store
+        .create_provider_account(new_account("alpha", 5))
+        .await
+        .unwrap();
+    let page = store.list_provider_accounts(None, 1, 20).await.unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(page.items[0].name, "alpha");
+    let none = store
+        .list_provider_accounts(Some("other".to_string()), 1, 20)
+        .await
+        .unwrap();
+    assert_eq!(none.total, 0);
+
+    let updated = store
+        .update_provider_account(
+            created.id,
+            ProviderAccountUpdate {
+                enabled: Some(false),
+                max_concurrency: Some(Some(2)),
+                plan: Some(None),
+                ..ProviderAccountUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!updated.enabled);
+    assert_eq!(updated.max_concurrency, Some(2));
+    assert_eq!(updated.plan, None);
+    assert!(updated.updated_at >= created.updated_at);
+
+    let missing = store
+        .update_provider_account(Uuid::now_v7(), ProviderAccountUpdate::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, StoreError::ProviderAccountNotFound(_)));
+
+    assert!(store.delete_provider_account(created.id).await.unwrap());
+    assert!(!store.delete_provider_account(created.id).await.unwrap());
+}
+
+#[tokio::test]
+async fn provider_account_observation_upserts_and_writes_history() {
+    let store = InMemoryStore::new();
+    let account = store
+        .create_provider_account(new_account("perso", 10))
+        .await
+        .unwrap();
+    let t0 = Utc::now() - TimeDelta::minutes(10);
+    let t1 = t0 + TimeDelta::minutes(5);
+
+    store
+        .record_provider_account_observation(
+            account.id,
+            NewProviderAccountObservation {
+                windows: vec![
+                    account_window("five_hour", 0.2, t0),
+                    account_window("seven_day", 0.5, t0),
+                ],
+                auth_failed: false,
+            },
+        )
+        .await
+        .unwrap();
+    let windows = store
+        .record_provider_account_observation(
+            account.id,
+            NewProviderAccountObservation {
+                windows: vec![account_window("five_hour", 0.4, t1)],
+                auth_failed: false,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(windows.len(), 2);
+    let five = windows.iter().find(|w| w.window == "five_hour").unwrap();
+    assert!((five.utilization - 0.4).abs() < 1e-9);
+
+    let history = store
+        .list_provider_account_usage(account.id, t0 - TimeDelta::minutes(1))
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    assert!(
+        history
+            .windows(2)
+            .all(|p| p[0].observed_at <= p[1].observed_at)
+    );
+
+    let missing = store
+        .record_provider_account_observation(
+            Uuid::now_v7(),
+            NewProviderAccountObservation::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, StoreError::ProviderAccountNotFound(_)));
+}
+
+#[tokio::test]
+async fn provider_account_older_observation_does_not_overwrite_newer() {
+    let store = InMemoryStore::new();
+    let account = store
+        .create_provider_account(new_account("perso", 10))
+        .await
+        .unwrap();
+    let newer = Utc::now();
+    let older = newer - TimeDelta::minutes(30);
+    for (utilization, at) in [(0.7, newer), (0.1, older)] {
+        store
+            .record_provider_account_observation(
+                account.id,
+                NewProviderAccountObservation {
+                    windows: vec![account_window("five_hour", utilization, at)],
+                    auth_failed: false,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let windows = store
+        .list_provider_account_windows(vec![account.id])
+        .await
+        .unwrap();
+    assert_eq!(windows.len(), 1);
+    assert!((windows[0].utilization - 0.7).abs() < 1e-9);
+    assert_eq!(windows[0].observed_at, newer);
+}
+
+#[tokio::test]
+async fn provider_account_auth_failure_is_set_and_cleared() {
+    let store = InMemoryStore::new();
+    let account = store
+        .create_provider_account(new_account("perso", 10))
+        .await
+        .unwrap();
+    store
+        .record_provider_account_observation(
+            account.id,
+            NewProviderAccountObservation {
+                windows: Vec::new(),
+                auth_failed: true,
+            },
+        )
+        .await
+        .unwrap();
+    let failed = store
+        .get_provider_account(account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(failed.auth_failed_at.is_some());
+
+    store
+        .record_provider_account_observation(
+            account.id,
+            NewProviderAccountObservation {
+                windows: vec![account_window("five_hour", 0.1, Utc::now())],
+                auth_failed: false,
+            },
+        )
+        .await
+        .unwrap();
+    let cleared = store
+        .get_provider_account(account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cleared.auth_failed_at.is_none());
+}
+
+#[tokio::test]
+async fn provider_account_candidates_filter_and_count_running_steps() {
+    let store = InMemoryStore::new();
+    let active = store
+        .create_provider_account(new_account("active", 10))
+        .await
+        .unwrap();
+    let disabled = store
+        .create_provider_account(NewProviderAccount {
+            enabled: false,
+            ..new_account("disabled", 10)
+        })
+        .await
+        .unwrap();
+    let expired = store
+        .create_provider_account(NewProviderAccount {
+            expires_at: Utc::now() - TimeDelta::days(1),
+            ..new_account("expired", 10)
+        })
+        .await
+        .unwrap();
+    let failed = store
+        .create_provider_account(new_account("failed", 10))
+        .await
+        .unwrap();
+    store
+        .record_provider_account_observation(
+            failed.id,
+            NewProviderAccountObservation {
+                windows: Vec::new(),
+                auth_failed: true,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .create_provider_account(NewProviderAccount {
+            kind: "other".to_string(),
+            ..new_account("other-kind", 10)
+        })
+        .await
+        .unwrap();
+
+    // A running step under `active`, on a run holding a live lease.
+    store.create_run(new_run("wf")).await.unwrap();
+    let run = store
+        .pick_next_pending(Some(LeaseRequest {
+            worker_id: "worker-1".to_string(),
+            ttl: Duration::from_secs(90),
+        }))
+        .await
+        .unwrap()
+        .expect("picked run");
+    let step = store
+        .create_step(new_step(run.id, "agent", 0))
+        .await
+        .unwrap();
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Running),
+                account_id: Some(active.id),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let candidates = store
+        .list_provider_account_candidates("claude_subscription".to_string())
+        .await
+        .unwrap();
+    let names: Vec<&str> = candidates.iter().map(|c| c.account.name.as_str()).collect();
+    assert_eq!(names, vec!["active"]);
+    assert_eq!(candidates[0].running_steps, 1);
+    assert!(!names.contains(&disabled.name.as_str()));
+    assert!(!names.contains(&expired.name.as_str()));
+}
+
+#[tokio::test]
+async fn provider_account_delete_cascades_and_nulls_step_account() {
+    let store = InMemoryStore::new();
+    let account = store
+        .create_provider_account(new_account("perso", 10))
+        .await
+        .unwrap();
+    store
+        .record_provider_account_observation(
+            account.id,
+            NewProviderAccountObservation {
+                windows: vec![account_window("five_hour", 0.3, Utc::now())],
+                auth_failed: false,
+            },
+        )
+        .await
+        .unwrap();
+    let run = store.create_run(new_run("wf")).await.unwrap().into_run();
+    let step = store
+        .create_step(new_step(run.id, "agent", 0))
+        .await
+        .unwrap();
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                account_id: Some(account.id),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_step(step.id).await.unwrap().unwrap().account_id,
+        Some(account.id)
+    );
+
+    assert!(store.delete_provider_account(account.id).await.unwrap());
+    assert!(
+        store
+            .list_provider_account_windows(vec![account.id])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let since = Utc::now() - TimeDelta::days(1);
+    assert!(
+        store
+            .list_provider_account_usage(account.id, since)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.get_step(step.id).await.unwrap().unwrap().account_id,
+        None
+    );
+}
+
+#[tokio::test]
+async fn provider_account_purge_usage_removes_old_points() {
+    let store = InMemoryStore::new();
+    let account = store
+        .create_provider_account(new_account("perso", 10))
+        .await
+        .unwrap();
+    let now = Utc::now();
+    store
+        .record_provider_account_observation(
+            account.id,
+            NewProviderAccountObservation {
+                windows: vec![
+                    account_window("five_hour", 0.1, now - TimeDelta::days(40)),
+                    account_window("seven_day", 0.2, now),
+                ],
+                auth_failed: false,
+            },
+        )
+        .await
+        .unwrap();
+    let purged = store
+        .purge_provider_account_usage(now - TimeDelta::days(30))
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+    let remaining = store
+        .list_provider_account_usage(account.id, now - TimeDelta::days(90))
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].window, "seven_day");
+}
+
+#[cfg(feature = "secret-store")]
+#[tokio::test]
+async fn list_secrets_hides_provider_account_credentials() {
+    use ironflow_store::crypto::KeyRing;
+
+    let mut store = InMemoryStore::new();
+    let spec = format!("1:{}", "aa".repeat(32));
+    store.set_key_ring(KeyRing::from_spec(&spec, Some(1)).unwrap());
+    store.set_secret("github/token", "v").await.unwrap();
+    store
+        .set_secret(
+            &provider_account_secret_key(Uuid::now_v7()),
+            "sk-ant-oat01-x",
+        )
+        .await
+        .unwrap();
+
+    let page = store.list_secrets("", 1, 50).await.unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].key, "github/token");
+    let hidden = store.list_secrets("accounts/", 1, 50).await.unwrap();
+    assert_eq!(hidden.total, 0);
 }

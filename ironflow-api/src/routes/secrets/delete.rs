@@ -7,6 +7,7 @@ use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
 
 use crate::error::ApiError;
+use crate::routes::secrets::reject_provider_account_key;
 use crate::state::AppState;
 
 /// Delete a secret by key. Admin only.
@@ -39,6 +40,7 @@ pub async fn delete_secret(
     if !auth.is_admin() {
         return Err(ApiError::Forbidden);
     }
+    reject_provider_account_key(&key)?;
 
     let deleted = state.store.delete_secret(&key).await?;
     if !deleted {

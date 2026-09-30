@@ -147,6 +147,47 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/secrets/key-versions",
         Coverage::Command(&["secret", "key-status"]),
     ),
+    // -- Provider Accounts --
+    (
+        "GET",
+        "/api/v1/provider-accounts",
+        Coverage::Command(&["accounts", "list"]),
+    ),
+    (
+        "POST",
+        "/api/v1/provider-accounts",
+        Coverage::Command(&["accounts", "add", "perso", "--token-stdin"]),
+    ),
+    (
+        "GET",
+        "/api/v1/provider-accounts/kinds",
+        Coverage::Exempt("form metadata for the dashboard add flow"),
+    ),
+    (
+        "GET",
+        "/api/v1/provider-accounts/{id}",
+        Coverage::Command(&["accounts", "show", "perso"]),
+    ),
+    (
+        "PATCH",
+        "/api/v1/provider-accounts/{id}",
+        Coverage::Command(&["accounts", "update", "perso", "--disable"]),
+    ),
+    (
+        "DELETE",
+        "/api/v1/provider-accounts/{id}",
+        Coverage::Command(&["accounts", "remove", "perso", "--yes"]),
+    ),
+    (
+        "POST",
+        "/api/v1/provider-accounts/{id}/test",
+        Coverage::Command(&["accounts", "test", "perso"]),
+    ),
+    (
+        "GET",
+        "/api/v1/provider-accounts/{id}/usage",
+        Coverage::Command(&["accounts", "usage", "perso"]),
+    ),
     // ── API keys ──
     (
         "GET",

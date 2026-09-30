@@ -25,6 +25,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::account::AccountSession;
 use crate::error::AgentError;
 use crate::operations::agent::{Model, PermissionMode};
 use crate::retry::RetryPolicy;
@@ -338,6 +339,14 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<WorkflowTraceContext>,
 
+    /// Provider Account the invocation runs under, set by the worker.
+    ///
+    /// Providers whose [`AgentProvider::account_kind`] matches inject its
+    /// credential into the agent process and report observed rate-limit
+    /// windows to its recorder. Never serialized: it carries a secret.
+    #[serde(skip)]
+    pub account: Option<AccountSession>,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -382,6 +391,7 @@ impl AgentConfig {
             allow_failure: false,
             retry: None,
             trace_context: None,
+            account: None,
             _marker: PhantomData,
         }
     }
@@ -847,6 +857,29 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Run the invocation under a Provider Account.
+    ///
+    /// The worker sets it after selecting an account; providers that support
+    /// the account kind inject the credential and record rate-limit windows.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::account::{AccountCredential, AccountSession, RateLimitRecorder};
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let session = AccountSession::new(
+    ///     AccountCredential::new("CLAUDE_CODE_OAUTH_TOKEN", "token".to_string()),
+    ///     RateLimitRecorder::default(),
+    /// );
+    /// let config = AgentConfig::new("hello").account_session(session);
+    /// assert!(config.account.is_some());
+    /// ```
+    pub fn account_session(mut self, session: AccountSession) -> Self {
+        self.account = Some(session);
+        self
+    }
+
     /// Tag the pod with the run id and step name (K8s providers only).
     ///
     /// Sets [`LABEL_RUN_ID`] and [`LABEL_STEP`], both passed through
@@ -902,6 +935,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             allow_failure: self.allow_failure,
             retry: self.retry,
             trace_context: self.trace_context,
+            account: self.account,
             _marker: PhantomData,
         }
     }
@@ -1137,6 +1171,10 @@ pub struct AgentOutput {
     /// Contains every assistant message and tool call made during the
     /// invocation, in chronological order. `None` when verbose mode is off.
     pub debug_messages: Option<Vec<DebugMessage>>,
+
+    /// Identifier of the Provider Account the invocation ran under, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 /// A single assistant turn captured during a verbose invocation.
@@ -1302,6 +1340,7 @@ impl AgentOutput {
             model: None,
             duration_ms: 0,
             debug_messages: None,
+            account_id: None,
         }
     }
 }
@@ -1424,6 +1463,23 @@ pub trait AgentProvider: Send + Sync {
         let _ = run_id;
         Box::pin(async { Ok(()) })
     }
+
+    /// The Provider Account kind whose credential this provider can inject.
+    ///
+    /// `None` (the default) means the provider ignores
+    /// [`AgentConfig::account`] and always runs with its own environment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_core::provider::AgentProvider;
+    ///
+    /// assert_eq!(ClaudeCodeProvider::new().account_kind(), Some("claude_subscription"));
+    /// ```
+    fn account_kind(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 // The decision abstraction lives beside `AgentProvider`: re-exported here so
@@ -1543,6 +1599,7 @@ mod tests {
             model: Some("claude-sonnet".to_string()),
             duration_ms: 3000,
             debug_messages: None,
+            account_id: None,
         };
         let json = serde_json::to_string(&output).unwrap();
         let back: AgentOutput = serde_json::from_str(&json).unwrap();
@@ -1630,6 +1687,7 @@ mod tests {
             model: None,
             duration_ms: 0,
             debug_messages: None,
+            account_id: None,
         };
         let debug_str = format!("{:?}", output);
         assert!(!debug_str.is_empty());
@@ -2002,6 +2060,7 @@ mod tests {
                     model: self.output.model.clone(),
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
+                    account_id: None,
                 })
             })
         }

@@ -139,6 +139,7 @@ mod tests {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::new("build", None, &outputs),
+            account_id: None,
         }
     }
 

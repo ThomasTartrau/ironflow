@@ -118,6 +118,7 @@ impl MockShellOutput {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         })
     }
 }
@@ -249,6 +250,7 @@ impl MockHttpResponse {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         }
     }
 }

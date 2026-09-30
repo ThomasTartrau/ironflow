@@ -39,10 +39,12 @@ use tokio::io::AsyncWriteExt;
 use tokio::time;
 use tracing::{debug, warn};
 
+use crate::account::ClaudeSubscriptionKind;
 use crate::error::AgentError;
 use crate::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LogSink};
 
 use super::common::{self, DEFAULT_TIMEOUT};
+use super::rate_limit_event;
 
 /// [`AgentProvider`] that executes the `claude` CLI inside a Docker container.
 ///
@@ -173,6 +175,14 @@ impl DockerProvider {
         if let Some(ref ctx) = config.trace_context {
             env_clear.push(format!("TRACEPARENT={}", ctx.to_traceparent()));
         }
+        // The credential travels in the exec environment, never on the command
+        // line. This vector is never logged.
+        if let Some(session) = &config.account {
+            let credential = session.credential();
+            let cleared = format!("{}=", credential.env_var());
+            env_clear.retain(|entry| *entry != cleared);
+            env_clear.push(format!("{}={}", credential.env_var(), credential.expose()));
+        }
 
         let needs_stdin = built.stdin_prompt.is_some();
 
@@ -285,6 +295,7 @@ impl DockerProvider {
 
         let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
         let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+        rate_limit_event::record_rate_limits(config, &stdout);
 
         if exit_code != 0 {
             return common::handle_nonzero_exit(
@@ -304,6 +315,10 @@ impl DockerProvider {
 }
 
 impl AgentProvider for DockerProvider {
+    fn account_kind(&self) -> Option<&'static str> {
+        Some(ClaudeSubscriptionKind::ID)
+    }
+
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(self.invoke_inner(config, None))
     }
@@ -320,6 +335,14 @@ impl AgentProvider for DockerProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docker_provider_supports_claude_subscription_accounts() {
+        assert_eq!(
+            DockerProvider::new("cnt").account_kind(),
+            Some(ClaudeSubscriptionKind::ID)
+        );
+    }
 
     #[test]
     fn docker_provider_defaults() {

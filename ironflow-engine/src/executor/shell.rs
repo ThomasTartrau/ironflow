@@ -131,6 +131,7 @@ impl ShellExecutor<'_> {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         })
     }
 
@@ -237,6 +238,7 @@ impl ShellExecutor<'_> {
             model: None,
             debug_messages: None,
             artifacts: StepArtifacts::default(),
+            account_id: None,
         })
     }
 

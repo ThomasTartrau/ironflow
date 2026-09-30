@@ -79,6 +79,14 @@ pub enum StoreError {
     #[error("approval delegation not found: {0}")]
     DelegationNotFound(Uuid),
 
+    /// The requested provider account does not exist.
+    #[error("provider account not found: {0}")]
+    ProviderAccountNotFound(Uuid),
+
+    /// A provider account with this name already exists.
+    #[error("provider account already exists: {0}")]
+    DuplicateProviderAccount(String),
+
     /// A database or I/O error from the backing store.
     #[error("database error: {0}")]
     Database(String),

@@ -47,6 +47,8 @@ openapi = ["utoipa", "ironflow-store/openapi"]
 secret-store = ["ironflow-store/secret-store"]
 
 [dev-dependencies]
+# Secrets need encryption: Provider Account tests store a credential.
+ironflow-store = { version = "2.38.9", path = "../ironflow-store", features = ["secret-store"] }
 # A real HTTP provider for the tool profile tests.
 ironflow-core = { version = "4.4.1", path = "../ironflow-core", features = ["provider-openai"] }
 tokio = { version = "1", features = ["full"] }

@@ -1125,6 +1125,7 @@ impl RunStore for PostgresStore {
                 update.cache_creation_input_tokens
             );
             push_set!("output_tokens", update.output_tokens);
+            push_set!("account_id", update.account_id);
             push_set!("started_at", update.started_at);
             push_set!("completed_at", update.completed_at);
             push_set!("debug_messages", update.debug_messages);
@@ -1173,6 +1174,9 @@ impl RunStore for PostgresStore {
             }
             if let Some(tokens) = update.output_tokens {
                 query = query.bind(tokens as i64);
+            }
+            if let Some(account_id) = update.account_id {
+                query = query.bind(account_id);
             }
             if let Some(started) = update.started_at {
                 query = query.bind(started);
