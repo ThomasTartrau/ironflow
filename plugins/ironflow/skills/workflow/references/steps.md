@@ -28,9 +28,33 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 }
 ```
 
-Other builders: `clean_env()` (start from an empty environment), `allow_failure()`,
+Other builders: `clean_env()` (start from an empty environment), `allow_failure()`, `exit_code_as_output()`,
 `retry_policy(RetryPolicy)`, `output("target/*.log")` and `input("build", "report.html")`
 for artifacts (below).
+
+A non-zero exit code fails the step. When the code is data the handler branches on
+(a conflicting `git merge`, red tests), add `exit_code_as_output()`: the step is
+`Completed`, the run is not degraded, and the code is read with `exit_code()`.
+
+```rust,no_run
+use ironflow_engine::config::ShellConfig;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let merge = ctx
+        .shell("merge", ShellConfig::new("git merge feature").exit_code_as_output())
+        .await?;
+    if !merge.is_success() {
+        let _code = merge.exit_code();
+        ctx.shell("abort", ShellConfig::new("git merge --abort")).await?;
+    }
+    Ok(())
+}
+```
+
+A non-zero exit is then not an error, so a `retry_policy` does not retry it. Timeout and
+spawn failures stay errors.
 
 ## HTTP
 

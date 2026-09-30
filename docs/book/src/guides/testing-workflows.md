@@ -110,7 +110,8 @@ The mocks reproduce the asymmetry of the real executors, so `allow_failure`,
 step retries and run failure behave exactly as in production:
 
 * A `MockShellOutput` with a non-zero `exit_code` is an **error**, like a real
-  non-zero exit. Use `MockShellOutput::failed(1, "boom")`.
+  non-zero exit. Use `MockShellOutput::failed(1, "boom")`. When the step sets
+  `exit_code_as_output()`, the mock completes with that exit code as its output.
 * A `MockHttpResponse` with a non-2xx `status` is a normal **output**, like a
   real 500 response. Return `Err(OperationError::Http { status: None, .. })`
   from the closure to simulate a transport failure instead.
