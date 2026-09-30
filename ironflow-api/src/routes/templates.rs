@@ -73,6 +73,7 @@ impl From<RegistryEntry> for TemplateListEntry {
         responses(
             (status = 200, description = "Template catalogue", body = TemplateRegistryResponse),
             (status = 404, description = "No registry at the configured URL (`REGISTRY_NOT_FOUND`)"),
+            (status = 500, description = "Server-side I/O failure, e.g. read-only temp dir (`INTERNAL_ERROR`)"),
             (status = 502, description = "Registry host unreachable (`REGISTRY_UNREACHABLE`)")
         )
     )
@@ -80,6 +81,23 @@ impl From<RegistryEntry> for TemplateListEntry {
 pub async fn list_registry_templates(_auth: Authenticated) -> Result<impl IntoResponse, ApiError> {
     let response = fetch_registry_listing(resolve_registry_url(None)).await?;
     Ok(ok(response))
+}
+
+/// Map a registry fetch failure to the API error answered to the client.
+///
+/// A local I/O failure is a server fault (500); every other variant stems from
+/// the remote registry or git and stays a 502. The full error is logged, never
+/// returned.
+fn map_template_error(e: TemplateError) -> ApiError {
+    warn!(error = %e, "template registry fetch failed");
+    match e {
+        TemplateError::RegistryNotFound { .. } => ApiError::RegistryNotFound,
+        TemplateError::RegistryUnreachable { .. } => ApiError::RegistryUnreachable,
+        TemplateError::Io(_) => {
+            ApiError::Internal("registry fetch failed: local I/O error".to_string())
+        }
+        other => ApiError::BadGateway(format!("registry fetch failed: {other}")),
+    }
 }
 
 /// Fetch the registry index at `registry_url` and build the API response.
@@ -92,14 +110,7 @@ async fn fetch_registry_listing(
     let index = spawn_blocking(move || fetch_registry_index(&registry_url))
         .await
         .map_err(|e| ApiError::Internal(format!("task join error: {e}")))?
-        .map_err(|e| {
-            warn!(error = %e, "template registry fetch failed");
-            match e {
-                TemplateError::RegistryNotFound { .. } => ApiError::RegistryNotFound,
-                TemplateError::RegistryUnreachable { .. } => ApiError::RegistryUnreachable,
-                other => ApiError::BadGateway(format!("registry fetch failed: {other}")),
-            }
-        })?;
+        .map_err(map_template_error)?;
 
     let templates: Vec<TemplateListEntry> = index.templates.into_iter().map(Into::into).collect();
     Ok(TemplateRegistryResponse {
@@ -110,6 +121,8 @@ async fn fetch_registry_listing(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::Response;
@@ -192,6 +205,66 @@ mod tests {
         let body = error_body(response).await?.to_string();
         assert!(!body.contains("s3cret"), "leaked: {body}");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn io_error_answers_500_internal_error() -> TestResult {
+        let err = TemplateError::Io(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "read-only file system",
+        ));
+
+        let response = map_template_error(err).into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = error_body(response).await?;
+        assert_eq!(body["error"]["code"], "INTERNAL_ERROR");
+        assert!(
+            !body.to_string().contains("read-only file system"),
+            "leaked: {body}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn registry_not_found_maps_to_404() -> TestResult {
+        let err = TemplateError::RegistryNotFound {
+            url: "https://example.com/registry".to_string(),
+            reason: "no index.toml".to_string(),
+        };
+
+        let response = map_template_error(err).into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            error_body(response).await?["error"]["code"],
+            "REGISTRY_NOT_FOUND"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn registry_unreachable_maps_to_502() -> TestResult {
+        let err = TemplateError::RegistryUnreachable {
+            url: "https://example.com/registry".to_string(),
+            reason: "connection refused".to_string(),
+        };
+
+        let response = map_template_error(err).into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            error_body(response).await?["error"]["code"],
+            "REGISTRY_UNREACHABLE"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn git_error_maps_to_502_bad_gateway() {
+        let response = map_template_error(TemplateError::Git("boom".to_string())).into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     }
 
     #[test]
