@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.41.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.41.1...ironflow-api-v2.41.2) - 2026-09-30
+
+### Fixed
+
+- #134 map TemplateError::Io to HTTP 500 instead of 502
+
 ## [2.41.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.40.11...ironflow-api-v2.41.0) - 2026-09-29
 
 ### Added
