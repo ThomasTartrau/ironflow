@@ -2,7 +2,7 @@
 //!
 //! [`AccountAwareProvider`] wraps the worker's [`AgentProvider`]. For each
 //! agent invocation on a provider that can inject a Provider Account
-//! credential ([`AgentProvider::account_kind`]), it:
+//! credential for the invocation ([`AgentProvider::account_kind_for`]), it:
 //!
 //! 1. lists the candidate accounts of that kind from the store,
 //! 2. picks one with an [`AccountStrategy`],
@@ -226,7 +226,7 @@ impl AccountAwareProvider {
         config: &AgentConfig,
         sink: Option<Arc<dyn LogSink>>,
     ) -> Result<AgentOutput, AgentError> {
-        let Some(kind_id) = self.inner.account_kind() else {
+        let Some(kind_id) = self.inner.account_kind_for(config) else {
             return self.invoke_inner(config, sink).await;
         };
         let Some(kind) = self.kinds.get(kind_id).cloned() else {
@@ -356,6 +356,10 @@ impl AgentProvider for AccountAwareProvider {
     fn account_kind(&self) -> Option<&'static str> {
         self.inner.account_kind()
     }
+
+    fn account_kind_for(&self, config: &AgentConfig) -> Option<&'static str> {
+        self.inner.account_kind_for(config)
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +367,7 @@ mod tests {
     use std::sync::Mutex;
 
     use chrono::TimeDelta;
+    use ironflow_core::providers::router::{ProviderMatcher, ProviderRouter};
     use ironflow_store::crypto::KeyRing;
     use ironflow_store::entities::{NewProviderAccount, provider_account_secret_key};
     use ironflow_store::memory::InMemoryStore;
@@ -516,6 +521,61 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].0.as_deref(), Some(format!("{TOKEN}-idle").as_str()));
         assert!(seen[0].1, "verbose must be forced for rate_limit_event");
+    }
+
+    #[tokio::test]
+    async fn account_is_injected_behind_a_router() {
+        let store = Arc::new(store_with_key());
+        let account = add_account(&store, "perso", 10).await;
+        let claude = Arc::new(RecordingProvider::new(
+            Some(ClaudeSubscriptionKind::ID),
+            Outcome::Succeed,
+        ));
+        let router = ProviderRouter::new(claude.clone());
+        let dyn_store: Arc<dyn Store> = store.clone();
+        let provider = AccountAwareProvider::new(Arc::new(router), dyn_store);
+
+        let output = provider
+            .invoke(&AgentConfig::new("p").model("sonnet"))
+            .await
+            .unwrap();
+
+        assert_eq!(output.account_id, Some(account.id.to_string()));
+        let seen = claude.seen();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            seen[0].0.as_deref(),
+            Some(format!("{TOKEN}-perso").as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_router_injects_an_account_only_on_claude_routes() {
+        let store = Arc::new(store_with_key());
+        let account = add_account(&store, "perso", 10).await;
+        let claude = Arc::new(RecordingProvider::new(
+            Some(ClaudeSubscriptionKind::ID),
+            Outcome::Succeed,
+        ));
+        let http = Arc::new(RecordingProvider::new(None, Outcome::Succeed));
+        let router = ProviderRouter::new(claude.clone())
+            .route(ProviderMatcher::ModelPrefix("gpt-".into()), http.clone());
+        let dyn_store: Arc<dyn Store> = store.clone();
+        let provider = AccountAwareProvider::new(Arc::new(router), dyn_store);
+
+        let claude_output = provider
+            .invoke(&AgentConfig::new("p").model("sonnet"))
+            .await
+            .unwrap();
+        assert_eq!(claude_output.account_id, Some(account.id.to_string()));
+        assert!(claude.seen()[0].0.is_some());
+
+        let http_output = provider
+            .invoke(&AgentConfig::new("p").model("gpt-5"))
+            .await
+            .unwrap();
+        assert_eq!(http_output.account_id, None);
+        assert_eq!(http.seen(), vec![(None, false)]);
     }
 
     #[tokio::test]
