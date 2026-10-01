@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.22.21"
+version = "2.22.22"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -11,9 +11,9 @@ keywords = ["workflow", "worker", "queue", "background"]
 categories = ["asynchronous"]
 
 [dependencies]
-ironflow-core = { version = "4.6.0", path = "../ironflow-core" }
-ironflow-store = { version = "2.39.2", path = "../ironflow-store", default-features = false }
-ironflow-engine = { version = "2.42.4", path = "../ironflow-engine" }
+ironflow-core = { version = "4.7.0", path = "../ironflow-core" }
+ironflow-store = { version = "2.39.3", path = "../ironflow-store", default-features = false }
+ironflow-engine = { version = "2.42.5", path = "../ironflow-engine" }
 ironflow-artifacts = { version = "0.1.2", path = "../ironflow-artifacts" }
 
 bytes = "1"
@@ -40,7 +40,7 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 async-trait = "0.1"
 rust_decimal = "1"
-ironflow-api = { version = "2.41.7", path = "../ironflow-api", features = ["prometheus"] }
-ironflow-auth = { version = "2.4.42", path = "../ironflow-auth" }
-ironflow-store = { version = "2.39.2", path = "../ironflow-store", features = ["store-memory"] }
+ironflow-api = { version = "2.41.8", path = "../ironflow-api", features = ["prometheus"] }
+ironflow-auth = { version = "2.4.43", path = "../ironflow-auth" }
+ironflow-store = { version = "2.39.3", path = "../ironflow-store", features = ["store-memory"] }
 schemars = "1"

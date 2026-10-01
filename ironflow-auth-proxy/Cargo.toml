@@ -18,7 +18,7 @@ name = "ironflow-auth-proxy"
 path = "src/main.rs"
 
 [dependencies]
-ironflow-core = { path = "../ironflow-core", version = "4.5.1" }
+ironflow-core = { path = "../ironflow-core", version = "4.7.0" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 reqwest = { version = "0.13", features = ["stream"] }
