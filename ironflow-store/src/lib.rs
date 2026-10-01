@@ -11,6 +11,11 @@
 //! | [`InMemoryStore`](memory::InMemoryStore) | `store-memory` (default) | In-process, no external dependencies. |
 //! | [`PostgresStore`](postgres::PostgresStore) | `store-postgres` | Production-ready with `SELECT FOR UPDATE SKIP LOCKED`. |
 //!
+//! With `store-postgres` and `secret-store`, `PostgresStore` also implements
+//! `ironflow_core::auth_proxy::GrantBackend`: the token registry of
+//! `ironflow-auth-proxy`, shared by its replicas, with the credential
+//! encrypted by the store's key ring.
+//!
 //! # Quick start
 //!
 //! ```no_run

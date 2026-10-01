@@ -295,7 +295,9 @@ sqlx-cache-check:
   variables:
     SQLX_OFFLINE: "true"
   script:
-    - cargo package -p ironflow-store --features store-postgres,secret-store,openapi
+    # ironflow-core is packaged alongside so ironflow-store is verified against the
+    # workspace core, not the last release on crates.io.
+    - cargo package -p ironflow-core -p ironflow-store --features ironflow-store/store-postgres,ironflow-store/secret-store,ironflow-store/openapi
 
 dashboard-check:
   extends: .only-mr

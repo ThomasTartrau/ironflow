@@ -56,7 +56,15 @@ kubectl apply -f managed-settings.yaml          # managed-settings presets
   its own environment.
 - Any Claude credential set on the provider or the step for the pod
   (`oauth_token_from_secret`, `oauth_credentials`, ...) fails the step.
-- The proxy keeps its tokens in memory: run exactly one replica.
+- Registry: in memory by default (one replica). Set
+  `IRONFLOW_AUTH_PROXY_DATABASE_URL` and an encryption key
+  (`IRONFLOW_SECRET_KEYS`) for a shared PostgreSQL registry: several replicas,
+  tokens survive restarts, the proxy needs egress to PostgreSQL.
+- Under Cilium, uncomment the 5432 rule in section (b) of
+  `cilium-egress-auth-proxy.yaml` when the shared registry is on. With standard
+  NetworkPolicies only, nothing restricts the proxy's egress unless you add a
+  policy on the proxy pods; do not add 5432 to `networkpolicy-auth-proxy.yaml`,
+  which selects the agent pods.
 
 Check that an agent pod holds no secret while it runs:
 

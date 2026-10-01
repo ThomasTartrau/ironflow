@@ -16,9 +16,9 @@ use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
-use ironflow_sdk::IronflowClient;
-use ironflow_sdk::client::{ClientConfig, ListAuditLogsFilter};
+use ironflow_sdk::client::ListAuditLogsFilter;
 use ironflow_sdk::types::{ApiKeyScope, CreateApiKeyRequest, EventKind};
+use ironflow_sdk::{ClientBuilder, IronflowClient};
 use ironflow_store::crypto::MasterKey;
 use ironflow_store::entities::NewUser;
 use ironflow_store::memory::InMemoryStore;
@@ -159,13 +159,13 @@ async fn seed_awaiting_approval_run(store: &Arc<dyn Store>) -> Uuid {
     run.id
 }
 
+/// No retries: a POST that times out on a loaded CI runner would be sent
+/// again and answer 409 for a resource the first attempt already created.
 fn make_client(base_url: &str, token: &str) -> IronflowClient {
-    let config = ClientConfig {
-        base_url: base_url.to_string(),
-        api_key: token.to_string(),
-        timeout: Duration::from_secs(10),
-    };
-    IronflowClient::from_config(config)
+    ClientBuilder::new(base_url, token)
+        .with_timeout(Duration::from_secs(60))
+        .with_max_retries(0)
+        .build()
 }
 
 // ── Stats ──────────────────────────────────────────────────────

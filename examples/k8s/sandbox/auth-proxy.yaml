@@ -31,10 +31,16 @@ metadata:
   labels:
     app.kubernetes.io/name: ironflow-auth-proxy
 spec:
-  # Exactly one replica: the tokens live in the proxy's memory. A second
-  # replica would answer 401 to tokens issued by the first. Recreate (not
-  # RollingUpdate) for the same reason; tokens issued before a restart are
-  # lost and the steps holding them fail.
+  # By default the tokens live in the proxy's memory: exactly one replica (a
+  # second one would answer 401 to tokens issued by the first) and Recreate
+  # (not RollingUpdate) for the same reason; tokens issued before a restart
+  # are lost and the steps holding them fail.
+  #
+  # With IRONFLOW_AUTH_PROXY_DATABASE_URL and IRONFLOW_SECRET_KEYS set (the
+  # commented-out env entries below), the tokens live in a shared PostgreSQL
+  # registry and survive restarts: raise `replicas` and switch the strategy
+  # to RollingUpdate. The network policies must then allow egress to
+  # PostgreSQL: uncomment the 5432 rule of cilium-egress-auth-proxy.yaml.
   replicas: 1
   strategy:
     type: Recreate
@@ -68,6 +74,19 @@ spec:
                 secretKeyRef:
                   name: ironflow-auth-proxy-admin
                   key: admin-key
+            # Shared PostgreSQL registry (several replicas, survives restarts).
+            # Use a dedicated database or role: the migrations create the
+            # ironflow schema in it.
+            # - name: IRONFLOW_AUTH_PROXY_DATABASE_URL
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: ironflow-auth-proxy-db
+            #       key: database-url
+            # - name: IRONFLOW_SECRET_KEYS
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: ironflow-auth-proxy-db
+            #       key: secret-keys
           readinessProbe:
             httpGet:
               path: /healthz

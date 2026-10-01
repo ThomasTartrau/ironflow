@@ -100,12 +100,20 @@ tag. There is no `latest` tag: pin the version.
   `oauth_credentials_from_secret`, a step `env_from_secret("CLAUDE_CODE_OAUTH_TOKEN", ..)`,
   any plain value starting with `sk-ant`) fails the step with an error naming
   the variable.
-- **Single replica.** Tokens live in the proxy's memory: run one replica.
+- **Registry.** In memory by default (one replica). Set
+  `IRONFLOW_AUTH_PROXY_DATABASE_URL` and an encryption key
+  (`IRONFLOW_SECRET_KEYS`) for a shared PostgreSQL registry: several replicas,
+  tokens survive restarts, the proxy needs egress to PostgreSQL. Under
+  Cilium, uncomment the 5432 rule in section (b) of
+  `cilium-egress-auth-proxy.yaml` (below). With standard NetworkPolicies only,
+  nothing restricts the proxy's egress unless the operator adds a policy on the
+  proxy pods.
 - **Logs.** The proxy and the worker log the first 12 characters of the token
   id (a SHA-256 of the token), never the token or the credential.
 
 The network side changes too: the agent pods only reach the proxy, and the
-proxy only reaches `api.anthropic.com`:
+proxy only reaches `api.anthropic.com` (and PostgreSQL with the shared
+registry):
 
 ```yaml
 {{#include ../../../../examples/k8s/sandbox/cilium-egress-auth-proxy.yaml}}

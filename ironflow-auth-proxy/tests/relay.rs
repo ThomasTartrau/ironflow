@@ -23,7 +23,7 @@ use wiremock::matchers::{header, header_exists, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use ironflow_auth_proxy::{AuthProxyConfig, AuthProxyState, router};
-use ironflow_core::auth_proxy::{CredentialKind, ProxyCredential, TokenRequest};
+use ironflow_core::auth_proxy::{AuthProxyRegistry, CredentialKind, ProxyCredential, TokenRequest};
 
 const ADMIN_KEY: &str = "0123456789abcdef0123456789abcdef";
 const OAUTH: &str = "sk-ant-oat01-test";
@@ -50,10 +50,15 @@ struct Proxy {
 }
 
 impl Proxy {
-    /// Start the proxy relaying to `upstream`.
+    /// Start the proxy relaying to `upstream`, with its own in-memory registry.
     async fn start(upstream: &str) -> Self {
+        Self::start_with_registry(upstream, AuthProxyRegistry::default()).await
+    }
+
+    /// Start a proxy replica relaying to `upstream` over `registry`.
+    async fn start_with_registry(upstream: &str, registry: AuthProxyRegistry) -> Self {
         let config = AuthProxyConfig::new(ADMIN_KEY).with_upstream(Url::parse(upstream).unwrap());
-        let state = AuthProxyState::new(config).unwrap();
+        let state = AuthProxyState::with_registry(config, registry).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let app = router(state.clone());
@@ -162,10 +167,15 @@ async fn expired_token_returns_401() {
             expires_at: issued_at + 90,
             credential: ProxyCredential::new(CredentialKind::OauthToken, OAUTH.to_string()),
         };
-        let issued = proxy.state.registry().issue(request, issued_at).unwrap();
+        let issued = proxy
+            .state
+            .registry()
+            .issue(request, issued_at)
+            .await
+            .unwrap();
         let resp = proxy.post_messages(&issued.token).await;
         assert_auth_error(resp, StatusCode::UNAUTHORIZED, "authentication_error").await;
-        assert!(proxy.state.registry().is_empty());
+        assert!(proxy.state.registry().is_empty().await.unwrap());
     })
     .await;
 }
@@ -195,6 +205,43 @@ async fn revoked_token_returns_401() {
         assert_eq!(again.status(), StatusCode::NOT_FOUND);
 
         let resp = proxy.post_messages(&token).await;
+        assert_auth_error(resp, StatusCode::UNAUTHORIZED, "authentication_error").await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn token_issued_by_one_replica_is_relayed_by_another() {
+    within_timeout(async {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("authorization", format!("Bearer {OAUTH}").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_1"})))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let registry = AuthProxyRegistry::default();
+        let a = Proxy::start_with_registry(&upstream.uri(), registry.clone()).await;
+        let b = Proxy::start_with_registry(&upstream.uri(), registry).await;
+        assert_ne!(a.addr, b.addr);
+
+        let (id, token) = a.issue(CredentialKind::OauthToken, OAUTH).await;
+        let resp = b.post_messages(&token).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["id"], "msg_1");
+
+        let revoke = b
+            .http
+            .delete(format!("{}/admin/v1/tokens/{id}", b.base))
+            .bearer_auth(ADMIN_KEY)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+
+        let resp = a.post_messages(&token).await;
         assert_auth_error(resp, StatusCode::UNAUTHORIZED, "authentication_error").await;
     })
     .await;
@@ -498,7 +545,7 @@ async fn admin_without_key_returns_401() {
             .await
             .unwrap();
         assert_eq!(revoke.status(), StatusCode::UNAUTHORIZED);
-        assert!(proxy.state.registry().is_empty());
+        assert!(proxy.state.registry().is_empty().await.unwrap());
     })
     .await;
 }
@@ -538,7 +585,7 @@ async fn admin_issue_rejects_past_expiry_with_400() {
         assert_eq!(garbage.status(), StatusCode::BAD_REQUEST);
         let text = garbage.text().await.unwrap();
         assert!(!text.contains(OAUTH), "{text}");
-        assert!(proxy.state.registry().is_empty());
+        assert!(proxy.state.registry().is_empty().await.unwrap());
     })
     .await;
 }

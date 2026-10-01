@@ -21,13 +21,33 @@ relaying the request to `https://api.anthropic.com`.
 |----------|---------|-------------|
 | `IRONFLOW_AUTH_PROXY_ADMIN_KEY` | - (required) | Admin key, at least 32 characters, shared with the worker. |
 | `IRONFLOW_AUTH_PROXY_LISTEN` | `0.0.0.0:8080` | Listen address. |
+| `IRONFLOW_AUTH_PROXY_DATABASE_URL` | unset (in memory) | PostgreSQL URL of the shared token registry. Never logged. |
+| `IRONFLOW_SECRET_KEYS` | - (required with a database) | Key ring encrypting the credentials at rest, `version:hex` entries (64 hex characters each), comma-separated. |
+| `IRONFLOW_SECRET_ACTIVE_KEY_VERSION` | highest version | Key version new grants are encrypted with. |
+| `IRONFLOW_SECRET_KEY` | - | Legacy single key (version 1), used when `IRONFLOW_SECRET_KEYS` is unset. |
 | `RUST_LOG` | `info` | Log filter. |
 
-## Single replica
+## Registry backends
 
-Tokens live in memory. Run exactly one replica: a second one would refuse the
-tokens issued by the first, and a restart drops the tokens of the steps in
-flight.
+**In memory (default).** Run exactly one replica with the `Recreate`
+strategy: a second one would refuse the tokens issued by the first, and a
+restart drops the tokens of the steps in flight.
+
+**PostgreSQL**, when `IRONFLOW_AUTH_PROXY_DATABASE_URL` is set. Several
+replicas share the registry, with the `RollingUpdate` strategy, and tokens
+survive restarts.
+
+- Stored per token: its SHA-256 (never the token itself), the run, the step,
+  the expiry and the credential, AES-256-GCM encrypted with the key ring.
+  Startup fails when the database is set without an encryption key.
+- Expired rows are purged every 60 s by every replica (idempotent deletes).
+- A database outage answers 503 (retryable), never 401: a valid token does not
+  look revoked.
+- The network policy must allow egress from the proxy to PostgreSQL: under
+  Cilium, uncomment the 5432 rule of
+  `examples/k8s/sandbox/cilium-egress-auth-proxy.yaml`.
+- Least privilege: give the proxy a dedicated database or role. Its migrations
+  create the `ironflow` schema in that database.
 
 ## Deployment
 

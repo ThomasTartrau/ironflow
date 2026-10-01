@@ -17,19 +17,33 @@
 //!   401, a path outside `/v1/` or a request for another host a 403, a method
 //!   other than GET/POST a 405.
 //!
-//! Tokens live in memory: run a single replica. Logs never contain a token or
-//! a credential, only the short token id.
+//! Grants live in a registry with two backends:
+//!
+//! * in memory (default): a single replica, tokens lost on restart;
+//! * PostgreSQL, when [`DATABASE_URL_ENV`] is set ([`registry_from_config`]):
+//!   shared by several replicas and surviving restarts. Only the token
+//!   SHA-256 is stored, never the token, and the credential is AES-256-GCM
+//!   encrypted at rest with the `IRONFLOW_SECRET_KEYS` key ring.
+//!
+//! Logs never contain a token or a credential, only the short token id.
 //!
 //! # Examples
 //!
 //! ```no_run
+//! use std::env::var;
 //! use std::time::Duration;
 //!
-//! use ironflow_auth_proxy::{AuthProxyConfig, AuthProxyState, serve, spawn_purge};
+//! use ironflow_auth_proxy::{
+//!     AuthProxyConfig, AuthProxyState, DATABASE_URL_ENV, registry_from_config, serve, spawn_purge,
+//! };
+//! use ironflow_store::crypto::KeyRing;
 //! use tokio::net::TcpListener;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let state = AuthProxyState::new(AuthProxyConfig::new("0123456789abcdef0123456789abcdef"))?;
+//! let database_url = var(DATABASE_URL_ENV).ok();
+//! let registry = registry_from_config(database_url.as_deref(), KeyRing::from_env()?).await?;
+//! let config = AuthProxyConfig::new("0123456789abcdef0123456789abcdef");
+//! let state = AuthProxyState::with_registry(config, registry)?;
 //! let purge = spawn_purge(state.registry().clone(), Duration::from_secs(60));
 //! let listener = TcpListener::bind("0.0.0.0:8080").await?;
 //! serve(listener, state).await?;
@@ -55,6 +69,7 @@ use axum::{Json, Router};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Error as ReqwestError};
 use serde_json::{from_slice, json};
+use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
 #[cfg(unix)]
@@ -69,6 +84,13 @@ use ironflow_core::auth_proxy::{
     admin_key_matches, downstream_headers, error_body, extract_opaque_token, is_allowed_method,
     is_allowed_path, upstream_headers,
 };
+use ironflow_store::crypto::{CryptoError, KeyRing};
+use ironflow_store::error::StoreError;
+use ironflow_store::postgres::PostgresStore;
+
+/// Environment variable holding the PostgreSQL URL of the shared token
+/// registry. Unset (or empty), tokens live in memory.
+pub const DATABASE_URL_ENV: &str = "IRONFLOW_AUTH_PROXY_DATABASE_URL";
 
 /// Shortest admin key accepted.
 pub const MIN_ADMIN_KEY_LEN: usize = 32;
@@ -166,9 +188,9 @@ impl AuthProxyConfig {
 /// ```
 /// use ironflow_auth_proxy::{AuthProxyConfig, AuthProxyState};
 ///
-/// # fn example() -> Result<(), reqwest::Error> {
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let state = AuthProxyState::new(AuthProxyConfig::new("0123456789abcdef0123456789abcdef"))?;
-/// assert!(state.registry().is_empty());
+/// assert!(state.registry().is_empty().await?);
 /// # Ok(())
 /// # }
 /// ```
@@ -180,7 +202,23 @@ pub struct AuthProxyState {
 }
 
 impl AuthProxyState {
-    /// Build the state with an empty registry.
+    /// Build the state with an empty in-memory registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`reqwest::Error`] raised when the HTTP client cannot be
+    /// built (TLS backend initialisation).
+    ///
+    /// # Examples
+    ///
+    /// See [`AuthProxyState`].
+    pub fn new(config: AuthProxyConfig) -> Result<Self, ReqwestError> {
+        Self::with_registry(config, AuthProxyRegistry::default())
+    }
+
+    /// Build the state over `registry`, for instance the shared PostgreSQL
+    /// registry returned by [`registry_from_config`]. Proxies built over
+    /// registries sharing a backend serve the same tokens.
     ///
     /// The upstream client never follows redirects and only bounds the
     /// connection time.
@@ -192,14 +230,29 @@ impl AuthProxyState {
     ///
     /// # Examples
     ///
-    /// See [`AuthProxyState`].
-    pub fn new(config: AuthProxyConfig) -> Result<Self, ReqwestError> {
+    /// ```
+    /// use ironflow_auth_proxy::{AuthProxyConfig, AuthProxyState};
+    /// use ironflow_core::auth_proxy::AuthProxyRegistry;
+    ///
+    /// # fn example() -> Result<(), reqwest::Error> {
+    /// let registry = AuthProxyRegistry::default();
+    /// let config = AuthProxyConfig::new("0123456789abcdef0123456789abcdef");
+    /// let a = AuthProxyState::with_registry(config.clone(), registry.clone())?;
+    /// let b = AuthProxyState::with_registry(config, registry)?;
+    /// # let _ = (a, b);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_registry(
+        config: AuthProxyConfig,
+        registry: AuthProxyRegistry,
+    ) -> Result<Self, ReqwestError> {
         let http = Client::builder()
             .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
             .redirect(Policy::none())
             .build()?;
         Ok(Self {
-            registry: AuthProxyRegistry::default(),
+            registry,
             config: Arc::new(config),
             http,
         })
@@ -213,6 +266,71 @@ impl AuthProxyState {
     pub fn registry(&self) -> &AuthProxyRegistry {
         &self.registry
     }
+}
+
+/// Why the token registry could not be built. No variant carries the
+/// database URL, a key or a credential.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_auth_proxy::RegistryConfigError;
+///
+/// assert!(RegistryConfigError::MissingKeyRing.to_string().contains("IRONFLOW_SECRET_KEYS"));
+/// ```
+#[derive(Debug, Error)]
+pub enum RegistryConfigError {
+    /// A database is configured but no key to encrypt the credentials with.
+    #[error(
+        "{DATABASE_URL_ENV} is set but no encryption key is configured: set IRONFLOW_SECRET_KEYS (or IRONFLOW_SECRET_KEY)"
+    )]
+    MissingKeyRing,
+    /// The encryption key configuration is invalid.
+    #[error("invalid encryption key: {0}")]
+    Crypto(#[from] CryptoError),
+    /// The database cannot be opened or migrated.
+    #[error("cannot open the token registry database: {0}")]
+    Store(#[from] StoreError),
+}
+
+/// Build the token registry: in memory when `database_url` is `None` or
+/// blank, otherwise shared in PostgreSQL, the credentials encrypted with
+/// `key_ring`. Opening the database runs the store migrations.
+///
+/// # Errors
+///
+/// Returns [`RegistryConfigError::MissingKeyRing`] when a database is given
+/// without a key ring (checked before any connection), and
+/// [`RegistryConfigError::Store`] when the database cannot be reached or
+/// migrated.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_auth_proxy::registry_from_config;
+/// use ironflow_store::crypto::KeyRing;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let memory = registry_from_config(None, None).await?;
+/// assert!(memory.is_empty().await?);
+///
+/// let ring = KeyRing::from_spec(&format!("1:{}", "aa".repeat(32)), None)?;
+/// let shared = registry_from_config(Some("postgres://localhost/ironflow"), Some(ring)).await?;
+/// # let _ = shared;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn registry_from_config(
+    database_url: Option<&str>,
+    key_ring: Option<KeyRing>,
+) -> Result<AuthProxyRegistry, RegistryConfigError> {
+    let Some(url) = database_url.map(str::trim).filter(|url| !url.is_empty()) else {
+        return Ok(AuthProxyRegistry::default());
+    };
+    let ring = key_ring.ok_or(RegistryConfigError::MissingKeyRing)?;
+    let mut store = PostgresStore::new(url).await?;
+    store.set_key_ring(ring);
+    Ok(AuthProxyRegistry::with_backend(Arc::new(store)))
 }
 
 /// The proxy router: health, admin API and relay.
@@ -290,12 +408,12 @@ pub fn spawn_purge(registry: AuthProxyRegistry, interval: Duration) -> JoinHandl
         loop {
             ticker.tick().await;
             match now_unix() {
-                Ok(now) => {
-                    let purged = registry.purge_expired(now);
-                    if purged > 0 {
-                        info!(purged, "expired auth proxy tokens purged");
-                    }
-                }
+                // Every replica purges: the deletes are idempotent.
+                Ok(now) => match registry.purge_expired(now).await {
+                    Ok(purged) if purged > 0 => info!(purged, "expired auth proxy tokens purged"),
+                    Ok(_) => {}
+                    Err(e) => warn!(error = %e, "expired auth proxy tokens purge failed"),
+                },
                 Err(e) => warn!(error = %e, "clock before the unix epoch; purge skipped"),
             }
         }
@@ -372,6 +490,12 @@ fn invalid_token(reason: &str, path: &str) -> Response {
     )
 }
 
+/// The answer when the registry backend fails. A 503 is retryable, and does
+/// not make a valid token look revoked as a 401 would.
+fn registry_unavailable(message: &str) -> Response {
+    error_response(StatusCode::SERVICE_UNAVAILABLE, "api_error", message)
+}
+
 fn admin_unauthorized() -> Response {
     warn!("admin request without a valid admin key");
     error_response(
@@ -409,7 +533,7 @@ async fn issue_token(
     };
     let run_id = request.run_id.clone();
     let step = request.step.clone();
-    match state.registry.issue(request, now) {
+    match state.registry.issue(request, now).await {
         Ok(issued) => {
             info!(
                 token = %issued.short_id(),
@@ -422,6 +546,10 @@ async fn issue_token(
         Err(AuthProxyError::InvalidRequest(message)) => {
             warn!(run_id = %run_id, step = %step, reason = %message, "token request refused");
             error_response(StatusCode::BAD_REQUEST, "invalid_request_error", &message)
+        }
+        Err(AuthProxyError::Backend(e)) => {
+            warn!(run_id = %run_id, step = %step, error = %e, "token registry unavailable");
+            registry_unavailable("token registry unavailable")
         }
         Err(e) => {
             warn!(error = %e, "token issuance failed");
@@ -442,11 +570,16 @@ async fn revoke_token(
     if !admin_authorized(&state, &headers) {
         return admin_unauthorized();
     }
-    if state.registry.revoke(&id) {
-        info!(token = %short_id(&id), "token revoked");
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        error_response(StatusCode::NOT_FOUND, "not_found_error", "unknown token")
+    match state.registry.revoke(&id).await {
+        Ok(true) => {
+            info!(token = %short_id(&id), "token revoked");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => error_response(StatusCode::NOT_FOUND, "not_found_error", "unknown token"),
+        Err(e) => {
+            warn!(token = %short_id(&id), error = %e, "token registry unavailable");
+            registry_unavailable("token registry unavailable")
+        }
     }
 }
 
@@ -458,9 +591,16 @@ async fn revoke_run(
     if !admin_authorized(&state, &headers) {
         return admin_unauthorized();
     }
-    let revoked = state.registry.revoke_run(&run_id);
-    info!(run_id = %run_id, revoked, "run tokens revoked");
-    (StatusCode::OK, Json(json!({ "revoked": revoked }))).into_response()
+    match state.registry.revoke_run(&run_id).await {
+        Ok(revoked) => {
+            info!(run_id = %run_id, revoked, "run tokens revoked");
+            (StatusCode::OK, Json(json!({ "revoked": revoked }))).into_response()
+        }
+        Err(e) => {
+            warn!(run_id = %run_id, error = %e, "token registry unavailable");
+            registry_unavailable("token registry unavailable")
+        }
+    }
 }
 
 async fn relay(State(state): State<AuthProxyState>, request: Request) -> Response {
@@ -486,10 +626,14 @@ async fn relay(State(state): State<AuthProxyState>, request: Request) -> Respons
     let Some(token) = extract_opaque_token(&parts.headers) else {
         return invalid_token("missing", &path);
     };
-    let grant = match state.registry.resolve(&token, now) {
+    let grant = match state.registry.resolve(&token, now).await {
         Ok(grant) => grant,
         Err(TokenRejection::Unknown) => return invalid_token("unknown", &path),
         Err(TokenRejection::Expired) => return invalid_token("expired", &path),
+        Err(TokenRejection::Unavailable(e)) => {
+            warn!(error = %e, path = %path, "token registry unavailable");
+            return registry_unavailable("auth proxy token registry unavailable");
+        }
     };
     let token = short_id(&grant.id);
 
@@ -559,4 +703,45 @@ async fn relay(State(state): State<AuthProxyState>, request: Request) -> Respons
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key_ring() -> KeyRing {
+        KeyRing::from_spec(&format!("1:{}", "aa".repeat(32)), None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn registry_from_config_defaults_to_memory() {
+        let registry = registry_from_config(None, None).await.unwrap();
+        assert!(registry.is_empty().await.unwrap());
+
+        let registry = registry_from_config(Some(""), None).await.unwrap();
+        assert!(registry.is_empty().await.unwrap());
+
+        let registry = registry_from_config(Some("  \n"), Some(key_ring()))
+            .await
+            .unwrap();
+        assert!(registry.is_empty().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn registry_from_config_requires_key_ring_with_database() {
+        let result = registry_from_config(Some("postgres://localhost/x"), None).await;
+        assert!(
+            matches!(result, Err(RegistryConfigError::MissingKeyRing)),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_from_config_rejects_invalid_database_url() {
+        let result = registry_from_config(Some("not a url"), Some(key_ring())).await;
+        assert!(
+            matches!(result, Err(RegistryConfigError::Store(_))),
+            "{result:?}"
+        );
+    }
 }
