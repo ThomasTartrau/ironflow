@@ -3580,6 +3580,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironflow-auth-proxy"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ironflow-core",
+ "reqwest 0.13.5",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "ironflow-cli"
 version = "0.1.42"
 dependencies = [
@@ -3623,6 +3638,7 @@ dependencies = [
  "bollard",
  "chrono",
  "futures-util",
+ "getrandom 0.3.4",
  "globset",
  "ignore",
  "k8s-openapi",
