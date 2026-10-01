@@ -56,8 +56,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: ironflow-auth-proxy
-          # Build from docker/auth-proxy/Dockerfile. Never `latest`.
-          image: registry.example.com/ironflow-auth-proxy:0.1.0
+          # Published by CI from docker/auth-proxy/Dockerfile, tagged with the
+          # ironflow-auth-proxy crate version. There is no `latest`.
+          image: registry.gitlab.com/thomastartrau/ironflow/ironflow-auth-proxy:0.1.0
           ports:
             - name: http
               containerPort: 8080

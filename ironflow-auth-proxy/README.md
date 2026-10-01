@@ -31,6 +31,11 @@ flight.
 
 ## Deployment
 
-Image: `docker/auth-proxy/Dockerfile`. Manifests and network policies:
+Image:
+`registry.gitlab.com/thomastartrau/ironflow/ironflow-auth-proxy:<version>`,
+where `<version>` is the version of this crate. CI builds it from
+`docker/auth-proxy/Dockerfile` and publishes it once the version is released;
+a published tag is never rebuilt, and there is no `latest`. Manifests and
+network policies:
 `examples/k8s/sandbox/` (`auth-proxy.yaml`, `cilium-egress-auth-proxy.yaml`,
 `networkpolicy-auth-proxy.yaml`).

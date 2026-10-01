@@ -67,9 +67,14 @@ let provider = K8sEphemeralProvider::sandboxed(&image)
     .auth_proxy("http://ironflow-auth-proxy.ironflow-system");
 ```
 
-The `ironflow-auth-proxy` service (crate `ironflow-auth-proxy`, image built
-from `docker/auth-proxy/Dockerfile`, manifests in
-`examples/k8s/sandbox/auth-proxy.yaml`) holds the credential instead:
+The `ironflow-auth-proxy` service (crate `ironflow-auth-proxy`, manifests in
+`examples/k8s/sandbox/auth-proxy.yaml`) holds the credential instead. Its
+official image
+`registry.gitlab.com/thomastartrau/ironflow/ironflow-auth-proxy:<version>` is
+built from `docker/auth-proxy/Dockerfile` by the `build-auth-proxy-image` CI
+job. `<version>` is the version of the `ironflow-auth-proxy` crate: the job
+publishes it once that version is released, and never rebuilds a published
+tag. There is no `latest` tag: pin the version.
 
 - **Token lifecycle.** At pod launch the worker calls the proxy admin API and
   gets an opaque token (`ifap_...`) bound to the run id, the step and the pod
