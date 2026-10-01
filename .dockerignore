@@ -1,0 +1,14 @@
+# Build context of docker/auth-proxy/Dockerfile: the repository root. Only the
+# Cargo workspace is needed; build outputs, caches and local checkouts are not.
+.git
+**/target
+**/node_modules
+.worktrees
+.claude/worktrees
+.cargo/*
+!.cargo/config.toml
+book
+docs/book/book
+ironflow-api/dashboard
+ironflow-dashboard/dist
+.corepack

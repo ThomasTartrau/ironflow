@@ -69,6 +69,7 @@
 
 pub mod account;
 pub mod account_strategy;
+pub mod auth_proxy;
 pub mod decision;
 pub mod dry_run;
 pub mod error;

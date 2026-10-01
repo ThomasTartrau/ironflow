@@ -22,6 +22,10 @@ The `AgentProvider` trait abstracts how agent commands are executed. Built-in pr
 | `K8sEphemeralProvider` | `transport-k8s` | Ephemeral Kubernetes pods |
 | `RecordReplayProvider` | - | Deterministic test fixtures without tokens |
 
+`K8sEphemeralProvider::auth_proxy(url)` keeps the Claude credential out of the agent pod: the pod
+receives an opaque per-step token, and the `ironflow-auth-proxy` service swaps it for the real
+credential (see `ironflow_core::auth_proxy`).
+
 ## Features
 
 | Feature | Description |

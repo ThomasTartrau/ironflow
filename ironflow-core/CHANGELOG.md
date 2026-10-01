@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.6.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.5.1...ironflow-core-v4.6.0) - 2026-10-01
+
+### Added
+
+- #141 per-step PVC volumes and opt-out of provider volumes in K8sEphemeralProvider
+
+
+### Changed
+
+- #141 simplify PVC volume validation and rendering
+
 ## [4.5.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.5.0...ironflow-core-v4.5.1) - 2026-10-01
 
 ### Fixed

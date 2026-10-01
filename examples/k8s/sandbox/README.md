@@ -28,3 +28,38 @@ policies belong to whoever administers the cluster, applied once, out of band.
 Egress profiles follow the same split: the provider only sets the
 `ironflow.io/egress-profile` label, and a policy written by the administrator
 decides what that label opens.
+
+## Auth proxy variant
+
+With `K8sEphemeralProvider::auth_proxy`, the agent pods never receive a Claude
+credential: they get the proxy URL (`ANTHROPIC_BASE_URL`) and an opaque token
+bound to one run and one step (`ANTHROPIC_AUTH_TOKEN`). The `ironflow-auth-proxy`
+service swaps that token for the real credential and is the only component
+that reaches `api.anthropic.com`.
+
+```sh
+kubectl apply -f namespace-rbac.yaml            # namespace + worker Role
+kubectl apply -f networkpolicy-deny-all.yaml    # default deny, DNS only
+kubectl apply -f auth-proxy.yaml                # ironflow-system + proxy
+kubectl -n ironflow-system create secret generic ironflow-auth-proxy-admin \
+  --from-literal=admin-key="$(openssl rand -hex 32)"
+kubectl apply -f networkpolicy-auth-proxy.yaml  # agent pods -> proxy
+kubectl apply -f cilium-egress-auth-proxy.yaml  # instead of cilium-egress-anthropic.yaml
+kubectl apply -f managed-settings.yaml          # managed-settings presets
+```
+
+- Do not create the `claude-oauth` secret in `ironflow-agents`, and do not apply
+  `cilium-egress-anthropic.yaml`: the agent pods must not reach the API directly.
+- The worker needs `IRONFLOW_AUTH_PROXY_ADMIN_KEY` (the same key as the
+  `ironflow-auth-proxy-admin` secret) and a credential to hand to the proxy:
+  Provider Accounts, or `CLAUDE_CODE_OAUTH_TOKEN` (else `ANTHROPIC_API_KEY`) in
+  its own environment.
+- Any Claude credential set on the provider or the step for the pod
+  (`oauth_token_from_secret`, `oauth_credentials`, ...) fails the step.
+- The proxy keeps its tokens in memory: run exactly one replica.
+
+Check that an agent pod holds no secret while it runs:
+
+```sh
+kubectl -n ironflow-agents exec <agent pod> -- env | grep -c 'sk-ant'   # 0
+```

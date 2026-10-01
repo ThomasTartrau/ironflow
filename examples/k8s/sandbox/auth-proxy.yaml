@@ -1,0 +1,104 @@
+# ironflow-auth-proxy: the agent pods never hold the Claude credential.
+#
+# The worker (K8sEphemeralProvider::auth_proxy) issues an opaque token per
+# step through the admin API, protected by the key in the
+# ironflow-auth-proxy-admin Secret. Claude Code in the agent pod sends that
+# token here; the proxy swaps it for the real credential and relays to
+# api.anthropic.com only.
+#
+# Create the admin key before applying, in this namespace and in the worker's
+# environment (IRONFLOW_AUTH_PROXY_ADMIN_KEY):
+#
+#   kubectl -n ironflow-system create secret generic ironflow-auth-proxy-admin \
+#     --from-literal=admin-key="$(openssl rand -hex 32)"
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ironflow-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ironflow-auth-proxy
+  namespace: ironflow-system
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ironflow-auth-proxy
+  namespace: ironflow-system
+  labels:
+    app.kubernetes.io/name: ironflow-auth-proxy
+spec:
+  # Exactly one replica: the tokens live in the proxy's memory. A second
+  # replica would answer 401 to tokens issued by the first. Recreate (not
+  # RollingUpdate) for the same reason; tokens issued before a restart are
+  # lost and the steps holding them fail.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ironflow-auth-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ironflow-auth-proxy
+    spec:
+      serviceAccountName: ironflow-auth-proxy
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ironflow-auth-proxy
+          # Published by CI from docker/auth-proxy/Dockerfile, tagged with the
+          # ironflow-auth-proxy crate version. There is no `latest`.
+          image: registry.gitlab.com/thomastartrau/ironflow/ironflow-auth-proxy:0.1.0
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: IRONFLOW_AUTH_PROXY_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ironflow-auth-proxy-admin
+                  key: admin-key
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ironflow-auth-proxy
+  namespace: ironflow-system
+  labels:
+    app.kubernetes.io/name: ironflow-auth-proxy
+spec:
+  selector:
+    app.kubernetes.io/name: ironflow-auth-proxy
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

@@ -1,0 +1,29 @@
+# Standard NetworkPolicy for the auth proxy variant: agent pods may reach the
+# auth proxy pods on 8080, on top of the DNS egress of
+# networkpolicy-deny-all.yaml (NetworkPolicies are additive).
+#
+# No FQDN rule is needed on this side: the agent pods never reach
+# api.anthropic.com themselves. Only the proxy does (see the policy on the
+# proxy pods in cilium-egress-auth-proxy.yaml, or your CNI's FQDN policy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: claude-runner-egress-auth-proxy
+  namespace: ironflow-agents
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: claude-runner
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ironflow-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ironflow-auth-proxy
+      ports:
+        - protocol: TCP
+          port: 8080

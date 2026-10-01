@@ -55,6 +55,62 @@ let provider = K8sEphemeralProvider::sandboxed(&image)
     .env_from_secret("GITLAB_TOKEN", "gitlab-bot", "token");
 ```
 
+## Auth proxy: no Claude credential in the pod
+
+A `secretKeyRef` keeps the credential out of the pod spec, not out of the pod:
+anything running in the agent container can still read
+`CLAUDE_CODE_OAUTH_TOKEN`. With `auth_proxy`, the pod never receives it:
+
+```rust,ignore
+let provider = K8sEphemeralProvider::sandboxed(&image)
+    .namespace("ironflow-agents")
+    .auth_proxy("http://ironflow-auth-proxy.ironflow-system");
+```
+
+The `ironflow-auth-proxy` service (crate `ironflow-auth-proxy`, manifests in
+`examples/k8s/sandbox/auth-proxy.yaml`) holds the credential instead. Its
+official image
+`registry.gitlab.com/thomastartrau/ironflow/ironflow-auth-proxy:<version>` is
+built from `docker/auth-proxy/Dockerfile` by the `build-auth-proxy-image` CI
+job. `<version>` is the version of the `ironflow-auth-proxy` crate: the job
+publishes it once that version is released, and never rebuilds a published
+tag. There is no `latest` tag: pin the version.
+
+- **Token lifecycle.** At pod launch the worker calls the proxy admin API and
+  gets an opaque token (`ifap_...`) bound to the run id, the step and the pod
+  expiry (`ironflow.io/expires-at`). The pod receives `ANTHROPIC_BASE_URL` (the
+  proxy URL), `ANTHROPIC_AUTH_TOKEN` (the opaque token) and
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. The worker revokes the token
+  when the step ends, whatever the outcome, and every token of a run when the
+  run is released; the expiry is the backstop. An unknown, revoked or expired
+  token gets a 401. If the proxy cannot issue a token, the step fails before
+  any pod is created.
+- **Restrictions.** The proxy only relays GET and POST requests under `/v1/`
+  to `api.anthropic.com`. A path outside `/v1/` (including `/admin`, which needs
+  the admin key) or a request for another host (absolute-form URI, `CONNECT`) gets
+  a 403, any other method a 405.
+- **Which credential.** The step's Provider Account when one is attached (the
+  provider reports the `claude_subscription` account kind once `auth_proxy` is
+  set), else `CLAUDE_CODE_OAUTH_TOKEN`, then `ANTHROPIC_API_KEY`, from the worker
+  environment. The worker also needs `IRONFLOW_AUTH_PROXY_ADMIN_KEY` (or
+  `.auth_proxy_admin_key(..)`). Rate-limit windows reported through the proxy
+  are recorded on the Provider Account as with the Docker provider.
+- **No credential on the pod side.** With `auth_proxy` set, a Claude credential
+  configured for the pod (`oauth_token_from_secret`, `oauth_credentials`,
+  `oauth_credentials_from_secret`, a step `env_from_secret("CLAUDE_CODE_OAUTH_TOKEN", ..)`,
+  any plain value starting with `sk-ant`) fails the step with an error naming
+  the variable.
+- **Single replica.** Tokens live in the proxy's memory: run one replica.
+- **Logs.** The proxy and the worker log the first 12 characters of the token
+  id (a SHA-256 of the token), never the token or the credential.
+
+The network side changes too: the agent pods only reach the proxy, and the
+proxy only reaches `api.anthropic.com`:
+
+```yaml
+{{#include ../../../../examples/k8s/sandbox/cilium-egress-auth-proxy.yaml}}
+```
+
 ## Per-step settings
 
 A step adds to or overrides the provider's settings through its
@@ -274,3 +330,12 @@ kubectl -n ironflow-agents get pods \
 
 The `exec` checks against the service account, the root filesystem and egress
 must fail; `kubectl auth can-i` must answer `no`.
+
+With the auth proxy, also check that the pod holds no Claude secret and that
+the proxy refuses an unknown token:
+
+```sh
+kubectl -n ironflow-agents exec <pod> -- env | grep -c 'sk-ant'   # 0
+kubectl -n ironflow-agents exec <pod> -- sh -c \
+  'curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer invalide" "$ANTHROPIC_BASE_URL/v1/messages"'   # 401
+```
