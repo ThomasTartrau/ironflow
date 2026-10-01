@@ -60,6 +60,11 @@ kubectl apply -f managed-settings.yaml          # managed-settings presets
   `IRONFLOW_AUTH_PROXY_DATABASE_URL` and an encryption key
   (`IRONFLOW_SECRET_KEYS`) for a shared PostgreSQL registry: several replicas,
   tokens survive restarts, the proxy needs egress to PostgreSQL.
+- Under Cilium, uncomment the 5432 rule in section (b) of
+  `cilium-egress-auth-proxy.yaml` when the shared registry is on. With standard
+  NetworkPolicies only, nothing restricts the proxy's egress unless you add a
+  policy on the proxy pods; do not add 5432 to `networkpolicy-auth-proxy.yaml`,
+  which selects the agent pods.
 
 Check that an agent pod holds no secret while it runs:
 

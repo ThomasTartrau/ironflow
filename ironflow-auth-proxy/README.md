@@ -43,7 +43,9 @@ survive restarts.
 - Expired rows are purged every 60 s by every replica (idempotent deletes).
 - A database outage answers 503 (retryable), never 401: a valid token does not
   look revoked.
-- The network policy must allow egress from the proxy to PostgreSQL.
+- The network policy must allow egress from the proxy to PostgreSQL: under
+  Cilium, uncomment the 5432 rule of
+  `examples/k8s/sandbox/cilium-egress-auth-proxy.yaml`.
 - Least privilege: give the proxy a dedicated database or role. Its migrations
   create the `ironflow` schema in that database.
 

@@ -40,7 +40,7 @@ spec:
   # commented-out env entries below), the tokens live in a shared PostgreSQL
   # registry and survive restarts: raise `replicas` and switch the strategy
   # to RollingUpdate. The network policies must then allow egress to
-  # PostgreSQL.
+  # PostgreSQL: uncomment the 5432 rule of cilium-egress-auth-proxy.yaml.
   replicas: 1
   strategy:
     type: Recreate

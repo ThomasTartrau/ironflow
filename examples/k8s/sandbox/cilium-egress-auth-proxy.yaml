@@ -67,7 +67,8 @@ spec:
             - port: "443"
               protocol: TCP
 ---
-# (b) The auth proxy pods: egress to DNS and api.anthropic.com:443 only;
+# (b) The auth proxy pods: egress to DNS and api.anthropic.com:443 only, plus
+# PostgreSQL on 5432 with the shared registry (commented-out rule below);
 # ingress on 8080 only from the agent pods and from the worker. Adjust the
 # worker selector to the namespace and labels the worker runs under.
 apiVersion: cilium.io/v2
@@ -109,3 +110,25 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+    # Shared PostgreSQL registry (IRONFLOW_AUTH_PROXY_DATABASE_URL set in
+    # auth-proxy.yaml): uncomment ONE of the two rules below, else the proxy
+    # times out at startup. Not needed with the in-memory registry. If the
+    # database has its own ingress policy, open 5432 there to the proxy pods.
+    #
+    # In-cluster database: adjust its namespace and pod labels.
+    # - toEndpoints:
+    #     - matchLabels:
+    #         k8s:io.kubernetes.pod.namespace: ironflow-db
+    #         app.kubernetes.io/name: postgresql
+    #   toPorts:
+    #     - ports:
+    #         - port: "5432"
+    #           protocol: TCP
+    #
+    # Managed database outside the cluster: adjust to its subnet.
+    # - toCIDR:
+    #     - 10.0.0.0/24
+    #   toPorts:
+    #     - ports:
+    #         - port: "5432"
+    #           protocol: TCP
