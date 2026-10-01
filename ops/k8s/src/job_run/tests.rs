@@ -565,3 +565,18 @@ async fn run_failed_is_ok_with_success_false() {
     assert_eq!(out.phase, "Failed");
     assert_eq!(deleted.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn build_job_pvc_volume_renders_sub_path_and_read_only() {
+    let job = JobRun::new(&dummy_kube(), "migrate", "migrate:1", "migrate up")
+        .pvc_volume("shared-claim", "/repos", Some("team-a"), true)
+        .pvc_volume("shared-claim", "/rw", None, false)
+        .build_job();
+    let pod_spec = job.spec.unwrap().template.spec.unwrap();
+    assert_eq!(pod_spec.volumes.as_ref().unwrap().len(), 1);
+    let mounts = pod_spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts.len(), 2);
+    assert_eq!(mounts[0].sub_path.as_deref(), Some("team-a"));
+    assert_eq!(mounts[0].read_only, Some(true));
+    assert!(mounts[1].read_only.is_none());
+}

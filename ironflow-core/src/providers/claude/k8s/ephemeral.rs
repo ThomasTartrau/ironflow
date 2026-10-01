@@ -47,8 +47,8 @@ use tracing::{debug, info, warn};
 use crate::error::AgentError;
 use crate::provider::{
     AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT,
-    LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, LogSink, PodVolumeSource, ReadOnlyVolume,
-    ReleaseFuture, SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label,
+    LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, LogSink, PodVolumeSource, PvcVolume,
+    ReadOnlyVolume, ReleaseFuture, SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label,
     upsert_secret_env,
 };
 use crate::providers::claude::common as claude_common;
@@ -688,6 +688,8 @@ impl K8sEphemeralProvider {
     ///
     /// Can be called multiple times to add several volumes.
     ///
+    /// A step drops this mount with [`AgentConfig::without_provider_volumes`].
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -709,6 +711,8 @@ impl K8sEphemeralProvider {
     /// access mode when multiple pods mount the same claim concurrently.
     ///
     /// Can be called multiple times to add several PVC mounts.
+    ///
+    /// A step drops this mount with [`AgentConfig::without_provider_volumes`].
     ///
     /// # Examples
     ///
@@ -811,6 +815,9 @@ struct CreatedPod {
 /// Pod inputs merged from the provider defaults and the step's [`AgentConfig`].
 #[derive(Debug)]
 struct MergedPodInputs {
+    volumes: Vec<(String, String)>,
+    pvc_volumes: Vec<(String, String)>,
+    step_pvc_volumes: Vec<PvcVolume>,
     secret_env: Vec<SecretEnvVar>,
     service_account: Option<String>,
     read_only_volumes: Vec<ReadOnlyVolume>,
@@ -865,6 +872,13 @@ impl K8sEphemeralProvider {
             .clone()
             .or_else(|| self.service_account.clone());
 
+        let (volumes, pvc_volumes) = if config.pod.without_provider_volumes {
+            (Vec::new(), Vec::new())
+        } else {
+            (self.volumes.clone(), self.pvc_volumes.clone())
+        };
+        let step_pvc_volumes = config.pod.pvc_volumes.clone();
+
         let mut read_only_volumes = self.read_only_volumes.clone();
         read_only_volumes.extend(config.pod.read_only_volumes.iter().cloned());
 
@@ -908,6 +922,9 @@ impl K8sEphemeralProvider {
         labels.extend(config.pod_labels.clone());
 
         Ok(MergedPodInputs {
+            volumes,
+            pvc_volumes,
+            step_pvc_volumes,
             secret_env,
             service_account,
             read_only_volumes,
@@ -1176,8 +1193,8 @@ impl K8sEphemeralProvider {
             extra_labels: &merged.labels,
             node_selector: &self.node_selector,
             tolerations: &self.tolerations,
-            volumes: &self.volumes,
-            pvc_volumes: &self.pvc_volumes,
+            volumes: &merged.volumes,
+            pvc_volumes: &merged.pvc_volumes,
             inputs: &config.inputs,
             input_init_image: &self.input_init_image,
             prompt_configmap: prompt_configmap_name.as_deref(),
@@ -1186,6 +1203,7 @@ impl K8sEphemeralProvider {
                 sandbox: self.sandbox.as_ref(),
                 secret_env: &merged.secret_env,
                 read_only_volumes: &merged.read_only_volumes,
+                step_pvc_volumes: &merged.step_pvc_volumes,
                 managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
                 claude_profiles: &self.claude_profiles,
                 annotations: Some(&annotations),
@@ -1519,6 +1537,8 @@ mod label_tests;
 
 #[cfg(test)]
 mod tests {
+    use serde_json::to_value;
+
     use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
 
@@ -1863,6 +1883,90 @@ mod tests {
         let config = AgentConfig::new("hi").service_account("step-sa");
         let merged = merge(&provider, &config);
         assert_eq!(merged.service_account.as_deref(), Some("step-sa"));
+    }
+
+    fn provider_with_volumes() -> K8sEphemeralProvider {
+        K8sEphemeralProvider::sandboxed("img:v1")
+            .volume("/srv/work", "/data/work")
+            .pvc_volume("repos", "/data/repos")
+    }
+
+    #[test]
+    fn merged_provider_volumes_kept_without_flag() {
+        let merged = merge(&provider_with_volumes(), &AgentConfig::new("hi"));
+        assert_eq!(merged.volumes.len(), 1);
+        assert_eq!(merged.pvc_volumes.len(), 1);
+        assert!(merged.step_pvc_volumes.is_empty());
+    }
+
+    #[test]
+    fn merged_without_provider_volumes_drops_them() {
+        let config = AgentConfig::new("hi").without_provider_volumes();
+        let merged = merge(&provider_with_volumes(), &config);
+        assert!(merged.volumes.is_empty());
+        assert!(merged.pvc_volumes.is_empty());
+    }
+
+    #[test]
+    fn merged_step_pvc_volumes_come_through_after_provider_ones() {
+        let config = AgentConfig::new("hi").pvc_volume("scratch", "/scratch", Some("a"), false);
+        let merged = merge(&provider_with_volumes(), &config);
+        assert_eq!(merged.pvc_volumes[0].0, "repos");
+        assert_eq!(merged.step_pvc_volumes.len(), 1);
+        assert_eq!(merged.step_pvc_volumes[0].claim_name, "scratch");
+        assert_eq!(merged.step_pvc_volumes[0].sub_path.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn pod_spec_without_provider_volumes_keeps_home_and_tmp() {
+        let provider = provider_with_volumes().read_only_pvc("ro-claim", "/data/ro");
+        let config = AgentConfig::new("hi")
+            .without_provider_volumes()
+            .pvc_volume("scratch", "/data/work", None, false);
+        let merged = merge(&provider, &config);
+        let pod = to_value(
+            build_pod_spec(&PodConfig {
+                name: "test-pod",
+                image: "img:v1",
+                command: vec!["sh".to_string()],
+                namespace: "default",
+                resources: &K8sResources::default(),
+                service_account: None,
+                restart_policy: "Never",
+                image_pull_policy: &ImagePullPolicy::default(),
+                env_vars: &[],
+                image_pull_secrets: &[],
+                extra_labels: &BTreeMap::new(),
+                node_selector: &BTreeMap::new(),
+                tolerations: &[],
+                volumes: &merged.volumes,
+                pvc_volumes: &merged.pvc_volumes,
+                inputs: &[],
+                input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+                prompt_configmap: None,
+                prompt_mount_path: "",
+                hardening: PodHardening {
+                    sandbox: provider.sandbox.as_ref(),
+                    read_only_volumes: &merged.read_only_volumes,
+                    step_pvc_volumes: &merged.step_pvc_volumes,
+                    ..PodHardening::default()
+                },
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let names: Vec<&str> = pod["spec"]["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"pvc-0"));
+        assert!(!names.contains(&"vol-0"));
+        assert!(names.contains(&"step-pvc-0"));
+        assert!(names.contains(&"ro-0"));
+        assert!(names.contains(&"ironflow-home"));
+        assert!(names.contains(&"ironflow-tmp"));
     }
 
     #[test]
