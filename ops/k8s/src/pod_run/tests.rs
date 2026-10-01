@@ -863,3 +863,91 @@ async fn run_timeout_is_external_and_deletes() {
         "pod must be deleted even on timeout"
     );
 }
+
+#[tokio::test]
+async fn build_pod_pvc_volume_renders_sub_path_and_read_only() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc_volume("shared-claim", "/repos", Some("team-a"), true)
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].name, "workspace");
+    assert_eq!(mounts[0].mount_path, "/repos");
+    assert_eq!(mounts[0].sub_path.as_deref(), Some("team-a"));
+    assert_eq!(mounts[0].read_only, Some(true));
+    let volumes = spec.volumes.as_ref().unwrap();
+    assert_eq!(volumes.len(), 1);
+    assert!(
+        volumes[0]
+            .persistent_volume_claim
+            .as_ref()
+            .unwrap()
+            .read_only
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn build_pod_pvc_volume_same_claim_shares_one_volume() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc_volume("shared-claim", "/a", Some("a"), false)
+        .pvc_volume("shared-claim", "/b", Some("b"), true)
+        .pvc("other-claim", "/other")
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let volumes = spec.volumes.as_ref().unwrap();
+    let names: Vec<&str> = volumes.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, vec!["workspace", "workspace-1"]);
+    let mounts = spec.containers[0].volume_mounts.as_ref().unwrap();
+    assert_eq!(mounts.len(), 3);
+    assert_eq!(mounts[0].name, "workspace");
+    assert_eq!(mounts[1].name, "workspace");
+    assert_eq!(mounts[2].name, "workspace-1");
+    assert_eq!(mounts[0].sub_path.as_deref(), Some("a"));
+    assert_eq!(mounts[1].sub_path.as_deref(), Some("b"));
+}
+
+#[tokio::test]
+async fn build_pod_pvc_volume_read_write_default_leaves_read_only_unset() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc_volume("shared-claim", "/repos", None, false)
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let mount = &spec.containers[0].volume_mounts.as_ref().unwrap()[0];
+    assert!(mount.read_only.is_none());
+    assert!(mount.sub_path.is_none());
+}
+
+#[tokio::test]
+async fn build_pod_pvc_leaves_mount_options_unset() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .pvc("shared-claim", "/workspace")
+        .build_pod();
+    let spec = pod.spec.unwrap();
+    let mount = &spec.containers[0].volume_mounts.as_ref().unwrap()[0];
+    assert!(mount.read_only.is_none());
+    assert!(mount.sub_path.is_none());
+}
+
+#[tokio::test]
+#[should_panic(expected = "sub_path")]
+async fn pvc_volume_rejects_parent_sub_path() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").pvc_volume(
+        "shared-claim",
+        "/repos",
+        Some("../x"),
+        false,
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "sub_path")]
+async fn pvc_volume_rejects_absolute_sub_path() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").pvc_volume(
+        "shared-claim",
+        "/repos",
+        Some("/abs"),
+        false,
+    );
+}

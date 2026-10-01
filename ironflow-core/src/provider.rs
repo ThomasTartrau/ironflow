@@ -39,8 +39,9 @@ mod tool_profile;
 pub(crate) use pod::upsert_secret_env;
 pub use pod::{
     LABEL_COMPONENT, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT, LABEL_MANAGED_BY, LABEL_ROOT_RUN_ID,
-    LABEL_RUN_ID, LABEL_STEP, MANAGED_BY_IRONFLOW, PodSettings, PodVolumeSource, ReadOnlyVolume,
-    SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label, sanitize_label_value,
+    LABEL_RUN_ID, LABEL_STEP, MANAGED_BY_IRONFLOW, PodSettings, PodVolumeSource, PvcVolume,
+    ReadOnlyVolume, SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label,
+    sanitize_label_value, validate_pvc_sub_path,
 };
 pub use tool::Tool;
 pub use tool_profile::ToolProfile;
@@ -770,6 +771,68 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// ```
     pub fn read_only_volume(mut self, volume: ReadOnlyVolume) -> Self {
         self.pod.read_only_volumes.push(volume);
+        self
+    }
+
+    /// Drop the provider's `volume` and `pvc_volume` mounts for this step
+    /// (K8s ephemeral provider only). The provider's read-only volumes, its
+    /// profiles and its managed settings are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").without_provider_volumes();
+    /// assert!(config.pod.without_provider_volumes);
+    /// ```
+    pub fn without_provider_volumes(mut self) -> Self {
+        self.pod.without_provider_volumes = true;
+        self
+    }
+
+    /// Mount a PersistentVolumeClaim into the agent container, optionally
+    /// on a `sub_path` and read-only (K8s ephemeral provider only). Step
+    /// mounts are merged after the provider's volumes.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the volume is refused by [`PvcVolume::validate`]: an empty
+    /// `claim` or a `sub_path` refused by [`validate_pvc_sub_path`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("build")
+    ///     .pvc_volume("workspace", "/work", Some("team-a"), false);
+    /// assert_eq!(config.pod.pvc_volumes[0].claim_name, "workspace");
+    /// assert_eq!(config.pod.pvc_volumes[0].sub_path.as_deref(), Some("team-a"));
+    /// ```
+    ///
+    /// ```should_panic
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let _ = AgentConfig::new("build").pvc_volume("workspace", "/work", Some("../x"), false);
+    /// ```
+    pub fn pvc_volume(
+        mut self,
+        claim: &str,
+        mount_path: &str,
+        sub_path: Option<&str>,
+        read_only: bool,
+    ) -> Self {
+        let volume = PvcVolume {
+            claim_name: claim.to_string(),
+            mount_path: mount_path.to_string(),
+            sub_path: sub_path.map(str::to_string),
+            read_only,
+        };
+        if let Err(reason) = volume.validate() {
+            panic!("invalid pvc_volume: {reason}");
+        }
+        self.pod.pvc_volumes.push(volume);
         self
     }
 
@@ -2028,6 +2091,51 @@ mod tests {
         );
         assert_eq!(config.pod.managed_settings.as_deref(), Some("locked"));
         assert_eq!(config.pod_labels[LABEL_EGRESS_PROFILE], "gitlab");
+    }
+
+    #[test]
+    fn k8s_pvc_volume_builder_pushes_volume() {
+        let config = AgentConfig::new("x")
+            .pvc_volume("ws", "/work", Some("a/b"), true)
+            .pvc_volume("ws", "/other", None, false);
+        assert_eq!(config.pod.pvc_volumes.len(), 2);
+        assert_eq!(config.pod.pvc_volumes[0].claim_name, "ws");
+        assert_eq!(config.pod.pvc_volumes[0].mount_path, "/work");
+        assert_eq!(config.pod.pvc_volumes[0].sub_path.as_deref(), Some("a/b"));
+        assert!(config.pod.pvc_volumes[0].read_only);
+        assert_eq!(config.pod.pvc_volumes[1].sub_path, None);
+        assert!(!config.pod.pvc_volumes[1].read_only);
+    }
+
+    #[test]
+    fn k8s_without_provider_volumes_sets_flag() {
+        assert!(!AgentConfig::new("x").pod.without_provider_volumes);
+        let config = AgentConfig::new("x").without_provider_volumes();
+        assert!(config.pod.without_provider_volumes);
+    }
+
+    #[test]
+    #[should_panic(expected = "sub_path")]
+    fn k8s_pvc_volume_rejects_parent_sub_path() {
+        let _ = AgentConfig::new("x").pvc_volume("ws", "/work", Some("../x"), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "sub_path")]
+    fn k8s_pvc_volume_rejects_absolute_sub_path() {
+        let _ = AgentConfig::new("x").pvc_volume("ws", "/work", Some("/abs"), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "sub_path")]
+    fn k8s_pvc_volume_rejects_empty_segment_sub_path() {
+        let _ = AgentConfig::new("x").pvc_volume("ws", "/work", Some("a//b"), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "claim_name")]
+    fn k8s_pvc_volume_rejects_empty_claim() {
+        let _ = AgentConfig::new("x").pvc_volume("", "/work", None, false);
     }
 
     #[test]

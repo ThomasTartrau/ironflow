@@ -182,6 +182,107 @@ pub struct ReadOnlyVolume {
     pub sub_path: Option<String>,
 }
 
+/// A PersistentVolumeClaim mounted into the agent container, read-write by
+/// default.
+///
+/// Unlike [`ReadOnlyVolume`], the mount can be read-write and carries an
+/// optional `sub_path`. Several mounts may share one claim.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::provider::PvcVolume;
+///
+/// let volume = PvcVolume {
+///     claim_name: "repos".to_string(),
+///     mount_path: "/data/repos".to_string(),
+///     sub_path: Some("team-a".to_string()),
+///     read_only: true,
+/// };
+/// assert_eq!(volume.claim_name, "repos");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PvcVolume {
+    /// Name of the claim in the pod's namespace.
+    pub claim_name: String,
+    /// Absolute mount path inside the container.
+    pub mount_path: String,
+    /// Optional sub-path of the volume to mount instead of its root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_path: Option<String>,
+    /// Mount the volume read-only.
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+impl PvcVolume {
+    /// Check that the claim is named and that `sub_path`, when set, passes
+    /// [`validate_pvc_sub_path`]. The mount path is checked by the provider,
+    /// which knows its reserved paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason as a message when the volume is refused.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::PvcVolume;
+    ///
+    /// let mut volume = PvcVolume {
+    ///     claim_name: "repos".to_string(),
+    ///     mount_path: "/data/repos".to_string(),
+    ///     sub_path: Some("team-a".to_string()),
+    ///     read_only: false,
+    /// };
+    /// assert!(volume.validate().is_ok());
+    /// volume.sub_path = Some("../x".to_string());
+    /// assert!(volume.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), String> {
+        if self.claim_name.is_empty() {
+            return Err("pvc volume needs a non-empty claim_name".to_string());
+        }
+        self.sub_path
+            .as_deref()
+            .map_or(Ok(()), validate_pvc_sub_path)
+    }
+}
+
+/// Check the structure of a PVC `subPath`.
+///
+/// Refuses an empty value, a leading `/`, an empty segment (a trailing `/` or
+/// a `//`) and any `.` or `..` segment. Characters are not restricted: a
+/// volume's directories may contain spaces.
+///
+/// # Errors
+///
+/// Returns the reason as a message when `sub_path` is refused.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::provider::validate_pvc_sub_path;
+///
+/// assert!(validate_pvc_sub_path("team a/repos").is_ok());
+/// assert!(validate_pvc_sub_path("../x").is_err());
+/// assert!(validate_pvc_sub_path("/abs").is_err());
+/// assert!(validate_pvc_sub_path("a//b").is_err());
+/// ```
+pub fn validate_pvc_sub_path(sub_path: &str) -> Result<(), String> {
+    // An empty value splits into one empty segment, so it is refused below.
+    let malformed = sub_path.starts_with('/')
+        || sub_path
+            .split('/')
+            .any(|segment| matches!(segment, "" | "." | ".."));
+    if malformed {
+        return Err(format!(
+            "sub_path '{sub_path}' must be relative, without empty, '.' or '..' segments"
+        ));
+    }
+    Ok(())
+}
+
 /// Pod-level settings a step asks for (K8s ephemeral provider only).
 ///
 /// Merged with the provider's own settings when the pod is built: the step
@@ -212,6 +313,12 @@ pub struct PodSettings {
     /// RuntimeClass of the pod (`spec.runtimeClassName`). Overrides the provider's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_class: Option<String>,
+    /// PVC mounts of the step, merged after the provider's volumes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pvc_volumes: Vec<PvcVolume>,
+    /// Drop the provider's `volume` and `pvc_volume` mounts for this step.
+    #[serde(default)]
+    pub without_provider_volumes: bool,
 }
 
 impl PodSettings {
@@ -233,6 +340,8 @@ impl PodSettings {
             && self.read_only_volumes.is_empty()
             && self.managed_settings.is_none()
             && self.runtime_class.is_none()
+            && self.pvc_volumes.is_empty()
+            && !self.without_provider_volumes
     }
 }
 
@@ -385,6 +494,77 @@ mod tests {
             ..PodSettings::default()
         };
         assert!(!with_volume.is_empty());
+        let with_pvc = PodSettings {
+            pvc_volumes: vec![PvcVolume {
+                claim_name: "repos".to_string(),
+                mount_path: "/data".to_string(),
+                sub_path: None,
+                read_only: false,
+            }],
+            ..PodSettings::default()
+        };
+        assert!(!with_pvc.is_empty());
+        let without_provider = PodSettings {
+            without_provider_volumes: true,
+            ..PodSettings::default()
+        };
+        assert!(!without_provider.is_empty());
+    }
+
+    #[test]
+    fn k8s_validate_pvc_sub_path_accepts_nested_and_spaces() {
+        assert!(validate_pvc_sub_path("a").is_ok());
+        assert!(validate_pvc_sub_path("a/b c/d.e").is_ok());
+        assert!(validate_pvc_sub_path("..a/.b").is_ok());
+    }
+
+    #[test]
+    fn k8s_validate_pvc_sub_path_refuses_structural_errors() {
+        for bad in ["", "/abs", "a//b", "a/", ".", "..", "a/../b", "./a"] {
+            assert!(validate_pvc_sub_path(bad).is_err(), "{bad:?} accepted");
+        }
+    }
+
+    #[test]
+    fn k8s_pvc_volume_validate() {
+        let volume = PvcVolume {
+            claim_name: "c".to_string(),
+            mount_path: "/m".to_string(),
+            sub_path: None,
+            read_only: false,
+        };
+        assert!(volume.validate().is_ok());
+        let nested = PvcVolume {
+            sub_path: Some("a/b".to_string()),
+            ..volume.clone()
+        };
+        assert!(nested.validate().is_ok());
+        let unnamed = PvcVolume {
+            claim_name: String::new(),
+            ..volume.clone()
+        };
+        assert!(unnamed.validate().unwrap_err().contains("claim_name"));
+        let escaping = PvcVolume {
+            sub_path: Some("../x".to_string()),
+            ..volume
+        };
+        assert!(escaping.validate().unwrap_err().contains("sub_path"));
+    }
+
+    #[test]
+    fn k8s_pvc_volume_serde_skips_defaults() {
+        let volume = PvcVolume {
+            claim_name: "c".to_string(),
+            mount_path: "/m".to_string(),
+            sub_path: None,
+            read_only: false,
+        };
+        let json = serde_json::to_value(&volume).unwrap();
+        assert!(json.get("sub_path").is_none());
+        let back: PvcVolume =
+            serde_json::from_value(serde_json::json!({"claim_name":"c","mount_path":"/m"}))
+                .unwrap();
+        assert_eq!(back, volume);
     }
 
     #[test]

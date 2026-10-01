@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ironflow_core::error::OperationError;
 use ironflow_core::operation::{Operation, OperationContext, TypedOperation};
-use ironflow_core::provider::assert_pod_label_allowed;
+use ironflow_core::provider::{assert_pod_label_allowed, validate_pvc_sub_path};
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, LocalObjectReference, PersistentVolumeClaimVolumeSource, Pod,
     PodSecurityContext, PodSpec, ResourceRequirements, SecurityContext, Toleration, Volume,
@@ -70,6 +70,10 @@ pub struct PvcMount {
     pub claim: String,
     /// Path at which the volume is mounted inside the container.
     pub mount_path: String,
+    /// Sub-path of the volume mounted instead of its root, when set.
+    pub sub_path: Option<String>,
+    /// Mount the volume read-only.
+    pub read_only: bool,
 }
 
 /// Output of a [`PodRun`] operation.
@@ -309,7 +313,42 @@ impl PodRun {
         self.pvcs.push(PvcMount {
             claim: claim.to_string(),
             mount_path: mount_path.to_string(),
+            sub_path: None,
+            read_only: false,
         });
+        self
+    }
+
+    /// Mount a PersistentVolumeClaim with an optional `subPath` and a read-only
+    /// flag.
+    ///
+    /// Additive like [`pvc`](Self::pvc), and shares its volume naming. Several
+    /// mounts of the same claim produce a single volume and one mount each, so
+    /// different sub-paths of one claim can be mounted at different paths.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `sub_path` is refused by [`validate_pvc_sub_path`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::PodRun;
+    /// # fn example(kube: &ironflow_ops_k8s::KubeClient) {
+    /// let op = PodRun::new(kube, "build", "busybox", "ls /repos")
+    ///     .pvc_volume("shared-claim", "/repos", Some("team-a"), true);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn pvc_volume(
+        mut self,
+        claim: &str,
+        mount_path: &str,
+        sub_path: Option<&str>,
+        read_only: bool,
+    ) -> Self {
+        self.pvcs
+            .push(new_pvc_mount(claim, mount_path, sub_path, read_only));
         self
     }
 
@@ -590,32 +629,71 @@ impl PodRun {
     }
 }
 
+/// Build a [`PvcMount`], validating its `sub_path`.
+///
+/// Shared by [`PodRun::pvc_volume`] and [`JobRun::pvc_volume`](crate::job_run::JobRun::pvc_volume).
+///
+/// # Panics
+///
+/// Panics when `sub_path` is refused by [`validate_pvc_sub_path`].
+pub(crate) fn new_pvc_mount(
+    claim: &str,
+    mount_path: &str,
+    sub_path: Option<&str>,
+    read_only: bool,
+) -> PvcMount {
+    if let Some(sub_path) = sub_path
+        && let Err(reason) = validate_pvc_sub_path(sub_path)
+    {
+        panic!("invalid pvc_volume sub_path: {reason}");
+    }
+    PvcMount {
+        claim: claim.to_string(),
+        mount_path: mount_path.to_string(),
+        sub_path: sub_path.map(str::to_string),
+        read_only,
+    }
+}
+
 /// Build the `(volumes, volume_mounts)` pair for a list of [`PvcMount`]s.
 ///
-/// Each entry produces one [`Volume`] backed by its PVC and one [`VolumeMount`]
-/// sharing the same generated name, so the mount always resolves to its volume.
-/// Names are deterministic and unique: the first entry keeps the historical
-/// `"workspace"` name (strict retro-compat with the single-volume manifest),
-/// each subsequent entry becomes `"workspace-1"`, `"workspace-2"`, ... Returns
-/// two empty vectors when `pvcs` is empty, so callers leave both fields absent.
+/// One [`Volume`] is produced per distinct claim and one [`VolumeMount`] per
+/// entry, sharing the name of its claim's volume, so the mount always resolves
+/// to its volume and several sub-paths of one claim share a single volume.
+/// Volume names are deterministic and unique: the first distinct claim keeps
+/// the historical `"workspace"` name (strict retro-compat with the
+/// single-volume manifest), each subsequent one becomes `"workspace-1"`,
+/// `"workspace-2"`, ... The mount-level `subPath` and `readOnly` are set only
+/// when requested; the volume-level `readOnly` stays unset. Returns two empty
+/// vectors when `pvcs` is empty, so callers leave both fields absent.
 ///
 /// Shared by [`PodRun::build_pod`] and [`JobRun::build_job`](crate::job_run::JobRun::build_job).
 pub(crate) fn build_pvc_volumes(pvcs: &[PvcMount]) -> (Vec<Volume>, Vec<VolumeMount>) {
-    let mut volumes = Vec::with_capacity(pvcs.len());
+    let mut volumes: Vec<Volume> = Vec::new();
+    let mut claim_names: BTreeMap<&str, String> = BTreeMap::new();
     let mut mounts = Vec::with_capacity(pvcs.len());
-    for (index, pvc) in pvcs.iter().enumerate() {
-        let name = volume_name(index);
+    for pvc in pvcs {
+        let name = match claim_names.get(pvc.claim.as_str()) {
+            Some(existing) => existing.clone(),
+            None => {
+                let name = volume_name(volumes.len());
+                volumes.push(Volume {
+                    name: name.clone(),
+                    persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                        claim_name: pvc.claim.clone(),
+                        read_only: None,
+                    }),
+                    ..Default::default()
+                });
+                claim_names.insert(pvc.claim.as_str(), name.clone());
+                name
+            }
+        };
         mounts.push(VolumeMount {
-            name: name.clone(),
-            mount_path: pvc.mount_path.clone(),
-            ..Default::default()
-        });
-        volumes.push(Volume {
             name,
-            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                claim_name: pvc.claim.clone(),
-                read_only: None,
-            }),
+            mount_path: pvc.mount_path.clone(),
+            sub_path: pvc.sub_path.clone(),
+            read_only: pvc.read_only.then_some(true),
             ..Default::default()
         });
     }
