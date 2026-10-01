@@ -9,6 +9,9 @@
 //!   settings presets, egress profile label, Claude profile ConfigMaps in
 //!   [`profile`]), cleanup of a previous attempt's pods on retry and of a
 //!   run's pods before it executes again, and an orphan reaper ([`reap_orphans`]).
+//!   [`K8sEphemeralProvider::auth_proxy`] routes Claude traffic through an
+//!   `ironflow-auth-proxy`: the pod gets an opaque per-step token instead of
+//!   the Claude credential.
 //! * [`K8sPersistentProvider`] - reuses a long-running worker pod and executes
 //!   commands via the Kubernetes exec API. Lower latency but shared state between
 //!   invocations.

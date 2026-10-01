@@ -29,6 +29,7 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::env::var;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -44,6 +45,11 @@ use tokio::time;
 
 use tracing::{debug, info, warn};
 
+use crate::account::ClaudeSubscriptionKind;
+use crate::auth_proxy::{
+    ADMIN_KEY_ENV, AuthProxyClient, AuthProxyError, IssuedToken, POD_BASE_URL_ENV, POD_TOKEN_ENV,
+    TokenRequest, resolve_credential,
+};
 use crate::error::AgentError;
 use crate::provider::{
     AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT,
@@ -53,6 +59,7 @@ use crate::provider::{
 };
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
+use crate::providers::claude::rate_limit_event;
 
 use super::cleanup::{delete_and_wait, release_run, step_selection};
 use super::common::{
@@ -69,6 +76,51 @@ const CREDENTIALS_ENV_VAR: &str = "IRONFLOW_CLAUDE_CREDENTIALS";
 
 /// Environment variables a sandboxed provider refuses as plain values.
 const PLAIN_TEXT_SECRETS: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+/// Environment variables the pod must not receive when the auth proxy is set.
+const PROXY_FORBIDDEN_ENV: [&str; 5] = [
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    POD_TOKEN_ENV,
+    POD_BASE_URL_ENV,
+    CREDENTIALS_ENV_VAR,
+];
+
+/// Turns off the non-essential traffic of Claude Code (telemetry, updates):
+/// behind the auth proxy only the Messages API is reachable.
+const NONESSENTIAL_TRAFFIC_ENV: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
+
+/// The error raised when the pod would receive `name` while the auth proxy
+/// is set. Names the variable, never its value.
+fn proxy_forbidden(name: &str) -> AgentError {
+    AgentError::ProcessFailed {
+        exit_code: -1,
+        stderr: format!(
+            "auth_proxy is set: the pod must not receive {name}; the proxy injects the credential"
+        ),
+    }
+}
+
+/// An auth proxy failure, as the error of the invocation.
+fn auth_proxy_error(e: AuthProxyError) -> AgentError {
+    AgentError::ProcessFailed {
+        exit_code: -1,
+        stderr: format!("auth proxy: {e}"),
+    }
+}
+
+/// Delete the prompt ConfigMap of a pod that will not be created.
+async fn abort_launch_configmap(configmaps: &Api<ConfigMap>, name: Option<&str>) {
+    if let Some(name) = name
+        && let Err(e) = configmaps.delete(name, &DeleteParams::default()).await
+    {
+        warn!(
+            configmap = %name,
+            error = %e,
+            "failed to delete the prompt ConfigMap of an aborted pod"
+        );
+    }
+}
 
 /// Label selector matching every pod and Job created by ironflow: agent pods,
 /// `PodRun` and `JobRun` of `ironflow-ops-k8s`.
@@ -167,6 +219,8 @@ pub struct K8sEphemeralProvider {
     pub(super) claude_profiles: Vec<ClaudeProfile>,
     egress_profile: Option<String>,
     previous_attempt_timeout: Duration,
+    auth_proxy_url: Option<String>,
+    auth_proxy_admin_key: Option<String>,
 }
 
 /// Apply a Kubernetes `activeDeadlineSeconds` onto a built pod, in whole seconds.
@@ -213,6 +267,8 @@ impl K8sEphemeralProvider {
             claude_profiles: Vec::new(),
             egress_profile: None,
             previous_attempt_timeout: Duration::from_secs(60),
+            auth_proxy_url: None,
+            auth_proxy_admin_key: None,
         }
     }
 
@@ -522,6 +578,62 @@ impl K8sEphemeralProvider {
         self
     }
 
+    /// Route Claude traffic through an `ironflow-auth-proxy` at `url`: the pod
+    /// never receives a Claude credential.
+    ///
+    /// At pod launch the worker asks the proxy for an opaque token bound to
+    /// the run, the step and the pod expiry (`ironflow.io/expires-at`), and
+    /// the pod receives `ANTHROPIC_BASE_URL=<url>`, `ANTHROPIC_AUTH_TOKEN=<opaque
+    /// token>` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. The proxy swaps
+    /// the opaque token for the real credential. The token is revoked at the
+    /// end of the step, and every token of a run when the run is released.
+    ///
+    /// The credential is the step's Provider Account, else the worker
+    /// environment (`CLAUDE_CODE_OAUTH_TOKEN`, then `ANTHROPIC_API_KEY`). The
+    /// admin key is read from `IRONFLOW_AUTH_PROXY_ADMIN_KEY` unless
+    /// [`auth_proxy_admin_key`](Self::auth_proxy_admin_key) sets it. Any Claude
+    /// credential set on the provider or the step for the pod
+    /// ([`oauth_token_from_secret`](Self::oauth_token_from_secret),
+    /// [`oauth_credentials`](Self::oauth_credentials), ...) fails the invocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `url` does not start with `http://` or `https://`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .auth_proxy("http://ironflow-auth-proxy.ironflow-system");
+    /// ```
+    pub fn auth_proxy(mut self, url: &str) -> Self {
+        assert!(
+            url.starts_with("http://") || url.starts_with("https://"),
+            "auth_proxy url must start with http:// or https://"
+        );
+        self.auth_proxy_url = Some(url.trim_end_matches('/').to_string());
+        self
+    }
+
+    /// Set the admin key of the auth proxy instead of reading
+    /// `IRONFLOW_AUTH_PROXY_ADMIN_KEY` from the worker environment.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .auth_proxy("http://ironflow-auth-proxy.ironflow-system")
+    ///     .auth_proxy_admin_key("0123456789abcdef0123456789abcdef");
+    /// ```
+    pub fn auth_proxy_admin_key(mut self, key: &str) -> Self {
+        self.auth_proxy_admin_key = Some(key.to_string());
+        self
+    }
+
     /// Set the Kubernetes namespace (default: `"default"`).
     pub fn namespace(mut self, ns: &str) -> Self {
         self.namespace = ns.to_string();
@@ -810,6 +922,8 @@ struct CreatedPod {
     start: Instant,
     prompt_configmap: Option<String>,
     configmaps: Option<Api<ConfigMap>>,
+    /// Id of the auth proxy token issued for the pod, revoked at the end of the step.
+    proxy_token_id: Option<String>,
 }
 
 /// Pod inputs merged from the provider defaults and the step's [`AgentConfig`].
@@ -830,11 +944,15 @@ impl K8sEphemeralProvider {
     /// # Errors
     ///
     /// Returns [`AgentError::ProcessFailed`] when a sandboxed provider carries
-    /// a secret as plain text, or when the managed-settings preset is unknown.
+    /// a secret as plain text, when the auth proxy is set and the pod would
+    /// receive a Claude credential, or when the managed-settings preset is unknown.
     fn merged_pod_inputs<'a>(
         &'a self,
         config: &AgentConfig,
     ) -> Result<MergedPodInputs<'a>, AgentError> {
+        if self.auth_proxy_url.is_some() {
+            self.check_no_proxy_credential()?;
+        }
         if self.sandbox.is_some() {
             if self.oauth_credentials.is_some() {
                 return Err(AgentError::ProcessFailed {
@@ -866,6 +984,13 @@ impl K8sEphemeralProvider {
         }
         for entry in &config.pod.secret_env {
             upsert_secret_env(&mut secret_env, entry.clone());
+        }
+        if self.auth_proxy_url.is_some()
+            && let Some(entry) = secret_env
+                .iter()
+                .find(|s| PROXY_FORBIDDEN_ENV.contains(&s.name.as_str()))
+        {
+            return Err(proxy_forbidden(&entry.name));
         }
 
         let service_account = config
@@ -931,6 +1056,78 @@ impl K8sEphemeralProvider {
             managed_settings_configmap,
             labels,
         })
+    }
+
+    /// Refuse every Claude credential the provider would hand to the pod
+    /// itself while the auth proxy is set.
+    fn check_no_proxy_credential(&self) -> Result<(), AgentError> {
+        if self.oauth_credentials.is_some() {
+            return Err(proxy_forbidden("oauth_credentials"));
+        }
+        if self.oauth_credentials_secret.is_some() {
+            return Err(proxy_forbidden(CREDENTIALS_ENV_VAR));
+        }
+        let forbidden = self.env_vars.iter().find(|(key, value)| {
+            PROXY_FORBIDDEN_ENV.contains(&key.as_str()) || value.starts_with("sk-ant")
+        });
+        match forbidden {
+            Some((key, _)) => Err(proxy_forbidden(key)),
+            None => Ok(()),
+        }
+    }
+
+    /// Plain environment variables of the pod: the provider's, plus the proxy
+    /// URL and the opaque token when the auth proxy is set and a token was issued.
+    fn pod_env_vars(&self, proxy_token: Option<&str>) -> Vec<(String, String)> {
+        let mut env = self.env_vars.clone();
+        if let (Some(url), Some(token)) = (&self.auth_proxy_url, proxy_token) {
+            env.push((POD_BASE_URL_ENV.to_string(), url.clone()));
+            env.push((POD_TOKEN_ENV.to_string(), token.to_string()));
+            env.push((NONESSENTIAL_TRAFFIC_ENV.to_string(), "1".to_string()));
+        }
+        env
+    }
+
+    /// Admin client of the auth proxy, `None` when no proxy is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::ProcessFailed`] when the proxy is set but no
+    /// admin key is available.
+    fn auth_proxy_client(&self) -> Result<Option<AuthProxyClient>, AgentError> {
+        let Some(url) = &self.auth_proxy_url else {
+            return Ok(None);
+        };
+        let key = self
+            .auth_proxy_admin_key
+            .clone()
+            .or_else(|| var(ADMIN_KEY_ENV).ok().filter(|key| !key.is_empty()))
+            .ok_or_else(|| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("auth_proxy requires {ADMIN_KEY_ENV}"),
+            })?;
+        Ok(Some(AuthProxyClient::new(url, &key)))
+    }
+
+    /// Revoke the opaque token of a step, best effort: its expiry is the backstop.
+    async fn revoke_proxy_token(&self, id: Option<&str>) {
+        let Some(id) = id else {
+            return;
+        };
+        let short = id.get(..12).unwrap_or(id);
+        let result = match self.auth_proxy_client() {
+            Ok(Some(client)) => client.revoke(id).await.map_err(|e| e.to_string()),
+            Ok(None) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        };
+        match result {
+            Ok(()) => debug!(token = %short, "auth proxy token revoked"),
+            Err(e) => warn!(
+                token = %short,
+                error = %e,
+                "auth proxy token revocation failed; it expires at expires-at"
+            ),
+        }
     }
 
     /// Shell prefix filling `~/.claude`: the profiles, then the credentials,
@@ -1179,6 +1376,19 @@ impl K8sEphemeralProvider {
             "creating ephemeral K8s pod"
         );
 
+        let issued = match self
+            .issue_proxy_token(config, run_id, step, &pod_name, expires_at)
+            .await
+        {
+            Ok(issued) => issued,
+            Err(e) => {
+                abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
+                return Err(e);
+            }
+        };
+        let env_vars = self.pod_env_vars(issued.as_ref().map(|t| t.token.as_str()));
+        let proxy_token_id = issued.map(|t| t.id);
+
         let pod_spec = build_pod_spec(&PodConfig {
             name: &pod_name,
             image: &self.image,
@@ -1188,7 +1398,7 @@ impl K8sEphemeralProvider {
             service_account: merged.service_account.as_deref(),
             restart_policy: "Never",
             image_pull_policy: &self.image_pull_policy,
-            env_vars: &self.env_vars,
+            env_vars: &env_vars,
             image_pull_secrets: &self.image_pull_secrets,
             extra_labels: &merged.labels,
             node_selector: &self.node_selector,
@@ -1208,19 +1418,28 @@ impl K8sEphemeralProvider {
                 claude_profiles: &self.claude_profiles,
                 annotations: Some(&annotations),
             },
-        })?;
+        });
 
-        // Applied after build_pod_spec: the shared PodConfig builder does not
-        // carry this field, so it is set on the built pod here.
-        let mut pod_spec = pod_spec;
-        apply_active_deadline_seconds(&mut pod_spec, self.effective_deadline());
-
-        pods.create(&PostParams::default(), &pod_spec)
-            .await
-            .map_err(|e| AgentError::ProcessFailed {
-                exit_code: -1,
-                stderr: format!("failed to create K8s pod: {e}"),
-            })?;
+        let created = match pod_spec {
+            Ok(mut pod_spec) => {
+                // Applied after build_pod_spec: the shared PodConfig builder does not
+                // carry this field, so it is set on the built pod here.
+                apply_active_deadline_seconds(&mut pod_spec, self.effective_deadline());
+                pods.create(&PostParams::default(), &pod_spec)
+                    .await
+                    .map_err(|e| AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: format!("failed to create K8s pod: {e}"),
+                    })
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = created {
+            // No pod runs with the token: drop it now rather than at expiry.
+            self.revoke_proxy_token(proxy_token_id.as_deref()).await;
+            abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
+            return Err(e);
+        }
 
         Ok(CreatedPod {
             pods,
@@ -1228,7 +1447,47 @@ impl K8sEphemeralProvider {
             start,
             prompt_configmap: prompt_configmap_name,
             configmaps: Some(configmaps),
+            proxy_token_id,
         })
+    }
+
+    /// Issue the auth proxy token of a pod, `None` when no proxy is set.
+    ///
+    /// The token is bound to the run and step labels (the pod name and
+    /// `agent` for an invocation outside a run) and expires with the pod.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::ProcessFailed`] when no admin key or credential
+    /// is available, or when the proxy refuses or cannot be reached.
+    async fn issue_proxy_token(
+        &self,
+        config: &AgentConfig,
+        run_id: Option<&String>,
+        step: Option<&String>,
+        pod_name: &str,
+        expires_at: u64,
+    ) -> Result<Option<IssuedToken>, AgentError> {
+        let Some(client) = self.auth_proxy_client()? else {
+            return Ok(None);
+        };
+        let credential = resolve_credential(config.account.as_ref(), |k| var(k).ok());
+        let credential = credential.map_err(auth_proxy_error)?;
+        let request = TokenRequest {
+            run_id: run_id.map_or_else(|| pod_name.to_string(), String::clone),
+            step: step.map_or_else(|| "agent".to_string(), String::clone),
+            expires_at,
+            credential,
+        };
+        let issued = client.issue(&request).await.map_err(auth_proxy_error)?;
+        info!(
+            token = %issued.short_id(),
+            pod = %pod_name,
+            run_id = %request.run_id,
+            step = %request.step,
+            "auth proxy token issued"
+        );
+        Ok(Some(issued))
     }
 
     /// Read pod phase after completion, delete the pod, and parse the output.
@@ -1241,6 +1500,8 @@ impl K8sEphemeralProvider {
         config: &AgentConfig,
         start: Instant,
     ) -> Result<AgentOutput, AgentError> {
+        rate_limit_event::record_rate_limits(config, logs);
+
         if timed_out {
             warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out");
             return Err(AgentError::Timeout {
@@ -1267,68 +1528,290 @@ impl K8sEphemeralProvider {
     }
 }
 
+impl K8sEphemeralProvider {
+    /// Wait for a created pod to complete, read its logs, delete it and
+    /// parse the output.
+    async fn run_created(
+        &self,
+        config: &AgentConfig,
+        created: &CreatedPod,
+    ) -> Result<AgentOutput, AgentError> {
+        let CreatedPod {
+            pods,
+            pod_name,
+            start,
+            prompt_configmap,
+            configmaps,
+            ..
+        } = created;
+
+        // Wait for pod to complete
+        let wait_result = time::timeout(
+            self.timeout,
+            await_condition(pods.clone(), pod_name, is_pod_completed()),
+        )
+        .await;
+
+        let timed_out = wait_result.is_err();
+        let pod_phase = if timed_out {
+            "TimedOut".to_string()
+        } else {
+            let condition_result = wait_result.expect("timeout already handled").map_err(|e| {
+                AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed waiting for pod completion: {e}"),
+                }
+            })?;
+            condition_result
+                .and_then(|p| p.status)
+                .and_then(|s| s.phase)
+                .unwrap_or_else(|| "Unknown".to_string())
+        };
+
+        let logs = pods
+            .logs(pod_name, &LogParams::default())
+            .await
+            .unwrap_or_default();
+
+        let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+        if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+            let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+        }
+
+        self.finalize_pod(&logs, &pod_phase, timed_out, pod_name, config, *start)
+    }
+
+    /// Stream the logs of a created pod into `log_sink` until it completes,
+    /// delete it and parse the output.
+    async fn run_created_with_logs(
+        &self,
+        config: &AgentConfig,
+        created: &CreatedPod,
+        log_sink: Arc<dyn LogSink>,
+    ) -> Result<AgentOutput, AgentError> {
+        let CreatedPod {
+            pods,
+            pod_name,
+            start,
+            prompt_configmap,
+            configmaps,
+            ..
+        } = created;
+
+        let ready_result = time::timeout(
+            self.timeout,
+            await_condition(pods.clone(), pod_name, is_pod_running_or_terminal()),
+        )
+        .await;
+
+        if let Err(_elapsed) = ready_result {
+            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+            }
+            warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out waiting for Running");
+            return Err(AgentError::Timeout {
+                limit: self.timeout,
+            });
+        }
+
+        if let Err(e) = ready_result.expect("timeout already handled") {
+            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+            }
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed waiting for pod to start: {e}"),
+            });
+        }
+
+        let phase_after_ready = pods
+            .get(pod_name)
+            .await
+            .ok()
+            .and_then(|p| p.status)
+            .and_then(|s| s.phase);
+        let already_terminal = phase_after_ready.as_deref().is_some_and(is_terminal_phase);
+
+        let mut accumulated = String::new();
+        let mut timed_out = false;
+
+        if already_terminal {
+            debug!(pod = %pod_name, phase = ?phase_after_ready, "pod already terminal, skipping log stream");
+            accumulated = pods
+                .logs(pod_name, &LogParams::default())
+                .await
+                .unwrap_or_default();
+            for line in accumulated.lines() {
+                log_sink.log("stdout", line);
+            }
+        } else {
+            let log_params = LogParams {
+                follow: true,
+                ..Default::default()
+            };
+
+            const MAX_ACCUMULATED_BYTES: usize = 50 * 1024 * 1024;
+            let mut truncated = false;
+
+            let completion_notify = Arc::new(tokio::sync::Notify::new());
+
+            let watcher_handle = {
+                let pods = pods.clone();
+                let pod_name = pod_name.to_string();
+                let notify = completion_notify.clone();
+                tokio::spawn(async move {
+                    let _ = await_condition(pods, &pod_name, is_pod_completed()).await;
+                    notify.notify_waiters();
+                })
+            };
+
+            let stream_result = time::timeout(
+                self.timeout,
+                async {
+                    match pods.log_stream(pod_name, &log_params).await {
+                        Ok(stream) => {
+                            let mut lines = stream.lines();
+                            loop {
+                                tokio::select! {
+                                    line_result = lines.try_next() => {
+                                        match line_result {
+                                            Ok(Some(line)) => {
+                                                log_sink.log("stdout", &line);
+                                                if !truncated {
+                                                    if accumulated.len() + line.len() + 1
+                                                        > MAX_ACCUMULATED_BYTES
+                                                    {
+                                                        truncated = true;
+                                                        warn!(pod = %pod_name, "log accumulation cap reached, further output will only be streamed");
+                                                    } else {
+                                                        accumulated.push_str(&line);
+                                                        accumulated.push('\n');
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => break,
+                                            Err(_) => break,
+                                        }
+                                    }
+                                    _ = completion_notify.notified() => {
+                                        debug!(pod = %pod_name, "pod completed, draining remaining log lines");
+                                        while let Ok(Some(line)) = time::timeout(
+                                            Duration::from_secs(2),
+                                            lines.try_next(),
+                                        ).await.unwrap_or(Ok(None)) {
+                                            log_sink.log("stdout", &line);
+                                            if !truncated {
+                                                if accumulated.len() + line.len() + 1
+                                                    > MAX_ACCUMULATED_BYTES
+                                                {
+                                                    truncated = true;
+                                                } else {
+                                                    accumulated.push_str(&line);
+                                                    accumulated.push('\n');
+                                                }
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                },
+            )
+            .await;
+
+            watcher_handle.abort();
+            timed_out = stream_result.is_err();
+            if let Ok(Err(e)) = stream_result {
+                warn!(pod = %pod_name, error = %e, "failed to open log stream, falling back to batch read");
+                let _ = time::timeout(
+                    self.timeout,
+                    await_condition(pods.clone(), pod_name, is_pod_completed()),
+                )
+                .await;
+
+                accumulated = pods
+                    .logs(pod_name, &LogParams::default())
+                    .await
+                    .unwrap_or_default();
+                for line in accumulated.lines() {
+                    log_sink.log("stdout", line);
+                }
+            }
+        }
+
+        let pod_phase = if already_terminal {
+            phase_after_ready.unwrap_or_else(|| "Unknown".to_string())
+        } else {
+            match pods.get(pod_name).await {
+                Ok(pod) => pod
+                    .status
+                    .and_then(|s| s.phase)
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                Err(_) => "Unknown".to_string(),
+            }
+        };
+
+        let _ = pods.delete(pod_name, &DeleteParams::default()).await;
+        if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
+            let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
+        }
+
+        self.finalize_pod(
+            &accumulated,
+            &pod_phase,
+            timed_out,
+            pod_name,
+            config,
+            *start,
+        )
+    }
+}
+
 impl AgentProvider for K8sEphemeralProvider {
     /// Delete every pod, `JobRun` Job and prompt ConfigMap labelled with the
     /// run (`ironflow.io/run-id`) or with the run as the root of a
     /// sub-workflow (`ironflow.io/root-run-id`), and wait up to
     /// [`previous_attempt_timeout`](Self::previous_attempt_timeout) until the
-    /// pods are gone.
+    /// pods are gone. With an auth proxy, every token of the run is revoked
+    /// too, best effort.
     fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
         let limit = self.previous_attempt_timeout;
-        Box::pin(release_run(
-            &self.cluster_config,
-            &self.namespace,
-            run_id,
-            limit,
-        ))
+        Box::pin(async move {
+            let cleanup = release_run(&self.cluster_config, &self.namespace, run_id, limit).await;
+            if let Ok(Some(client)) = self.auth_proxy_client()
+                && let Err(e) = client.revoke_run(run_id).await
+            {
+                warn!(
+                    run_id = %run_id,
+                    error = %e,
+                    "auth proxy token revocation of the run failed; they expire on their own"
+                );
+            }
+            cleanup
+        })
+    }
+
+    /// Provider Accounts are injected only through the auth proxy: without
+    /// it, the pod credential comes from the provider settings.
+    fn account_kind(&self) -> Option<&'static str> {
+        self.auth_proxy_url
+            .as_ref()
+            .map(|_| ClaudeSubscriptionKind::ID)
     }
 
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             let created = self.create_pod(config).await?;
-            let CreatedPod {
-                pods,
-                pod_name,
-                start,
-                prompt_configmap,
-                configmaps,
-            } = &created;
-
-            // Wait for pod to complete
-            let wait_result = time::timeout(
-                self.timeout,
-                await_condition(pods.clone(), pod_name, is_pod_completed()),
-            )
-            .await;
-
-            let timed_out = wait_result.is_err();
-            let pod_phase = if timed_out {
-                "TimedOut".to_string()
-            } else {
-                let condition_result =
-                    wait_result.expect("timeout already handled").map_err(|e| {
-                        AgentError::ProcessFailed {
-                            exit_code: -1,
-                            stderr: format!("failed waiting for pod completion: {e}"),
-                        }
-                    })?;
-                condition_result
-                    .and_then(|p| p.status)
-                    .and_then(|s| s.phase)
-                    .unwrap_or_else(|| "Unknown".to_string())
-            };
-
-            let logs = pods
-                .logs(pod_name, &LogParams::default())
-                .await
-                .unwrap_or_default();
-
-            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-            }
-
-            self.finalize_pod(&logs, &pod_phase, timed_out, pod_name, config, *start)
+            let result = self.run_created(config, &created).await;
+            self.revoke_proxy_token(created.proxy_token_id.as_deref())
+                .await;
+            result
         })
     }
 
@@ -1348,186 +1831,10 @@ impl AgentProvider for K8sEphemeralProvider {
             };
 
             let created = self.create_pod(config).await?;
-            let CreatedPod {
-                pods,
-                pod_name,
-                start,
-                prompt_configmap,
-                configmaps,
-            } = &created;
-
-            let ready_result = time::timeout(
-                self.timeout,
-                await_condition(pods.clone(), pod_name, is_pod_running_or_terminal()),
-            )
-            .await;
-
-            if let Err(_elapsed) = ready_result {
-                let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-                if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-                    let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-                }
-                warn!(timeout = ?self.timeout, pod = %pod_name, "K8s pod timed out waiting for Running");
-                return Err(AgentError::Timeout {
-                    limit: self.timeout,
-                });
-            }
-
-            if let Err(e) = ready_result.expect("timeout already handled") {
-                let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-                if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-                    let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-                }
-                return Err(AgentError::ProcessFailed {
-                    exit_code: -1,
-                    stderr: format!("failed waiting for pod to start: {e}"),
-                });
-            }
-
-            let phase_after_ready = pods
-                .get(pod_name)
-                .await
-                .ok()
-                .and_then(|p| p.status)
-                .and_then(|s| s.phase);
-            let already_terminal = phase_after_ready.as_deref().is_some_and(is_terminal_phase);
-
-            let mut accumulated = String::new();
-            let mut timed_out = false;
-
-            if already_terminal {
-                debug!(pod = %pod_name, phase = ?phase_after_ready, "pod already terminal, skipping log stream");
-                accumulated = pods
-                    .logs(pod_name, &LogParams::default())
-                    .await
-                    .unwrap_or_default();
-                for line in accumulated.lines() {
-                    log_sink.log("stdout", line);
-                }
-            } else {
-                let log_params = LogParams {
-                    follow: true,
-                    ..Default::default()
-                };
-
-                const MAX_ACCUMULATED_BYTES: usize = 50 * 1024 * 1024;
-                let mut truncated = false;
-
-                let completion_notify = Arc::new(tokio::sync::Notify::new());
-
-                let watcher_handle = {
-                    let pods = pods.clone();
-                    let pod_name = pod_name.to_string();
-                    let notify = completion_notify.clone();
-                    tokio::spawn(async move {
-                        let _ = await_condition(pods, &pod_name, is_pod_completed()).await;
-                        notify.notify_waiters();
-                    })
-                };
-
-                let stream_result = time::timeout(
-                    self.timeout,
-                    async {
-                        match pods.log_stream(pod_name, &log_params).await {
-                            Ok(stream) => {
-                                let mut lines = stream.lines();
-                                loop {
-                                    tokio::select! {
-                                        line_result = lines.try_next() => {
-                                            match line_result {
-                                                Ok(Some(line)) => {
-                                                    log_sink.log("stdout", &line);
-                                                    if !truncated {
-                                                        if accumulated.len() + line.len() + 1
-                                                            > MAX_ACCUMULATED_BYTES
-                                                        {
-                                                            truncated = true;
-                                                            warn!(pod = %pod_name, "log accumulation cap reached, further output will only be streamed");
-                                                        } else {
-                                                            accumulated.push_str(&line);
-                                                            accumulated.push('\n');
-                                                        }
-                                                    }
-                                                }
-                                                Ok(None) => break,
-                                                Err(_) => break,
-                                            }
-                                        }
-                                        _ = completion_notify.notified() => {
-                                            debug!(pod = %pod_name, "pod completed, draining remaining log lines");
-                                            while let Ok(Some(line)) = time::timeout(
-                                                Duration::from_secs(2),
-                                                lines.try_next(),
-                                            ).await.unwrap_or(Ok(None)) {
-                                                log_sink.log("stdout", &line);
-                                                if !truncated {
-                                                    if accumulated.len() + line.len() + 1
-                                                        > MAX_ACCUMULATED_BYTES
-                                                    {
-                                                        truncated = true;
-                                                    } else {
-                                                        accumulated.push_str(&line);
-                                                        accumulated.push('\n');
-                                                    }
-                                                }
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                Ok(())
-                            }
-                            Err(e) => Err(e),
-                        }
-                    },
-                )
+            let result = self.run_created_with_logs(config, &created, log_sink).await;
+            self.revoke_proxy_token(created.proxy_token_id.as_deref())
                 .await;
-
-                watcher_handle.abort();
-                timed_out = stream_result.is_err();
-                if let Ok(Err(e)) = stream_result {
-                    warn!(pod = %pod_name, error = %e, "failed to open log stream, falling back to batch read");
-                    let _ = time::timeout(
-                        self.timeout,
-                        await_condition(pods.clone(), pod_name, is_pod_completed()),
-                    )
-                    .await;
-
-                    accumulated = pods
-                        .logs(pod_name, &LogParams::default())
-                        .await
-                        .unwrap_or_default();
-                    for line in accumulated.lines() {
-                        log_sink.log("stdout", line);
-                    }
-                }
-            }
-
-            let pod_phase = if already_terminal {
-                phase_after_ready.unwrap_or_else(|| "Unknown".to_string())
-            } else {
-                match pods.get(pod_name).await {
-                    Ok(pod) => pod
-                        .status
-                        .and_then(|s| s.phase)
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    Err(_) => "Unknown".to_string(),
-                }
-            };
-
-            let _ = pods.delete(pod_name, &DeleteParams::default()).await;
-            if let (Some(cm_name), Some(cm_api)) = (prompt_configmap, configmaps) {
-                let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
-            }
-
-            self.finalize_pod(
-                &accumulated,
-                &pod_phase,
-                timed_out,
-                pod_name,
-                config,
-                *start,
-            )
+            result
         })
     }
 }
@@ -1537,7 +1844,7 @@ mod label_tests;
 
 #[cfg(test)]
 mod tests {
-    use serde_json::to_value;
+    use serde_json::{Value, to_value};
 
     use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
@@ -2126,5 +2433,209 @@ mod tests {
     #[should_panic(expected = "orphan reaper interval must be greater than zero")]
     fn spawn_orphan_reaper_zero_interval_panics() {
         drop(K8sEphemeralProvider::sandboxed("img:v1").spawn_orphan_reaper(Duration::ZERO));
+    }
+
+    // ── Auth proxy ──────────────────────────────────────────────────
+
+    const PROXY_URL: &str = "http://ironflow-auth-proxy.ironflow-system";
+
+    fn proxied() -> K8sEphemeralProvider {
+        K8sEphemeralProvider::sandboxed("img:v1").auth_proxy(PROXY_URL)
+    }
+
+    /// The env entries of the agent container, as built for a real pod.
+    fn pod_env(
+        provider: &K8sEphemeralProvider,
+        config: &AgentConfig,
+        token: Option<&str>,
+    ) -> Vec<Value> {
+        let merged = merge(provider, config);
+        let env_vars = provider.pod_env_vars(token);
+        let pod = build_pod_spec(&PodConfig {
+            name: "claude-code-test",
+            image: &provider.image,
+            command: vec!["sh".to_string()],
+            namespace: &provider.namespace,
+            resources: &provider.resources,
+            service_account: merged.service_account.as_deref(),
+            restart_policy: "Never",
+            image_pull_policy: &provider.image_pull_policy,
+            env_vars: &env_vars,
+            image_pull_secrets: &provider.image_pull_secrets,
+            extra_labels: &merged.labels,
+            node_selector: &provider.node_selector,
+            tolerations: &provider.tolerations,
+            volumes: &provider.volumes,
+            pvc_volumes: &provider.pvc_volumes,
+            inputs: &config.inputs,
+            input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+            prompt_configmap: None,
+            prompt_mount_path: PROMPT_MOUNT_PATH,
+            hardening: PodHardening {
+                sandbox: provider.sandbox.as_ref(),
+                secret_env: &merged.secret_env,
+                read_only_volumes: &merged.read_only_volumes,
+                step_pvc_volumes: &config.pod.pvc_volumes,
+                managed_settings_configmap: None,
+                claude_profiles: &provider.claude_profiles,
+                annotations: None,
+            },
+        })
+        .unwrap();
+        let pod = to_value(&pod).unwrap();
+        pod["spec"]["containers"][0]["env"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn env_value<'a>(env: &'a [Value], name: &str) -> Option<&'a str> {
+        env.iter()
+            .find(|entry| entry["name"] == name)
+            .and_then(|entry| entry["value"].as_str())
+    }
+
+    #[test]
+    fn auth_proxy_builder_sets_url_and_trims_slash() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .auth_proxy("http://ironflow-auth-proxy.ironflow-system/")
+            .auth_proxy_admin_key("0123456789abcdef0123456789abcdef");
+        assert_eq!(provider.auth_proxy_url.as_deref(), Some(PROXY_URL));
+        assert_eq!(
+            provider.auth_proxy_admin_key.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert!(provider.auth_proxy_client().unwrap().is_some());
+
+        let https = K8sEphemeralProvider::new("img:v1").auth_proxy("https://proxy");
+        assert_eq!(https.auth_proxy_url.as_deref(), Some("https://proxy"));
+    }
+
+    #[test]
+    #[should_panic(expected = "auth_proxy url must start with http:// or https://")]
+    fn auth_proxy_invalid_url_panics() {
+        let _ = K8sEphemeralProvider::sandboxed("img:v1").auth_proxy("ironflow-auth-proxy:80");
+    }
+
+    #[test]
+    fn auth_proxy_client_is_none_without_proxy() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").auth_proxy_admin_key("k");
+        assert!(provider.auth_proxy_client().unwrap().is_none());
+    }
+
+    #[test]
+    fn auth_proxy_rejects_oauth_token_from_secret() {
+        let provider = proxied().oauth_token_from_secret("claude-oauth", "token");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("auth_proxy is set"), "{err}");
+        assert!(err.contains("CLAUDE_CODE_OAUTH_TOKEN"), "{err}");
+    }
+
+    #[test]
+    fn auth_proxy_rejects_step_secret_env_oauth_token() {
+        let config = AgentConfig::new("hi").env_from_secret("CLAUDE_CODE_OAUTH_TOKEN", "o", "k");
+        let err = err_text(proxied().merged_pod_inputs(&config));
+        assert!(err.contains("CLAUDE_CODE_OAUTH_TOKEN"), "{err}");
+
+        let config = AgentConfig::new("hi").env_from_secret("ANTHROPIC_API_KEY", "anthropic", "k");
+        let err = err_text(proxied().merged_pod_inputs(&config));
+        assert!(err.contains("ANTHROPIC_API_KEY"), "{err}");
+    }
+
+    #[test]
+    fn auth_proxy_rejects_inline_oauth_credentials() {
+        let json = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}"#;
+        let provider = proxied().oauth_credentials(json);
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("auth_proxy is set"), "{err}");
+        assert!(!err.contains("sk-ant"), "{err}");
+
+        let provider = proxied().oauth_credentials_from_secret("claude-credentials", "creds");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains(CREDENTIALS_ENV_VAR), "{err}");
+
+        // Not sandboxed: still refused.
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .auth_proxy(PROXY_URL)
+            .oauth_credentials("{}");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("auth_proxy is set"), "{err}");
+    }
+
+    #[test]
+    fn auth_proxy_rejects_sk_ant_plain_value() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .auth_proxy(PROXY_URL)
+            .env("SOME_VAR", "sk-ant-oat01-leak");
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("SOME_VAR"), "{err}");
+        assert!(!err.contains("sk-ant-oat01-leak"), "{err}");
+
+        for name in ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] {
+            let provider = proxied().env(name, "x");
+            let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+            assert!(err.contains(name), "{err}");
+        }
+    }
+
+    #[test]
+    fn auth_proxy_pod_env_has_base_url_and_opaque_token_only() {
+        let provider = proxied().env("TEAM", "infra");
+        let config = AgentConfig::new("hi").run_scope("run-1", "review");
+        let env = pod_env(&provider, &config, Some("ifap_x"));
+
+        assert_eq!(env_value(&env, "ANTHROPIC_BASE_URL"), Some(PROXY_URL));
+        assert_eq!(env_value(&env, "ANTHROPIC_AUTH_TOKEN"), Some("ifap_x"));
+        assert_eq!(
+            env_value(&env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"),
+            Some("1")
+        );
+        assert_eq!(env_value(&env, "TEAM"), Some("infra"));
+        assert!(
+            env.iter().all(|entry| entry.get("valueFrom").is_none()),
+            "no secretKeyRef expected: {env:?}"
+        );
+        for name in ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] {
+            assert!(
+                env_value(&env, name).is_none_or(str::is_empty),
+                "{name} must not carry a value: {env:?}"
+            );
+        }
+        let rendered = Value::Array(env).to_string();
+        assert!(!rendered.contains("sk-ant"), "{rendered}");
+    }
+
+    #[test]
+    fn auth_proxy_account_kind_is_subscription_only_with_proxy() {
+        assert_eq!(proxied().account_kind(), Some(ClaudeSubscriptionKind::ID));
+        assert_eq!(
+            K8sEphemeralProvider::sandboxed("img:v1").account_kind(),
+            None
+        );
+        assert_eq!(K8sEphemeralProvider::new("img:v1").account_kind(), None);
+    }
+
+    #[test]
+    fn non_proxy_pod_env_unchanged() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1")
+            .env("TEAM", "infra")
+            .oauth_token_from_secret("claude-oauth", "token");
+        assert_eq!(
+            provider.pod_env_vars(Some("ifap_x")),
+            vec![("TEAM".to_string(), "infra".to_string())]
+        );
+        assert_eq!(proxied().pod_env_vars(None), Vec::new());
+
+        let env = pod_env(&provider, &AgentConfig::new("hi"), None);
+        assert!(env_value(&env, "ANTHROPIC_BASE_URL").is_none());
+        assert!(env_value(&env, "ANTHROPIC_AUTH_TOKEN").is_none());
+        let token = env
+            .iter()
+            .find(|entry| entry["name"] == "CLAUDE_CODE_OAUTH_TOKEN")
+            .expect("token entry");
+        assert_eq!(
+            token["valueFrom"]["secretKeyRef"]["name"],
+            Value::from("claude-oauth")
+        );
     }
 }

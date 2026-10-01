@@ -9,6 +9,7 @@ members = [
     "ironflow-engine",
     "ironflow-api",
     "ironflow-auth",
+    "ironflow-auth-proxy",
     "ironflow-worker",
     "examples/ironflow-workflows",
     "examples/server",

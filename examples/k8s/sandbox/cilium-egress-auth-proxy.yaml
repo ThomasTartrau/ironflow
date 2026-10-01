@@ -1,0 +1,111 @@
+# Cilium egress for the auth proxy variant.
+#
+# Use INSTEAD of cilium-egress-anthropic.yaml: the agent pods no longer reach
+# api.anthropic.com, only the auth proxy, which alone holds the credential
+# and alone reaches the API. The per-profile policies (gitlab below) are
+# unchanged and stay additive.
+#
+# (a) Agent pods: DNS, and the auth proxy pods on 8080.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: claude-runner-egress-auth-proxy
+  namespace: ironflow-agents
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: claude-runner
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ironflow-system
+            app.kubernetes.io/name: ironflow-auth-proxy
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+---
+# Per-profile opening, as in cilium-egress-anthropic.yaml: pods labelled
+# ironflow.io/egress-profile=gitlab may also reach gitlab.com.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: claude-runner-egress-gitlab
+  namespace: ironflow-agents
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: claude-runner
+      ironflow.io/egress-profile: gitlab
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: gitlab.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+# (b) The auth proxy pods: egress to DNS and api.anthropic.com:443 only;
+# ingress on 8080 only from the agent pods and from the worker. Adjust the
+# worker selector to the namespace and labels the worker runs under.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ironflow-auth-proxy
+  namespace: ironflow-system
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: ironflow-auth-proxy
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ironflow-agents
+            app.kubernetes.io/component: claude-runner
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ironflow
+            app.kubernetes.io/name: ironflow-worker
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: api.anthropic.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

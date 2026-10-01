@@ -193,6 +193,44 @@ build-claude-runner-image:
       --destination "${CI_REGISTRY_IMAGE}/ironflow-claude-runner:${RUNNER_IMAGE_TAG}"
       --cache=true
 
+# ironflow-auth-proxy image (docker/auth-proxy), published as
+# ironflow-auth-proxy:<version>, never as `latest`. <version> is the version of
+# the ironflow-auth-proxy crate: a Dockerfile change ships with the next release
+# of the crate, never under a tag already published. The build context is the
+# repository root, trimmed by .dockerignore, and the Rust version is the one of
+# CI_RUST_IMAGE_TAG. A path the image compiles from must be added to the
+# `changes` list of check-auth-proxy-image.
+.auth-proxy-image:
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: 1
+  before_script:
+    - AUTH_PROXY_RUST_VERSION="${CI_RUST_IMAGE_TAG%-*}"
+
+# MR check, only when the image or what it compiles changes. Builds without
+# pushing. Release MRs only bump versions: skipped, as by .only-mr.
+check-auth-proxy-image:
+  extends: .auth-proxy-image
+  stage: check
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TITLE =~ /^chore: release/'
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - docker/auth-proxy/**/*
+        - ironflow-auth-proxy/**/*
+        - ironflow-core/src/auth_proxy/**/*
+        - Cargo.lock
+        - .dockerignore
+  script:
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/docker/auth-proxy/Dockerfile"
+      --build-arg "RUST_VERSION=${AUTH_PROXY_RUST_VERSION}"
+      --no-push
+
 # release-plz is installed as a prebuilt musl binary, not built from source:
 # its dependency tree (cargo crate) tracks the latest rustc and breaks on the
 # pinned toolchain image. The binary is self-contained and toolchain-independent.
@@ -472,6 +510,54 @@ release-plz-release:
       - stuck_or_timeout_failure
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Decides whether build-auth-proxy-image publishes: only when release-plz has
+# tagged ironflow-auth-proxy-v<version> and the registry has no image under
+# <version>. Runs on every main pipeline, so a version tagged by a later
+# pipeline (a release resumed after a failure) is still published; retrying
+# this job and the next one is the fallback. Not in the kaniko image: its
+# busybox wget does not verify TLS certificates, and this answer decides
+# whether a published tag could be overwritten.
+auth-proxy-image-tag:
+  stage: deploy
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  needs:
+    - release-plz-release
+  variables:
+    GIT_DEPTH: 1
+  script:
+    - scripts/crate-image-tag.sh ironflow-auth-proxy/Cargo.toml "${CI_REGISTRY_IMAGE}/ironflow-auth-proxy" > auth-proxy-image.env
+    - cat auth-proxy-image.env
+  artifacts:
+    reports:
+      dotenv: auth-proxy-image.env
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+build-auth-proxy-image:
+  extends: .auth-proxy-image
+  stage: deploy
+  needs:
+    - auth-proxy-image-tag
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - |
+      if [ "${IMAGE_PUBLISH}" != "true" ]; then
+        echo "Nothing to publish (IMAGE_TAG=${IMAGE_TAG}, IMAGE_PUBLISH=${IMAGE_PUBLISH}), see auth-proxy-image-tag."
+        exit 0
+      fi
+      if [ -z "${IMAGE_TAG}" ]; then
+        echo "IMAGE_PUBLISH=true without IMAGE_TAG, see auth-proxy-image-tag."
+        exit 1
+      fi
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/docker/auth-proxy/Dockerfile"
+      --build-arg "RUST_VERSION=${AUTH_PROXY_RUST_VERSION}"
+      --destination "${CI_REGISTRY_IMAGE}/ironflow-auth-proxy:${IMAGE_TAG}"
 
 pages:
   stage: deploy
