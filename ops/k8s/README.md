@@ -69,6 +69,9 @@ not an error; an `OperationError::External { origin: "kubernetes", .. }` is
 returned only for infrastructure failures (create, wait, timeout). The pod/Job
 is always deleted, including on timeout.
 
+`PodRun::runtime_class("gvisor")` sets `spec.runtimeClassName` to run the pod
+under a sandboxed runtime; left unset, the cluster default applies.
+
 ```rust,ignore
 use ironflow_ops_k8s::{KubeClient, pod_run::PodRun};
 

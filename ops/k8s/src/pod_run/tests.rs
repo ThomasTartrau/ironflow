@@ -113,6 +113,23 @@ async fn build_pod_labels_replaces_whole_map() {
 }
 
 #[tokio::test]
+async fn build_pod_applies_runtime_class() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .runtime_class("gvisor")
+        .build_pod();
+    assert_eq!(
+        pod.spec.unwrap().runtime_class_name.as_deref(),
+        Some("gvisor")
+    );
+}
+
+#[tokio::test]
+async fn build_pod_without_runtime_class_leaves_it_unset() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true").build_pod();
+    assert_eq!(pod.spec.unwrap().runtime_class_name, None);
+}
+
+#[tokio::test]
 async fn build_pod_applies_toleration() {
     let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
         .toleration(Toleration {

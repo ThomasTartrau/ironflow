@@ -67,6 +67,7 @@ let config = AgentConfig::new("Open the merge request")
     .read_only_pvc("repos", "/data/repos")                  // after the provider's volumes
     .read_only_config_map("guidelines", "/data/guidelines")
     .managed_settings("readonly")                           // preset registered on the provider
+    .runtime_class("gvisor")                                // wins over the provider's
     .egress_profile("gitlab");                              // ironflow.io/egress-profile label
 ```
 
@@ -188,6 +189,46 @@ let report = reap_orphans(&K8sClusterConfig::Default, "ironflow-agents").await?;
 Reaping Jobs needs `list` and `delete` on `jobs` (see
 `examples/k8s/sandbox/namespace-rbac.yaml`). Without them, the Job pass is
 skipped with a warning and the rest of the pass runs.
+
+## gVisor (RuntimeClass)
+
+A `runc` container shares the node kernel: a kernel exploit in untrusted code
+reaches the node. gVisor runs the pod against a user-space kernel instead. On
+Talos, install the `gvisor` system extension on the nodes, then declare the
+RuntimeClass once per cluster:
+
+```yaml
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+```
+
+Set it on the provider to cover every agent pod, and override it for one step
+(the step wins):
+
+```rust,ignore
+let provider = K8sEphemeralProvider::sandboxed(&image)
+    .runtime_class("gvisor");
+
+let config = AgentConfig::new("Review this untrusted patch")
+    .runtime_class("kata"); // wins over the provider's
+```
+
+A check pod created with `PodRun` takes the same setting:
+
+```rust,ignore
+let run = PodRun::new(&kube, "check", "rust:1.94", "cargo test")
+    .runtime_class("gvisor");
+```
+
+Without a value, `spec.runtimeClassName` stays absent and the cluster default
+runtime (`runc`) applies. A blank name is refused.
+
+> **Warning:** builds are noticeably slower under gVisor (compilation, many
+> small file syscalls, `cargo` and `npm` installs). Keep gVisor for the steps
+> that handle untrusted code and leave trusted build steps on `runc`.
 
 ## Network policies
 
