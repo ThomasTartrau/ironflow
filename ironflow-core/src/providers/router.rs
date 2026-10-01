@@ -126,6 +126,23 @@ impl AgentProvider for ProviderRouter {
         provider.invoke_with_logs(config, log_sink)
     }
 
+    /// The kind shared by the fallback and every routed provider, or `None`
+    /// when they differ or any of them has no kind.
+    ///
+    /// Use [`AgentProvider::account_kind_for`] for the kind of a given config.
+    fn account_kind(&self) -> Option<&'static str> {
+        let first = self.fallback.account_kind()?;
+        self.routes
+            .iter()
+            .all(|(_, provider)| provider.account_kind() == Some(first))
+            .then_some(first)
+    }
+
+    /// The kind of the provider this config is routed to.
+    fn account_kind_for(&self, config: &AgentConfig) -> Option<&'static str> {
+        self.resolve(config).account_kind_for(config)
+    }
+
     /// Release the run on the fallback and on every routed provider: any of
     /// them may have started something for it. A failure does not stop the
     /// others; the first one is returned once all have been asked.
@@ -178,6 +195,85 @@ mod tests {
             let name = self.name;
             Box::pin(async move { Ok(AgentOutput::new(json!(name))) })
         }
+    }
+
+    struct KindProvider {
+        kind: Option<&'static str>,
+    }
+
+    impl AgentProvider for KindProvider {
+        fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async { Ok(AgentOutput::new(json!("kind"))) })
+        }
+
+        fn account_kind(&self) -> Option<&'static str> {
+            self.kind
+        }
+    }
+
+    fn kind_provider(kind: Option<&'static str>) -> Arc<KindProvider> {
+        Arc::new(KindProvider { kind })
+    }
+
+    #[test]
+    fn router_exposes_the_common_account_kind() {
+        let router = ProviderRouter::new(kind_provider(Some("claude_subscription"))).route(
+            ProviderMatcher::ModelPrefix("opus".into()),
+            kind_provider(Some("claude_subscription")),
+        );
+        assert_eq!(router.account_kind(), Some("claude_subscription"));
+    }
+
+    #[test]
+    fn router_without_routes_exposes_fallback_kind() {
+        let router = ProviderRouter::new(kind_provider(Some("kind_a")));
+        assert_eq!(router.account_kind(), Some("kind_a"));
+        let router = ProviderRouter::new(kind_provider(None));
+        assert_eq!(router.account_kind(), None);
+    }
+
+    #[test]
+    fn router_with_mixed_kinds_exposes_no_common_kind() {
+        let router = ProviderRouter::new(kind_provider(Some("claude_subscription"))).route(
+            ProviderMatcher::ModelPrefix("gpt-".into()),
+            kind_provider(None),
+        );
+        assert_eq!(router.account_kind(), None);
+
+        let router = ProviderRouter::new(kind_provider(Some("kind_a"))).route(
+            ProviderMatcher::ModelPrefix("gpt-".into()),
+            kind_provider(Some("kind_b")),
+        );
+        assert_eq!(router.account_kind(), None);
+    }
+
+    #[test]
+    fn router_account_kind_for_follows_the_routed_provider() {
+        let router = ProviderRouter::new(kind_provider(Some("kind_a"))).route(
+            ProviderMatcher::ModelPrefix("gpt-".into()),
+            kind_provider(Some("kind_b")),
+        );
+        assert_eq!(
+            router.account_kind_for(&AgentConfig::new("x").model("gpt-5")),
+            Some("kind_b")
+        );
+        assert_eq!(
+            router.account_kind_for(&AgentConfig::new("x").model("sonnet")),
+            Some("kind_a")
+        );
+
+        let router = ProviderRouter::new(kind_provider(Some("kind_a"))).route(
+            ProviderMatcher::ModelPrefix("gpt-".into()),
+            kind_provider(None),
+        );
+        assert_eq!(
+            router.account_kind_for(&AgentConfig::new("x").model("gpt-5")),
+            None
+        );
+        assert_eq!(
+            router.account_kind_for(&AgentConfig::new("x").model("sonnet")),
+            Some("kind_a")
+        );
     }
 
     /// Provider journaling the runs it is asked to release.

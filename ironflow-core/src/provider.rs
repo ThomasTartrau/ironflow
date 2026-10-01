@@ -1480,6 +1480,29 @@ pub trait AgentProvider: Send + Sync {
     fn account_kind(&self) -> Option<&'static str> {
         None
     }
+
+    /// The Provider Account kind of the credential this provider would use
+    /// for this specific `config`.
+    ///
+    /// Defaults to [`AgentProvider::account_kind`]. It differs only for
+    /// providers that dispatch to other providers (routers): the kind then
+    /// depends on the provider the config is routed to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_core::provider::{AgentConfig, AgentProvider};
+    ///
+    /// let provider = ClaudeCodeProvider::new();
+    /// assert_eq!(
+    ///     provider.account_kind_for(&AgentConfig::new("hi")),
+    ///     Some("claude_subscription")
+    /// );
+    /// ```
+    fn account_kind_for(&self, _config: &AgentConfig) -> Option<&'static str> {
+        self.account_kind()
+    }
 }
 
 // The decision abstraction lives beside `AgentProvider`: re-exported here so
