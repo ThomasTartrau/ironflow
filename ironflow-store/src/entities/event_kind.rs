@@ -73,6 +73,10 @@ pub enum EventKind {
     #[serde(rename = "provider_account.usage_updated")]
     #[strum(serialize = "provider_account.usage_updated")]
     ProviderAccountUsageUpdated,
+    /// A run started waiting for a signal.
+    SignalAwaited,
+    /// A signal was received.
+    SignalReceived,
 }
 
 impl EventKind {
@@ -96,6 +100,8 @@ impl EventKind {
         Self::RetryForced,
         Self::ProviderAccountUpdated,
         Self::ProviderAccountUsageUpdated,
+        Self::SignalAwaited,
+        Self::SignalReceived,
     ];
 
     /// Returns the wire-format string for this kind.
@@ -128,7 +134,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 18);
+        assert_eq!(EventKind::ALL.len(), 20);
     }
 
     #[test]

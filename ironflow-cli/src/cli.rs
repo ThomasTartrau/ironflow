@@ -23,6 +23,7 @@ use crate::commands::logs::LogsArgs;
 use crate::commands::run::RunArgs;
 use crate::commands::schedule::ScheduleArgs;
 use crate::commands::secret::SecretArgs;
+use crate::commands::signal::SignalArgs;
 use crate::commands::stats::StatsArgs;
 use crate::commands::template::TemplateArgs;
 use crate::commands::user::UserArgs;
@@ -96,6 +97,8 @@ pub enum Commands {
     Schedule(ScheduleArgs),
     /// Manage approval delegations.
     Delegation(DelegationArgs),
+    /// Send and list signals that resume waiting runs.
+    Signal(SignalArgs),
     /// Manage workflow templates (add, list, info, create).
     Template(TemplateArgs),
     /// Scaffold a new Ironflow project.
@@ -175,6 +178,7 @@ pub async fn dispatch(client: &IronflowClient, cli: &Cli) -> Result<()> {
         Commands::AuditLog(args) => commands::audit_log::execute(client, args, cli.json).await,
         Commands::Schedule(args) => commands::schedule::execute(client, args, cli.json).await,
         Commands::Delegation(args) => commands::delegation::execute(client, args, cli.json).await,
+        Commands::Signal(args) => commands::signal::execute(client, args, cli.json).await,
         Commands::Template(args) => commands::template::execute(args),
         Commands::Init(args) => commands::init::execute(args),
         Commands::Dashboard(args) => commands::dashboard::execute(client, args),
@@ -192,6 +196,7 @@ mod tests {
     use crate::commands::audit_log::AuditLogCommands;
     use crate::commands::delegation::DelegationCommands;
     use crate::commands::secret::SecretCommands;
+    use crate::commands::signal::SignalCommands;
     use crate::commands::user::UserCommands;
 
     use super::*;
@@ -1017,5 +1022,78 @@ mod tests {
     fn parse_template_requires_subcommand() {
         let result = Cli::try_parse_from(["ironflow-cli", "template"]);
         assert!(result.is_err());
+    }
+
+    // ── Signals ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_signal_send_with_every_flag() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "signal",
+            "send",
+            "ci.pipeline_finished",
+            "--key",
+            "4f2a9c1",
+            "--payload",
+            r#"{"status":"success"}"#,
+            "--idempotency-id",
+            "delivery-42",
+        ]);
+        let Commands::Signal(args) = &cli.command else {
+            panic!("expected Signal command");
+        };
+        let SignalCommands::Send {
+            name,
+            key,
+            payload,
+            idempotency_id,
+        } = &args.command
+        else {
+            panic!("expected Send subcommand");
+        };
+        assert_eq!(name, "ci.pipeline_finished");
+        assert_eq!(key, "4f2a9c1");
+        assert_eq!(payload.as_deref(), Some(r#"{"status":"success"}"#));
+        assert_eq!(idempotency_id.as_deref(), Some("delivery-42"));
+    }
+
+    #[test]
+    fn parse_signal_send_requires_a_key() {
+        let result = Cli::try_parse_from(["ironflow-cli", "signal", "send", "demo.done"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_signal_list_with_filters() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "signal",
+            "list",
+            "--name",
+            "demo.done",
+            "--key",
+            "k1",
+            "--page",
+            "2",
+            "--per-page",
+            "10",
+        ]);
+        let Commands::Signal(args) = &cli.command else {
+            panic!("expected Signal command");
+        };
+        let SignalCommands::List {
+            name,
+            key,
+            page,
+            per_page,
+        } = &args.command
+        else {
+            panic!("expected List subcommand");
+        };
+        assert_eq!(name.as_deref(), Some("demo.done"));
+        assert_eq!(key.as_deref(), Some("k1"));
+        assert_eq!(*page, Some(2));
+        assert_eq!(*per_page, Some(10));
     }
 }

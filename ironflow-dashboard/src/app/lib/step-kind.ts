@@ -10,6 +10,7 @@ import {
 	ShieldCheck,
 	SkipForward,
 	MessageSquare,
+	Radio,
 	type LucideIcon,
 } from "lucide-react";
 
@@ -33,6 +34,8 @@ export function getKindMeta(kind: string): KindMeta {
 			return { icon: ShieldCheck, color: "rose", label: "approval" };
 		case "human_input":
 			return { icon: MessageSquare, color: "blue", label: "input" };
+		case "signal":
+			return { icon: Radio, color: "indigo", label: "signal" };
 		case "skip":
 			return { icon: SkipForward, color: "slate", label: "skipped" };
 		default:

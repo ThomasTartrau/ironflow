@@ -14,5 +14,6 @@ mod human_input;
 mod operation;
 mod parallel;
 mod shell;
+mod signal;
 mod skip;
 mod sub_workflow;

@@ -21,6 +21,7 @@ The repository includes a complete example server:
 | `PORT` | `3000` | HTTP listen port |
 | `ALLOWED_ORIGINS` | same-origin | Comma-separated CORS origins |
 | `ARTIFACTS_DIR` | -- | Filesystem root for step artifacts |
+| `SIGNAL_RETENTION_DAYS` | `7` | Days received [signals](../concepts/signals.md) are kept before the purger deletes them (min 1) |
 
 ## Running
 

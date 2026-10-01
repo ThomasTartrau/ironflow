@@ -74,7 +74,9 @@ pub mod replay_policy;
 pub mod retry_policy;
 pub mod run_creator;
 pub mod schedule;
+pub mod signal;
 pub mod testing;
+pub mod wake;
 
 /// Convenience re-exports.
 pub mod prelude {
@@ -101,4 +103,6 @@ pub mod prelude {
     pub use crate::plan::{ConditionResult, ExecutionPlan, PlanOptions, PlannedStep};
     pub use crate::run_creator::{CreateRunOpts, RunCreator};
     pub use crate::schedule::CronSchedule;
+    pub use crate::signal::{Signal, SignalDelivery};
+    pub use crate::wake::RunWaker;
 }

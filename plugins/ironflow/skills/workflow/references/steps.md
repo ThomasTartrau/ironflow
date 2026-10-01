@@ -357,6 +357,63 @@ MCP tools `submit_input` / `reject_input`:
   `#[serde(default)]`); otherwise the plan stops there with a reason.
 - In tests: `TestEngine::with_mock_human_input(|name, cfg| HumanInputOutcome::Provided(json!(..)))`.
 
+## Signal
+
+`ctx.wait_for_signal::<S>(name, key, timeout)` suspends the run until an external signal
+named `S::NAME` with the same key arrives, or the timeout elapses. It returns
+`Some(S)` with the payload, or `None` on timeout. The key identifies one occurrence of
+the event: wait on a commit SHA, not on a merge request.
+
+```rust,no_run
+use std::time::Duration;
+
+use ironflow_engine::config::ShellConfig;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+use ironflow_engine::signal::Signal;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct PipelineFinished {
+    status: String,
+}
+
+impl Signal for PipelineFinished {
+    const NAME: &'static str = "ci.pipeline_finished";
+}
+
+async fn example(ctx: &mut WorkflowContext, sha: &str) -> Result<(), EngineError> {
+    let finished = ctx
+        .wait_for_signal::<PipelineFinished>("wait-ci", sha, Duration::from_secs(3600))
+        .await?;
+    match finished {
+        Some(pipeline) if pipeline.status == "success" => {
+            ctx.shell("deploy", ShellConfig::new("./deploy.sh")).await?;
+        }
+        Some(_) => return Err(EngineError::StepConfig("CI failed".to_string())),
+        None => return Err(EngineError::StepConfig("CI timed out".to_string())),
+    }
+    Ok(())
+}
+```
+
+The step is stored with kind `signal` and the JSON schema of `S` in its input; the run
+moves to `Sleeping` until the deadline. A signal received after the run was created but
+before the step opened resolves it at once. Every run waiting on the same name and key
+receives the signal.
+
+| Route | Effect |
+|-------|--------|
+| `POST /api/v1/signals` | Body `{"name", "key", "payload", "idempotency_id"}`. Admin, or API key with `signals_send`. Resumes the waiting runs whose schema the payload matches; the others stay waiting and are listed under `rejected`. A reused `idempotency_id` returns `duplicate: true` |
+| `GET /api/v1/signals` | Lists received signals (`?name=&key=&page=&per_page=`) |
+
+- CLI: `ironflow signal send <name> --key <key> --payload '{..}'`, `ironflow signal list`.
+- MCP: `send_signal`, `list_signals`. Rust: `engine.send_signal(&signal, key, Some(id))`.
+- While planning, the step is recorded and `S` is built from `{}` when possible, `None` otherwise.
+- In tests: `TestEngine::with_mock_signal(|step, name, key| SignalOutcome::Received(json!(..)))`
+  or `SignalOutcome::TimedOut`.
+
 ## Decision
 
 A typed machine decision (System One / Jev): classify, route, score, or yes/no, with a

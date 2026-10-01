@@ -17,6 +17,7 @@ import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { AgentDebugTimeline, countVisibleTurns } from "./AgentDebugTimeline";
 import { StepArtifacts } from "./StepArtifacts";
 import { HumanInputForm } from "./HumanInputForm";
+import { SignalStepPanel } from "./SignalStepPanel";
 import { Badge } from "@/components/ui/badge";
 import {
 	Collapsible,
@@ -229,6 +230,8 @@ function getKindColor(kind: string): string {
 			return "bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-400/15 dark:text-teal-300 dark:border-teal-400/30";
 		case "human_input":
 			return "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-400/15 dark:text-cyan-300 dark:border-cyan-400/30";
+		case "signal":
+			return "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-400/15 dark:text-indigo-300 dark:border-indigo-400/30";
 		case "skip":
 			return "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-400/15 dark:text-slate-300 dark:border-slate-400/30";
 		default:
@@ -834,6 +837,8 @@ function StepRow({ step }: { step: StepResponse }) {
 								step.status === "awaiting_approval" && (
 									<HumanInputForm step={step} />
 								)}
+
+							{step.kind === "signal" && <SignalStepPanel step={step} />}
 
 							{step.status === "skipped" &&
 								step.output &&

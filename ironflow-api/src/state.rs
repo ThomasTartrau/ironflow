@@ -29,6 +29,7 @@ use crate::escalator::Escalator;
 use crate::reaper::Reaper;
 use crate::schedule_sync::sync_handler_schedules;
 use crate::schedule_ticker::ScheduleTicker;
+use crate::waker::Waker;
 
 /// Global application state.
 ///
@@ -257,6 +258,8 @@ impl AppState {
     /// - **Schedule ticker**: polls due schedules and creates runs.
     /// - **Reaper**: recovers runs abandoned by dead workers.
     /// - **Escalator**: resolves approval gates that missed their SLA deadline.
+    /// - **Waker**: wakes `Sleeping` runs whose delay elapsed or whose signal
+    ///   wait timed out.
     ///
     /// Call this once after building the `AppState`, before serving requests.
     /// Drop the returned [`CancellationToken`] (or call `.cancel()`) to stop
@@ -282,6 +285,7 @@ impl AppState {
         tokio::spawn(ScheduleTicker::new(self.store.clone()).run(shutdown.clone()));
         tokio::spawn(Reaper::new(self.store.clone(), self.engine.clone()).run(shutdown.clone()));
         tokio::spawn(Escalator::new(self.engine.clone()).run(shutdown.clone()));
+        tokio::spawn(Waker::new(self.engine.clone()).run(shutdown.clone()));
         shutdown
     }
 }

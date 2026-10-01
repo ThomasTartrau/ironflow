@@ -29,6 +29,7 @@ pub mod retry_run;
 pub mod run_events;
 pub mod schedules;
 pub mod secrets;
+pub mod signals;
 pub mod templates;
 #[cfg(test)]
 mod test_helpers;
@@ -168,6 +169,15 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             post(internal::create_step_dependencies::create_step_dependencies),
         )
         .route("/secrets/{*key}", get(internal::get_secret::get_secret))
+        .route("/signals", get(internal::signals::list_signals_for_key))
+        .route(
+            "/steps/{id}/signal-resolution",
+            post(internal::signals::resolve_signal_step),
+        )
+        .route(
+            "/runs/{id}/signal-suspension",
+            post(internal::signals::suspend_run_on_signal),
+        )
         .route(
             "/provider-accounts/candidates",
             get(internal::provider_accounts::list_candidates),
@@ -351,6 +361,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route(
             "/schedules/{id}/trigger",
             post(schedules::trigger::trigger_schedule),
+        )
+        .route(
+            "/signals",
+            get(signals::list::list_signals).post(signals::send::send_signal),
         )
         .route(
             "/templates/registry",

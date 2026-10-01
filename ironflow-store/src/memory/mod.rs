@@ -48,6 +48,7 @@ mod provider_account_store;
 mod run_store;
 mod schedule_store;
 mod secret_store;
+mod signal_store;
 mod stats_history;
 mod user_store;
 
@@ -74,6 +75,10 @@ pub(super) struct State {
     pub(super) provider_account_windows:
         HashMap<(Uuid, String, String), crate::entities::ProviderAccountWindow>,
     pub(super) provider_account_usage: Vec<crate::entities::ProviderAccountUsagePoint>,
+    pub(super) signals: Vec<crate::entities::Signal>,
+    /// Idempotency ID -> signal holding it. Guarded by the same lock as
+    /// `signals`, so check-then-insert is atomic.
+    pub(super) signal_idempotency: HashMap<String, Uuid>,
 }
 
 #[derive(Debug, Clone)]

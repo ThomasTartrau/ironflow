@@ -238,7 +238,11 @@ let child_steps = store.list_steps(child.run_id()).await?;
 * Custom operations (`ctx.operation(...)`) are not intercepted. Mock one by
   passing a test-double `Operation` to the handler.
 * `ctx.delay(...)` is not intercepted: a non-zero delay still suspends the run
-  with `RunStatus::Sleeping`.
+  with `RunStatus::Sleeping`. It resumes once `RunWaker::tick` runs after its
+  `scheduled_at`.
+* `ctx.wait_for_signal(...)` is resolved with `with_mock_signal(|step, name, key| ..)`,
+  returning `SignalOutcome::Received(json!(..))` or `SignalOutcome::TimedOut`.
+  Without it, the run ends in `RunStatus::Sleeping` until a signal is delivered.
 * `ctx.decision(...)` needs a real `DecisionProvider`, wired with
   `with_decision_provider`.
 

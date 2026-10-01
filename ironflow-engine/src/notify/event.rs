@@ -684,6 +684,84 @@ pub struct ProviderAccountUsageUpdatedEvent {
     pub at: DateTime<Utc>,
 }
 
+/// Payload of the `Event::SignalAwaited` event.
+///
+/// Emitted when a run suspends on `ctx.wait_for_signal` and goes `Sleeping`.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::{TimeDelta, Utc};
+/// use ironflow_engine::notify::SignalAwaitedEvent;
+/// use uuid::Uuid;
+///
+/// let now = Utc::now();
+/// let payload = SignalAwaitedEvent {
+///     run_id: Uuid::now_v7(),
+///     step_id: Uuid::now_v7(),
+///     step_name: "wait-ci".to_string(),
+///     name: "ci.pipeline_finished".to_string(),
+///     key: "4f2a9c1".to_string(),
+///     deadline_at: now + TimeDelta::hours(1),
+///     at: now,
+/// };
+/// assert_eq!(payload.key, "4f2a9c1");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SignalAwaitedEvent {
+    /// Run identifier.
+    pub run_id: Uuid,
+    /// The signal step the run waits on.
+    pub step_id: Uuid,
+    /// Name of the signal step.
+    pub step_name: String,
+    /// Awaited signal name.
+    pub name: String,
+    /// Awaited occurrence key.
+    pub key: String,
+    /// When the wait times out.
+    pub deadline_at: DateTime<Utc>,
+    /// When the run started waiting.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::SignalReceived` event.
+///
+/// Emitted once per stored signal; a duplicate (same idempotency ID) emits
+/// nothing.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::SignalReceivedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = SignalReceivedEvent {
+///     signal_id: Uuid::now_v7(),
+///     name: "ci.pipeline_finished".to_string(),
+///     key: "4f2a9c1".to_string(),
+///     resumed_runs: vec![Uuid::now_v7()],
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.resumed_runs.len(), 1);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SignalReceivedEvent {
+    /// Stored signal identifier.
+    pub signal_id: Uuid,
+    /// Signal name.
+    pub name: String,
+    /// Occurrence key.
+    pub key: String,
+    /// Runs whose waiting step the signal resolved.
+    pub resumed_runs: Vec<Uuid>,
+    /// When the signal was received.
+    pub at: DateTime<Utc>,
+}
+
 /// A domain event emitted by the ironflow system.
 ///
 /// Covers the full lifecycle: runs, steps, approvals, and authentication.
@@ -795,6 +873,13 @@ pub enum Event {
     /// New usage windows were recorded for a Provider Account.
     #[serde(rename = "provider_account.usage_updated")]
     ProviderAccountUsageUpdated(ProviderAccountUsageUpdatedEvent),
+
+    // -- Signals --
+    /// A run started waiting for a signal.
+    SignalAwaited(SignalAwaitedEvent),
+
+    /// A signal was received.
+    SignalReceived(SignalReceivedEvent),
 }
 
 impl Event {
@@ -833,6 +918,10 @@ impl Event {
     /// Event type constant for
     /// [`ProviderAccountUsageUpdated`](Event::ProviderAccountUsageUpdated).
     pub const PROVIDER_ACCOUNT_USAGE_UPDATED: &'static str = "provider_account.usage_updated";
+    /// Event type constant for [`SignalAwaited`](Event::SignalAwaited).
+    pub const SIGNAL_AWAITED: &'static str = "signal_awaited";
+    /// Event type constant for [`SignalReceived`](Event::SignalReceived).
+    pub const SIGNAL_RECEIVED: &'static str = "signal_received";
 
     /// All event types. Pass this to
     /// [`EventPublisher::subscribe`](super::EventPublisher::subscribe) to
@@ -867,6 +956,8 @@ impl Event {
         Self::RETRY_FORCED,
         Self::PROVIDER_ACCOUNT_UPDATED,
         Self::PROVIDER_ACCOUNT_USAGE_UPDATED,
+        Self::SIGNAL_AWAITED,
+        Self::SIGNAL_RECEIVED,
     ];
 
     /// Returns the event type as a static string (e.g. `"run_status_changed"`).
@@ -907,6 +998,8 @@ impl Event {
             Event::UserSignedOut(_) => Self::USER_SIGNED_OUT,
             Event::ProviderAccountUpdated(_) => Self::PROVIDER_ACCOUNT_UPDATED,
             Event::ProviderAccountUsageUpdated(_) => Self::PROVIDER_ACCOUNT_USAGE_UPDATED,
+            Event::SignalAwaited(_) => Self::SIGNAL_AWAITED,
+            Event::SignalReceived(_) => Self::SIGNAL_RECEIVED,
         }
     }
 
@@ -947,11 +1040,13 @@ impl Event {
             Event::ApprovalRejected(e) => Some(e.run_id),
             Event::ApprovalEscalated(e) => Some(e.run_id),
             Event::LogLine(e) => Some(e.run_id),
+            Event::SignalAwaited(e) => Some(e.run_id),
             Event::UserSignedIn(_)
             | Event::UserSignedUp(_)
             | Event::UserSignedOut(_)
             | Event::ProviderAccountUpdated(_)
-            | Event::ProviderAccountUsageUpdated(_) => None,
+            | Event::ProviderAccountUsageUpdated(_)
+            | Event::SignalReceived(_) => None,
         }
     }
 
@@ -993,6 +1088,7 @@ impl Event {
             Event::ApprovalEscalated(e) => Some(e.step_id),
             Event::ApprovalGranted(e) => e.step_id,
             Event::ApprovalRejected(e) => e.step_id,
+            Event::SignalAwaited(e) => Some(e.step_id),
             Event::RunCreated(_)
             | Event::RunStatusChanged(_)
             | Event::RunFailed(_)
@@ -1003,7 +1099,8 @@ impl Event {
             | Event::UserSignedUp(_)
             | Event::UserSignedOut(_)
             | Event::ProviderAccountUpdated(_)
-            | Event::ProviderAccountUsageUpdated(_) => None,
+            | Event::ProviderAccountUsageUpdated(_)
+            | Event::SignalReceived(_) => None,
         }
     }
 
@@ -1048,7 +1145,9 @@ impl Event {
             | Event::ApprovalEscalated(_)
             | Event::LogLine(_)
             | Event::ProviderAccountUpdated(_)
-            | Event::ProviderAccountUsageUpdated(_) => None,
+            | Event::ProviderAccountUsageUpdated(_)
+            | Event::SignalAwaited(_)
+            | Event::SignalReceived(_) => None,
         }
     }
 }
@@ -1834,6 +1933,28 @@ mod tests {
                 }),
                 "provider_account.usage_updated",
             ),
+            (
+                Event::SignalAwaited(SignalAwaitedEvent {
+                    run_id: id,
+                    step_id: id,
+                    step_name: "wait-ci".to_string(),
+                    name: "ci.done".to_string(),
+                    key: "abc".to_string(),
+                    deadline_at: now,
+                    at: now,
+                }),
+                "signal_awaited",
+            ),
+            (
+                Event::SignalReceived(SignalReceivedEvent {
+                    signal_id: id,
+                    name: "ci.done".to_string(),
+                    key: "abc".to_string(),
+                    resumed_runs: vec![id],
+                    at: now,
+                }),
+                "signal_received",
+            ),
         ];
 
         assert_eq!(
@@ -1897,5 +2018,51 @@ mod tests {
         assert_eq!(event.run_id(), Some(run_id));
         assert_eq!(event.step_id(), Some(step_id));
         assert_eq!(event.user_id(), None);
+    }
+
+    #[test]
+    fn signal_awaited_serde_roundtrip() {
+        let run_id = Uuid::now_v7();
+        let step_id = Uuid::now_v7();
+        let event = Event::SignalAwaited(SignalAwaitedEvent {
+            run_id,
+            step_id,
+            step_name: "wait-ci".to_string(),
+            name: "ci.done".to_string(),
+            key: "abc".to_string(),
+            deadline_at: Utc::now(),
+            at: Utc::now(),
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"signal_awaited\""), "got {json}");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.event_type(), Event::SIGNAL_AWAITED);
+        assert_eq!(back.run_id(), Some(run_id));
+        assert_eq!(back.step_id(), Some(step_id));
+        assert_eq!(back.user_id(), None);
+    }
+
+    #[test]
+    fn signal_received_serde_roundtrip() {
+        let resumed = Uuid::now_v7();
+        let event = Event::SignalReceived(SignalReceivedEvent {
+            signal_id: Uuid::now_v7(),
+            name: "ci.done".to_string(),
+            key: "abc".to_string(),
+            resumed_runs: vec![resumed],
+            at: Utc::now(),
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"signal_received\""), "got {json}");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        let Event::SignalReceived(payload) = &back else {
+            panic!("expected a signal_received event, got {back:?}");
+        };
+        assert_eq!(payload.resumed_runs, vec![resumed]);
+        assert_eq!(back.run_id(), None);
+        assert_eq!(back.step_id(), None);
+        assert_eq!(back.user_id(), None);
     }
 }

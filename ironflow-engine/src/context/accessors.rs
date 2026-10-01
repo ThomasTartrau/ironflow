@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::{Value, from_value};
 use tracing::error;
@@ -77,6 +78,7 @@ impl WorkflowContext {
             interceptor: None,
             trace_context,
             operation_ctx: None,
+            run_created_at: None,
             plan: None,
         }
     }
@@ -124,6 +126,7 @@ impl WorkflowContext {
             interceptor: None,
             trace_context,
             operation_ctx: None,
+            run_created_at: None,
             plan: None,
         }
     }
@@ -278,6 +281,26 @@ impl WorkflowContext {
         self.attempt = attempt;
         self.total_cost_usd = cost_usd;
         self.carried_duration_ms = duration_ms;
+    }
+
+    /// Record when the run was created, so a wait step can bound the signals
+    /// it accepts without reading the run back.
+    pub(crate) fn set_run_created_at(&mut self, created_at: DateTime<Utc>) {
+        self.run_created_at = Some(created_at);
+    }
+
+    /// When the run was created: the value set by the engine, otherwise read
+    /// from the store.
+    pub(crate) async fn run_created_at(&self) -> Result<DateTime<Utc>, EngineError> {
+        if let Some(created_at) = self.run_created_at {
+            return Ok(created_at);
+        }
+        let run = self
+            .store
+            .get_run(self.run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(self.run_id)))?;
+        Ok(run.created_at)
     }
 
     /// Wall-clock duration already recorded on the run by previous attempts.

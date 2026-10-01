@@ -33,6 +33,8 @@ export const ALL_EVENT_KINDS = [
 	"retry_forced",
 	"provider_account.updated",
 	"provider_account.usage_updated",
+	"signal_awaited",
+	"signal_received",
 ] as const satisfies readonly StreamedEventKind[];
 
 // Exhaustiveness check: fails to compile if a new Event variant is added to the

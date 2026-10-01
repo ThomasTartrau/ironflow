@@ -13,7 +13,8 @@ use std::time::Instant;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use rust_decimal::Decimal;
-use serde_json::Value;
+use serde_json::{Value, to_value};
+use tokio::spawn;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -25,8 +26,8 @@ use ironflow_core::metric_names::{
 use ironflow_core::provider::AgentProvider;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, Run, RunActor, RunCreation, RunFilter, RunStatus, RunUpdate, StepStatus, StepUpdate,
-    TriggerKind,
+    NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter, RunStatus, RunUpdate, SignalInsert,
+    SignalStepResolution, StepStatus, StepUpdate, TriggerKind,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -42,13 +43,17 @@ use crate::handler::{WorkflowHandler, WorkflowInfo};
 use crate::log_sender::LogSender;
 use crate::notify::{
     ApprovalRequestedEvent, Event, EventPublisher, EventSubscriber, RunBudgetExceededEvent,
-    RunFailedEvent, RunStatusChangedEvent, WorkflowEventBus,
+    RunFailedEvent, RunStatusChangedEvent, SignalAwaitedEvent, SignalReceivedEvent,
+    WorkflowEventBus,
 };
 use crate::plan::{
     ExecutionPlan, PlanOptions, PlanRecorder, SharedPlanRecorder, estimate_durations, lock_plan,
 };
 use crate::retry_policy::{backoff_for_retry, is_run_retryable};
 use crate::schedule::CronSchedule;
+use crate::signal::{
+    Signal, SignalDelivery, SignalRejected, SignalResumed, received_output, validate_step_payload,
+};
 use ironflow_core::decision::DecisionProvider;
 
 /// Result of a workflow execution, carrying the final [`Run`] and per-step
@@ -505,6 +510,7 @@ impl Engine {
         );
         ctx.carry_over_run_totals(run.retry_count + 1, run.cost_usd, run.duration_ms);
         ctx.set_max_cost_usd(run.max_cost_usd);
+        ctx.set_run_created_at(run.created_at);
         if let Some(ref sender) = self.log_sender {
             ctx.set_log_sender(sender.clone());
         }
@@ -1255,6 +1261,236 @@ impl Engine {
         .await
     }
 
+    /// Store a signal and resolve every step waiting for its `(name, key)`.
+    ///
+    /// Each waiting step validates the payload against the JSON schema it
+    /// stored when it opened. A matching step is completed with the payload
+    /// and its run, if `Sleeping`, goes back to `Pending`: under
+    /// [`ExecutionMode::Local`] it resumes in a background task, under
+    /// [`ExecutionMode::Workers`] a worker picks it up. A step whose schema
+    /// the payload does not match keeps waiting and is listed in
+    /// [`SignalDelivery::rejected`].
+    ///
+    /// The signal is stored even when nobody waits for it: a run opening its
+    /// wait step later still finds it. A signal whose `idempotency_id` was
+    /// already used is not stored nor delivered again, and comes back with
+    /// [`SignalDelivery::duplicate`] set.
+    ///
+    /// Publishes [`Event::SignalReceived`] for every stored signal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InvalidSignal`] when `name` or `key` is empty,
+    /// and [`EngineError::Store`] when the signal cannot be stored or its
+    /// waiters cannot be listed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_store::entities::NewSignal;
+    /// use serde_json::json;
+    ///
+    /// # async fn example(engine: Arc<Engine>) -> Result<(), EngineError> {
+    /// let delivery = engine
+    ///     .deliver_signal(NewSignal {
+    ///         name: "ci.pipeline_finished".to_string(),
+    ///         key: "4f2a9c1".to_string(),
+    ///         payload: json!({"status": "success"}),
+    ///         idempotency_id: Some("delivery-42".to_string()),
+    ///     })
+    ///     .await?;
+    /// println!("{} runs resumed", delivery.resumed.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn deliver_signal(
+        self: &Arc<Self>,
+        signal: NewSignal,
+    ) -> Result<SignalDelivery, EngineError> {
+        if signal.name.trim().is_empty() {
+            return Err(EngineError::InvalidSignal(
+                "signal name must not be empty".to_string(),
+            ));
+        }
+        if signal.key.trim().is_empty() {
+            return Err(EngineError::InvalidSignal(
+                "signal key must not be empty".to_string(),
+            ));
+        }
+
+        let stored = match self.store.insert_signal(signal).await? {
+            SignalInsert::Created(stored) => stored,
+            SignalInsert::Duplicate(existing) => {
+                info!(
+                    signal_id = %existing.id,
+                    signal = %existing.name,
+                    key = %existing.key,
+                    "duplicate signal ignored"
+                );
+                return Ok(SignalDelivery {
+                    signal_id: existing.id,
+                    duplicate: true,
+                    resumed: Vec::new(),
+                    rejected: Vec::new(),
+                });
+            }
+        };
+
+        let waiters = self
+            .store
+            .list_signal_waiters(&stored.name, &stored.key)
+            .await?;
+        let mut resumed = Vec::new();
+        let mut rejected = Vec::new();
+
+        for step in waiters {
+            if let Err(error) = validate_step_payload(step.input.as_ref(), &stored.payload) {
+                rejected.push(SignalRejected {
+                    run_id: step.run_id,
+                    step_id: step.id,
+                    error,
+                });
+                continue;
+            }
+
+            match self
+                .store
+                .resolve_signal_step(step.id, received_output(&stored))
+                .await
+            {
+                Ok(SignalStepResolution::Resolved {
+                    run_id,
+                    run_resumed,
+                }) => {
+                    resumed.push(SignalResumed {
+                        run_id,
+                        step_id: step.id,
+                    });
+                    if run_resumed && self.execution_mode == ExecutionMode::Local {
+                        self.spawn_local_resume(run_id);
+                    }
+                }
+                // A concurrent delivery or the timeout resolved it first.
+                Ok(SignalStepResolution::NotWaiting { .. }) => {}
+                Err(err) => {
+                    error!(
+                        run_id = %step.run_id,
+                        step_id = %step.id,
+                        error = %err,
+                        "failed to resolve a waiting signal step"
+                    );
+                    rejected.push(SignalRejected {
+                        run_id: step.run_id,
+                        step_id: step.id,
+                        error: err.to_string(),
+                    });
+                }
+            }
+        }
+
+        info!(
+            signal_id = %stored.id,
+            signal = %stored.name,
+            key = %stored.key,
+            resumed = resumed.len(),
+            rejected = rejected.len(),
+            "signal received"
+        );
+        self.event_publisher
+            .publish(Event::SignalReceived(SignalReceivedEvent {
+                signal_id: stored.id,
+                name: stored.name.clone(),
+                key: stored.key.clone(),
+                resumed_runs: resumed.iter().map(|r| r.run_id).collect(),
+                at: stored.received_at,
+            }));
+
+        Ok(SignalDelivery {
+            signal_id: stored.id,
+            duplicate: false,
+            resumed,
+            rejected,
+        })
+    }
+
+    /// Send a typed signal: shorthand for [`deliver_signal`](Self::deliver_signal)
+    /// with `S::NAME` as the name and `signal` as the payload.
+    ///
+    /// `key` identifies the occurrence (a commit SHA, an order ID).
+    /// `idempotency_id`, when set, makes a redelivery of the same event (a
+    /// webhook retried by its sender) a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Serialization`] when `signal` cannot be
+    /// serialized, and every error of [`deliver_signal`](Self::deliver_signal).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_engine::signal::Signal;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct PipelineFinished {
+    ///     status: String,
+    /// }
+    ///
+    /// impl Signal for PipelineFinished {
+    ///     const NAME: &'static str = "ci.pipeline_finished";
+    /// }
+    ///
+    /// # async fn example(engine: Arc<Engine>) -> Result<(), EngineError> {
+    /// let finished = PipelineFinished { status: "success".to_string() };
+    /// engine.send_signal(&finished, "4f2a9c1", Some("delivery-42")).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_signal<S: Signal>(
+        self: &Arc<Self>,
+        signal: &S,
+        key: &str,
+        idempotency_id: Option<&str>,
+    ) -> Result<SignalDelivery, EngineError> {
+        let payload = to_value(signal)?;
+        self.deliver_signal(NewSignal {
+            name: S::NAME.to_string(),
+            key: key.to_string(),
+            payload,
+            idempotency_id: idempotency_id.map(str::to_string),
+        })
+        .await
+    }
+
+    /// Resume a run requeued to `Pending` in a background task.
+    ///
+    /// Used under [`ExecutionMode::Local`], where no worker would pick the
+    /// run up. The state change already happened, so a failed resume is
+    /// logged, not rolled back.
+    pub(crate) fn spawn_local_resume(self: &Arc<Self>, run_id: Uuid) {
+        let engine = Arc::clone(self);
+        spawn(async move {
+            if let Err(err) = engine
+                .store
+                .update_run_status(run_id, RunStatus::Running)
+                .await
+            {
+                error!(run_id = %run_id, error = %err, "failed to restart a woken run");
+                return;
+            }
+            if let Err(err) = engine.resume_run(run_id).await {
+                error!(run_id = %run_id, error = %err, "failed to resume a woken run");
+            }
+        });
+    }
+
     /// Record a run failure, replaying the run later when retries remain.
     ///
     /// This is the single place where a failed run's fate is decided. When
@@ -1589,6 +1825,57 @@ impl Engine {
                     step_id = %step_id,
                     wake_at = %wake_at,
                     "run sleeping until delay elapses"
+                );
+            }
+            Err(EngineError::SignalWaiting {
+                run_id: wait_run_id,
+                step_id,
+                ref step_name,
+                ref name,
+                ref key,
+                deadline_at,
+            }) => {
+                final_status = RunStatus::Sleeping;
+                // Atomic with the step lock: a signal delivered since the step
+                // opened leaves the run due right away instead of until the
+                // deadline.
+                let waiting = self
+                    .store
+                    .suspend_run_on_signal(run_id, step_id, deadline_at)
+                    .await?;
+                final_run = self
+                    .store
+                    .update_run_returning(
+                        run_id,
+                        RunUpdate {
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                if waiting {
+                    self.event_publisher
+                        .publish(Event::SignalAwaited(SignalAwaitedEvent {
+                            run_id: wait_run_id,
+                            step_id,
+                            step_name: step_name.clone(),
+                            name: name.clone(),
+                            key: key.clone(),
+                            deadline_at,
+                            at: Utc::now(),
+                        }));
+                }
+
+                info!(
+                    run_id = %wait_run_id,
+                    step_id = %step_id,
+                    signal = %name,
+                    key = %key,
+                    deadline_at = %deadline_at,
+                    waiting,
+                    "run sleeping until a signal arrives"
                 );
             }
             Err(err) => {

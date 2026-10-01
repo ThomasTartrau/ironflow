@@ -13,6 +13,7 @@ mod provider_account;
 mod run;
 mod schedule;
 mod secret;
+mod signal;
 mod stats;
 mod step;
 mod user;
@@ -39,6 +40,10 @@ pub use schedule::{CreateScheduleRequest, ScheduleResponse, UpdateScheduleReques
 pub use secret::{
     KeyVersionsResponse, RotateSecretsRequest, RotateSecretsResponse, SecretResponse,
     SetSecretRequest,
+};
+pub use signal::{
+    ListSignalsQuery, RejectedRunResponse, ResumedRunResponse, SendSignalRequest,
+    SignalDeliveryResponse, SignalResponse,
 };
 pub use stats::{
     StatsHistoryBucketResponse, StatsHistoryQuery, StatsHistoryResponse, StatsResponse,

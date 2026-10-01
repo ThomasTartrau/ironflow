@@ -86,7 +86,11 @@ _Avoid_: account (reserved for User), subscription, seat
 
 **Event**:
 A domain event emitted during the lifecycle (RunCreated, RunStatusChanged, StepCompleted, etc.). Consumed by subscribers for SSE streaming, webhook notifications, and audit logging.
-_Avoid_: notification, message, signal
+_Avoid_: notification, message
+
+**Signal**:
+An external message, named (what happened) and keyed (which occurrence, e.g. a commit SHA), sent to Ironflow to resume the Runs waiting for it with `ctx.wait_for_signal`.
+_Avoid_: event, callback, webhook
 
 **Audit Log Entry**:
 A persisted Event with denormalized context IDs (run, step, user) for compliance and post-mortem filtering.

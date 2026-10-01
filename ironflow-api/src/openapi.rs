@@ -5,13 +5,14 @@ use crate::entities::{
     AccountUsagePointResponse, AccountWindowResponse, ApprovalDelegationResponse, ArtifactResponse,
     ChangePasswordRequest, CreateApprovalDelegationRequest, CreateProviderAccountRequest,
     CreateRunRequest, CreateScheduleRequest, CreateUserRequest, CreatedBy, CreatedByKind,
-    KeyVersionsResponse, ListApprovalDelegationsQuery, ListRunsQuery, MeResponse,
+    KeyVersionsResponse, ListApprovalDelegationsQuery, ListRunsQuery, ListSignalsQuery, MeResponse,
     ProviderAccountResponse, ProviderAccountTestResponse, ProviderAccountUsageResponse,
-    RotateSecretsRequest, RotateSecretsResponse, RunDetailResponse, RunResponse, ScheduleResponse,
-    SecretResponse, SetSecretRequest, SignInRequest, StatsHistoryBucketResponse,
-    StatsHistoryResponse, StatsResponse, StepResponse, UpdateProviderAccountRequest,
-    UpdateRoleRequest, UpdateScheduleRequest, UpdateUserGroupsRequest, UserGroupsResponse,
-    UserResponse,
+    RejectedRunResponse, ResumedRunResponse, RotateSecretsRequest, RotateSecretsResponse,
+    RunDetailResponse, RunResponse, ScheduleResponse, SecretResponse, SendSignalRequest,
+    SetSecretRequest, SignInRequest, SignalDeliveryResponse, SignalResponse,
+    StatsHistoryBucketResponse, StatsHistoryResponse, StatsResponse, StepResponse,
+    UpdateProviderAccountRequest, UpdateRoleRequest, UpdateScheduleRequest,
+    UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -31,16 +32,17 @@ use crate::routes::{
     api_keys, approval_delegations, approve_run, audit_logs, auth, cancel_run, create_run,
     download_artifact, get_run, get_run_logs, get_stats, get_stats_history, get_workflow,
     health_check, human_input, list_runs, list_workflows, plan_workflow, provider_accounts,
-    replay_run, retry_run, run_events, schedules, secrets, users,
+    replay_run, retry_run, run_events, schedules, secrets, signals, users,
 };
 use ironflow_engine::notify::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
     Event, LogLineEvent, ProviderAccountChange, ProviderAccountUpdatedEvent,
     ProviderAccountUsageUpdatedEvent, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent,
-    RunFailedEvent, RunStatusChangedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
-    UserSignedOutEvent, UserSignedUpEvent, WorkflowAgentStepTokensUsedEvent,
-    WorkflowApprovalRequiredEvent, WorkflowEvent, WorkflowInputRequiredEvent,
-    WorkflowStepCompletedEvent, WorkflowStepFailedEvent, WorkflowStepStartedEvent,
+    RunFailedEvent, RunStatusChangedEvent, SignalAwaitedEvent, SignalReceivedEvent,
+    StepCompletedEvent, StepFailedEvent, UserSignedInEvent, UserSignedOutEvent, UserSignedUpEvent,
+    WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
+    WorkflowInputRequiredEvent, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
+    WorkflowStepStartedEvent,
 };
 use ironflow_store::entities::{
     AccountWindowStatus, ApprovalRequirement, AuditLogEntry, LogEntry, LogStream,
@@ -142,6 +144,8 @@ mod with_signup {
             approval_delegations::create::create_approval_delegation,
             approval_delegations::list::list_approval_delegations,
             approval_delegations::delete::delete_approval_delegation,
+            signals::send::send_signal,
+            signals::list::list_signals,
         ),
         components(
             schemas(
@@ -239,6 +243,14 @@ mod with_signup {
                 ApprovalDelegationResponse,
                 CreateApprovalDelegationRequest,
                 ListApprovalDelegationsQuery,
+                SendSignalRequest,
+                SignalDeliveryResponse,
+                ResumedRunResponse,
+                RejectedRunResponse,
+                SignalResponse,
+                ListSignalsQuery,
+                SignalAwaitedEvent,
+                SignalReceivedEvent,
             )
         ),
         tags(
@@ -255,6 +267,7 @@ mod with_signup {
             (name = "logs", description = "Run/step log persistence and retrieval"),
             (name = "schedules", description = "Schedule management"),
             (name = "approval-delegations", description = "Approval delegation for absent approvers"),
+            (name = "signals", description = "Signals: external messages that resume waiting runs"),
         )
     )]
     pub struct ApiDoc;
@@ -333,6 +346,8 @@ mod without_signup {
             approval_delegations::create::create_approval_delegation,
             approval_delegations::list::list_approval_delegations,
             approval_delegations::delete::delete_approval_delegation,
+            signals::send::send_signal,
+            signals::list::list_signals,
         ),
         components(
             schemas(
@@ -428,6 +443,14 @@ mod without_signup {
                 ApprovalDelegationResponse,
                 CreateApprovalDelegationRequest,
                 ListApprovalDelegationsQuery,
+                SendSignalRequest,
+                SignalDeliveryResponse,
+                ResumedRunResponse,
+                RejectedRunResponse,
+                SignalResponse,
+                ListSignalsQuery,
+                SignalAwaitedEvent,
+                SignalReceivedEvent,
             )
         ),
         tags(
@@ -444,6 +467,7 @@ mod without_signup {
             (name = "logs", description = "Run/step log persistence and retrieval"),
             (name = "schedules", description = "Schedule management"),
             (name = "approval-delegations", description = "Approval delegation for absent approvers"),
+            (name = "signals", description = "Signals: external messages that resume waiting runs"),
         )
     )]
     pub struct ApiDoc;

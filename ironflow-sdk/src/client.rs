@@ -226,6 +226,36 @@ pub struct ListApprovalDelegationsFilter {
     pub per_page: Option<u32>,
 }
 
+/// Filtering options for [`IronflowClient::list_signals`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_sdk::client::ListSignalsFilter;
+///
+/// let filter = ListSignalsFilter {
+///     name: Some("ci.pipeline_finished".to_string()),
+///     key: Some("4f2a9c1".to_string()),
+///     ..Default::default()
+/// };
+/// assert!(filter.page.is_none());
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ListSignalsFilter {
+    /// Only signals with this exact name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Only signals with this exact key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Page number (1-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    /// Items per page (max 100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<u32>,
+}
+
 /// Type-safe client for the Ironflow REST API.
 ///
 /// Handles Bearer authentication, the `{ data, meta }` response envelope,

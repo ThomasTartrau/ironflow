@@ -25,6 +25,7 @@ use crate::log_store::LogStore;
 use crate::provider_account_store::ProviderAccountStore;
 use crate::schedule_store::ScheduleStore;
 use crate::secret_store::SecretStore;
+use crate::signal_store::SignalStore;
 use crate::user_store::UserStore;
 
 /// Boxed future for [`RunStore`] methods — ensures object safety for `dyn RunStore`.
@@ -162,6 +163,24 @@ pub trait RunStore: Send + Sync {
     /// the escalation leaves the gate open with no timer, the same trade-off
     /// [`reap_expired_leases`](Self::reap_expired_leases) accepts.
     fn claim_due_approval_deadlines(&self, limit: u32) -> StoreFuture<'_, Vec<Step>>;
+
+    /// Atomically wake the `Sleeping` runs whose `scheduled_at` has passed, at
+    /// most `limit` per call.
+    ///
+    /// Each claimed run goes `Sleeping -> Pending` (`delay_elapsed`) and has
+    /// its `scheduled_at` cleared in the same transaction, so a run is woken
+    /// exactly once even with several API instances running the waker (the
+    /// PostgreSQL implementation uses `FOR UPDATE SKIP LOCKED`). Runs are
+    /// claimed oldest `scheduled_at` first.
+    ///
+    /// Returns the runs as they are after the transition. Callers decide how
+    /// the requeued runs resume: a worker picks them up, or the API resumes
+    /// them in-process when it has no worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] on storage failure.
+    fn claim_due_sleeping_runs(&self, limit: u32) -> StoreFuture<'_, Vec<Run>>;
 
     /// Create a new step for a run.
     ///
@@ -381,6 +400,7 @@ pub trait Store:
     + ScheduleStore
     + ApprovalDelegationStore
     + ProviderAccountStore
+    + SignalStore
 {
 }
 
@@ -394,7 +414,8 @@ impl<
         + LogStore
         + ScheduleStore
         + ApprovalDelegationStore
-        + ProviderAccountStore,
+        + ProviderAccountStore
+        + SignalStore,
 > Store for T
 {
 }

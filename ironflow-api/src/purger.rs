@@ -36,6 +36,9 @@ pub const DEFAULT_PURGE_BATCH_SIZE: u32 = 100;
 /// Default days of Provider Account usage history kept.
 pub const DEFAULT_USAGE_RETENTION_DAYS: u32 = 30;
 
+/// Default days received signals are kept.
+pub const DEFAULT_SIGNAL_RETENTION_DAYS: u32 = 7;
+
 /// Periodic task that purges terminal runs exceeding the retention policy.
 ///
 /// # Examples
@@ -69,6 +72,7 @@ pub struct RunPurger {
     interval: Duration,
     batch_size: u32,
     usage_retention_days: u32,
+    signal_retention_days: u32,
 }
 
 impl RunPurger {
@@ -81,6 +85,7 @@ impl RunPurger {
             interval: DEFAULT_PURGE_INTERVAL,
             batch_size: DEFAULT_PURGE_BATCH_SIZE,
             usage_retention_days: DEFAULT_USAGE_RETENTION_DAYS,
+            signal_retention_days: DEFAULT_SIGNAL_RETENTION_DAYS,
         }
     }
 
@@ -124,6 +129,28 @@ impl RunPurger {
         self
     }
 
+    /// Set how many days received signals are kept.
+    ///
+    /// A signal older than this can no longer resume a run that opens its
+    /// wait step late.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_api::purger::RunPurger;
+    /// use ironflow_store::entities::PurgePolicy;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let policy = PurgePolicy { max_age_days: 90, max_runs_per_workflow: 1000, dry_run: false };
+    /// let purger = RunPurger::new(Arc::new(InMemoryStore::new()), policy).signal_retention_days(3);
+    /// # let _ = purger;
+    /// ```
+    pub fn signal_retention_days(mut self, days: u32) -> Self {
+        self.signal_retention_days = days;
+        self
+    }
+
     /// Run the purge loop until `shutdown` is cancelled.
     pub async fn run(self, shutdown: CancellationToken) {
         let mut ticker = interval(self.interval);
@@ -164,11 +191,25 @@ impl RunPurger {
         }
     }
 
+    /// Delete the signals received before the retention window.
+    async fn purge_signals(&self) {
+        if self.policy.dry_run {
+            return;
+        }
+        let before = Utc::now() - TimeDelta::days(i64::from(self.signal_retention_days));
+        match self.store.purge_signals(before).await {
+            Ok(0) => {}
+            Ok(deleted) => info!(deleted, "purged old signals"),
+            Err(err) => error!(error = %err, "failed to purge old signals"),
+        }
+    }
+
     /// Purge one batch of eligible runs.
     ///
     /// Exposed for tests and for callers that drive the schedule themselves.
     pub async fn tick(&self) {
         self.purge_account_usage().await;
+        self.purge_signals().await;
 
         let purgeable = match self
             .store
@@ -280,12 +321,15 @@ mod tests {
     use chrono::{TimeDelta, Utc};
     use ironflow_store::entities::{
         AccountWindowStatus, NewAccountWindow, NewProviderAccount, NewProviderAccountObservation,
-        NewRun, PurgePolicy, RunStatus, TriggerKind, provider_account_secret_key,
+        NewRun, NewSignal, PurgePolicy, RunStatus, SignalFilter, TriggerKind,
+        provider_account_secret_key,
     };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::provider_account_store::ProviderAccountStore;
+    use ironflow_store::signal_store::SignalStore;
     use ironflow_store::store::RunStore;
     use serde_json::json;
+    use tokio::time::sleep;
     use uuid::Uuid;
 
     use super::*;
@@ -563,6 +607,48 @@ mod tests {
         // The blob should still exist
         let get_result = blob.get(shared_key).await;
         assert!(get_result.is_ok(), "shared blob should not be deleted");
+    }
+
+    #[tokio::test]
+    async fn purger_tick_purges_old_signals() {
+        let store = Arc::new(InMemoryStore::new());
+        store
+            .insert_signal(NewSignal {
+                name: "demo.done".to_string(),
+                key: "k1".to_string(),
+                payload: json!({}),
+                idempotency_id: None,
+            })
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(5)).await;
+        let policy = PurgePolicy {
+            max_age_days: 90,
+            max_runs_per_workflow: 1000,
+            dry_run: false,
+        };
+
+        // A one-day window keeps the fresh signal.
+        build(store.clone(), policy.clone())
+            .signal_retention_days(1)
+            .tick()
+            .await;
+        let kept = store
+            .list_signals(SignalFilter::default(), 1, 20)
+            .await
+            .unwrap();
+        assert_eq!(kept.total, 1);
+
+        // A zero-day window drops everything received before now.
+        build(store.clone(), policy)
+            .signal_retention_days(0)
+            .tick()
+            .await;
+        let purged = store
+            .list_signals(SignalFilter::default(), 1, 20)
+            .await
+            .unwrap();
+        assert_eq!(purged.total, 0);
     }
 
     #[tokio::test]

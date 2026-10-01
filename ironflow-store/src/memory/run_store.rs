@@ -448,6 +448,34 @@ impl RunStore for InMemoryStore {
         })
     }
 
+    fn claim_due_sleeping_runs(&self, limit: u32) -> StoreFuture<'_, Vec<Run>> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let now = Utc::now();
+
+            let mut due: Vec<(DateTime<Utc>, Uuid)> = state
+                .runs
+                .values()
+                .filter(|r| r.status.state == RunStatus::Sleeping)
+                .filter_map(|r| r.scheduled_at.filter(|at| *at <= now).map(|at| (at, r.id)))
+                .collect();
+            due.sort_unstable();
+            due.truncate(limit as usize);
+
+            let mut woken = Vec::with_capacity(due.len());
+            for (_, id) in due {
+                let run = state.runs.get_mut(&id).expect("run exists");
+                run.status.state = RunStatus::Pending;
+                run.scheduled_at = None;
+                run.updated_at = now;
+                let run = run.clone();
+                woken.push(run_with_label(&run, &state));
+            }
+
+            Ok(woken)
+        })
+    }
+
     fn list_purgeable_runs(
         &self,
         policy: &PurgePolicy,
@@ -3638,5 +3666,72 @@ mod tests {
 
         let fetched = store.get_step(step.id).await.unwrap().unwrap();
         assert_eq!(fetched.approval_requirement, Some(requirement));
+    }
+
+    async fn sleeping_run(store: &InMemoryStore, scheduled_at: DateTime<Utc>) -> Run {
+        let run = store
+            .create_run(new_run_req("sleepy"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Sleeping),
+                    scheduled_at: Some(scheduled_at),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        store.get_run(run.id).await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn claim_due_sleeping_runs_requeues_due_runs() {
+        let store = InMemoryStore::new();
+        let due = sleeping_run(&store, Utc::now() - TimeDelta::seconds(5)).await;
+
+        let woken = store.claim_due_sleeping_runs(10).await.unwrap();
+        assert_eq!(woken.len(), 1);
+        assert_eq!(woken[0].id, due.id);
+        assert_eq!(woken[0].status.state, RunStatus::Pending);
+        assert!(woken[0].scheduled_at.is_none());
+
+        let fetched = store.get_run(due.id).await.unwrap().unwrap();
+        assert_eq!(fetched.status.state, RunStatus::Pending);
+        assert!(fetched.scheduled_at.is_none());
+
+        // Exactly once: a second tick finds nothing.
+        assert!(store.claim_due_sleeping_runs(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn claim_due_sleeping_runs_skips_future_runs() {
+        let store = InMemoryStore::new();
+        let future = sleeping_run(&store, Utc::now() + TimeDelta::hours(1)).await;
+
+        assert!(store.claim_due_sleeping_runs(10).await.unwrap().is_empty());
+        let fetched = store.get_run(future.id).await.unwrap().unwrap();
+        assert_eq!(fetched.status.state, RunStatus::Sleeping);
+    }
+
+    #[tokio::test]
+    async fn claim_due_sleeping_runs_honours_limit_oldest_first() {
+        let store = InMemoryStore::new();
+        let older = sleeping_run(&store, Utc::now() - TimeDelta::seconds(20)).await;
+        let newer = sleeping_run(&store, Utc::now() - TimeDelta::seconds(10)).await;
+
+        let woken = store.claim_due_sleeping_runs(1).await.unwrap();
+        assert_eq!(woken.len(), 1);
+        assert_eq!(woken[0].id, older.id);
+
+        let woken = store.claim_due_sleeping_runs(1).await.unwrap();
+        assert_eq!(woken[0].id, newer.id);
     }
 }

@@ -1,7 +1,9 @@
 //! Engine error types.
 
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use thiserror::Error;
+use uuid::Uuid;
 
 use ironflow_artifacts::error::ArtifactError;
 use ironflow_core::error::OperationError;
@@ -201,6 +203,34 @@ pub enum EngineError {
         /// When the run should be woken up.
         wake_at: chrono::DateTime<chrono::Utc>,
     },
+
+    /// A signal step suspended the run until a matching signal or its deadline.
+    ///
+    /// Raised by
+    /// [`WorkflowContext::wait_for_signal`](crate::context::WorkflowContext::wait_for_signal)
+    /// when no signal was received yet. The engine transitions the run to
+    /// [`Sleeping`](ironflow_store::entities::RunStatus::Sleeping) with
+    /// `scheduled_at` set to the deadline: a delivery wakes it earlier.
+    #[error("run {run_id} waiting for signal {name:?} with key {key:?} until {deadline_at}")]
+    SignalWaiting {
+        /// The run that is waiting.
+        run_id: Uuid,
+        /// The signal step the run waits on.
+        step_id: Uuid,
+        /// Name of the signal step.
+        step_name: String,
+        /// The awaited signal name.
+        name: String,
+        /// The awaited occurrence key.
+        key: String,
+        /// When the wait times out.
+        deadline_at: DateTime<Utc>,
+    },
+
+    /// A signal could not be delivered because it is malformed (empty name or
+    /// key).
+    #[error("invalid signal: {0}")]
+    InvalidSignal(String),
 
     /// A workflow invocation was rejected by the [workflow guard](crate::guard).
     ///

@@ -42,3 +42,14 @@ export function rejectStepInput(
 		.post<RunResponse>(`/runs/${runId}/steps/${stepId}/reject`, { reason })
 		.then((res) => res.data);
 }
+
+/** Deliver a signal by hand, resuming the runs waiting for its name and key. */
+export function sendSignal(
+	name: string,
+	key: string,
+	payload: unknown,
+): Promise<unknown> {
+	return api
+		.post<unknown>("/signals", { name, key, payload })
+		.then((res) => res.data);
+}

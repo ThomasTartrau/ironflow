@@ -8,6 +8,7 @@
 //! - `api_keys/` - list, create, delete API keys
 //! - `users/` - list, create, update role, delete users
 //! - `delegations/` - list, create, revoke approval delegations
+//! - `signals/` - send and list signals
 //! - `audit_logs.rs` - list audit log entries
 //! - `artifacts.rs` - download step artifacts
 //! - `stats.rs` - aggregated statistics
@@ -21,6 +22,7 @@ pub mod provider_accounts;
 pub mod runs;
 pub mod schedules;
 pub mod secrets;
+pub mod signals;
 pub mod stats;
 pub mod users;
 pub mod workflows;
@@ -48,6 +50,7 @@ pub use schedules::{
 pub use secrets::{
     CreateSecretTool, DeleteSecretTool, ListSecretsTool, RotateSecretKeyTool, UpdateSecretTool,
 };
+pub use signals::{ListSignalsTool, SendSignalTool};
 pub use stats::{GetStatsHistoryTool, GetStatsTool};
 pub use users::{CreateUserTool, DeleteUserTool, ListUsersTool, UpdateUserRoleTool};
 pub use workflows::{GetWorkflowTool, ListWorkflowsTool, PlanWorkflowTool};
@@ -101,7 +104,9 @@ rust_mcp_sdk::tool_box!(
         TriggerScheduleTool,
         ListApprovalDelegationsTool,
         CreateApprovalDelegationTool,
-        DeleteApprovalDelegationTool
+        DeleteApprovalDelegationTool,
+        SendSignalTool,
+        ListSignalsTool
     ]
 );
 
@@ -1585,5 +1590,132 @@ mod tests {
 
         assert_eq!(parsed["meta"]["page"], "1");
         assert_eq!(parsed["meta"]["per_page"], "20");
+    }
+
+    // ── Signals ──
+
+    fn signals_router() -> Router {
+        Router::new().route(
+            "/api/v1/signals",
+            post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                let auth = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                Json(json!({
+                    "data": {
+                        "signal_id": "s1",
+                        "duplicate": false,
+                        "resumed": [],
+                        "rejected": [],
+                        "echo": body,
+                        "auth": auth
+                    }
+                }))
+            })
+            .get(|Query(params): Query<HashMap<String, String>>| async move {
+                Json(json!({
+                    "data": [{ "id": "s1", "name": params.get("name"), "key": params.get("key") }],
+                    "meta": { "page": 1, "per_page": 20, "total": 1 }
+                }))
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn send_signal_tool_posts_the_signal() {
+        let addr = start_server(signals_router()).await;
+        let client = client_for(addr);
+        let tool = SendSignalTool {
+            name: "ci.pipeline_finished".to_string(),
+            key: "abc".to_string(),
+            payload: Some(r#"{"status": "success"}"#.to_string()),
+            idempotency_id: Some("delivery-1".to_string()),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["duplicate"], false);
+        assert_eq!(parsed["echo"]["name"], "ci.pipeline_finished");
+        assert_eq!(parsed["echo"]["key"], "abc");
+        assert_eq!(parsed["echo"]["payload"], json!({"status": "success"}));
+        assert_eq!(parsed["echo"]["idempotency_id"], "delivery-1");
+        assert_eq!(parsed["auth"], "Bearer test-key");
+    }
+
+    #[tokio::test]
+    async fn send_signal_tool_defaults_to_an_empty_payload() {
+        let addr = start_server(signals_router()).await;
+        let client = client_for(addr);
+        let tool = SendSignalTool {
+            name: "demo.done".to_string(),
+            key: "k1".to_string(),
+            payload: None,
+            idempotency_id: None,
+        };
+
+        let parsed = extract_json(&tool.run(&client).await.unwrap());
+
+        assert_eq!(parsed["echo"]["payload"], json!({}));
+        assert!(parsed["echo"].get("idempotency_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn send_signal_tool_refuses_an_invalid_payload() {
+        let addr = start_server(signals_router()).await;
+        let client = client_for(addr);
+        let tool = SendSignalTool {
+            name: "demo.done".to_string(),
+            key: "k1".to_string(),
+            payload: Some("not json".to_string()),
+            idempotency_id: None,
+        };
+
+        assert!(tool.run(&client).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn send_signal_tool_propagates_api_error() {
+        let app = Router::new().route(
+            "/api/v1/signals",
+            post(|| async {
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "error": { "code": "INSUFFICIENT_SCOPE", "message": "missing scope" }
+                    })),
+                )
+            }),
+        );
+        let addr = start_server(app).await;
+        let client = client_for(addr);
+        let tool = SendSignalTool {
+            name: "demo.done".to_string(),
+            key: "k1".to_string(),
+            payload: None,
+            idempotency_id: None,
+        };
+
+        assert!(tool.run(&client).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_signals_tool_forwards_the_filters() {
+        let addr = start_server(signals_router()).await;
+        let client = client_for(addr);
+        let tool = ListSignalsTool {
+            name: Some("demo.done".to_string()),
+            key: Some("k1".to_string()),
+            page: None,
+            per_page: None,
+        };
+
+        let parsed = extract_json(&tool.run(&client).await.unwrap());
+
+        assert_eq!(parsed["data"][0]["name"], "demo.done");
+        assert_eq!(parsed["data"][0]["key"], "k1");
+        assert_eq!(parsed["meta"]["total"], 1);
     }
 }

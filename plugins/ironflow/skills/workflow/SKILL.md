@@ -1,6 +1,6 @@
 ---
 name: workflow
-description: Write an Ironflow WorkflowHandler - typed input schema, steps (shell, http, agent, approval, human input, decision, sub-workflow, parallel), registration in handlers(). Loaded by the ironflow hub for the workflow verb.
+description: Write an Ironflow WorkflowHandler - typed input schema, steps (shell, http, agent, approval, human input, signal, decision, sub-workflow, parallel), registration in handlers(). Loaded by the ironflow hub for the workflow verb.
 user-invocable: false
 ---
 
@@ -122,7 +122,7 @@ Then add the source display, which needs the real file name:
     }
 ```
 
-Step catalogue with every config builder: `references/steps.md`. Read it before writing an agent, http, sub-workflow, secret or artifact step.
+Step catalogue with every config builder: `references/steps.md`. Read it before writing an agent, http, signal (`ctx.wait_for_signal`), sub-workflow, secret or artifact step.
 
 ## 3. Register
 

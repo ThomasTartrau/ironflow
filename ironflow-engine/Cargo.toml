@@ -35,6 +35,7 @@ sha2 = "0.10"
 hex = "0.4"
 schemars = "1"
 croner = { version = "3", features = ["serde"] }
+jsonschema = { version = "0.30", default-features = false }
 rand = "0.9"
 metrics = { version = "0.24", optional = true }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], optional = true }

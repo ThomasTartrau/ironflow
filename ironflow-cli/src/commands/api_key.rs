@@ -55,7 +55,7 @@ pub enum ApiKeyCommands {
 }
 
 /// Every scope the API accepts, in the order the enum declares them.
-const ALL_SCOPES: [ApiKeyScope; 8] = [
+const ALL_SCOPES: [ApiKeyScope; 9] = [
     ApiKeyScope::WorkflowsRead,
     ApiKeyScope::RunsRead,
     ApiKeyScope::RunsWrite,
@@ -63,6 +63,7 @@ const ALL_SCOPES: [ApiKeyScope; 8] = [
     ApiKeyScope::StatsRead,
     ApiKeyScope::AccountsRead,
     ApiKeyScope::AccountsManage,
+    ApiKeyScope::SignalsSend,
     ApiKeyScope::Admin,
 ];
 

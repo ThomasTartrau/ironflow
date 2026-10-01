@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use ironflow_store::api_key_store::ApiKeyStore;
@@ -26,11 +27,15 @@ use ironflow_store::entities::{
     NewProviderAccount, NewProviderAccountObservation, ProviderAccount, ProviderAccountCandidate,
     ProviderAccountUpdate, ProviderAccountUsagePoint, ProviderAccountWindow,
 };
+use ironflow_store::entities::{
+    NewSignal, Signal, SignalFilter, SignalInsert, SignalStepResolution,
+};
 use ironflow_store::error::StoreError;
 use ironflow_store::log_store::LogStore;
 use ironflow_store::provider_account_store::ProviderAccountStore;
 use ironflow_store::schedule_store::ScheduleStore;
 use ironflow_store::secret_store::SecretStore;
+use ironflow_store::signal_store::SignalStore;
 use ironflow_store::store::RunStore;
 use ironflow_store::user_store::UserStore;
 
@@ -269,6 +274,12 @@ impl RunStore for ApiRunStore {
     fn claim_due_approval_deadlines(&self, _limit: u32) -> StoreFuture<'_, Vec<Step>> {
         // Escalation is an API-server responsibility: the worker has no route for
         // it and must never resolve a gate it does not own.
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    fn claim_due_sleeping_runs(&self, _limit: u32) -> StoreFuture<'_, Vec<Run>> {
+        // Waking sleeping runs is an API-server responsibility: the worker has
+        // no route for it and picks the requeued runs up like any pending run.
         Box::pin(async move { Ok(Vec::new()) })
     }
 
@@ -972,6 +983,120 @@ impl ProviderAccountStore for ApiRunStore {
     }
 }
 
+/// Error for the signal methods only the API server runs.
+fn signal_method_unavailable(method: &str) -> StoreError {
+    StoreError::Database(format!("SignalStore::{method} not available in worker"))
+}
+
+impl SignalStore for ApiRunStore {
+    fn insert_signal(&self, _signal: NewSignal) -> StoreFuture<'_, SignalInsert> {
+        Box::pin(async { Err(signal_method_unavailable("insert_signal")) })
+    }
+
+    fn list_signals(
+        &self,
+        _filter: SignalFilter,
+        _page: u32,
+        _per_page: u32,
+    ) -> StoreFuture<'_, Page<Signal>> {
+        Box::pin(async { Err(signal_method_unavailable("list_signals")) })
+    }
+
+    fn list_signals_for_key(
+        &self,
+        name: &str,
+        key: &str,
+        since: DateTime<Utc>,
+    ) -> StoreFuture<'_, Vec<Signal>> {
+        let query = [
+            ("name", name.to_string()),
+            ("key", key.to_string()),
+            ("since", since.to_rfc3339()),
+        ];
+        Box::pin(async move {
+            let resp = self
+                .client
+                .get(self.internal("/signals"))
+                .bearer_auth(&self.token)
+                .query(&query)
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<Vec<Signal>> = resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
+        })
+    }
+
+    fn list_signal_waiters(&self, _name: &str, _key: &str) -> StoreFuture<'_, Vec<Step>> {
+        Box::pin(async { Err(signal_method_unavailable("list_signal_waiters")) })
+    }
+
+    fn resolve_signal_step(
+        &self,
+        step_id: Uuid,
+        output: Value,
+    ) -> StoreFuture<'_, SignalStepResolution> {
+        Box::pin(async move {
+            let resp = self
+                .client
+                .post(self.internal(&format!("/steps/{step_id}/signal-resolution")))
+                .bearer_auth(&self.token)
+                .json(&json!({ "output": output }))
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if resp.status() == StatusCode::NOT_FOUND {
+                return Err(StoreError::StepNotFound(step_id));
+            }
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<SignalStepResolution> =
+                resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
+        })
+    }
+
+    fn suspend_run_on_signal(
+        &self,
+        run_id: Uuid,
+        step_id: Uuid,
+        deadline_at: DateTime<Utc>,
+    ) -> StoreFuture<'_, bool> {
+        Box::pin(async move {
+            let resp = self
+                .client
+                .post(self.internal(&format!("/runs/{run_id}/signal-suspension")))
+                .bearer_auth(&self.token)
+                .json(&json!({ "step_id": step_id, "deadline_at": deadline_at }))
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<bool> = resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
+        })
+    }
+
+    fn purge_signals(&self, _before: DateTime<Utc>) -> StoreFuture<'_, u64> {
+        Box::pin(async { Err(signal_method_unavailable("purge_signals")) })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -999,6 +1124,23 @@ mod tests {
         };
         let result = store.create_run(req).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn insert_signal_not_available_in_worker() {
+        let store = ApiRunStore::new("http://localhost:3000", "token");
+        let result = store
+            .insert_signal(NewSignal {
+                name: "demo.done".to_string(),
+                key: "k1".to_string(),
+                payload: json!({}),
+                idempotency_id: None,
+            })
+            .await;
+        match result {
+            Err(StoreError::Database(msg)) => assert!(msg.contains("not available in worker")),
+            other => panic!("expected an unavailable-method error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

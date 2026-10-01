@@ -57,6 +57,7 @@ pub mod rate_limit;
 pub mod retry;
 mod schedule_methods;
 mod sender;
+mod signal_methods;
 #[doc(hidden)]
 #[allow(unused_imports, clippy::all)]
 mod generated {

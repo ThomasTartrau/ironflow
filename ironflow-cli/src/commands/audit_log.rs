@@ -46,7 +46,7 @@ pub enum AuditLogCommands {
 }
 
 /// Every event kind the API records, in the order the enum declares them.
-const ALL_EVENT_KINDS: [EventKind; 15] = [
+const ALL_EVENT_KINDS: [EventKind; 17] = [
     EventKind::RunCreated,
     EventKind::RunStatusChanged,
     EventKind::RunFailed,
@@ -62,6 +62,8 @@ const ALL_EVENT_KINDS: [EventKind; 15] = [
     EventKind::UserSignedUp,
     EventKind::UserSignedOut,
     EventKind::ProviderAccountUpdated,
+    EventKind::SignalAwaited,
+    EventKind::SignalReceived,
 ];
 
 /// Parse a `--type` value, listing the accepted values on failure.

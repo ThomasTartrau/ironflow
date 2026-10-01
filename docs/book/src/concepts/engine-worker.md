@@ -81,6 +81,10 @@ chooses how.
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.
 
+## Waker
+
+Runs paused in `Sleeping` (a `ctx.delay` step, or a `ctx.wait_for_signal` step waiting for its signal) carry their wake-up time in `scheduled_at`. The Waker, a background task of the API server, claims every due run every 10 seconds and moves it back to `Pending` exactly once, even with several API instances. Under `ExecutionMode::Local` the API then resumes the run in-process; under `ExecutionMode::Workers` a worker picks it up. A delivered [signal](signals.md) wakes its runs right away, without waiting for the Waker.
+
 ## Scaling
 
 Workers are stateless. Add more workers to increase throughput. Each worker polls independently -- no coordination is needed beyond the API server.
