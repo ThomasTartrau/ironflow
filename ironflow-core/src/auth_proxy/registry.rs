@@ -1,14 +1,15 @@
-//! Opaque tokens bound to one run and one step, held in memory by the proxy.
+//! Opaque tokens bound to one run and one step, held by the proxy in a
+//! [`GrantBackend`].
 
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use getrandom::fill as fill_random;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use super::backend::{GrantBackend, MemoryGrantBackend};
 use super::credential::ProxyCredential;
 use super::{AuthProxyError, MAX_TOKEN_LIFETIME, TOKEN_PREFIX};
 
@@ -108,8 +109,10 @@ pub struct Grant {
 /// ```
 /// use ironflow_core::auth_proxy::{AuthProxyRegistry, TokenRejection};
 ///
+/// # async fn example() {
 /// let registry = AuthProxyRegistry::default();
-/// assert_eq!(registry.resolve("ifap_nope", 0).err(), Some(TokenRejection::Unknown));
+/// assert_eq!(registry.resolve("ifap_nope", 0).await.err(), Some(TokenRejection::Unknown));
+/// # }
 /// ```
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TokenRejection {
@@ -119,10 +122,17 @@ pub enum TokenRejection {
     /// The token has expired.
     #[error("expired token")]
     Expired,
+    /// The [`GrantBackend`] could not answer: the token may well be valid.
+    /// The message never carries a token or credential value.
+    #[error("token registry unavailable: {0}")]
+    Unavailable(String),
 }
 
-/// In-memory registry of the issued tokens, keyed by [`token_id`]. The token
-/// itself is never stored. Cheap to clone: clones share the same registry.
+/// Registry of the issued tokens, keyed by [`token_id`]. The token itself is
+/// never stored. Grants live in a [`GrantBackend`]: in memory by default
+/// ([`MemoryGrantBackend`]), or shared between replicas with
+/// [`AuthProxyRegistry::with_backend`]. Cheap to clone: clones share the same
+/// backend.
 ///
 /// # Examples
 ///
@@ -131,7 +141,7 @@ pub enum TokenRejection {
 ///     AuthProxyRegistry, CredentialKind, ProxyCredential, TokenRequest,
 /// };
 ///
-/// # fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
+/// # async fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
 /// let registry = AuthProxyRegistry::default();
 /// let request = TokenRequest {
 ///     run_id: "run-1".to_string(),
@@ -139,21 +149,61 @@ pub enum TokenRejection {
 ///     expires_at: 200,
 ///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
 /// };
-/// let issued = registry.issue(request, 100)?;
-/// assert_eq!(registry.len(), 1);
-/// assert!(registry.revoke(&issued.id));
-/// assert!(registry.is_empty());
+/// let issued = registry.issue(request, 100).await?;
+/// assert_eq!(registry.len().await?, 1);
+/// assert!(registry.revoke(&issued.id).await?);
+/// assert!(registry.is_empty().await?);
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AuthProxyRegistry {
-    grants: Arc<Mutex<HashMap<String, Grant>>>,
+    backend: Arc<dyn GrantBackend>,
+}
+
+impl Default for AuthProxyRegistry {
+    fn default() -> Self {
+        Self::with_backend(Arc::new(MemoryGrantBackend::default()))
+    }
+}
+
+impl fmt::Debug for AuthProxyRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthProxyRegistry").finish_non_exhaustive()
+    }
 }
 
 impl AuthProxyRegistry {
-    fn grants(&self) -> MutexGuard<'_, HashMap<String, Grant>> {
-        self.grants.lock().unwrap_or_else(|e| e.into_inner())
+    /// A registry keeping its grants in `backend`. Registries built over the
+    /// same backend (or over backends sharing the same storage, such as one
+    /// database) see the same tokens.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use ironflow_core::auth_proxy::{
+    ///     AuthProxyRegistry, CredentialKind, MemoryGrantBackend, ProxyCredential, TokenRequest,
+    /// };
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
+    /// let backend = Arc::new(MemoryGrantBackend::default());
+    /// let a = AuthProxyRegistry::with_backend(backend.clone());
+    /// let b = AuthProxyRegistry::with_backend(backend);
+    /// let request = TokenRequest {
+    ///     run_id: "run-1".to_string(),
+    ///     step: "review".to_string(),
+    ///     expires_at: 200,
+    ///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+    /// };
+    /// let issued = a.issue(request, 100).await?;
+    /// assert!(b.resolve(&issued.token, 150).await.is_ok());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_backend(backend: Arc<dyn GrantBackend>) -> Self {
+        Self { backend }
     }
 
     /// Issue a new opaque token for `req`, `now` being the current unix time.
@@ -164,12 +214,13 @@ impl AuthProxyRegistry {
     /// after `now` or more than [`MAX_TOKEN_LIFETIME`] away, or when the run,
     /// step or credential is empty, or when the credential holds a character
     /// outside printable ASCII; [`AuthProxyError::Random`] when the system
-    /// random source fails.
+    /// random source fails; [`AuthProxyError::Backend`] when the backend
+    /// cannot store the grant.
     ///
     /// # Examples
     ///
     /// See [`AuthProxyRegistry`].
-    pub fn issue(&self, req: TokenRequest, now: u64) -> Result<IssuedToken, AuthProxyError> {
+    pub async fn issue(&self, req: TokenRequest, now: u64) -> Result<IssuedToken, AuthProxyError> {
         if req.expires_at <= now {
             return Err(invalid("expires_at is in the past"));
         }
@@ -202,7 +253,7 @@ impl AuthProxyRegistry {
             credential: req.credential,
             id: id.clone(),
         };
-        self.grants().insert(id.clone(), grant);
+        self.backend.insert(grant).await?;
         Ok(IssuedToken { id, token })
     }
 
@@ -211,7 +262,8 @@ impl AuthProxyRegistry {
     /// # Errors
     ///
     /// Returns [`TokenRejection::Unknown`] for a token never issued or
-    /// revoked, [`TokenRejection::Expired`] once `expires_at <= now`.
+    /// revoked, [`TokenRejection::Expired`] once `expires_at <= now`,
+    /// [`TokenRejection::Unavailable`] when the backend fails.
     ///
     /// # Examples
     ///
@@ -220,7 +272,7 @@ impl AuthProxyRegistry {
     ///     AuthProxyRegistry, CredentialKind, ProxyCredential, TokenRejection, TokenRequest,
     /// };
     ///
-    /// # fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
+    /// # async fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
     /// let registry = AuthProxyRegistry::default();
     /// let request = TokenRequest {
     ///     run_id: "run-1".to_string(),
@@ -228,80 +280,113 @@ impl AuthProxyRegistry {
     ///     expires_at: 200,
     ///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
     /// };
-    /// let issued = registry.issue(request, 100)?;
-    /// assert_eq!(registry.resolve(&issued.token, 150).map(|g| g.run_id), Ok("run-1".to_string()));
-    /// assert_eq!(registry.resolve(&issued.token, 200).err(), Some(TokenRejection::Expired));
+    /// let issued = registry.issue(request, 100).await?;
+    /// assert_eq!(
+    ///     registry.resolve(&issued.token, 150).await.map(|g| g.run_id),
+    ///     Ok("run-1".to_string())
+    /// );
+    /// assert_eq!(
+    ///     registry.resolve(&issued.token, 200).await.err(),
+    ///     Some(TokenRejection::Expired)
+    /// );
     /// # Ok(())
     /// # }
     /// ```
-    pub fn resolve(&self, token: &str, now: u64) -> Result<Grant, TokenRejection> {
+    pub async fn resolve(&self, token: &str, now: u64) -> Result<Grant, TokenRejection> {
         let id = token_id(token);
-        let mut grants = self.grants();
-        let grant = grants.get(&id).ok_or(TokenRejection::Unknown)?;
+        let grant = self
+            .backend
+            .get(&id)
+            .await
+            .map_err(|e| TokenRejection::Unavailable(e.to_string()))?
+            .ok_or(TokenRejection::Unknown)?;
         if grant.expires_at <= now {
-            grants.remove(&id);
+            self.backend
+                .remove(&id)
+                .await
+                .map_err(|e| TokenRejection::Unavailable(e.to_string()))?;
             return Err(TokenRejection::Expired);
         }
-        Ok(grant.clone())
+        Ok(grant)
     }
 
     /// Revoke a token by id. Returns whether it existed.
     ///
+    /// # Errors
+    ///
+    /// Returns [`AuthProxyError::Backend`] when the backend fails.
+    ///
     /// # Examples
     ///
     /// See [`AuthProxyRegistry`].
-    pub fn revoke(&self, id: &str) -> bool {
-        self.grants().remove(id).is_some()
+    pub async fn revoke(&self, id: &str) -> Result<bool, AuthProxyError> {
+        self.backend.remove(id).await
     }
 
     /// Revoke every token of a run. Returns how many were revoked.
     ///
+    /// # Errors
+    ///
+    /// Returns [`AuthProxyError::Backend`] when the backend fails.
+    ///
     /// # Examples
     ///
     /// ```
     /// use ironflow_core::auth_proxy::AuthProxyRegistry;
     ///
-    /// assert_eq!(AuthProxyRegistry::default().revoke_run("run-1"), 0);
+    /// # async fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
+    /// assert_eq!(AuthProxyRegistry::default().revoke_run("run-1").await?, 0);
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn revoke_run(&self, run_id: &str) -> usize {
-        let mut grants = self.grants();
-        let before = grants.len();
-        grants.retain(|_, grant| grant.run_id != run_id);
-        before - grants.len()
+    pub async fn revoke_run(&self, run_id: &str) -> Result<usize, AuthProxyError> {
+        self.backend.remove_run(run_id).await
     }
 
     /// Drop every grant expired at `now`. Returns how many were dropped.
     ///
+    /// # Errors
+    ///
+    /// Returns [`AuthProxyError::Backend`] when the backend fails.
+    ///
     /// # Examples
     ///
     /// ```
     /// use ironflow_core::auth_proxy::AuthProxyRegistry;
     ///
-    /// assert_eq!(AuthProxyRegistry::default().purge_expired(1_700_000_000), 0);
+    /// # async fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
+    /// assert_eq!(AuthProxyRegistry::default().purge_expired(1_700_000_000).await?, 0);
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn purge_expired(&self, now: u64) -> usize {
-        let mut grants = self.grants();
-        let before = grants.len();
-        grants.retain(|_, grant| grant.expires_at > now);
-        before - grants.len()
+    pub async fn purge_expired(&self, now: u64) -> Result<usize, AuthProxyError> {
+        self.backend.purge_expired(now).await
     }
 
     /// Number of live grants.
     ///
+    /// # Errors
+    ///
+    /// Returns [`AuthProxyError::Backend`] when the backend fails.
+    ///
     /// # Examples
     ///
     /// See [`AuthProxyRegistry`].
-    pub fn len(&self) -> usize {
-        self.grants().len()
+    pub async fn len(&self) -> Result<usize, AuthProxyError> {
+        self.backend.len().await
     }
 
     /// Whether no grant is held.
     ///
+    /// # Errors
+    ///
+    /// Returns [`AuthProxyError::Backend`] when the backend fails.
+    ///
     /// # Examples
     ///
     /// See [`AuthProxyRegistry`].
-    pub fn is_empty(&self) -> bool {
-        self.grants().is_empty()
+    pub async fn is_empty(&self) -> Result<bool, AuthProxyError> {
+        self.backend.is_empty().await
     }
 }
 
@@ -381,11 +466,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn issue_then_resolve_returns_grant() {
+    #[tokio::test]
+    async fn issue_then_resolve_returns_grant() {
         let registry = AuthProxyRegistry::default();
-        let issued = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
-        let grant = registry.resolve(&issued.token, NOW + 1).unwrap();
+        let issued = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
+        let grant = registry.resolve(&issued.token, NOW + 1).await.unwrap();
         assert_eq!(grant.run_id, "run-1");
         assert_eq!(grant.step, "review");
         assert_eq!(grant.expires_at, NOW + 600);
@@ -394,115 +482,162 @@ mod tests {
         assert_eq!(grant.credential.kind(), CredentialKind::OauthToken);
     }
 
-    #[test]
-    fn resolve_unknown_token_is_rejected() {
+    #[tokio::test]
+    async fn resolve_unknown_token_is_rejected() {
         let registry = AuthProxyRegistry::default();
-        registry.issue(request("run-1", NOW + 600), NOW).unwrap();
+        registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
         assert_eq!(
-            registry.resolve("invalide", NOW).unwrap_err(),
+            registry.resolve("invalide", NOW).await.unwrap_err(),
             TokenRejection::Unknown
         );
     }
 
-    #[test]
-    fn resolve_expired_token_is_rejected_and_removed() {
+    #[tokio::test]
+    async fn resolve_expired_token_is_rejected_and_removed() {
         let registry = AuthProxyRegistry::default();
-        let issued = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
+        let issued = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
         assert_eq!(
-            registry.resolve(&issued.token, NOW + 600).unwrap_err(),
+            registry
+                .resolve(&issued.token, NOW + 600)
+                .await
+                .unwrap_err(),
             TokenRejection::Expired
         );
-        assert!(registry.is_empty());
+        assert!(registry.is_empty().await.unwrap());
         assert_eq!(
-            registry.resolve(&issued.token, NOW + 600).unwrap_err(),
+            registry
+                .resolve(&issued.token, NOW + 600)
+                .await
+                .unwrap_err(),
             TokenRejection::Unknown
         );
     }
 
-    #[test]
-    fn revoke_makes_token_unknown() {
+    #[tokio::test]
+    async fn revoke_makes_token_unknown() {
         let registry = AuthProxyRegistry::default();
-        let issued = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
-        assert!(registry.revoke(&issued.id));
-        assert!(!registry.revoke(&issued.id));
+        let issued = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
+        assert!(registry.revoke(&issued.id).await.unwrap());
+        assert!(!registry.revoke(&issued.id).await.unwrap());
         assert_eq!(
-            registry.resolve(&issued.token, NOW).unwrap_err(),
+            registry.resolve(&issued.token, NOW).await.unwrap_err(),
             TokenRejection::Unknown
         );
     }
 
-    #[test]
-    fn revoke_run_only_drops_that_run() {
+    #[tokio::test]
+    async fn revoke_run_only_drops_that_run() {
         let registry = AuthProxyRegistry::default();
-        let a1 = registry.issue(request("run-a", NOW + 600), NOW).unwrap();
-        let a2 = registry.issue(request("run-a", NOW + 600), NOW).unwrap();
-        let b = registry.issue(request("run-b", NOW + 600), NOW).unwrap();
-        assert_eq!(registry.revoke_run("run-a"), 2);
-        assert_eq!(registry.revoke_run("run-a"), 0);
-        assert!(registry.resolve(&a1.token, NOW).is_err());
-        assert!(registry.resolve(&a2.token, NOW).is_err());
-        assert_eq!(registry.resolve(&b.token, NOW).unwrap().run_id, "run-b");
+        let a1 = registry
+            .issue(request("run-a", NOW + 600), NOW)
+            .await
+            .unwrap();
+        let a2 = registry
+            .issue(request("run-a", NOW + 600), NOW)
+            .await
+            .unwrap();
+        let b = registry
+            .issue(request("run-b", NOW + 600), NOW)
+            .await
+            .unwrap();
+        assert_eq!(registry.revoke_run("run-a").await.unwrap(), 2);
+        assert_eq!(registry.revoke_run("run-a").await.unwrap(), 0);
+        assert!(registry.resolve(&a1.token, NOW).await.is_err());
+        assert!(registry.resolve(&a2.token, NOW).await.is_err());
+        assert_eq!(
+            registry.resolve(&b.token, NOW).await.unwrap().run_id,
+            "run-b"
+        );
     }
 
-    #[test]
-    fn purge_expired_counts() {
+    #[tokio::test]
+    async fn purge_expired_counts() {
         let registry = AuthProxyRegistry::default();
-        registry.issue(request("run-1", NOW + 10), NOW).unwrap();
-        registry.issue(request("run-1", NOW + 20), NOW).unwrap();
-        let live = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
-        assert_eq!(registry.purge_expired(NOW + 20), 2);
-        assert_eq!(registry.len(), 1);
-        assert!(registry.resolve(&live.token, NOW + 20).is_ok());
-        assert_eq!(registry.purge_expired(NOW + 20), 0);
+        registry
+            .issue(request("run-1", NOW + 10), NOW)
+            .await
+            .unwrap();
+        registry
+            .issue(request("run-1", NOW + 20), NOW)
+            .await
+            .unwrap();
+        let live = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
+        assert_eq!(registry.purge_expired(NOW + 20).await.unwrap(), 2);
+        assert_eq!(registry.len().await.unwrap(), 1);
+        assert!(registry.resolve(&live.token, NOW + 20).await.is_ok());
+        assert_eq!(registry.purge_expired(NOW + 20).await.unwrap(), 0);
     }
 
-    #[test]
-    fn issue_rejects_past_expiry() {
+    #[tokio::test]
+    async fn issue_rejects_past_expiry() {
         let registry = AuthProxyRegistry::default();
-        let message = invalid_message(registry.issue(request("run-1", NOW), NOW));
+        let message = invalid_message(registry.issue(request("run-1", NOW), NOW).await);
         assert_eq!(message, "expires_at is in the past");
-        let message = invalid_message(registry.issue(request("run-1", NOW - 1), NOW));
+        let message = invalid_message(registry.issue(request("run-1", NOW - 1), NOW).await);
         assert_eq!(message, "expires_at is in the past");
-        assert!(registry.is_empty());
+        assert!(registry.is_empty().await.unwrap());
     }
 
-    #[test]
-    fn issue_rejects_lifetime_over_24h() {
+    #[tokio::test]
+    async fn issue_rejects_lifetime_over_24h() {
         let registry = AuthProxyRegistry::default();
         let max = MAX_TOKEN_LIFETIME.as_secs();
-        let message = invalid_message(registry.issue(request("run-1", NOW + max + 1), NOW));
+        let message = invalid_message(registry.issue(request("run-1", NOW + max + 1), NOW).await);
         assert!(message.contains("24 hours"), "{message}");
-        assert!(registry.issue(request("run-1", NOW + max), NOW).is_ok());
+        assert!(
+            registry
+                .issue(request("run-1", NOW + max), NOW)
+                .await
+                .is_ok()
+        );
     }
 
-    #[test]
-    fn issue_rejects_empty_credential() {
+    #[tokio::test]
+    async fn issue_rejects_empty_credential() {
         let registry = AuthProxyRegistry::default();
         let mut req = request("run-1", NOW + 600);
         req.credential = ProxyCredential::new(CredentialKind::ApiKey, String::new());
         assert_eq!(
-            invalid_message(registry.issue(req, NOW)),
+            invalid_message(registry.issue(req, NOW).await),
             "credential is empty"
         );
 
-        let message = invalid_message(registry.issue(request("", NOW + 600), NOW));
+        let message = invalid_message(registry.issue(request("", NOW + 600), NOW).await);
         assert_eq!(message, "run_id is empty");
 
         let mut req = request("run-1", NOW + 600);
         req.step = String::new();
-        assert_eq!(invalid_message(registry.issue(req, NOW)), "step is empty");
+        assert_eq!(
+            invalid_message(registry.issue(req, NOW).await),
+            "step is empty"
+        );
 
         let mut req = request("run-1", NOW + 600);
         req.credential = ProxyCredential::new(CredentialKind::OauthToken, "tok\nen".to_string());
-        let message = invalid_message(registry.issue(req, NOW));
+        let message = invalid_message(registry.issue(req, NOW).await);
         assert!(message.contains("header cannot carry"), "{message}");
-        assert!(registry.is_empty());
+        assert!(registry.is_empty().await.unwrap());
     }
 
-    #[test]
-    fn token_has_prefix_and_never_starts_with_sk_ant() {
+    #[tokio::test]
+    async fn token_has_prefix_and_never_starts_with_sk_ant() {
         let registry = AuthProxyRegistry::default();
-        let issued = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
+        let issued = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
         assert!(issued.token.starts_with(TOKEN_PREFIX));
         assert!(!issued.token.starts_with("sk-ant"));
         let suffix = &issued.token[TOKEN_PREFIX.len()..];
@@ -516,33 +651,56 @@ mod tests {
         assert_eq!(issued.short_id(), &issued.id[..12]);
     }
 
-    #[test]
-    fn two_tokens_differ() {
+    #[tokio::test]
+    async fn two_tokens_differ() {
         let registry = AuthProxyRegistry::default();
-        let a = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
-        let b = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
+        let a = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
+        let b = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
         assert_ne!(a.token, b.token);
         assert_ne!(a.id, b.id);
-        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.len().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn registry_with_backend_shares_grants_between_clones() {
+        let backend = Arc::new(MemoryGrantBackend::default());
+        let a = AuthProxyRegistry::with_backend(backend.clone());
+        let b = AuthProxyRegistry::with_backend(backend.clone());
+        let issued = a.issue(request("run-1", NOW + 600), NOW).await.unwrap();
+
+        let grant = b.resolve(&issued.token, NOW + 1).await.unwrap();
+        assert_eq!(grant.id, issued.id);
+        assert_eq!(grant.run_id, "run-1");
+        assert_eq!(grant.credential.expose(), "sk-ant-oat01-test");
+        assert_eq!(b.len().await.unwrap(), 1);
+
+        assert!(b.revoke(&issued.id).await.unwrap());
+        assert_eq!(
+            a.resolve(&issued.token, NOW + 1).await.unwrap_err(),
+            TokenRejection::Unknown
+        );
+        assert!(a.is_empty().await.unwrap());
     }
 
     #[test]
-    fn registry_never_stores_the_token() {
-        let registry = AuthProxyRegistry::default();
-        let issued = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
-        let grants = registry.grants();
-        let keys: Vec<&String> = grants.keys().collect();
-        assert_eq!(keys, vec![&token_id(&issued.token)]);
-        assert_ne!(keys[0], &issued.token);
-        let stored = format!("{:?}", grants.values().collect::<Vec<_>>());
-        assert!(!stored.contains(&issued.token), "{stored}");
-        assert!(!stored.contains("sk-ant-oat01-test"), "{stored}");
+    fn registry_debug_shows_no_grant() {
+        let debug = format!("{:?}", AuthProxyRegistry::default());
+        assert_eq!(debug, "AuthProxyRegistry { .. }");
     }
 
-    #[test]
-    fn issued_token_debug_redacts_token() {
+    #[tokio::test]
+    async fn issued_token_debug_redacts_token() {
         let registry = AuthProxyRegistry::default();
-        let issued = registry.issue(request("run-1", NOW + 600), NOW).unwrap();
+        let issued = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
         let debug = format!("{issued:?}");
         assert!(!debug.contains(&issued.token), "{debug}");
         assert!(debug.contains(&issued.id), "{debug}");

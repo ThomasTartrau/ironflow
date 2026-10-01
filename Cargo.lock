@@ -3585,8 +3585,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "ironflow-core",
+ "ironflow-store",
  "reqwest 0.13.5",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",

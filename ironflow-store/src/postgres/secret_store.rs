@@ -26,7 +26,7 @@ fn escape_like(s: &str) -> String {
 #[cfg(feature = "secret-store")]
 impl PostgresStore {
     /// The configured key ring, or a [`StoreError::Crypto`] naming what is missing.
-    fn require_key_ring(&self) -> Result<&crate::crypto::KeyRing, StoreError> {
+    pub(super) fn require_key_ring(&self) -> Result<&crate::crypto::KeyRing, StoreError> {
         self.key_ring
             .as_deref()
             .ok_or_else(|| StoreError::Crypto("no master key configured".to_string()))

@@ -5,6 +5,12 @@
 //! * `IRONFLOW_AUTH_PROXY_ADMIN_KEY` (required, at least 32 characters) - key
 //!   of the admin API, shared with the worker.
 //! * `IRONFLOW_AUTH_PROXY_LISTEN` (default `0.0.0.0:8080`) - listen address.
+//! * `IRONFLOW_AUTH_PROXY_DATABASE_URL` (optional) - PostgreSQL URL of a
+//!   token registry shared by several replicas and surviving restarts. Unset,
+//!   tokens live in memory and a single replica must run.
+//! * `IRONFLOW_SECRET_KEYS` / `IRONFLOW_SECRET_ACTIVE_KEY_VERSION` (or the
+//!   legacy `IRONFLOW_SECRET_KEY`) - key ring encrypting the credentials at
+//!   rest. Required with `IRONFLOW_AUTH_PROXY_DATABASE_URL`.
 //! * `RUST_LOG` (default `info`) - log filter. Logs are JSON.
 //!
 //! The upstream is always `https://api.anthropic.com`.
@@ -18,8 +24,12 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
 
-use ironflow_auth_proxy::{AuthProxyConfig, AuthProxyState, MIN_ADMIN_KEY_LEN, serve, spawn_purge};
+use ironflow_auth_proxy::{
+    AuthProxyConfig, AuthProxyState, DATABASE_URL_ENV, MIN_ADMIN_KEY_LEN, registry_from_config,
+    serve, spawn_purge,
+};
 use ironflow_core::auth_proxy::{ADMIN_KEY_ENV, DEFAULT_UPSTREAM};
+use ironflow_store::crypto::KeyRing;
 
 /// Environment variable holding the listen address.
 const LISTEN_ENV: &str = "IRONFLOW_AUTH_PROXY_LISTEN";
@@ -49,7 +59,35 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let state = match AuthProxyState::new(AuthProxyConfig::new(&admin_key)) {
+    // The URL can carry a password: it is never logged.
+    let database_url = var(DATABASE_URL_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let key_ring = match &database_url {
+        Some(_) => match KeyRing::from_env() {
+            Ok(ring) => ring,
+            Err(e) => {
+                error!(error = %e, "invalid encryption key configuration");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let backend = if database_url.is_some() {
+        "postgres"
+    } else {
+        "memory"
+    };
+    let registry = match registry_from_config(database_url.as_deref(), key_ring).await {
+        Ok(registry) => registry,
+        Err(e) => {
+            error!(error = %e, backend, "cannot build the token registry");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let state = match AuthProxyState::with_registry(AuthProxyConfig::new(&admin_key), registry) {
         Ok(state) => state,
         Err(e) => {
             error!(error = %e, "cannot build the upstream HTTP client");
@@ -64,7 +102,12 @@ async fn main() -> ExitCode {
         }
     };
 
-    info!(listen = %listen, upstream = DEFAULT_UPSTREAM, "ironflow-auth-proxy listening");
+    info!(
+        listen = %listen,
+        upstream = DEFAULT_UPSTREAM,
+        backend,
+        "ironflow-auth-proxy listening"
+    );
     let purge = spawn_purge(state.registry().clone(), PURGE_INTERVAL);
     let result = serve(listener, state).await;
     purge.abort();

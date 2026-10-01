@@ -11,6 +11,8 @@
 //! This module holds what both sides share:
 //!
 //! * [`AuthProxyRegistry`] - the opaque token registry (proxy side);
+//! * [`GrantBackend`] - where the registry keeps its grants, and
+//!   [`MemoryGrantBackend`], the in-process default;
 //! * [`extract_opaque_token`], [`is_allowed_path`], [`upstream_headers`],
 //!   [`downstream_headers`] - the relay policy (proxy side);
 //! * [`resolve_credential`] / [`ProxyCredential`] - which credential the
@@ -25,24 +27,27 @@
 //!     AuthProxyRegistry, CredentialKind, ProxyCredential, TokenRequest,
 //! };
 //!
-//! # fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
+//! # async fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
 //! let registry = AuthProxyRegistry::default();
-//! let issued = registry.issue(
-//!     TokenRequest {
-//!         run_id: "run-1".to_string(),
-//!         step: "review".to_string(),
-//!         expires_at: 1_000 + 600,
-//!         credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
-//!     },
-//!     1_000,
-//! )?;
+//! let issued = registry
+//!     .issue(
+//!         TokenRequest {
+//!             run_id: "run-1".to_string(),
+//!             step: "review".to_string(),
+//!             expires_at: 1_000 + 600,
+//!             credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+//!         },
+//!         1_000,
+//!     )
+//!     .await?;
 //! assert!(issued.token.starts_with("ifap_"));
-//! let step = registry.resolve(&issued.token, 1_001).map(|grant| grant.step);
+//! let step = registry.resolve(&issued.token, 1_001).await.map(|grant| grant.step);
 //! assert_eq!(step, Ok("review".to_string()));
 //! # Ok(())
 //! # }
 //! ```
 
+mod backend;
 mod client;
 mod credential;
 mod policy;
@@ -52,6 +57,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+pub use backend::{GrantBackend, GrantFuture, MemoryGrantBackend};
 pub use client::AuthProxyClient;
 pub use credential::{CredentialKind, ProxyCredential, resolve_credential};
 pub use policy::{
@@ -118,4 +124,8 @@ pub enum AuthProxyError {
     /// The admin API could not be reached.
     #[error("auth proxy unreachable: {0}")]
     Transport(String),
+    /// The [`GrantBackend`] holding the grants failed. The message never
+    /// carries a token or credential value.
+    #[error("auth proxy registry backend failed: {0}")]
+    Backend(String),
 }

@@ -21,6 +21,8 @@ mod api_key_store;
 mod approval_delegation_store;
 mod artifact_store;
 mod audit_log_store;
+#[cfg(feature = "secret-store")]
+mod auth_proxy_grant_store;
 mod helpers;
 mod log_store;
 mod provider_account_store;
