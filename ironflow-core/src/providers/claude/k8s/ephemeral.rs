@@ -688,6 +688,8 @@ impl K8sEphemeralProvider {
     ///
     /// Can be called multiple times to add several volumes.
     ///
+    /// A step drops this mount with [`AgentConfig::without_provider_volumes`].
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -709,6 +711,8 @@ impl K8sEphemeralProvider {
     /// access mode when multiple pods mount the same claim concurrently.
     ///
     /// Can be called multiple times to add several PVC mounts.
+    ///
+    /// A step drops this mount with [`AgentConfig::without_provider_volumes`].
     ///
     /// # Examples
     ///
@@ -810,7 +814,9 @@ struct CreatedPod {
 
 /// Pod inputs merged from the provider defaults and the step's [`AgentConfig`].
 #[derive(Debug)]
-struct MergedPodInputs {
+struct MergedPodInputs<'a> {
+    volumes: &'a [(String, String)],
+    pvc_volumes: &'a [(String, String)],
     secret_env: Vec<SecretEnvVar>,
     service_account: Option<String>,
     read_only_volumes: Vec<ReadOnlyVolume>,
@@ -825,7 +831,10 @@ impl K8sEphemeralProvider {
     ///
     /// Returns [`AgentError::ProcessFailed`] when a sandboxed provider carries
     /// a secret as plain text, or when the managed-settings preset is unknown.
-    fn merged_pod_inputs(&self, config: &AgentConfig) -> Result<MergedPodInputs, AgentError> {
+    fn merged_pod_inputs<'a>(
+        &'a self,
+        config: &AgentConfig,
+    ) -> Result<MergedPodInputs<'a>, AgentError> {
         if self.sandbox.is_some() {
             if self.oauth_credentials.is_some() {
                 return Err(AgentError::ProcessFailed {
@@ -864,6 +873,12 @@ impl K8sEphemeralProvider {
             .service_account
             .clone()
             .or_else(|| self.service_account.clone());
+
+        let (volumes, pvc_volumes): (&[_], &[_]) = if config.pod.without_provider_volumes {
+            (&[], &[])
+        } else {
+            (&self.volumes, &self.pvc_volumes)
+        };
 
         let mut read_only_volumes = self.read_only_volumes.clone();
         read_only_volumes.extend(config.pod.read_only_volumes.iter().cloned());
@@ -908,6 +923,8 @@ impl K8sEphemeralProvider {
         labels.extend(config.pod_labels.clone());
 
         Ok(MergedPodInputs {
+            volumes,
+            pvc_volumes,
             secret_env,
             service_account,
             read_only_volumes,
@@ -1176,8 +1193,8 @@ impl K8sEphemeralProvider {
             extra_labels: &merged.labels,
             node_selector: &self.node_selector,
             tolerations: &self.tolerations,
-            volumes: &self.volumes,
-            pvc_volumes: &self.pvc_volumes,
+            volumes: merged.volumes,
+            pvc_volumes: merged.pvc_volumes,
             inputs: &config.inputs,
             input_init_image: &self.input_init_image,
             prompt_configmap: prompt_configmap_name.as_deref(),
@@ -1186,6 +1203,7 @@ impl K8sEphemeralProvider {
                 sandbox: self.sandbox.as_ref(),
                 secret_env: &merged.secret_env,
                 read_only_volumes: &merged.read_only_volumes,
+                step_pvc_volumes: &config.pod.pvc_volumes,
                 managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
                 claude_profiles: &self.claude_profiles,
                 annotations: Some(&annotations),
@@ -1519,6 +1537,8 @@ mod label_tests;
 
 #[cfg(test)]
 mod tests {
+    use serde_json::to_value;
+
     use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
 
@@ -1724,11 +1744,11 @@ mod tests {
 
     // ── Sandbox ─────────────────────────────────────────────────────
 
-    fn err_text(result: Result<MergedPodInputs, AgentError>) -> String {
+    fn err_text(result: Result<MergedPodInputs<'_>, AgentError>) -> String {
         result.unwrap_err().to_string()
     }
 
-    fn merge(provider: &K8sEphemeralProvider, config: &AgentConfig) -> MergedPodInputs {
+    fn merge<'a>(provider: &'a K8sEphemeralProvider, config: &AgentConfig) -> MergedPodInputs<'a> {
         provider.merged_pod_inputs(config).unwrap()
     }
 
@@ -1863,6 +1883,94 @@ mod tests {
         let config = AgentConfig::new("hi").service_account("step-sa");
         let merged = merge(&provider, &config);
         assert_eq!(merged.service_account.as_deref(), Some("step-sa"));
+    }
+
+    fn provider_with_volumes() -> K8sEphemeralProvider {
+        K8sEphemeralProvider::sandboxed("img:v1")
+            .volume("/srv/work", "/data/work")
+            .pvc_volume("repos", "/data/repos")
+    }
+
+    #[test]
+    fn merged_provider_volumes_kept_without_flag() {
+        let provider = provider_with_volumes();
+        let config = AgentConfig::new("hi");
+        let merged = merge(&provider, &config);
+        assert_eq!(merged.volumes.len(), 1);
+        assert_eq!(merged.pvc_volumes.len(), 1);
+    }
+
+    #[test]
+    fn merged_without_provider_volumes_drops_them() {
+        let provider = provider_with_volumes();
+        let config = AgentConfig::new("hi").without_provider_volumes();
+        let merged = merge(&provider, &config);
+        assert!(merged.volumes.is_empty());
+        assert!(merged.pvc_volumes.is_empty());
+    }
+
+    #[test]
+    fn merged_step_pvc_volumes_keep_provider_ones() {
+        let provider = provider_with_volumes();
+        let config = AgentConfig::new("hi").pvc_volume("scratch", "/scratch", Some("a"), false);
+        let merged = merge(&provider, &config);
+        assert_eq!(
+            merged.pvc_volumes,
+            [("repos".to_string(), "/data/repos".to_string())]
+        );
+        assert_eq!(merged.volumes.len(), 1);
+    }
+
+    #[test]
+    fn pod_spec_without_provider_volumes_keeps_home_and_tmp() {
+        let provider = provider_with_volumes().read_only_pvc("ro-claim", "/data/ro");
+        let config = AgentConfig::new("hi")
+            .without_provider_volumes()
+            .pvc_volume("scratch", "/data/work", None, false);
+        let merged = merge(&provider, &config);
+        let pod = to_value(
+            build_pod_spec(&PodConfig {
+                name: "test-pod",
+                image: "img:v1",
+                command: vec!["sh".to_string()],
+                namespace: "default",
+                resources: &K8sResources::default(),
+                service_account: None,
+                restart_policy: "Never",
+                image_pull_policy: &ImagePullPolicy::default(),
+                env_vars: &[],
+                image_pull_secrets: &[],
+                extra_labels: &BTreeMap::new(),
+                node_selector: &BTreeMap::new(),
+                tolerations: &[],
+                volumes: merged.volumes,
+                pvc_volumes: merged.pvc_volumes,
+                inputs: &[],
+                input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+                prompt_configmap: None,
+                prompt_mount_path: "",
+                hardening: PodHardening {
+                    sandbox: provider.sandbox.as_ref(),
+                    read_only_volumes: &merged.read_only_volumes,
+                    step_pvc_volumes: &config.pod.pvc_volumes,
+                    ..PodHardening::default()
+                },
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let names: Vec<&str> = pod["spec"]["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"pvc-0"));
+        assert!(!names.contains(&"vol-0"));
+        assert!(names.contains(&"step-pvc-0"));
+        assert!(names.contains(&"ro-0"));
+        assert!(names.contains(&"ironflow-home"));
+        assert!(names.contains(&"ironflow-tmp"));
     }
 
     #[test]

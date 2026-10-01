@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::error::AgentError;
 use crate::provider::{
-    AgentInput, LABEL_COMPONENT, LABEL_MANAGED_BY, MANAGED_BY_IRONFLOW, PodVolumeSource,
+    AgentInput, LABEL_COMPONENT, LABEL_MANAGED_BY, MANAGED_BY_IRONFLOW, PodVolumeSource, PvcVolume,
     ReadOnlyVolume, SecretEnvVar,
 };
 use crate::providers::claude::common::env_vars_to_remove;
@@ -72,6 +72,9 @@ pub struct PodHardening<'a> {
     pub secret_env: &'a [SecretEnvVar],
     /// Volumes mounted read-only into the agent container.
     pub read_only_volumes: &'a [ReadOnlyVolume],
+    /// PVC mounts of the step, rendered after the provider's `pvc_volumes`. A
+    /// claim already mounted by the provider reuses its volume.
+    pub step_pvc_volumes: &'a [PvcVolume],
     /// ConfigMap holding `managed-settings.json`, mounted at [`MANAGED_SETTINGS_DIR`].
     pub managed_settings_configmap: Option<&'a str>,
     /// ConfigMaps holding a Claude profile, the n-th mounted read-only at
@@ -493,10 +496,11 @@ fn hardening_error(stderr: String) -> AgentError {
 
 /// Validate the hardening inputs of a pod config.
 ///
-/// Rejects read-only mounts at a relative path, at a directory the sandbox
-/// owns (`/`, [`SANDBOX_HOME`], `/tmp`, [`MANAGED_SETTINGS_DIR`],
-/// [`PROFILE_MOUNT_DIR`] and below) or at a path already mounted, and secret
-/// env entries with an empty name, secret or key.
+/// Rejects step PVC volumes refused by [`PvcVolume::validate`], read-only and
+/// step PVC mounts at a relative path, at a directory the sandbox owns (`/`,
+/// [`SANDBOX_HOME`], `/tmp`, [`MANAGED_SETTINGS_DIR`], [`PROFILE_MOUNT_DIR`]
+/// and below) or at a path already mounted, and secret env entries with an
+/// empty name, secret or key.
 fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
     let reserved = [
         SANDBOX_HOME,
@@ -512,18 +516,33 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
         .map(|(_, mount)| mount.trim_end_matches('/'))
         .collect();
 
-    for volume in config.hardening.read_only_volumes {
-        let path = volume.mount_path.as_str();
+    for volume in config.hardening.step_pvc_volumes {
+        volume
+            .validate()
+            .map_err(|reason| hardening_error(format!("step pvc volume: {reason}")))?;
+    }
+
+    let read_only_mounts = config
+        .hardening
+        .read_only_volumes
+        .iter()
+        .map(|volume| ("read-only volume", volume.mount_path.as_str()));
+    let step_pvc_mounts = config
+        .hardening
+        .step_pvc_volumes
+        .iter()
+        .map(|volume| ("step pvc volume", volume.mount_path.as_str()));
+    for (kind, path) in read_only_mounts.chain(step_pvc_mounts) {
         if !path.starts_with('/') {
             return Err(hardening_error(format!(
-                "read-only volume mount_path must be absolute, got '{path}'"
+                "{kind} mount_path must be absolute, got '{path}'"
             )));
         }
         let normalized = path.trim_end_matches('/');
         let under_profiles = normalized.starts_with(&profile_prefix);
         if normalized.is_empty() || reserved.contains(&normalized) || under_profiles {
             return Err(hardening_error(format!(
-                "read-only volume cannot be mounted at reserved path '{path}'"
+                "{kind} cannot be mounted at reserved path '{path}'"
             )));
         }
         if !seen.insert(normalized) {
@@ -570,15 +589,20 @@ fn read_only_volume_json(name: &str, volume: &ReadOnlyVolume) -> (Value, Value) 
             "configMap": { "name": cm }
         }),
     };
-    let mut mount = json!({
-        "name": name,
-        "mountPath": volume.mount_path,
-        "readOnly": true
-    });
-    if let Some(sub_path) = &volume.sub_path {
+    let mount = mount_json(name, &volume.mount_path, volume.sub_path.as_deref(), true);
+    (source, mount)
+}
+
+/// Container `volumeMount` JSON, with `subPath` and `readOnly` only when set.
+fn mount_json(name: &str, mount_path: &str, sub_path: Option<&str>, read_only: bool) -> Value {
+    let mut mount = json!({ "name": name, "mountPath": mount_path });
+    if read_only {
+        mount["readOnly"] = json!(true);
+    }
+    if let Some(sub_path) = sub_path {
         mount["subPath"] = json!(sub_path);
     }
-    (source, mount)
+    mount
 }
 
 /// Build a Kubernetes pod spec for running claude.
@@ -641,31 +665,45 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
     let mut volumes_json = Vec::new();
     let mut main_mounts_json = Vec::new();
 
-    if !config.volumes.is_empty() {
-        for (i, (host_path, container_path)) in config.volumes.iter().enumerate() {
-            let name = format!("vol-{i}");
-            volumes_json.push(json!({
-                "name": name,
-                "hostPath": { "path": host_path, "type": "Directory" }
-            }));
-            main_mounts_json.push(json!({
-                "name": name,
-                "mountPath": container_path
-            }));
-        }
+    for (i, (host_path, container_path)) in config.volumes.iter().enumerate() {
+        let name = format!("vol-{i}");
+        volumes_json.push(json!({
+            "name": name,
+            "hostPath": { "path": host_path, "type": "Directory" }
+        }));
+        main_mounts_json.push(mount_json(&name, container_path, None, false));
     }
-    if !config.pvc_volumes.is_empty() {
-        for (i, (claim_name, mount_path)) in config.pvc_volumes.iter().enumerate() {
-            let name = format!("pvc-{i}");
-            volumes_json.push(json!({
-                "name": name,
-                "persistentVolumeClaim": { "claimName": claim_name }
-            }));
-            main_mounts_json.push(json!({
-                "name": name,
-                "mountPath": mount_path
-            }));
-        }
+    // Volume name of each claim already in the pod: a step mount of the same
+    // claim reuses it instead of declaring the claim twice.
+    let mut claim_volumes: BTreeMap<&str, String> = BTreeMap::new();
+    for (i, (claim_name, mount_path)) in config.pvc_volumes.iter().enumerate() {
+        let name = format!("pvc-{i}");
+        volumes_json.push(json!({
+            "name": name,
+            "persistentVolumeClaim": { "claimName": claim_name }
+        }));
+        main_mounts_json.push(mount_json(&name, mount_path, None, false));
+        claim_volumes.entry(claim_name.as_str()).or_insert(name);
+    }
+    let mut step_claims = 0;
+    for volume in config.hardening.step_pvc_volumes {
+        let name = claim_volumes
+            .entry(volume.claim_name.as_str())
+            .or_insert_with(|| {
+                let name = format!("step-pvc-{step_claims}");
+                step_claims += 1;
+                volumes_json.push(json!({
+                    "name": name,
+                    "persistentVolumeClaim": { "claimName": volume.claim_name }
+                }));
+                name
+            });
+        main_mounts_json.push(mount_json(
+            name,
+            &volume.mount_path,
+            volume.sub_path.as_deref(),
+            volume.read_only,
+        ));
     }
     volumes_json.extend(input_volumes);
     main_mounts_json.extend(input_mounts);
@@ -1941,6 +1979,146 @@ mod tests {
             })
         };
         assert!(hardening_err(&config).contains("duplicate"));
+    }
+
+    fn step_pvc(claim: &str, mount: &str, sub_path: Option<&str>, read_only: bool) -> PvcVolume {
+        PvcVolume {
+            claim_name: claim.to_string(),
+            mount_path: mount.to_string(),
+            sub_path: sub_path.map(str::to_string),
+            read_only,
+        }
+    }
+
+    #[test]
+    fn build_pod_spec_step_pvc_with_sub_path_read_write() {
+        let steps = vec![step_pvc("ws", "/work", Some("team-a"), false)];
+        let pod = pod_json(&hardened_config(PodHardening {
+            step_pvc_volumes: &steps,
+            ..PodHardening::default()
+        }));
+        let volume = find_by_name(&pod["spec"]["volumes"], "step-pvc-0").unwrap();
+        assert_eq!(volume["persistentVolumeClaim"]["claimName"], "ws");
+        let mount =
+            find_by_name(&pod["spec"]["containers"][0]["volumeMounts"], "step-pvc-0").unwrap();
+        assert_eq!(mount["mountPath"], "/work");
+        assert_eq!(mount["subPath"], "team-a");
+        assert!(mount.get("readOnly").is_none());
+    }
+
+    #[test]
+    fn build_pod_spec_step_pvc_read_only_mount() {
+        let steps = vec![step_pvc("ws", "/work", None, true)];
+        let pod = pod_json(&hardened_config(PodHardening {
+            step_pvc_volumes: &steps,
+            ..PodHardening::default()
+        }));
+        let mount =
+            find_by_name(&pod["spec"]["containers"][0]["volumeMounts"], "step-pvc-0").unwrap();
+        assert_eq!(mount["readOnly"], true);
+        assert!(mount.get("subPath").is_none());
+        let volume = find_by_name(&pod["spec"]["volumes"], "step-pvc-0").unwrap();
+        assert!(volume["persistentVolumeClaim"].get("readOnly").is_none());
+    }
+
+    #[test]
+    fn build_pod_spec_step_pvc_same_claim_shares_one_volume() {
+        let steps = vec![
+            step_pvc("ws", "/work/a", Some("a"), false),
+            step_pvc("ws", "/work/b", Some("b"), true),
+        ];
+        let pod = pod_json(&hardened_config(PodHardening {
+            step_pvc_volumes: &steps,
+            ..PodHardening::default()
+        }));
+        let volumes = pod["spec"]["volumes"].as_array().unwrap();
+        let claims = volumes
+            .iter()
+            .filter(|v| v.get("persistentVolumeClaim").is_some())
+            .count();
+        assert_eq!(claims, 1);
+        let mounts = pod["spec"]["containers"][0]["volumeMounts"]
+            .as_array()
+            .unwrap();
+        let on_claim: Vec<_> = mounts
+            .iter()
+            .filter(|m| m["name"] == "step-pvc-0")
+            .collect();
+        assert_eq!(on_claim.len(), 2);
+    }
+
+    #[test]
+    fn build_pod_spec_step_pvc_reuses_provider_claim_volume() {
+        let pvcs = vec![("repos".to_string(), "/data/repos".to_string())];
+        let steps = vec![step_pvc("repos", "/data/sub", Some("api"), true)];
+        let config = PodConfig {
+            pvc_volumes: &pvcs,
+            ..hardened_config(PodHardening {
+                step_pvc_volumes: &steps,
+                ..PodHardening::default()
+            })
+        };
+        let pod = pod_json(&config);
+        let volumes = pod["spec"]["volumes"].as_array().unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0]["name"], "pvc-0");
+        let mounts = pod["spec"]["containers"][0]["volumeMounts"]
+            .as_array()
+            .unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[1]["name"], "pvc-0");
+        assert_eq!(mounts[1]["mountPath"], "/data/sub");
+    }
+
+    #[test]
+    fn validate_hardening_step_pvc_rejects_relative_path() {
+        let steps = vec![step_pvc("ws", "work", None, false)];
+        let config = hardened_config(PodHardening {
+            step_pvc_volumes: &steps,
+            ..PodHardening::default()
+        });
+        assert!(hardening_err(&config).contains("must be absolute"));
+    }
+
+    #[test]
+    fn validate_hardening_step_pvc_rejects_reserved_path() {
+        let steps = vec![step_pvc("ws", "/tmp", None, false)];
+        let config = hardened_config(PodHardening {
+            step_pvc_volumes: &steps,
+            ..PodHardening::default()
+        });
+        assert!(hardening_err(&config).contains("reserved path"));
+    }
+
+    #[test]
+    fn validate_hardening_step_pvc_rejects_duplicate_with_provider_pvc() {
+        let pvcs = vec![("repos".to_string(), "/data/repos".to_string())];
+        let steps = vec![step_pvc("ws", "/data/repos", None, false)];
+        let config = PodConfig {
+            pvc_volumes: &pvcs,
+            ..hardened_config(PodHardening {
+                step_pvc_volumes: &steps,
+                ..PodHardening::default()
+            })
+        };
+        assert!(hardening_err(&config).contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_hardening_step_pvc_rejects_bad_sub_path_and_empty_claim() {
+        let steps = vec![step_pvc("ws", "/work", Some("../x"), false)];
+        let config = hardened_config(PodHardening {
+            step_pvc_volumes: &steps,
+            ..PodHardening::default()
+        });
+        assert!(hardening_err(&config).contains("sub_path"));
+
+        let steps = vec![step_pvc("", "/work", None, false)];
+        let config = hardened_config(PodHardening {
+            step_pvc_volumes: &steps,
+            ..PodHardening::default()
+        });
+        assert!(hardening_err(&config).contains("claim_name"));
     }
 
     #[test]

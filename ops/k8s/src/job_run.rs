@@ -24,7 +24,7 @@ use crate::conventions::{
 };
 use crate::error::k8s_external;
 use crate::pod_run::{
-    PvcMount, active_deadline_secs, build_env_vars, build_pvc_volumes, push_volume,
+    PvcMount, active_deadline_secs, build_env_vars, build_pvc_volumes, new_pvc_mount, push_volume,
 };
 
 #[cfg(test)]
@@ -157,7 +157,39 @@ impl JobRun {
         self.pvcs.push(PvcMount {
             claim: claim.to_string(),
             mount_path: mount_path.to_string(),
+            sub_path: None,
+            read_only: false,
         });
+        self
+    }
+
+    /// Mount a PersistentVolumeClaim with an optional `subPath` and a read-only
+    /// flag, matching [`PodRun::pvc_volume`](crate::pod_run::PodRun::pvc_volume).
+    ///
+    /// # Panics
+    ///
+    /// Panics when `sub_path` is refused by
+    /// [`validate_pvc_sub_path`](ironflow_core::provider::validate_pvc_sub_path).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::JobRun;
+    /// # fn example(kube: &ironflow_ops_k8s::KubeClient) {
+    /// let op = JobRun::new(kube, "build", "busybox", "ls /repos")
+    ///     .pvc_volume("shared-claim", "/repos", Some("team-a"), true);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn pvc_volume(
+        mut self,
+        claim: &str,
+        mount_path: &str,
+        sub_path: Option<&str>,
+        read_only: bool,
+    ) -> Self {
+        self.pvcs
+            .push(new_pvc_mount(claim, mount_path, sub_path, read_only));
         self
     }
 
