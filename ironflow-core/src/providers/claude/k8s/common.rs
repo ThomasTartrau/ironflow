@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::error::AgentError;
 use crate::provider::{
     AgentInput, LABEL_COMPONENT, LABEL_MANAGED_BY, MANAGED_BY_IRONFLOW, PodVolumeSource, PvcVolume,
-    ReadOnlyVolume, SecretEnvVar, validate_pvc_sub_path,
+    ReadOnlyVolume, SecretEnvVar,
 };
 use crate::providers::claude::common::env_vars_to_remove;
 use crate::providers::claude::k8s::profile::{ClaudeProfile, profile_mount_path};
@@ -496,10 +496,11 @@ fn hardening_error(stderr: String) -> AgentError {
 
 /// Validate the hardening inputs of a pod config.
 ///
-/// Rejects read-only mounts at a relative path, at a directory the sandbox
-/// owns (`/`, [`SANDBOX_HOME`], `/tmp`, [`MANAGED_SETTINGS_DIR`],
-/// [`PROFILE_MOUNT_DIR`] and below) or at a path already mounted, and secret
-/// env entries with an empty name, secret or key.
+/// Rejects step PVC volumes refused by [`PvcVolume::validate`], read-only and
+/// step PVC mounts at a relative path, at a directory the sandbox owns (`/`,
+/// [`SANDBOX_HOME`], `/tmp`, [`MANAGED_SETTINGS_DIR`], [`PROFILE_MOUNT_DIR`]
+/// and below) or at a path already mounted, and secret env entries with an
+/// empty name, secret or key.
 fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
     let reserved = [
         SANDBOX_HOME,
@@ -508,14 +509,30 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
         PROFILE_MOUNT_DIR,
     ];
     let profile_prefix = format!("{PROFILE_MOUNT_DIR}/");
-    let mut seen: BTreeSet<String> = config
+    let mut seen: BTreeSet<&str> = config
         .volumes
         .iter()
         .chain(config.pvc_volumes.iter())
-        .map(|(_, mount)| mount.trim_end_matches('/').to_string())
+        .map(|(_, mount)| mount.trim_end_matches('/'))
         .collect();
 
-    let mut check_mount = |kind: &str, path: &str| -> Result<(), AgentError> {
+    for volume in config.hardening.step_pvc_volumes {
+        volume
+            .validate()
+            .map_err(|reason| hardening_error(format!("step pvc volume: {reason}")))?;
+    }
+
+    let read_only_mounts = config
+        .hardening
+        .read_only_volumes
+        .iter()
+        .map(|volume| ("read-only volume", volume.mount_path.as_str()));
+    let step_pvc_mounts = config
+        .hardening
+        .step_pvc_volumes
+        .iter()
+        .map(|volume| ("step pvc volume", volume.mount_path.as_str()));
+    for (kind, path) in read_only_mounts.chain(step_pvc_mounts) {
         if !path.starts_with('/') {
             return Err(hardening_error(format!(
                 "{kind} mount_path must be absolute, got '{path}'"
@@ -528,28 +545,10 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
                 "{kind} cannot be mounted at reserved path '{path}'"
             )));
         }
-        if !seen.insert(normalized.to_string()) {
+        if !seen.insert(normalized) {
             let message = format!("duplicate volume mount path '{path}'");
             return Err(hardening_error(message));
         }
-        Ok(())
-    };
-
-    for volume in config.hardening.read_only_volumes {
-        check_mount("read-only volume", volume.mount_path.as_str())?;
-    }
-
-    for volume in config.hardening.step_pvc_volumes {
-        if volume.claim_name.is_empty() {
-            return Err(hardening_error(
-                "step pvc volume needs a non-empty claim_name".to_string(),
-            ));
-        }
-        if let Some(sub_path) = &volume.sub_path {
-            validate_pvc_sub_path(sub_path)
-                .map_err(|reason| hardening_error(format!("step pvc volume: {reason}")))?;
-        }
-        check_mount("step pvc volume", volume.mount_path.as_str())?;
     }
 
     for secret in config.hardening.secret_env {
@@ -590,15 +589,20 @@ fn read_only_volume_json(name: &str, volume: &ReadOnlyVolume) -> (Value, Value) 
             "configMap": { "name": cm }
         }),
     };
-    let mut mount = json!({
-        "name": name,
-        "mountPath": volume.mount_path,
-        "readOnly": true
-    });
-    if let Some(sub_path) = &volume.sub_path {
+    let mount = mount_json(name, &volume.mount_path, volume.sub_path.as_deref(), true);
+    (source, mount)
+}
+
+/// Container `volumeMount` JSON, with `subPath` and `readOnly` only when set.
+fn mount_json(name: &str, mount_path: &str, sub_path: Option<&str>, read_only: bool) -> Value {
+    let mut mount = json!({ "name": name, "mountPath": mount_path });
+    if read_only {
+        mount["readOnly"] = json!(true);
+    }
+    if let Some(sub_path) = sub_path {
         mount["subPath"] = json!(sub_path);
     }
-    (source, mount)
+    mount
 }
 
 /// Build a Kubernetes pod spec for running claude.
@@ -661,61 +665,45 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
     let mut volumes_json = Vec::new();
     let mut main_mounts_json = Vec::new();
 
-    if !config.volumes.is_empty() {
-        for (i, (host_path, container_path)) in config.volumes.iter().enumerate() {
-            let name = format!("vol-{i}");
-            volumes_json.push(json!({
-                "name": name,
-                "hostPath": { "path": host_path, "type": "Directory" }
-            }));
-            main_mounts_json.push(json!({
-                "name": name,
-                "mountPath": container_path
-            }));
-        }
+    for (i, (host_path, container_path)) in config.volumes.iter().enumerate() {
+        let name = format!("vol-{i}");
+        volumes_json.push(json!({
+            "name": name,
+            "hostPath": { "path": host_path, "type": "Directory" }
+        }));
+        main_mounts_json.push(mount_json(&name, container_path, None, false));
     }
-    if !config.pvc_volumes.is_empty() {
-        for (i, (claim_name, mount_path)) in config.pvc_volumes.iter().enumerate() {
-            let name = format!("pvc-{i}");
-            volumes_json.push(json!({
-                "name": name,
-                "persistentVolumeClaim": { "claimName": claim_name }
-            }));
-            main_mounts_json.push(json!({
-                "name": name,
-                "mountPath": mount_path
-            }));
-        }
-    }
+    // Volume name of each claim already in the pod: a step mount of the same
+    // claim reuses it instead of declaring the claim twice.
     let mut claim_volumes: BTreeMap<&str, String> = BTreeMap::new();
-    for (i, (claim_name, _)) in config.pvc_volumes.iter().enumerate() {
-        claim_volumes
-            .entry(claim_name.as_str())
-            .or_insert_with(|| format!("pvc-{i}"));
+    for (i, (claim_name, mount_path)) in config.pvc_volumes.iter().enumerate() {
+        let name = format!("pvc-{i}");
+        volumes_json.push(json!({
+            "name": name,
+            "persistentVolumeClaim": { "claimName": claim_name }
+        }));
+        main_mounts_json.push(mount_json(&name, mount_path, None, false));
+        claim_volumes.entry(claim_name.as_str()).or_insert(name);
     }
     let mut step_claims = 0;
     for volume in config.hardening.step_pvc_volumes {
-        let name = match claim_volumes.get(volume.claim_name.as_str()) {
-            Some(existing) => existing.clone(),
-            None => {
+        let name = claim_volumes
+            .entry(volume.claim_name.as_str())
+            .or_insert_with(|| {
                 let name = format!("step-pvc-{step_claims}");
                 step_claims += 1;
                 volumes_json.push(json!({
                     "name": name,
                     "persistentVolumeClaim": { "claimName": volume.claim_name }
                 }));
-                claim_volumes.insert(volume.claim_name.as_str(), name.clone());
                 name
-            }
-        };
-        let mut mount = json!({ "name": name, "mountPath": volume.mount_path });
-        if volume.read_only {
-            mount["readOnly"] = json!(true);
-        }
-        if let Some(sub_path) = &volume.sub_path {
-            mount["subPath"] = json!(sub_path);
-        }
-        main_mounts_json.push(mount);
+            });
+        main_mounts_json.push(mount_json(
+            name,
+            &volume.mount_path,
+            volume.sub_path.as_deref(),
+            volume.read_only,
+        ));
     }
     volumes_json.extend(input_volumes);
     main_mounts_json.extend(input_mounts);

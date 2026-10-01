@@ -780,7 +780,8 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     ///
     /// # Panics
     ///
-    /// Panics when `sub_path` is refused by [`validate_pvc_sub_path`].
+    /// Panics when the volume is refused by [`PvcVolume::validate`]: an empty
+    /// `claim` or a `sub_path` refused by [`validate_pvc_sub_path`].
     ///
     /// # Examples
     ///
@@ -805,17 +806,16 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         sub_path: Option<&str>,
         read_only: bool,
     ) -> Self {
-        if let Some(sub_path) = sub_path
-            && let Err(reason) = validate_pvc_sub_path(sub_path)
-        {
-            panic!("invalid pvc_volume sub_path: {reason}");
-        }
-        self.pod.pvc_volumes.push(PvcVolume {
+        let volume = PvcVolume {
             claim_name: claim.to_string(),
             mount_path: mount_path.to_string(),
             sub_path: sub_path.map(str::to_string),
             read_only,
-        });
+        };
+        if let Err(reason) = volume.validate() {
+            panic!("invalid pvc_volume: {reason}");
+        }
+        self.pod.pvc_volumes.push(volume);
         self
     }
 
@@ -2103,6 +2103,12 @@ mod tests {
     #[should_panic(expected = "sub_path")]
     fn k8s_pvc_volume_rejects_empty_segment_sub_path() {
         let _ = AgentConfig::new("x").pvc_volume("ws", "/work", Some("a//b"), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "claim_name")]
+    fn k8s_pvc_volume_rejects_empty_claim() {
+        let _ = AgentConfig::new("x").pvc_volume("", "/work", None, false);
     }
 
     #[test]

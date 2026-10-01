@@ -215,6 +215,40 @@ pub struct PvcVolume {
     pub read_only: bool,
 }
 
+impl PvcVolume {
+    /// Check that the claim is named and that `sub_path`, when set, passes
+    /// [`validate_pvc_sub_path`]. The mount path is checked by the provider,
+    /// which knows its reserved paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason as a message when the volume is refused.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::PvcVolume;
+    ///
+    /// let mut volume = PvcVolume {
+    ///     claim_name: "repos".to_string(),
+    ///     mount_path: "/data/repos".to_string(),
+    ///     sub_path: Some("team-a".to_string()),
+    ///     read_only: false,
+    /// };
+    /// assert!(volume.validate().is_ok());
+    /// volume.sub_path = Some("../x".to_string());
+    /// assert!(volume.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), String> {
+        if self.claim_name.is_empty() {
+            return Err("pvc volume needs a non-empty claim_name".to_string());
+        }
+        self.sub_path
+            .as_deref()
+            .map_or(Ok(()), validate_pvc_sub_path)
+    }
+}
+
 /// Check the structure of a PVC `subPath`.
 ///
 /// Refuses an empty value, a leading `/`, an empty segment (a trailing `/` or
@@ -236,28 +270,17 @@ pub struct PvcVolume {
 /// assert!(validate_pvc_sub_path("a//b").is_err());
 /// ```
 pub fn validate_pvc_sub_path(sub_path: &str) -> Result<(), String> {
-    if sub_path.is_empty() {
-        return Err("sub_path must not be empty".to_string());
-    }
-    if sub_path.starts_with('/') {
-        return Err(format!("sub_path '{sub_path}' must be relative"));
-    }
-    for segment in sub_path.split('/') {
-        match segment {
-            "" => return Err(format!("sub_path '{sub_path}' has an empty segment")),
-            "." | ".." => {
-                return Err(format!(
-                    "sub_path '{sub_path}' must not contain '.' or '..' segments"
-                ));
-            }
-            _ => {}
-        }
+    // An empty value splits into one empty segment, so it is refused below.
+    let malformed = sub_path.starts_with('/')
+        || sub_path
+            .split('/')
+            .any(|segment| matches!(segment, "" | "." | ".."));
+    if malformed {
+        return Err(format!(
+            "sub_path '{sub_path}' must be relative, without empty, '.' or '..' segments"
+        ));
     }
     Ok(())
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 /// Pod-level settings a step asks for (K8s ephemeral provider only).
@@ -291,7 +314,7 @@ pub struct PodSettings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pvc_volumes: Vec<PvcVolume>,
     /// Drop the provider's `volume` and `pvc_volume` mounts for this step.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub without_provider_volumes: bool,
 }
 
@@ -491,6 +514,32 @@ mod tests {
         for bad in ["", "/abs", "a//b", "a/", ".", "..", "a/../b", "./a"] {
             assert!(validate_pvc_sub_path(bad).is_err(), "{bad:?} accepted");
         }
+    }
+
+    #[test]
+    fn k8s_pvc_volume_validate() {
+        let volume = PvcVolume {
+            claim_name: "c".to_string(),
+            mount_path: "/m".to_string(),
+            sub_path: None,
+            read_only: false,
+        };
+        assert!(volume.validate().is_ok());
+        let nested = PvcVolume {
+            sub_path: Some("a/b".to_string()),
+            ..volume.clone()
+        };
+        assert!(nested.validate().is_ok());
+        let unnamed = PvcVolume {
+            claim_name: String::new(),
+            ..volume.clone()
+        };
+        assert!(unnamed.validate().unwrap_err().contains("claim_name"));
+        let escaping = PvcVolume {
+            sub_path: Some("../x".to_string()),
+            ..volume
+        };
+        assert!(escaping.validate().unwrap_err().contains("sub_path"));
     }
 
     #[test]
