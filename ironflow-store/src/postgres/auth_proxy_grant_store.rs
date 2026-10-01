@@ -162,8 +162,8 @@ impl GrantBackend for PostgresStore {
             let result = query("DELETE FROM ironflow.auth_proxy_grants WHERE run_id = $1")
                 .bind(&run_id)
                 .execute(&self.pool)
-            .await
-            .map_err(backend_error)?;
+                .await
+                .map_err(backend_error)?;
             to_count(result.rows_affected())
         })
     }
@@ -174,19 +174,18 @@ impl GrantBackend for PostgresStore {
             let result = query("DELETE FROM ironflow.auth_proxy_grants WHERE expires_at <= $1")
                 .bind(now)
                 .execute(&self.pool)
-            .await
-            .map_err(backend_error)?;
+                .await
+                .map_err(backend_error)?;
             to_count(result.rows_affected())
         })
     }
 
     fn len(&self) -> GrantFuture<'_, usize> {
         Box::pin(async move {
-            let count =
-                query_scalar::<_, i64>("SELECT COUNT(*) FROM ironflow.auth_proxy_grants")
-                    .fetch_one(&self.pool)
-                    .await
-                    .map_err(backend_error)?;
+            let count = query_scalar::<_, i64>("SELECT COUNT(*) FROM ironflow.auth_proxy_grants")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(backend_error)?;
             usize::try_from(count).map_err(backend_error)
         })
     }
