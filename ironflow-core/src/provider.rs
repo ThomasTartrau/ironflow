@@ -312,7 +312,8 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     ///
     /// Non-K8s providers ignore this field. Set it with
     /// [`AgentConfig::env_from_secret`], [`AgentConfig::service_account`],
-    /// [`AgentConfig::read_only_volume`] and [`AgentConfig::managed_settings`].
+    /// [`AgentConfig::read_only_volume`], [`AgentConfig::managed_settings`] and
+    /// [`AgentConfig::runtime_class`].
     #[serde(default, skip_serializing_if = "PodSettings::is_empty")]
     pub pod: PodSettings,
 
@@ -734,6 +735,22 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// ```
     pub fn service_account(mut self, name: &str) -> Self {
         self.pod.service_account = Some(name.to_string());
+        self
+    }
+
+    /// Run the pod under a given Kubernetes RuntimeClass, for instance
+    /// `gvisor` (K8s ephemeral provider only). Overrides the provider's.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("x").runtime_class("gvisor");
+    /// assert_eq!(config.pod.runtime_class.as_deref(), Some("gvisor"));
+    /// ```
+    pub fn runtime_class(mut self, name: &str) -> Self {
+        self.pod.runtime_class = Some(name.to_string());
         self
     }
 
@@ -2030,6 +2047,16 @@ mod tests {
         assert_eq!(config.pod.secret_env[0].secret, "new-secret");
         assert_eq!(config.pod.secret_env[0].key, "c");
         assert_eq!(config.pod.secret_env[1].name, "OTHER");
+    }
+
+    #[test]
+    fn k8s_runtime_class_setter_and_serde_round_trip() {
+        let config = AgentConfig::new("x").runtime_class("gvisor");
+        assert_eq!(config.pod.runtime_class.as_deref(), Some("gvisor"));
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pod.runtime_class.as_deref(), Some("gvisor"));
+        assert!(AgentConfig::new("x").pod.runtime_class.is_none());
     }
 
     #[test]

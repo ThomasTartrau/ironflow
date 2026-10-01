@@ -310,6 +310,9 @@ pub struct PodSettings {
     /// Name of a managed-settings preset registered on the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_settings: Option<String>,
+    /// RuntimeClass of the pod (`spec.runtimeClassName`). Overrides the provider's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_class: Option<String>,
     /// PVC mounts of the step, merged after the provider's volumes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pvc_volumes: Vec<PvcVolume>,
@@ -336,6 +339,7 @@ impl PodSettings {
             && self.service_account.is_none()
             && self.read_only_volumes.is_empty()
             && self.managed_settings.is_none()
+            && self.runtime_class.is_none()
             && self.pvc_volumes.is_empty()
             && !self.without_provider_volumes
     }
@@ -474,6 +478,11 @@ mod tests {
             ..PodSettings::default()
         };
         assert!(!with_preset.is_empty());
+        let with_runtime_class = PodSettings {
+            runtime_class: Some("gvisor".to_string()),
+            ..PodSettings::default()
+        };
+        assert!(!with_runtime_class.is_empty());
         let with_volume = PodSettings {
             read_only_volumes: vec![ReadOnlyVolume {
                 source: PodVolumeSource::HostPath {

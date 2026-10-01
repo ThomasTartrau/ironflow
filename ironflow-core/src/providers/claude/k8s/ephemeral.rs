@@ -219,8 +219,19 @@ pub struct K8sEphemeralProvider {
     pub(super) claude_profiles: Vec<ClaudeProfile>,
     egress_profile: Option<String>,
     previous_attempt_timeout: Duration,
+    runtime_class: Option<String>,
     auth_proxy_url: Option<String>,
     auth_proxy_admin_key: Option<String>,
+}
+
+/// Apply a Kubernetes `runtimeClassName` onto a built pod.
+///
+/// No-op unless both `runtime_class` and the pod spec are present, leaving the
+/// field absent so the cluster default runtime applies.
+fn apply_runtime_class(pod: &mut Pod, runtime_class: Option<&str>) {
+    if let (Some(name), Some(spec)) = (runtime_class, pod.spec.as_mut()) {
+        spec.runtime_class_name = Some(name.to_string());
+    }
 }
 
 /// Apply a Kubernetes `activeDeadlineSeconds` onto a built pod, in whole seconds.
@@ -267,6 +278,7 @@ impl K8sEphemeralProvider {
             claude_profiles: Vec::new(),
             egress_profile: None,
             previous_attempt_timeout: Duration::from_secs(60),
+            runtime_class: None,
             auth_proxy_url: None,
             auth_proxy_admin_key: None,
         }
@@ -881,6 +893,31 @@ impl K8sEphemeralProvider {
         self
     }
 
+    /// Run the agent pods under a Kubernetes RuntimeClass.
+    ///
+    /// Sets `spec.runtimeClassName`. The typical use is `gvisor`, which runs
+    /// the pod in a user-space kernel instead of sharing the node kernel the
+    /// way `runc` does, for steps that execute untrusted code. A step's
+    /// [`AgentConfig::runtime_class`] wins over this value. With no call the
+    /// field stays absent and the cluster default runtime applies.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `name` is empty or whitespace-only.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::new("img:v1").runtime_class("gvisor");
+    /// ```
+    pub fn runtime_class(mut self, name: &str) -> Self {
+        assert!(!name.trim().is_empty(), "runtime class must not be empty");
+        self.runtime_class = Some(name.to_string());
+        self
+    }
+
     /// Let the agent pod schedule onto tainted nodes.
     ///
     /// Appends one [`K8sToleration`] to the pod's `spec.tolerations`. Call
@@ -936,6 +973,7 @@ struct MergedPodInputs<'a> {
     read_only_volumes: Vec<ReadOnlyVolume>,
     managed_settings_configmap: Option<String>,
     labels: BTreeMap<String, String>,
+    runtime_class: Option<String>,
 }
 
 impl K8sEphemeralProvider {
@@ -999,6 +1037,21 @@ impl K8sEphemeralProvider {
             .clone()
             .or_else(|| self.service_account.clone());
 
+        let runtime_class = config
+            .pod
+            .runtime_class
+            .clone()
+            .or_else(|| self.runtime_class.clone());
+        if runtime_class
+            .as_deref()
+            .is_some_and(|c| c.trim().is_empty())
+        {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: "runtime class must not be empty".to_string(),
+            });
+        }
+
         let (volumes, pvc_volumes): (&[_], &[_]) = if config.pod.without_provider_volumes {
             (&[], &[])
         } else {
@@ -1055,6 +1108,7 @@ impl K8sEphemeralProvider {
             read_only_volumes,
             managed_settings_configmap,
             labels,
+            runtime_class,
         })
     }
 
@@ -1423,8 +1477,9 @@ impl K8sEphemeralProvider {
         let created = match pod_spec {
             Ok(mut pod_spec) => {
                 // Applied after build_pod_spec: the shared PodConfig builder does not
-                // carry this field, so it is set on the built pod here.
+                // carry these fields, so they are set on the built pod here.
                 apply_active_deadline_seconds(&mut pod_spec, self.effective_deadline());
+                apply_runtime_class(&mut pod_spec, merged.runtime_class.as_deref());
                 pods.create(&PostParams::default(), &pod_spec)
                     .await
                     .map_err(|e| AgentError::ProcessFailed {
@@ -2047,6 +2102,64 @@ mod tests {
             from_value(json!({"spec": {"containers": []}})).expect("valid minimal pod");
         apply_active_deadline_seconds(&mut pod, None);
         assert_eq!(pod.spec.unwrap().active_deadline_seconds, None);
+    }
+
+    #[test]
+    fn k8s_runtime_class_default_is_none_and_builder_stores_value() {
+        assert!(K8sEphemeralProvider::new("img:v1").runtime_class.is_none());
+        let provider = K8sEphemeralProvider::new("img:v1").runtime_class("gvisor");
+        assert_eq!(provider.runtime_class.as_deref(), Some("gvisor"));
+    }
+
+    #[test]
+    #[should_panic(expected = "runtime class must not be empty")]
+    fn k8s_runtime_class_blank_builder_panics() {
+        let _ = K8sEphemeralProvider::new("img:v1").runtime_class("  ");
+    }
+
+    #[test]
+    fn k8s_merged_step_runtime_class_overrides_provider() {
+        let provider = K8sEphemeralProvider::new("img:v1").runtime_class("gvisor");
+        let step = AgentConfig::new("hi").runtime_class("kata");
+        assert_eq!(
+            merge(&provider, &step).runtime_class.as_deref(),
+            Some("kata")
+        );
+        assert_eq!(
+            merge(&provider, &AgentConfig::new("hi"))
+                .runtime_class
+                .as_deref(),
+            Some("gvisor")
+        );
+        let plain = K8sEphemeralProvider::new("img:v1");
+        assert_eq!(merge(&plain, &AgentConfig::new("hi")).runtime_class, None);
+    }
+
+    #[test]
+    fn k8s_merged_blank_step_runtime_class_is_an_error() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        let config = AgentConfig::new("hi").runtime_class(" ");
+        let err = err_text(provider.merged_pod_inputs(&config));
+        assert!(err.contains("runtime class must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn k8s_apply_runtime_class_sets_runtime_class_name() {
+        let mut pod: Pod =
+            from_value(json!({"spec": {"containers": []}})).expect("valid minimal pod");
+        apply_runtime_class(&mut pod, Some("gvisor"));
+        assert_eq!(
+            pod.spec.unwrap().runtime_class_name.as_deref(),
+            Some("gvisor")
+        );
+    }
+
+    #[test]
+    fn k8s_apply_runtime_class_none_leaves_field_absent() {
+        let mut pod: Pod =
+            from_value(json!({"spec": {"containers": []}})).expect("valid minimal pod");
+        apply_runtime_class(&mut pod, None);
+        assert_eq!(pod.spec.unwrap().runtime_class_name, None);
     }
 
     // ── Sandbox ─────────────────────────────────────────────────────

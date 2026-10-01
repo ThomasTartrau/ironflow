@@ -507,6 +507,11 @@ step (`PodRun`, `JobRun` of `ironflow-ops-k8s`) carries both, as
 `LABEL_RUN_ID` and `LABEL_ROOT_RUN_ID` from `ironflow_core::provider`: a retry of the
 top-level run then deletes what a dead attempt left running.
 
+To run an agent step in a sandboxed pod (gVisor), call `AgentConfig::runtime_class("gvisor")`
+on the step, or `K8sEphemeralProvider::runtime_class("gvisor")` for every step of the
+provider (the step value wins). `PodRun::runtime_class` does the same for a pod you build
+yourself. The cluster must define a matching `RuntimeClass`.
+
 ## Parallel
 
 ```rust,no_run

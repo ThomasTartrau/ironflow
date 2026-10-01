@@ -15,12 +15,13 @@
 use std::collections::{HashMap, HashSet};
 use std::env::var;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
 use ironflow_store::entities::{
     NewRun, NewStep, RunStatus, StepKind, StepStatus, StepUpdate, TriggerKind, step_trace_id,
 };
-use ironflow_store::postgres::PostgresStore;
+use ironflow_store::postgres::{PoolConfig, PostgresStore};
 use ironflow_store::store::RunStore;
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -34,7 +35,12 @@ static SERIAL: Mutex<()> = Mutex::const_new(());
 
 async fn get_store() -> PostgresStore {
     let url = var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PostgresStore::new(&url)
+    let config = PoolConfig {
+        acquire_timeout: Duration::from_secs(60),
+        connect_timeout: Duration::from_secs(60),
+        ..PoolConfig::default()
+    };
+    PostgresStore::with_config(&url, config)
         .await
         .expect("failed to connect to PostgreSQL")
 }

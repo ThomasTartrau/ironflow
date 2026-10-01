@@ -142,6 +142,7 @@ pub struct PodRun {
     security: Option<SecuritySpec>,
     automount_service_account_token: Option<bool>,
     allow_privilege_escalation: Option<bool>,
+    runtime_class: Option<String>,
     active_deadline_seconds: Option<Duration>,
     timeout: Duration,
     expiry_margin: Duration,
@@ -172,6 +173,7 @@ impl PodRun {
             security: None,
             automount_service_account_token: None,
             allow_privilege_escalation: None,
+            runtime_class: None,
             active_deadline_seconds: None,
             timeout: DEFAULT_TIMEOUT,
             expiry_margin: DEFAULT_EXPIRY_MARGIN,
@@ -412,6 +414,17 @@ impl PodRun {
         self
     }
 
+    /// Set `PodSpec.runtimeClassName`, for instance `"gvisor"`.
+    ///
+    /// Runs the pod under a sandboxed runtime instead of the node's default
+    /// `runc`. Opt-in: if this builder is never called the field is left
+    /// absent and the cluster default runtime applies.
+    #[must_use]
+    pub fn runtime_class(mut self, name: &str) -> Self {
+        self.runtime_class = Some(name.to_string());
+        self
+    }
+
     /// Set the container's `SecurityContext.allowPrivilegeEscalation`.
     ///
     /// Pass `false` to forbid a process from gaining more privileges than its
@@ -552,6 +565,7 @@ impl PodRun {
                 },
                 security_context,
                 automount_service_account_token: self.automount_service_account_token,
+                runtime_class_name: self.runtime_class.clone(),
                 active_deadline_seconds: active_deadline_secs(self.active_deadline_seconds),
                 ..Default::default()
             }),
