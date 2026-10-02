@@ -3497,7 +3497,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "ironflow-api"
-version = "2.42.1"
+version = "2.43.0"
 dependencies = [
  "axum",
  "chrono",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth"
-version = "2.4.47"
+version = "2.4.48"
 dependencies = [
  "argon2 0.5.3",
  "axum",
@@ -3581,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth-proxy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "ironflow-core",
@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.43.1"
+version = "2.43.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -3994,7 +3994,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.4.68"
+version = "2.4.69"
 dependencies = [
  "async-nats",
  "axum",
@@ -4058,7 +4058,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-store"
-version = "2.41.1"
+version = "2.41.2"
 dependencies = [
  "aes-gcm 0.10.3",
  "async-trait",
@@ -4106,7 +4106,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.23.1"
+version = "2.23.2"
 dependencies = [
  "async-trait",
  "axum",
