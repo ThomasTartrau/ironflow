@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.23.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.22.24...ironflow-worker-v2.23.0) - 2026-10-02
+
+### Added
+
+- #146 add ctx.wait_for_signal, signal delivery and wake-up of Sleeping runs
+
 ## [2.22.19](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.22.18...ironflow-worker-v2.22.19) - 2026-09-30
 ## [2.22.13](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.22.12...ironflow-worker-v2.22.13) - 2026-09-29
 
