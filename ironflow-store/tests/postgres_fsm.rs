@@ -25,7 +25,7 @@ use ironflow_store::entities::{
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::postgres::PostgresStore;
+use ironflow_store::postgres::{PoolConfig, PostgresStore};
 use ironflow_store::store::RunStore;
 use serde_json::json;
 use sqlx::{Executor, PgPool, migrate, query_scalar};
@@ -39,8 +39,22 @@ fn database_url() -> String {
     var("DATABASE_URL").expect("DATABASE_URL must be set")
 }
 
+/// Connect and migrate with a pool that waits as long as the test may run.
+///
+/// The default 5s acquire timeout is tighter than [`TEST_TIMEOUT`]: on a loaded
+/// CI runner, the first connection to a freshly created database can take
+/// longer than that and the test failed with "pool timed out" well within its
+/// budget.
+async fn connect(url: &str) -> Result<PostgresStore, StoreError> {
+    let config = PoolConfig {
+        acquire_timeout: TEST_TIMEOUT,
+        ..PoolConfig::default()
+    };
+    PostgresStore::with_config(url, config).await
+}
+
 async fn postgres_store() -> PostgresStore {
-    PostgresStore::new(&database_url())
+    connect(&database_url())
         .await
         .expect("failed to connect to PostgreSQL")
 }
@@ -291,7 +305,7 @@ async fn migrations_apply_on_a_blank_database() {
     timeout(TEST_TIMEOUT, async {
         let db = BlankDatabase::create().await;
 
-        let migrated = PostgresStore::new(&db.url).await.map(|_| ());
+        let migrated = connect(&db.url).await.map(|_| ());
         db.drop().await;
 
         migrated.expect("migrations must apply on a blank database");
@@ -444,7 +458,7 @@ async fn run_in(store: &PostgresStore, status: RunStatus) -> Uuid {
 async fn run_fsm_state_migrations_revert_and_reapply() {
     timeout(TEST_TIMEOUT, async {
         let db = BlankDatabase::create().await;
-        let store = PostgresStore::new(&db.url)
+        let store = connect(&db.url)
             .await
             .expect("migrations must apply on a blank database");
         let pool = PgPool::connect(&db.url)

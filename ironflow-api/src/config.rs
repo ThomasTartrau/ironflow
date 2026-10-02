@@ -485,7 +485,12 @@ impl ServerConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use ironflow_store::memory::InMemoryStore;
+
+    use crate::purger::{DEFAULT_SIGNAL_RETENTION_DAYS, RunPurger};
 
     use super::*;
 
@@ -695,6 +700,41 @@ mod tests {
         unsafe { env::set_var("SIGNAL_RETENTION_DAYS", "soon") };
         assert!(ServerConfig::from_env().is_err());
         unsafe { clear_env() };
+    }
+
+    #[test]
+    fn purger_from_config_uses_env_values() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            clear_env();
+            env::set_var("SIGNAL_RETENTION_DAYS", "1");
+            env::set_var("PURGE_MAX_AGE_DAYS", "30");
+            env::set_var("PURGE_MAX_RUNS_PER_WORKFLOW", "50");
+            env::set_var("PURGE_DRY_RUN", "true");
+            env::set_var("PURGE_INTERVAL_SECS", "3600");
+            env::set_var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS", "5");
+        }
+        let config = ServerConfig::from_env().unwrap();
+        unsafe { clear_env() };
+
+        let purger = RunPurger::from_config(Arc::new(InMemoryStore::new()), &config);
+        assert_eq!(purger.signal_retention_days, 1);
+        assert_eq!(purger.usage_retention_days, 5);
+        assert_eq!(purger.policy.max_age_days, 30);
+        assert_eq!(purger.policy.max_runs_per_workflow, 50);
+        assert!(purger.policy.dry_run);
+        assert_eq!(purger.interval, Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn purger_from_config_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { clear_env() };
+        let config = ServerConfig::from_env().unwrap();
+
+        let purger = RunPurger::from_config(Arc::new(InMemoryStore::new()), &config);
+        assert_eq!(purger.signal_retention_days, DEFAULT_SIGNAL_RETENTION_DAYS);
+        assert_eq!(purger.signal_retention_days, 7);
     }
 
     #[test]
