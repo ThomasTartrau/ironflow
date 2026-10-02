@@ -8,8 +8,7 @@
 //! runs whose worker lease expired. The reaper keeps runs alive; the purger
 //! removes the ones that are done and old.
 //!
-//! [`RunPurger::from_config`] wires a purger from a
-//! [`ServerConfig`](crate::config::ServerConfig).
+//! [`RunPurger::from_config`] wires a purger from a [`ServerConfig`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -105,12 +104,12 @@ impl RunPurger {
     ///
     /// ```no_run
     /// use std::sync::Arc;
-    /// use ironflow_api::config::ServerConfig;
+    /// use ironflow_api::config::{ConfigError, ServerConfig};
     /// use ironflow_api::purger::RunPurger;
     /// use ironflow_store::memory::InMemoryStore;
     /// use tokio_util::sync::CancellationToken;
     ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example() -> Result<(), ConfigError> {
     /// let config = ServerConfig::from_env()?;
     /// let purger = RunPurger::from_config(Arc::new(InMemoryStore::new()), &config);
     /// tokio::spawn(purger.run(CancellationToken::new()));
