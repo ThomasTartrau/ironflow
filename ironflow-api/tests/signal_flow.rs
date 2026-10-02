@@ -107,11 +107,14 @@ fn admin_header(state: &AppState) -> String {
 
 #[tokio::test]
 async fn signal_resumes_run_through_router() {
-    timeout(TEST_TIMEOUT, async {
-        let store = Arc::new(InMemoryStore::new());
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let (app, state) = test_app(store.clone(), received.clone());
+    // Built outside the timeout: `AppState::new` loads the TLS root store
+    // synchronously, which takes seconds on a loaded CI runner and would eat
+    // the budget meant for the signal round trip.
+    let store = Arc::new(InMemoryStore::new());
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let (app, state) = test_app(store.clone(), received.clone());
 
+    timeout(TEST_TIMEOUT, async {
         let result = state
             .engine
             .run_handler("wait-ci", TriggerKind::Manual, json!({}))
