@@ -49,6 +49,7 @@
 //! | `ctx.agent` | [`TestEngine::with_mock_agent`] or [`TestEngine::with_recorded_agent`] |
 //! | `ctx.approval` | [`TestEngine::with_mock_approval`], or [`TestEngine::resume`] |
 //! | `ctx.human_input` | [`TestEngine::with_mock_human_input`], or [`TestEngine::resume`] after writing the answer on the step |
+//! | `ctx.wait_for_signal` | [`TestEngine::with_mock_signal`]: [`SignalOutcome::Received`] or [`SignalOutcome::TimedOut`] |
 //! | `ctx.secrets`, secrets read by operations | `TestEngine::with_secret` (`secret-store` feature) |
 //! | `ctx.parallel`, `ctx.workflow`, `on_error` | the mocks above apply to the steps inside them |
 //!
@@ -59,7 +60,9 @@
 //!   [`Operation`](crate::operation::Operation) to the handler.
 //! * [`ctx.delay`](crate::context::WorkflowContext::delay) is not intercepted: a
 //!   non-zero delay still suspends the run with
-//!   [`RunStatus::Sleeping`](ironflow_store::models::RunStatus::Sleeping).
+//!   [`RunStatus::Sleeping`](ironflow_store::models::RunStatus::Sleeping). The run
+//!   resumes once [`RunWaker::tick`](crate::wake::RunWaker::tick) runs after its
+//!   `scheduled_at`.
 //! * [`ctx.decision`](crate::context::WorkflowContext::decision) needs a real
 //!   [`DecisionProvider`](ironflow_core::decision::DecisionProvider), wired with
 //!   [`TestEngine::with_decision_provider`].
@@ -71,10 +74,10 @@ mod result;
 pub use engine::TestEngine;
 pub use mocks::{
     AgentMock, HttpMock, HumanInputMock, MissingAgentProvider, MockAgentProvider, MockHttpResponse,
-    MockInterceptor, MockShellOutput, ShellMock,
+    MockInterceptor, MockShellOutput, ShellMock, SignalMock,
 };
 pub use result::{TestResult, TestStep};
 
 // Re-exported so test code has a single import path for everything the harness
 // needs.
-pub use crate::executor::{ApprovalOutcome, HumanInputOutcome};
+pub use crate::executor::{ApprovalOutcome, HumanInputOutcome, SignalOutcome};

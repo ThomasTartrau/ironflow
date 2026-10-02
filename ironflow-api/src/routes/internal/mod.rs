@@ -17,6 +17,7 @@ pub mod pick_next_run;
 pub mod provider_accounts;
 pub mod push_logs;
 pub mod renew_lease;
+pub mod signals;
 pub mod update_run;
 pub mod update_run_status;
 pub mod update_step;

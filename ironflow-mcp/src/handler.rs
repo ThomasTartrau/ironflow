@@ -94,6 +94,8 @@ impl ServerHandler for IronflowHandler {
             IronflowTools::ListApprovalDelegationsTool(t) => t.run(&self.client).await,
             IronflowTools::CreateApprovalDelegationTool(t) => t.run(&self.client).await,
             IronflowTools::DeleteApprovalDelegationTool(t) => t.run(&self.client).await,
+            IronflowTools::SendSignalTool(t) => t.run(&self.client).await,
+            IronflowTools::ListSignalsTool(t) => t.run(&self.client).await,
         }
     }
 }

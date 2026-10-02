@@ -41,6 +41,8 @@ pub enum StepKind {
     Decision,
     /// A typed human input request.
     HumanInput,
+    /// A step waiting for an external Signal.
+    Signal,
     /// A user-defined operation (e.g. `"gitlab"`, `"gmail"`, `"slack"`).
     Custom(String),
 }
@@ -55,6 +57,7 @@ impl Serialize for StepKind {
             StepKind::Approval => "approval",
             StepKind::Decision => "decision",
             StepKind::HumanInput => "human_input",
+            StepKind::Signal => "signal",
             StepKind::Custom(name) => name.as_str(),
         };
         serializer.serialize_str(s)
@@ -72,6 +75,7 @@ impl<'de> Deserialize<'de> for StepKind {
             "approval" => StepKind::Approval,
             "decision" => StepKind::Decision,
             "human_input" => StepKind::HumanInput,
+            "signal" => StepKind::Signal,
             _ => StepKind::Custom(s),
         })
     }
@@ -87,6 +91,7 @@ impl std::fmt::Display for StepKind {
             StepKind::Approval => f.write_str("Approval"),
             StepKind::Decision => f.write_str("Decision"),
             StepKind::HumanInput => f.write_str("HumanInput"),
+            StepKind::Signal => f.write_str("Signal"),
             StepKind::Custom(name) => write!(f, "Custom({name})"),
         }
     }
@@ -125,6 +130,16 @@ mod tests {
         assert_eq!(json, "\"human_input\"");
         let back: StepKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, StepKind::HumanInput);
+    }
+
+    #[test]
+    fn serde_roundtrip_signal() {
+        let kind = StepKind::Signal;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"signal\"");
+        let back: StepKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, StepKind::Signal);
+        assert_eq!(kind.to_string(), "Signal");
     }
 
     #[test]

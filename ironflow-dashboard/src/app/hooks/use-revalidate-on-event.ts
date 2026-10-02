@@ -27,6 +27,8 @@ const DEFAULT_TYPES = [
 	"approval_granted",
 	"approval_rejected",
 	"approval_escalated",
+	"signal_awaited",
+	"signal_received",
 ] as const satisfies readonly EventKind[];
 
 /**

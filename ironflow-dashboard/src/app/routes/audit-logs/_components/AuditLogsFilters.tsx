@@ -29,6 +29,8 @@ const EVENT_KINDS: EventKind[] = [
 	"secrets_rotated",
 	"retry_forced",
 	"provider_account.updated",
+	"signal_awaited",
+	"signal_received",
 ];
 
 interface FilterValues {

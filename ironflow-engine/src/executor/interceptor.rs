@@ -6,7 +6,9 @@
 //! [`WorkflowContext::approval`](crate::context::WorkflowContext::approval)
 //! before the gate suspends the run, and by
 //! [`WorkflowContext::human_input`](crate::context::WorkflowContext::human_input)
-//! before the input request suspends the run. Returning `Some(..)` short-circuits the
+//! before the input request suspends the run, and by
+//! [`WorkflowContext::wait_for_signal`](crate::context::WorkflowContext::wait_for_signal)
+//! before the signal step suspends the run. Returning `Some(..)` short-circuits the
 //! step: no process is spawned, no request is sent, no human is asked.
 //!
 //! Production wiring leaves the hook unset. In practice the only implementor is
@@ -109,6 +111,25 @@ impl HumanInputOutcome {
     }
 }
 
+/// Outcome applied to a signal step by a [`StepInterceptor`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::executor::SignalOutcome;
+/// use serde_json::json;
+///
+/// let received = SignalOutcome::Received(json!({"status": "success"}));
+/// assert_ne!(received, SignalOutcome::TimedOut);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignalOutcome {
+    /// A signal arrived with this payload; it must match the expected type.
+    Received(Value),
+    /// No signal arrived before the deadline: the handler receives `None`.
+    TimedOut,
+}
+
 /// Resolves steps without executing them.
 ///
 /// # Examples
@@ -171,6 +192,22 @@ pub trait StepInterceptor: Send + Sync {
         schema: &Value,
     ) -> Option<HumanInputOutcome> {
         let _ = (name, config, schema);
+        None
+    }
+
+    /// Resolve a signal step instead of suspending the run.
+    ///
+    /// `name` is the step name, `signal_name` and `key` identify the awaited
+    /// signal, and `schema` is the JSON schema of its payload. The default
+    /// implementation returns `None`: the step waits for a real signal.
+    fn intercept_signal(
+        &self,
+        name: &str,
+        signal_name: &str,
+        key: &str,
+        schema: &Value,
+    ) -> Option<SignalOutcome> {
+        let _ = (name, signal_name, key, schema);
         None
     }
 }

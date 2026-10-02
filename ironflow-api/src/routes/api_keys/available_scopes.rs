@@ -70,6 +70,7 @@ fn scope_metadata(scope: &ApiKeyScope) -> (&'static str, &'static str) {
             "Accounts Manage",
             "Create, update, delete and test provider accounts",
         ),
+        ApiKeyScope::SignalsSend => ("Signals Send", "Send signals that resume waiting runs"),
         ApiKeyScope::Admin => ("Admin", "Full access to all operations"),
     }
 }
@@ -164,7 +165,7 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: JsonValue = serde_json::from_slice(&body).unwrap();
         let scopes = json["data"].as_array().unwrap();
-        assert_eq!(scopes.len(), 7);
+        assert_eq!(scopes.len(), 8);
 
         let values: Vec<&str> = scopes
             .iter()
@@ -172,6 +173,7 @@ mod tests {
             .collect();
         assert!(values.contains(&"runs_write"));
         assert!(values.contains(&"runs_manage"));
+        assert!(values.contains(&"signals_send"));
         assert!(values.contains(&"accounts_read"));
         assert!(values.contains(&"accounts_manage"));
     }

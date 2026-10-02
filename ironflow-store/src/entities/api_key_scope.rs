@@ -26,6 +26,8 @@ pub enum ApiKeyScope {
     AccountsRead,
     /// Create, update, delete and test Provider Accounts.
     AccountsManage,
+    /// Send signals that resume waiting runs.
+    SignalsSend,
     /// Full access to all operations.
     Admin,
 }
@@ -54,6 +56,7 @@ impl ApiKeyScope {
             ApiKeyScope::StatsRead,
             ApiKeyScope::AccountsRead,
             ApiKeyScope::AccountsManage,
+            ApiKeyScope::SignalsSend,
         ]
     }
 
@@ -123,6 +126,7 @@ mod tests {
             ApiKeyScope::StatsRead,
             ApiKeyScope::AccountsRead,
             ApiKeyScope::AccountsManage,
+            ApiKeyScope::SignalsSend,
             ApiKeyScope::Admin,
         ];
         for scope in scopes {
@@ -151,7 +155,7 @@ mod tests {
     fn all_non_admin_excludes_admin() {
         let scopes = ApiKeyScope::all_non_admin();
         assert!(!scopes.contains(&ApiKeyScope::Admin));
-        assert_eq!(scopes.len(), 7);
+        assert_eq!(scopes.len(), 8);
     }
 
     #[test]
@@ -165,6 +169,7 @@ mod tests {
         assert!(!allowed.contains(&ApiKeyScope::Admin));
         assert!(!allowed.contains(&ApiKeyScope::AccountsRead));
         assert!(!allowed.contains(&ApiKeyScope::AccountsManage));
+        assert!(!allowed.contains(&ApiKeyScope::SignalsSend));
     }
 
     #[test]

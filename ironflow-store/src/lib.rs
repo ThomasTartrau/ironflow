@@ -54,6 +54,7 @@ pub mod log_store;
 pub mod provider_account_store;
 pub mod schedule_store;
 pub mod secret_store;
+pub mod signal_store;
 pub mod store;
 pub mod user_store;
 
@@ -84,6 +85,7 @@ pub mod prelude {
     pub use crate::provider_account_store::ProviderAccountStore;
     pub use crate::schedule_store::ScheduleStore;
     pub use crate::secret_store::SecretStore;
+    pub use crate::signal_store::SignalStore;
     pub use crate::store::{RunStore, Store};
     pub use crate::user_store::UserStore;
 

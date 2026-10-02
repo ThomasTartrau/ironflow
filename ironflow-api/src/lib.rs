@@ -87,6 +87,7 @@ pub mod schedule_sync;
 pub mod schedule_ticker;
 pub mod sse;
 pub mod state;
+pub mod waker;
 
 /// Convenience re-exports for common API usage.
 pub mod prelude {

@@ -24,7 +24,7 @@ use ironflow_store::workflow_secrets::ScopedSecretStore;
 use crate::config::{HttpConfig, HumanInputConfig, ShellConfig};
 use crate::engine::{Engine, WorkflowResult};
 use crate::error::EngineError;
-use crate::executor::{ApprovalOutcome, HumanInputOutcome, StepInterceptor};
+use crate::executor::{ApprovalOutcome, HumanInputOutcome, SignalOutcome, StepInterceptor};
 use crate::handler::WorkflowHandler;
 use crate::testing::mocks::{
     MissingAgentProvider, MockAgentProvider, MockHttpResponse, MockInterceptor, MockShellOutput,
@@ -276,6 +276,38 @@ impl TestEngine {
     ) -> Self {
         assert!(self.engine.is_none(), "{CONFIGURE_BEFORE_RUN}");
         self.mocks = self.mocks.human_input(f);
+        self
+    }
+
+    /// Resolve every signal step with `f` instead of waiting for a signal.
+    ///
+    /// `f` receives the step name, the signal name and the key, and returns
+    /// [`SignalOutcome::Received`] with the payload, or
+    /// [`SignalOutcome::TimedOut`] to make `ctx.wait_for_signal` return `None`.
+    /// Without this, a handler that waits for a signal ends the run in
+    /// [`RunStatus::Sleeping`].
+    ///
+    /// # Panics
+    ///
+    /// Panics when called after the first run.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::testing::{SignalOutcome, TestEngine};
+    /// use serde_json::json;
+    ///
+    /// let harness = TestEngine::new().with_mock_signal(|_step, _name, _key| {
+    ///     SignalOutcome::Received(json!({"status": "success"}))
+    /// });
+    /// # let _ = harness;
+    /// ```
+    pub fn with_mock_signal(
+        mut self,
+        f: impl Fn(&str, &str, &str) -> SignalOutcome + Send + Sync + 'static,
+    ) -> Self {
+        assert!(self.engine.is_none(), "{CONFIGURE_BEFORE_RUN}");
+        self.mocks = self.mocks.signal(f);
         self
     }
 

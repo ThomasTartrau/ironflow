@@ -12,6 +12,7 @@ pub mod logs;
 pub mod run;
 pub mod schedule;
 pub mod secret;
+pub mod signal;
 pub mod stats;
 pub mod template;
 pub mod user;

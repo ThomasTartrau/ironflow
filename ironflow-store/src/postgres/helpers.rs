@@ -58,6 +58,7 @@ pub(crate) fn parse_step_kind(s: &str) -> Result<StepKind, StoreError> {
         "approval" => Ok(StepKind::Approval),
         "decision" => Ok(StepKind::Decision),
         "human_input" => Ok(StepKind::HumanInput),
+        "signal" => Ok(StepKind::Signal),
         other => Ok(StepKind::Custom(other.to_string())),
     }
 }
@@ -90,6 +91,7 @@ pub(crate) fn step_kind_to_str(kind: &StepKind) -> std::borrow::Cow<'static, str
         StepKind::Approval => std::borrow::Cow::Borrowed("approval"),
         StepKind::Decision => std::borrow::Cow::Borrowed("decision"),
         StepKind::HumanInput => std::borrow::Cow::Borrowed("human_input"),
+        StepKind::Signal => std::borrow::Cow::Borrowed("signal"),
         StepKind::Custom(name) => std::borrow::Cow::Owned(name.clone()),
     }
 }

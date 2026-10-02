@@ -50,6 +50,8 @@ pub enum RunEvent {
     DelaySleeping,
     /// The delay elapsed and the run is re-queued.
     DelayElapsed,
+    /// A signal resumed the run.
+    SignalReceived,
 }
 
 /// Finite state machine for a workflow run.
@@ -76,6 +78,7 @@ pub enum RunEvent {
 /// | AwaitingApproval | CancelRequested | Cancelled |
 /// | Running | DelaySleeping | Sleeping |
 /// | Sleeping | DelayElapsed | Pending |
+/// | Sleeping | SignalReceived | Pending |
 /// | Sleeping | CancelRequested | Cancelled |
 ///
 /// # Examples
@@ -243,6 +246,7 @@ fn next_state(from: RunStatus, event: RunEvent) -> Option<RunStatus> {
         // Delay
         (RunStatus::Running, RunEvent::DelaySleeping) => Some(RunStatus::Sleeping),
         (RunStatus::Sleeping, RunEvent::DelayElapsed) => Some(RunStatus::Pending),
+        (RunStatus::Sleeping, RunEvent::SignalReceived) => Some(RunStatus::Pending),
         (RunStatus::Sleeping, RunEvent::CancelRequested) => Some(RunStatus::Cancelled),
 
         // Terminal states and all other combos → invalid
@@ -465,6 +469,23 @@ mod tests {
         fsm.apply(RunEvent::AllStepsCompleted).unwrap();
         assert_eq!(fsm.state(), RunStatus::Completed);
         assert_eq!(fsm.history().len(), 4);
+    }
+
+    #[test]
+    fn sleeping_signal_received_goes_pending() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PickedUp).unwrap();
+        fsm.apply(RunEvent::DelaySleeping).unwrap();
+        fsm.apply(RunEvent::SignalReceived).unwrap();
+        assert_eq!(fsm.state(), RunStatus::Pending);
+        assert_eq!(RunEvent::SignalReceived.to_string(), "signal_received");
+    }
+
+    #[test]
+    fn cannot_receive_signal_while_running() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PickedUp).unwrap();
+        assert!(fsm.apply(RunEvent::SignalReceived).is_err());
     }
 
     // ---- TransitionError Display ----

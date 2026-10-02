@@ -29,6 +29,7 @@ mod provider_account_store;
 mod run_store;
 mod schedule_store;
 mod secret_store;
+mod signal_store;
 mod stats_history;
 mod user_store;
 

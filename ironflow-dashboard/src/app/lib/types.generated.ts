@@ -1003,6 +1003,50 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/signals": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List received signals, newest first, paginated.
+		 * @description Any signed-in user may list signals. An API key needs the `runs_read`
+		 *     scope.
+		 *
+		 *     # Errors
+		 *
+		 *     - 401 if not authenticated
+		 *     - 403 if the API key lacks `runs_read`
+		 */
+		get: operations["list_signals"];
+		put?: never;
+		/**
+		 * Send a signal.
+		 * @description The signal is stored, then every run waiting for its `(name, key)` with a
+		 *     payload schema it matches is resumed. A waiting run whose schema the
+		 *     payload does not match keeps waiting and is listed under `rejected`. The
+		 *     signal is stored even when nobody waits for it yet, so a run that opens its
+		 *     wait later still finds it.
+		 *
+		 *     Sending again with the same `idempotency_id` returns 200 with
+		 *     `duplicate: true` and delivers nothing.
+		 *
+		 *     # Errors
+		 *
+		 *     - 400 if `name` or `key` is empty or longer than 255 characters, or if
+		 *       `idempotency_id` is empty or longer than 255 characters
+		 *     - 401 if not authenticated
+		 *     - 403 if the caller is not an admin, or the API key lacks `signals_send`
+		 */
+		post: operations["send_signal"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/stats": {
 		parameters: {
 			query?: never;
@@ -1387,6 +1431,7 @@ export interface components {
 			| "stats_read"
 			| "accounts_read"
 			| "accounts_manage"
+			| "signals_send"
 			| "admin";
 		/** @description Approval delegation response. */
 		ApprovalDelegationResponse: {
@@ -2127,6 +2172,14 @@ export interface components {
 			| (components["schemas"]["ProviderAccountUsageUpdatedEvent"] & {
 					/** @enum {string} */
 					type: "provider_account.usage_updated";
+			  })
+			| (components["schemas"]["SignalAwaitedEvent"] & {
+					/** @enum {string} */
+					type: "signal_awaited";
+			  })
+			| (components["schemas"]["SignalReceivedEvent"] & {
+					/** @enum {string} */
+					type: "signal_received";
 			  });
 		/**
 		 * @description Strongly-typed event kind matching domain event variants.
@@ -2162,7 +2215,9 @@ export interface components {
 			| "secrets_rotated"
 			| "retry_forced"
 			| "provider_account.updated"
-			| "provider_account.usage_updated";
+			| "provider_account.usage_updated"
+			| "signal_awaited"
+			| "signal_received";
 		/** @description The execution plan of one workflow for one input payload. */
 		ExecutionPlanResponse: {
 			/**
@@ -2344,6 +2399,23 @@ export interface components {
 			status?: null | components["schemas"]["RunStatus"];
 			/** @description Filter by workflow name. */
 			workflow?: string | null;
+		};
+		/** @description Query parameters for listing signals. */
+		ListSignalsQuery: {
+			/** @description Only signals with this exact key. */
+			key?: string | null;
+			/** @description Only signals with this exact name. */
+			name?: string | null;
+			/**
+			 * Format: int32
+			 * @description Page number (1-based, defaults to 1).
+			 */
+			page?: number | null;
+			/**
+			 * Format: int32
+			 * @description Items per page (defaults to 20, max 100).
+			 */
+			per_page?: number | null;
 		};
 		/** @description Query parameters for listing users. */
 		ListUsersQuery: {
@@ -2766,6 +2838,34 @@ export interface components {
 		RejectHumanInputRequest: {
 			/** @description Why the input is refused. Passed to the handler. */
 			reason?: string | null;
+		};
+		/** @description A waiting run whose payload schema the signal did not match. */
+		RejectedRunResponse: {
+			/** @description Why the payload was refused. */
+			error: string;
+			/**
+			 * Format: uuid
+			 * @description Run that keeps waiting.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description The signal step that keeps waiting.
+			 */
+			step_id: string;
+		};
+		/** @description A run resumed by a signal. */
+		ResumedRunResponse: {
+			/**
+			 * Format: uuid
+			 * @description Run whose waiting step the signal resolved.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description The resolved signal step.
+			 */
+			step_id: string;
 		};
 		/**
 		 * @description Payload of the `Event::RetryForced` event.
@@ -3297,6 +3397,20 @@ export interface components {
 			 */
 			updated_at: string;
 		};
+		/** @description Send signal request body. */
+		SendSignalRequest: {
+			/**
+			 * @description Deduplication ID (1-255 characters): a second signal with the same ID
+			 *     is neither stored nor delivered.
+			 */
+			idempotency_id?: string | null;
+			/** @description Occurrence key, e.g. a commit SHA (1-255 characters). */
+			key: string;
+			/** @description Signal name, e.g. `"ci.pipeline_finished"` (1-255 characters). */
+			name: string;
+			/** @description JSON payload, validated against the schema of each waiting step. */
+			payload: Record<string, never>;
+		};
 		/** @description Request body for creating or updating a secret. */
 		SetSecretRequest: {
 			/** @description Secret key (namespaced, e.g. `workflows/inbox/gmail_token`). */
@@ -3319,6 +3433,135 @@ export interface components {
 			password: string;
 			/** @description Display username. */
 			username: string;
+		};
+		/**
+		 * @description Payload of the `Event::SignalAwaited` event.
+		 *
+		 *     Emitted when a run suspends on `ctx.wait_for_signal` and goes `Sleeping`.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::{TimeDelta, Utc};
+		 *     use ironflow_engine::notify::SignalAwaitedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let now = Utc::now();
+		 *     let payload = SignalAwaitedEvent {
+		 *         run_id: Uuid::now_v7(),
+		 *         step_id: Uuid::now_v7(),
+		 *         step_name: "wait-ci".to_string(),
+		 *         name: "ci.pipeline_finished".to_string(),
+		 *         key: "4f2a9c1".to_string(),
+		 *         deadline_at: now + TimeDelta::hours(1),
+		 *         at: now,
+		 *     };
+		 *     assert_eq!(payload.key, "4f2a9c1");
+		 *     ```
+		 */
+		SignalAwaitedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the run started waiting.
+			 */
+			at: string;
+			/**
+			 * Format: date-time
+			 * @description When the wait times out.
+			 */
+			deadline_at: string;
+			/** @description Awaited occurrence key. */
+			key: string;
+			/** @description Awaited signal name. */
+			name: string;
+			/**
+			 * Format: uuid
+			 * @description Run identifier.
+			 */
+			run_id: string;
+			/**
+			 * Format: uuid
+			 * @description The signal step the run waits on.
+			 */
+			step_id: string;
+			/** @description Name of the signal step. */
+			step_name: string;
+		};
+		/** @description Result of sending a signal. */
+		SignalDeliveryResponse: {
+			/** @description `true` when the idempotency ID was already used: nothing was delivered. */
+			duplicate: boolean;
+			/** @description Waiting runs that rejected the payload and keep waiting. */
+			rejected: components["schemas"]["RejectedRunResponse"][];
+			/** @description Runs the signal resumed. */
+			resumed: components["schemas"]["ResumedRunResponse"][];
+			/**
+			 * Format: uuid
+			 * @description ID of the stored signal (the pre-existing one on a duplicate).
+			 */
+			signal_id: string;
+		};
+		/**
+		 * @description Payload of the `Event::SignalReceived` event.
+		 *
+		 *     Emitted once per stored signal; a duplicate (same idempotency ID) emits
+		 *     nothing.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::SignalReceivedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = SignalReceivedEvent {
+		 *         signal_id: Uuid::now_v7(),
+		 *         name: "ci.pipeline_finished".to_string(),
+		 *         key: "4f2a9c1".to_string(),
+		 *         resumed_runs: vec![Uuid::now_v7()],
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.resumed_runs.len(), 1);
+		 *     ```
+		 */
+		SignalReceivedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the signal was received.
+			 */
+			at: string;
+			/** @description Occurrence key. */
+			key: string;
+			/** @description Signal name. */
+			name: string;
+			/** @description Runs whose waiting step the signal resolved. */
+			resumed_runs: string[];
+			/**
+			 * Format: uuid
+			 * @description Stored signal identifier.
+			 */
+			signal_id: string;
+		};
+		/** @description A stored signal. */
+		SignalResponse: {
+			/**
+			 * Format: uuid
+			 * @description Signal ID.
+			 */
+			id: string;
+			/** @description Deduplication ID given by the sender. */
+			idempotency_id?: string | null;
+			/** @description Occurrence key. */
+			key: string;
+			/** @description Signal name. */
+			name: string;
+			/** @description JSON payload. */
+			payload: Record<string, never>;
+			/**
+			 * Format: date-time
+			 * @description When the signal was received.
+			 */
+			received_at: string;
 		};
 		/**
 		 * @description One time bucket in the history response.
@@ -6507,6 +6750,95 @@ export interface operations {
 			};
 			/** @description Secret not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	list_signals: {
+		parameters: {
+			query?: {
+				/** @description Only signals with this exact name. */
+				name?: string | null;
+				/** @description Only signals with this exact key. */
+				key?: string | null;
+				/** @description Page number (1-based, defaults to 1). */
+				page?: number | null;
+				/** @description Items per page (defaults to 20, max 100). */
+				per_page?: number | null;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Paginated list of signals */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["SignalResponse"][];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Insufficient scope */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	send_signal: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Signal to deliver */
+		requestBody: {
+			content: {
+				"application/json": components["schemas"]["SendSignalRequest"];
+			};
+		};
+		responses: {
+			/** @description Signal stored and delivered */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["SignalDeliveryResponse"];
+				};
+			};
+			/** @description Invalid signal */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden or insufficient scope */
+			403: {
 				headers: {
 					[name: string]: unknown;
 				};

@@ -837,6 +837,90 @@ impl RunStore for PostgresStore {
         })
     }
 
+    fn claim_due_sleeping_runs(&self, limit: u32) -> StoreFuture<'_, Vec<Run>> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // SKIP LOCKED lets concurrent wakers work on disjoint runs;
+            // clearing scheduled_at below makes a run wake exactly once.
+            let rows = sqlx::query(
+                r#"
+                SELECT r.id, r.state_machine__id
+                FROM ironflow.runs r
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE ast.name = 'sleeping'
+                  AND r.scheduled_at IS NOT NULL
+                  AND r.scheduled_at <= NOW()
+                ORDER BY r.scheduled_at ASC
+                LIMIT $1
+                FOR UPDATE OF r, sm SKIP LOCKED
+                "#,
+            )
+            .bind(limit as i64)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let event =
+                PostgresStore::run_status_to_event(RunStatus::Sleeping, RunStatus::Pending)?;
+            let mut woken = Vec::with_capacity(rows.len());
+
+            for row in &rows {
+                let run_id: Uuid = row.get("id");
+                let state_machine_id: Uuid = row.get("state_machine__id");
+
+                sqlx::query("SELECT lib_fsm.state_machine_transition($1, $2)")
+                    .bind(state_machine_id)
+                    .bind(event)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                sqlx::query(
+                    r#"
+                    UPDATE ironflow.runs
+                    SET scheduled_at = NULL, updated_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(run_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                let updated_row = sqlx::query(
+                    r#"
+                    SELECT r.*, ast.name as state_name, cu.username as created_by_username,
+                           ck.name as created_by_api_key_name
+                    FROM ironflow.runs r
+                    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                    LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
+                    LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
+                    WHERE r.id = $1
+                    "#,
+                )
+                .bind(run_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                woken.push(row_to_run(&updated_row)?);
+            }
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(woken)
+        })
+    }
+
     fn list_purgeable_runs(
         &self,
         policy: &PurgePolicy,

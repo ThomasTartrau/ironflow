@@ -409,6 +409,7 @@ impl WorkflowContext {
             interceptor: self.interceptor.clone(),
             trace_context: self.trace_context.child(),
             operation_ctx: None,
+            run_created_at: None,
             plan: None,
         };
 

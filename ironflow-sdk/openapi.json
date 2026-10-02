@@ -238,6 +238,7 @@
           "stats_read",
           "accounts_read",
           "accounts_manage",
+          "signals_send",
           "admin"
         ],
         "type": "string"
@@ -1356,6 +1357,52 @@
               }
             ],
             "description": "New usage windows were recorded for a Provider Account."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignalAwaitedEvent",
+                "description": "A run started waiting for a signal."
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "signal_awaited"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A run started waiting for a signal."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignalReceivedEvent",
+                "description": "A signal was received."
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "signal_received"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A signal was received."
           }
         ]
       },
@@ -1379,7 +1426,9 @@
           "secrets_rotated",
           "retry_forced",
           "provider_account.updated",
-          "provider_account.usage_updated"
+          "provider_account.usage_updated",
+          "signal_awaited",
+          "signal_received"
         ],
         "type": "string"
       },
@@ -1644,6 +1693,36 @@
             "description": "Filter by workflow name.",
             "nullable": true,
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListSignalsQuery": {
+        "description": "Query parameters for listing signals.",
+        "properties": {
+          "key": {
+            "description": "Only signals with this exact key.",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Only signals with this exact name.",
+            "nullable": true,
+            "type": "string"
+          },
+          "page": {
+            "description": "Page number (1-based, defaults to 1).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "per_page": {
+            "description": "Items per page (defaults to 20, max 100).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
           }
         },
         "type": "object"
@@ -2216,6 +2295,51 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "RejectedRunResponse": {
+        "description": "A waiting run whose payload schema the signal did not match.",
+        "properties": {
+          "error": {
+            "description": "Why the payload was refused.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run that keeps waiting.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "The signal step that keeps waiting.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id",
+          "error"
+        ],
+        "type": "object"
+      },
+      "ResumedRunResponse": {
+        "description": "A run resumed by a signal.",
+        "properties": {
+          "run_id": {
+            "description": "Run whose waiting step the signal resolved.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "The resolved signal step.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id"
+        ],
         "type": "object"
       },
       "RetryForcedEvent": {
@@ -2796,6 +2920,34 @@
         ],
         "type": "object"
       },
+      "SendSignalRequest": {
+        "description": "Send signal request body.",
+        "properties": {
+          "idempotency_id": {
+            "description": "Deduplication ID (1-255 characters): a second signal with the same ID\nis neither stored nor delivered.",
+            "nullable": true,
+            "type": "string"
+          },
+          "key": {
+            "description": "Occurrence key, e.g. a commit SHA (1-255 characters).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Signal name, e.g. `\"ci.pipeline_finished\"` (1-255 characters).",
+            "type": "string"
+          },
+          "payload": {
+            "description": "JSON payload, validated against the schema of each waiting step.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "key",
+          "payload"
+        ],
+        "type": "object"
+      },
       "SetSecretRequest": {
         "description": "Request body for creating or updating a secret.",
         "properties": {
@@ -2852,6 +3004,167 @@
           "email",
           "username",
           "password"
+        ],
+        "type": "object"
+      },
+      "SignalAwaitedEvent": {
+        "description": "Payload of the `Event::SignalAwaited` event.\n\nEmitted when a run suspends on `ctx.wait_for_signal` and goes `Sleeping`.\n\n# Examples\n\n```\nuse chrono::{TimeDelta, Utc};\nuse ironflow_engine::notify::SignalAwaitedEvent;\nuse uuid::Uuid;\n\nlet now = Utc::now();\nlet payload = SignalAwaitedEvent {\n    run_id: Uuid::now_v7(),\n    step_id: Uuid::now_v7(),\n    step_name: \"wait-ci\".to_string(),\n    name: \"ci.pipeline_finished\".to_string(),\n    key: \"4f2a9c1\".to_string(),\n    deadline_at: now + TimeDelta::hours(1),\n    at: now,\n};\nassert_eq!(payload.key, \"4f2a9c1\");\n```",
+        "properties": {
+          "at": {
+            "description": "When the run started waiting.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "deadline_at": {
+            "description": "When the wait times out.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "key": {
+            "description": "Awaited occurrence key.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Awaited signal name.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run identifier.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_id": {
+            "description": "The signal step the run waits on.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "step_name": {
+            "description": "Name of the signal step.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "step_id",
+          "step_name",
+          "name",
+          "key",
+          "deadline_at",
+          "at"
+        ],
+        "type": "object"
+      },
+      "SignalDeliveryResponse": {
+        "description": "Result of sending a signal.",
+        "properties": {
+          "duplicate": {
+            "description": "`true` when the idempotency ID was already used: nothing was delivered.",
+            "type": "boolean"
+          },
+          "rejected": {
+            "description": "Waiting runs that rejected the payload and keep waiting.",
+            "items": {
+              "$ref": "#/components/schemas/RejectedRunResponse"
+            },
+            "type": "array"
+          },
+          "resumed": {
+            "description": "Runs the signal resumed.",
+            "items": {
+              "$ref": "#/components/schemas/ResumedRunResponse"
+            },
+            "type": "array"
+          },
+          "signal_id": {
+            "description": "ID of the stored signal (the pre-existing one on a duplicate).",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal_id",
+          "duplicate",
+          "resumed",
+          "rejected"
+        ],
+        "type": "object"
+      },
+      "SignalReceivedEvent": {
+        "description": "Payload of the `Event::SignalReceived` event.\n\nEmitted once per stored signal; a duplicate (same idempotency ID) emits\nnothing.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_engine::notify::SignalReceivedEvent;\nuse uuid::Uuid;\n\nlet payload = SignalReceivedEvent {\n    signal_id: Uuid::now_v7(),\n    name: \"ci.pipeline_finished\".to_string(),\n    key: \"4f2a9c1\".to_string(),\n    resumed_runs: vec![Uuid::now_v7()],\n    at: Utc::now(),\n};\nassert_eq!(payload.resumed_runs.len(), 1);\n```",
+        "properties": {
+          "at": {
+            "description": "When the signal was received.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "key": {
+            "description": "Occurrence key.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Signal name.",
+            "type": "string"
+          },
+          "resumed_runs": {
+            "description": "Runs whose waiting step the signal resolved.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "signal_id": {
+            "description": "Stored signal identifier.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal_id",
+          "name",
+          "key",
+          "resumed_runs",
+          "at"
+        ],
+        "type": "object"
+      },
+      "SignalResponse": {
+        "description": "A stored signal.",
+        "properties": {
+          "id": {
+            "description": "Signal ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "idempotency_id": {
+            "description": "Deduplication ID given by the sender.",
+            "nullable": true,
+            "type": "string"
+          },
+          "key": {
+            "description": "Occurrence key.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Signal name.",
+            "type": "string"
+          },
+          "payload": {
+            "description": "JSON payload.",
+            "type": "object"
+          },
+          "received_at": {
+            "description": "When the signal was received.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "key",
+          "payload",
+          "received_at"
         ],
         "type": "object"
       },
@@ -6766,6 +7079,129 @@
         ]
       }
     },
+    "/api/v1/signals": {
+      "get": {
+        "description": "Any signed-in user may list signals. An API key needs the `runs_read`\nscope.\n\n# Errors\n\n- 401 if not authenticated\n- 403 if the API key lacks `runs_read`",
+        "operationId": "list_signals",
+        "parameters": [
+          {
+            "description": "Only signals with this exact name.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only signals with this exact key.",
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number (1-based, defaults to 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (defaults to 20, max 100).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SignalResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Paginated list of signals"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "List received signals, newest first, paginated.",
+        "tags": [
+          "signals"
+        ]
+      },
+      "post": {
+        "description": "The signal is stored, then every run waiting for its `(name, key)` with a\npayload schema it matches is resumed. A waiting run whose schema the\npayload does not match keeps waiting and is listed under `rejected`. The\nsignal is stored even when nobody waits for it yet, so a run that opens its\nwait later still finds it.\n\nSending again with the same `idempotency_id` returns 200 with\n`duplicate: true` and delivers nothing.\n\n# Errors\n\n- 400 if `name` or `key` is empty or longer than 255 characters, or if\n  `idempotency_id` is empty or longer than 255 characters\n- 401 if not authenticated\n- 403 if the caller is not an admin, or the API key lacks `signals_send`",
+        "operationId": "send_signal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendSignalRequest"
+              }
+            }
+          },
+          "description": "Signal to deliver",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalDeliveryResponse"
+                }
+              }
+            },
+            "description": "Signal stored and delivered"
+          },
+          "400": {
+            "description": "Invalid signal"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden or insufficient scope"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Send a signal.",
+        "tags": [
+          "signals"
+        ]
+      }
+    },
     "/api/v1/stats": {
       "get": {
         "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and\n`per_page` are ignored.",
@@ -7495,6 +7931,10 @@
     {
       "description": "Approval delegation for absent approvers",
       "name": "approval-delegations"
+    },
+    {
+      "description": "Signals: external messages that resume waiting runs",
+      "name": "signals"
     }
   ]
 }

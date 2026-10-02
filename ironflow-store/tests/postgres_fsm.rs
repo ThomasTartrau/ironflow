@@ -458,7 +458,7 @@ async fn run_fsm_state_migrations_revert_and_reapply() {
         );
         assert_eq!(
             run_lifecycle_transitions_touching(&pool, "sleeping").await,
-            3
+            4
         );
         let awaiting = run_in(&store, RunStatus::AwaitingApproval).await;
         let sleeping = run_in(&store, RunStatus::Sleeping).await;
@@ -498,7 +498,7 @@ async fn run_fsm_state_migrations_revert_and_reapply() {
         );
         assert_eq!(
             run_lifecycle_transitions_touching(&pool, "sleeping").await,
-            3
+            4
         );
 
         pool.close().await;

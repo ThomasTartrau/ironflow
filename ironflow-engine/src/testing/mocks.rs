@@ -23,7 +23,7 @@ use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFut
 use crate::config::{ApprovalConfig, HttpConfig, HumanInputConfig, ShellConfig, StepConfig};
 use crate::error::EngineError;
 use crate::executor::{
-    ApprovalOutcome, HumanInputOutcome, StepArtifacts, StepInterceptor, StepOutput,
+    ApprovalOutcome, HumanInputOutcome, SignalOutcome, StepArtifacts, StepInterceptor, StepOutput,
 };
 
 /// Message carried by [`MissingAgentProvider`] failures.
@@ -270,6 +270,9 @@ pub type HttpMock =
 /// Closure answering a human input step from its name and config.
 pub type HumanInputMock = Arc<dyn Fn(&str, &HumanInputConfig) -> HumanInputOutcome + Send + Sync>;
 
+/// Closure answering a signal step from its step name, signal name and key.
+pub type SignalMock = Arc<dyn Fn(&str, &str, &str) -> SignalOutcome + Send + Sync>;
+
 /// Closure answering an agent invocation from its config.
 pub type AgentMock = Arc<dyn Fn(&AgentConfig) -> Result<AgentOutput, AgentError> + Send + Sync>;
 
@@ -300,6 +303,7 @@ pub struct MockInterceptor {
     http: Option<HttpMock>,
     approval: Option<ApprovalOutcome>,
     human_input: Option<HumanInputMock>,
+    signal: Option<SignalMock>,
 }
 
 impl MockInterceptor {
@@ -393,6 +397,28 @@ impl MockInterceptor {
         self.human_input = Some(Arc::new(f));
         self
     }
+
+    /// Resolve every signal step with `f`.
+    ///
+    /// `f` receives the step name, the signal name and the key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::testing::{MockInterceptor, SignalOutcome};
+    /// use serde_json::json;
+    ///
+    /// let interceptor = MockInterceptor::new()
+    ///     .signal(|_step, _name, _key| SignalOutcome::Received(json!({"status": "success"})));
+    /// # let _ = interceptor;
+    /// ```
+    pub fn signal(
+        mut self,
+        f: impl Fn(&str, &str, &str) -> SignalOutcome + Send + Sync + 'static,
+    ) -> Self {
+        self.signal = Some(Arc::new(f));
+        self
+    }
 }
 
 impl fmt::Debug for MockInterceptor {
@@ -403,6 +429,7 @@ impl fmt::Debug for MockInterceptor {
             .field("http", &self.http.is_some())
             .field("approval", &self.approval)
             .field("human_input", &self.human_input.is_some())
+            .field("signal", &self.signal.is_some())
             .finish()
     }
 }
@@ -440,6 +467,16 @@ impl StepInterceptor for MockInterceptor {
         _schema: &Value,
     ) -> Option<HumanInputOutcome> {
         self.human_input.as_ref().map(|f| f(name, config))
+    }
+
+    fn intercept_signal(
+        &self,
+        name: &str,
+        signal_name: &str,
+        key: &str,
+        _schema: &Value,
+    ) -> Option<SignalOutcome> {
+        self.signal.as_ref().map(|f| f(name, signal_name, key))
     }
 }
 
@@ -675,6 +712,23 @@ mod tests {
 
         assert_eq!(
             MockInterceptor::new().intercept_human_input("clarify", &config, &json!({})),
+            None
+        );
+    }
+
+    #[test]
+    fn intercept_signal_returns_the_mocked_outcome() {
+        let interceptor = MockInterceptor::new().signal(|step, name, key| {
+            SignalOutcome::Received(json!({"step": step, "name": name, "key": key}))
+        });
+        let expected = json!({"step": "wait-ci", "name": "ci.done", "key": "abc"});
+
+        assert_eq!(
+            interceptor.intercept_signal("wait-ci", "ci.done", "abc", &json!({})),
+            Some(SignalOutcome::Received(expected))
+        );
+        assert_eq!(
+            MockInterceptor::new().intercept_signal("wait-ci", "ci.done", "abc", &json!({})),
             None
         );
     }

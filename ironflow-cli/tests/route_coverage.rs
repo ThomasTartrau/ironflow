@@ -308,6 +308,17 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "/api/v1/approval-delegations/{id}",
         Coverage::Command(&["delegation", "delete", UUID, "--yes"]),
     ),
+    // ── Signals ──
+    (
+        "POST",
+        "/api/v1/signals",
+        Coverage::Command(&["signal", "send", "demo.done", "--key", "k1"]),
+    ),
+    (
+        "GET",
+        "/api/v1/signals",
+        Coverage::Command(&["signal", "list"]),
+    ),
     // ── Deliberately out of the CLI's reach ──
     (
         "GET",

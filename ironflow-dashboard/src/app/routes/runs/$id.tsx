@@ -116,6 +116,12 @@ export function Component() {
 	const pendingInputs = shownSteps.filter(isPendingInput);
 	const awaitingInput = steps.some(isPendingInput);
 	const awaitingStep = steps.find((s) => s.status === "awaiting_approval");
+	const waitingSignal =
+		run.status === "sleeping"
+			? steps.find((s) => s.kind === "signal" && s.status === "running")
+			: undefined;
+	const signalName = waitingSignal?.input?.name;
+	const waitingSignalName = typeof signalName === "string" ? signalName : null;
 
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
@@ -135,6 +141,11 @@ export function Component() {
 					<StatusBadge status={run.status} awaitingKind={awaitingStep?.kind} />
 					<TriggerBadge trigger={run.trigger} />
 					<RunActions run={run} awaitingInput={awaitingInput} />
+					{waitingSignalName && (
+						<span className="text-xs text-muted-foreground">
+							waiting for signal {waitingSignalName}
+						</span>
+					)}
 				</div>
 			}
 		>

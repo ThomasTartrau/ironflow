@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use uuid::Uuid;
@@ -153,6 +154,10 @@ pub struct WorkflowContext {
     trace_context: WorkflowTraceContext,
     /// Shared operation context for custom operations.
     operation_ctx: Option<OperationContext>,
+    /// When the run was created, set by the engine. Bounds the signals a wait
+    /// step accepts: a signal received before the run existed is not for it.
+    /// `None` falls back to reading the run from the store.
+    run_created_at: Option<DateTime<Utc>>,
     /// Set when the context is recording an execution plan instead of running.
     /// Every step method checks this first and records intent without executing.
     plan: Option<SharedPlanRecorder>,

@@ -3689,6 +3689,7 @@ dependencies = [
  "ironflow-core",
  "ironflow-engine-macros",
  "ironflow-store",
+ "jsonschema",
  "metrics",
  "metrics-exporter-prometheus",
  "rand 0.9.5",

@@ -24,6 +24,7 @@
 //! | `PURGE_DRY_RUN` | no | `false` | Log what would be purged without deleting |
 //! | `PURGE_INTERVAL_SECS` | no | `86400` | Seconds between purge ticks (min 60) |
 //! | `PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS` | no | `30` | Days of Provider Account usage history kept (min 1) |
+//! | `SIGNAL_RETENTION_DAYS` | no | `7` | Days received signals are kept (min 1) |
 //! | `ARTIFACT_BACKEND` | no | `local` | Blob storage backend: `local` or `s3` |
 //! | `ARTIFACT_S3_BUCKET` | **if s3** | - | S3 bucket name |
 //! | `ARTIFACT_S3_REGION` | no | `eu-west-1` | S3 region |
@@ -115,6 +116,10 @@ pub struct ServerConfig {
     ///
     /// Read from `PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS`, defaulting to 30.
     pub provider_account_usage_retention_days: u32,
+    /// Days received signals are kept by the purger.
+    ///
+    /// Read from `SIGNAL_RETENTION_DAYS`, defaulting to 7.
+    pub signal_retention_days: u32,
     /// Whether the server is running in production mode.
     pub is_production: bool,
     /// Rate limit for auth credential routes (sign-in, sign-up) in requests
@@ -365,6 +370,18 @@ impl ServerConfig {
                 },
                 None => 30,
             };
+        let signal_retention_days = match env::var("SIGNAL_RETENTION_DAYS").ok() {
+            Some(raw) => match raw.parse::<u32>() {
+                Ok(days) if days >= 1 => days,
+                _ => {
+                    errors.push(format!(
+                        "SIGNAL_RETENTION_DAYS must be an integer >= 1, got: {raw}"
+                    ));
+                    7
+                }
+            },
+            None => 7,
+        };
         let purge_interval_secs = match env::var("PURGE_INTERVAL_SECS").ok() {
             Some(raw) => {
                 let parsed = raw.parse::<u64>().unwrap_or_else(|_| {
@@ -453,6 +470,7 @@ impl ServerConfig {
             purge_dry_run,
             purge_interval_secs,
             provider_account_usage_retention_days,
+            signal_retention_days,
             artifact_backend,
             artifact_s3_bucket,
             artifact_s3_region,
@@ -494,6 +512,7 @@ mod tests {
             env::remove_var("PURGE_DRY_RUN");
             env::remove_var("PURGE_INTERVAL_SECS");
             env::remove_var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS");
+            env::remove_var("SIGNAL_RETENTION_DAYS");
             env::remove_var("ARTIFACT_BACKEND");
             env::remove_var("ARTIFACT_S3_BUCKET");
             env::remove_var("ARTIFACT_S3_REGION");
@@ -645,6 +664,7 @@ mod tests {
         assert!(!config.purge_dry_run);
         assert_eq!(config.purge_interval_secs, 86400);
         assert_eq!(config.provider_account_usage_retention_days, 30);
+        assert_eq!(config.signal_retention_days, 7);
     }
 
     #[test]
@@ -657,6 +677,22 @@ mod tests {
         assert_eq!(config.provider_account_usage_retention_days, 7);
 
         unsafe { env::set_var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS", "0") };
+        assert!(ServerConfig::from_env().is_err());
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn signal_retention_days_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { clear_env() };
+        unsafe { env::set_var("SIGNAL_RETENTION_DAYS", "3") };
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.signal_retention_days, 3);
+
+        unsafe { env::set_var("SIGNAL_RETENTION_DAYS", "0") };
+        assert!(ServerConfig::from_env().is_err());
+        unsafe { env::set_var("SIGNAL_RETENTION_DAYS", "soon") };
         assert!(ServerConfig::from_env().is_err());
         unsafe { clear_env() };
     }

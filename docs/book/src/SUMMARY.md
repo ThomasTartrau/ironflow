@@ -17,6 +17,7 @@
 - [Provider Accounts](concepts/provider-accounts.md)
 - [Approval Gates](concepts/approval-gates.md)
 - [Human Input](concepts/human-input.md)
+- [Signals](concepts/signals.md)
 - [Decisions](concepts/decision.md)
 
 # Guides
