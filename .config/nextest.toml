@@ -1,0 +1,14 @@
+# CI profile, selected by the unit-tests job with `--profile ci`.
+#
+# The test jobs start together and share one Kubernetes node. When the node is
+# saturated, every integration binary of a crate can stall for tens of seconds
+# at once (38s instead of 0.5s on MR !436), and a test wrapped in a
+# `tokio::time::timeout` fails without any code change. Integration tests are
+# retried; a test that passes on retry is reported as FLAKY in the job log, so
+# a test that is flaky on its own still shows up.
+[profile.ci]
+failure-output = "immediate-final"
+
+[[profile.ci.overrides]]
+filter = "kind(test)"
+retries = 2

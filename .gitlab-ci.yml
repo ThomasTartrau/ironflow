@@ -334,7 +334,7 @@ unit-tests:
   variables:
     RUSTFLAGS: "-D warnings"
   script:
-    - cargo nextest run --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES"
+    - cargo nextest run --profile ci --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES"
 
 doc-tests:
   extends: .only-mr
