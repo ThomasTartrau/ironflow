@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.41.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.41.0...ironflow-store-v2.41.1) - 2026-10-02
+
+### Fixed
+
+- #147 give the signal_received migration its own version
+
 ## [2.41.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.40.0...ironflow-store-v2.41.0) - 2026-10-02
 
 ### Added
