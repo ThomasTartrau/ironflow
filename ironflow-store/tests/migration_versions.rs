@@ -31,7 +31,10 @@ fn every_migration_version_belongs_to_a_single_migration() {
         }
     }
 
-    assert!(!names_by_version.is_empty(), "no migration found in {dir:?}");
+    assert!(
+        !names_by_version.is_empty(),
+        "no migration found in {dir:?}"
+    );
     let mut duplicates: Vec<_> = names_by_version
         .into_iter()
         .filter(|(_, names)| names.len() > 1)
