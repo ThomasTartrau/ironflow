@@ -7,6 +7,9 @@
 //! This is distinct from the [`Reaper`](crate::reaper::Reaper), which recovers
 //! runs whose worker lease expired. The reaper keeps runs alive; the purger
 //! removes the ones that are done and old.
+//!
+//! [`RunPurger::from_config`] wires a purger from a
+//! [`ServerConfig`](crate::config::ServerConfig).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +18,7 @@ use chrono::{TimeDelta, Utc};
 
 use uuid::Uuid;
 
+use crate::config::ServerConfig;
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_store::entities::{PurgePolicy, PurgeReason};
 use ironflow_store::store::Store;
@@ -68,11 +72,11 @@ pub const DEFAULT_SIGNAL_RETENTION_DAYS: u32 = 7;
 pub struct RunPurger {
     store: Arc<dyn Store>,
     blob_store: Option<Arc<dyn BlobStore>>,
-    policy: PurgePolicy,
-    interval: Duration,
+    pub(crate) policy: PurgePolicy,
+    pub(crate) interval: Duration,
     batch_size: u32,
-    usage_retention_days: u32,
-    signal_retention_days: u32,
+    pub(crate) usage_retention_days: u32,
+    pub(crate) signal_retention_days: u32,
 }
 
 impl RunPurger {
@@ -87,6 +91,42 @@ impl RunPurger {
             usage_retention_days: DEFAULT_USAGE_RETENTION_DAYS,
             signal_retention_days: DEFAULT_SIGNAL_RETENTION_DAYS,
         }
+    }
+
+    /// Create a purger from the server configuration.
+    ///
+    /// Takes the purge policy (`PURGE_MAX_AGE_DAYS`, `PURGE_MAX_RUNS_PER_WORKFLOW`,
+    /// `PURGE_DRY_RUN`), the interval (`PURGE_INTERVAL_SECS`) and the retention of
+    /// Provider Account usage history and signals
+    /// (`PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS`, `SIGNAL_RETENTION_DAYS`).
+    /// Chain [`RunPurger::with_blob_store`] to delete artifact blobs too.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_api::config::ServerConfig;
+    /// use ironflow_api::purger::RunPurger;
+    /// use ironflow_store::memory::InMemoryStore;
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = ServerConfig::from_env()?;
+    /// let purger = RunPurger::from_config(Arc::new(InMemoryStore::new()), &config);
+    /// tokio::spawn(purger.run(CancellationToken::new()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_config(store: Arc<dyn Store>, config: &ServerConfig) -> Self {
+        let policy = PurgePolicy {
+            max_age_days: config.purge_max_age_days,
+            max_runs_per_workflow: config.purge_max_runs_per_workflow,
+            dry_run: config.purge_dry_run,
+        };
+        Self::new(store, policy)
+            .interval(Duration::from_secs(config.purge_interval_secs))
+            .usage_retention_days(config.provider_account_usage_retention_days)
+            .signal_retention_days(config.signal_retention_days)
     }
 
     /// Set the blob store for artifact deletion.
@@ -162,6 +202,8 @@ impl RunPurger {
             max_age_days = self.policy.max_age_days,
             max_runs_per_workflow = self.policy.max_runs_per_workflow,
             dry_run = self.policy.dry_run,
+            usage_retention_days = self.usage_retention_days,
+            signal_retention_days = self.signal_retention_days,
             "purger started"
         );
 

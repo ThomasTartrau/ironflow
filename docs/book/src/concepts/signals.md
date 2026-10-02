@@ -90,4 +90,4 @@ if matches!(status.as_str(), "success" | "failed" | "canceled") {
 }
 ```
 
-Signals are kept `SIGNAL_RETENTION_DAYS` days (default 7) and then purged.
+Signals are kept `SIGNAL_RETENTION_DAYS` days (default 7) and then purged. The example server wires the variable into its `RunPurger`; a custom server builds it with `RunPurger::from_config(store, &config)`.

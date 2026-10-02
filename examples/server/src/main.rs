@@ -24,6 +24,10 @@
 //! - `IRONFLOW_MONTHLY_COST_LIMIT_USD` (optional: global cost quota for the
 //!   current calendar month in UTC; beyond it, creating a run returns
 //!   `429 MONTHLY_BUDGET_EXCEEDED` while in-flight runs continue)
+//! - `PURGE_MAX_AGE_DAYS`, `PURGE_MAX_RUNS_PER_WORKFLOW`, `PURGE_DRY_RUN`,
+//!   `PURGE_INTERVAL_SECS`, `PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS` and
+//!   `SIGNAL_RETENTION_DAYS` (optional: retention of the purger, see
+//!   `ServerConfig`)
 //! - `IRONFLOW_SEED` (optional: when set to any value, seeds development data
 //!   at startup -- users, runs, steps, API keys)
 
@@ -38,6 +42,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use ironflow_api::config::ServerConfig;
+use ironflow_api::purger::RunPurger;
 use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::sse::SseBroadcaster;
 use ironflow_api::state::AppState;
@@ -193,6 +198,11 @@ async fn main() {
     }
 
     let shutdown = state.spawn_background_tasks().await;
+    tokio::spawn(
+        RunPurger::from_config(store.clone(), &config)
+            .with_blob_store(state.blob_store.clone())
+            .run(shutdown.clone()),
+    );
     let router_config = RouterConfig {
         dashboard_dir: config.dashboard_dir.clone(),
         rate_limit_auth: config.rate_limit_auth,
