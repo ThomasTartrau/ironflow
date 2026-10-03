@@ -8,6 +8,7 @@
 //! Configuration comes from the environment (see `.env.example`).
 
 use std::env;
+use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,8 +31,14 @@ async fn main() {
         .init();
 
     let api_url = env::var("API_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-    let worker_token =
-        env::var("WORKER_TOKEN").unwrap_or_else(|_| "ironflow-dev-worker-token".to_string());
+    // Shared with the server through `.env` (scaffold.sh generates it).
+    let worker_token = env::var("WORKER_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty())
+        .unwrap_or_else(|| {
+            eprintln!("WORKER_TOKEN is required: set it in .env to the server's token");
+            process::exit(1);
+        });
     let concurrency: usize = env::var("CONCURRENCY")
         .ok()
         .and_then(|c| c.parse().ok())

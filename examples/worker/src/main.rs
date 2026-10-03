@@ -6,11 +6,12 @@
 //!
 //! Environment:
 //! - `API_URL` (default: http://localhost:3000)
-//! - `WORKER_TOKEN` (default: dev token)
+//! - `WORKER_TOKEN` (required: the server's token)
 //! - `CONCURRENCY` (default: 2)
 //! - `POLL_INTERVAL_SECS` (default: 2)
 
 use std::env;
+use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,8 +32,16 @@ async fn main() {
         .init();
 
     let api_url = env::var("API_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-    let worker_token =
-        env::var("WORKER_TOKEN").unwrap_or_else(|_| "ironflow-dev-worker-token".to_string());
+    let worker_token = env::var("WORKER_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty())
+        .unwrap_or_else(|| {
+            eprintln!(
+                "WORKER_TOKEN is required: use the server's token (in IRONFLOW_ENV=development, \
+                 the server logs the one it generated at startup)"
+            );
+            process::exit(1);
+        });
     let concurrency: usize = env::var("CONCURRENCY")
         .ok()
         .and_then(|c| c.parse().ok())

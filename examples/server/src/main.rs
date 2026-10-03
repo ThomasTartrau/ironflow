@@ -7,11 +7,13 @@
 //! The dashboard is served automatically via the `dashboard` feature in `ironflow-api`.
 //!
 //! Environment:
-//! - `IRONFLOW_ENV` (`production` or `development`, default: development)
+//! - `IRONFLOW_ENV` (`production`, or `development` to boot without secrets;
+//!   unset requires them)
 //! - `IRONFLOW_INSECURE_COOKIES` (`1` or `true` drops the `Secure` cookie flag, ignored in production)
 //! - `DATABASE_URL` (required in production)
-//! - `JWT_SECRET` (required in production, default: dev secret)
-//! - `WORKER_TOKEN` (required in production, default: dev token)
+//! - `JWT_SECRET` (required, >= 32 bytes; random per process in development)
+//! - `WORKER_TOKEN` (required, >= 32 bytes; random per process in development,
+//!   logged at startup for the worker)
 //! - `PORT` (default: 3000)
 //! - `DASHBOARD_DIR` (optional: overrides the embedded dashboard with a filesystem path)
 //! - `ALLOWED_ORIGINS` (comma-separated list; omit to allow same-origin only)

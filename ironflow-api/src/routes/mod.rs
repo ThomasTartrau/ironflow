@@ -400,7 +400,6 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
 
     let api_v1 = api_v1.with_state(state.clone());
 
-    #[allow(unused_mut)]
     let mut app = Router::new()
         .nest("/api/v1/internal", internal_routes)
         .nest("/api/v1", api_v1)
@@ -408,18 +407,17 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .merge(artifact_upload_routes);
 
-    if config.enforce_https {
-        app = app.layer(axum_mw::from_fn(https_redirect));
-    }
-
-    app = app.layer(axum_mw::from_fn(security_headers));
-
+    // Before the dashboard fallback: metrics are labelled by raw path, and
+    // every unknown URL falls through to the dashboard.
     #[cfg(feature = "prometheus")]
     {
         app = app.layer(axum_mw::from_fn(crate::middleware::request_metrics));
     }
 
-    match config.dashboard_dir {
+    // `Router::layer` only wraps what the router already holds: the dashboard
+    // fallback goes in first so the HTTPS redirect and the security headers
+    // cover it too.
+    app = match config.dashboard_dir {
         Some(dir) => {
             let index = dir.join("index.html");
             let serve = ServeDir::new(dir).fallback(ServeFile::new(index));
@@ -429,7 +427,13 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         None => app.fallback_service(crate::dashboard::EmbeddedDashboard),
         #[cfg(not(feature = "dashboard"))]
         None => app,
+    };
+
+    if config.enforce_https {
+        app = app.layer(axum_mw::from_fn(https_redirect));
     }
+
+    app.layer(axum_mw::from_fn(security_headers))
 }
 
 #[cfg(test)]

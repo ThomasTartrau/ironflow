@@ -13,14 +13,14 @@ Workers poll the API for pending runs, acquire leases, and execute workflow hand
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `API_URL` | `http://localhost:3000` | Address of the API server |
-| `WORKER_TOKEN` | dev token | Shared secret matching the server |
+| `WORKER_TOKEN` | -- | Shared secret matching the server (required) |
 | `CONCURRENCY` | `2` | Number of parallel runs |
 | `POLL_INTERVAL_SECS` | `2` | Seconds between polls |
 
 ## Running
 
 ```sh
-cargo run -p ironflow-example-worker
+WORKER_TOKEN=<token logged by the server> cargo run -p ironflow-example-worker
 ```
 
 ## Scaling

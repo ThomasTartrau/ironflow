@@ -159,6 +159,7 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
 
+    use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
@@ -167,7 +168,9 @@ mod tests {
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
     use serde_json::Value as JsonValue;
+    use std::fs::write;
     use std::sync::Arc;
+    use tempfile::TempDir;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
 
@@ -258,7 +261,7 @@ mod tests {
         builder.body(Body::empty()).unwrap()
     }
 
-    fn enforcing_router() -> axum::Router {
+    fn enforcing_router() -> Router {
         let config = RouterConfig {
             enforce_https: true,
             ..RouterConfig::default()
@@ -363,6 +366,53 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+    }
+
+    /// Router serving a dashboard from a temporary directory. The directory
+    /// is returned so it outlives the router.
+    fn dashboard_router(enforce_https: bool) -> (Router, TempDir) {
+        let dir = TempDir::new().unwrap();
+        write(dir.path().join("index.html"), "<!doctype html>").unwrap();
+        let config = RouterConfig {
+            enforce_https,
+            dashboard_dir: Some(dir.path().to_path_buf()),
+            ..RouterConfig::default()
+        };
+        (create_router(test_state(), config), dir)
+    }
+
+    #[tokio::test]
+    async fn https_redirect_covers_dashboard() {
+        // Non-regression: the dashboard fallback used to be attached after the
+        // layers, so plain HTTP on the dashboard was served without redirect.
+        let (app, _dir) = dashboard_router(true);
+        let req = Request::builder()
+            .uri("/runs?page=2")
+            .header("host", "example.com")
+            .header("x-forwarded-proto", "http")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            resp.headers().get("location").unwrap(),
+            "https://example.com/runs?page=2"
+        );
+    }
+
+    #[tokio::test]
+    async fn security_headers_cover_dashboard() {
+        let (app, _dir) = dashboard_router(false);
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("x-frame-options").unwrap(), "DENY");
+        assert!(resp.headers().get("strict-transport-security").is_some());
+        assert!(resp.headers().get("content-security-policy").is_some());
     }
 
     #[tokio::test]
