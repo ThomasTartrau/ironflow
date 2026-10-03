@@ -25,8 +25,9 @@ use ironflow_engine::notify::Event;
 use ironflow_engine::signal::Signal;
 use ironflow_engine::wake::RunWaker;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunStatus, StepKind, StepStatus, TriggerKind};
+use ironflow_store::models::{NewUser, RunStatus, StepKind, StepStatus, TriggerKind};
 use ironflow_store::store::RunStore;
+use ironflow_store::user_store::UserStore;
 use ironflow_worker::WorkerBuilder;
 use reqwest::{Client, Response, StatusCode};
 use schemars::JsonSchema;
@@ -171,8 +172,7 @@ impl Harness {
             }
         });
 
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "admin", true, &jwt_config).expect("token");
+        let token = admin_token(&store, &jwt_config).await;
 
         Self {
             base_url,
@@ -363,4 +363,19 @@ async fn signal_with_a_mismatched_payload_leaves_the_worker_run_sleeping() {
     })
     .await
     .expect("test timed out");
+}
+
+/// Signs an access token for an admin stored in `store`: the API rejects a
+/// token whose user does not exist.
+async fn admin_token(store: &InMemoryStore, jwt_config: &JwtConfig) -> AccessToken {
+    let user = store
+        .create_user(NewUser {
+            email: "admin@test.com".to_string(),
+            username: "admin".to_string(),
+            password_hash: "argon2hash".to_string(),
+            is_admin: Some(true),
+        })
+        .await
+        .expect("create admin");
+    AccessToken::for_user(user.id, &user.username, user.is_admin, jwt_config).expect("token")
 }

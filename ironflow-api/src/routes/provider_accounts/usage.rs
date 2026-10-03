@@ -71,7 +71,7 @@ mod tests {
             &state,
             "GET",
             "/api/v1/provider-accounts/perso-max/usage?days=7",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             None,
         )
         .await;

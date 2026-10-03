@@ -77,6 +77,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -113,12 +114,6 @@ mod tests {
             "test-worker-token".to_string(),
             event_sender,
         )
-    }
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
     }
 
     #[tokio::test]
@@ -173,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn delete_api_key_not_found() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let app = Router::new()
             .route("/{id}", delete(delete_api_key))

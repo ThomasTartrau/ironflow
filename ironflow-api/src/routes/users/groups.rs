@@ -181,6 +181,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     fn test_state() -> AppState {
         let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
@@ -266,7 +267,7 @@ mod tests {
     async fn put_then_get_roundtrips_the_groups() {
         let state = test_state();
         let alice = user(&state, "alice").await;
-        let admin = auth_header(Uuid::now_v7(), true, &state);
+        let admin = create_user_auth_header(&state, "admin", true).await;
 
         let (status, body) = put_groups(
             &state,
@@ -288,7 +289,7 @@ mod tests {
     async fn groups_are_trimmed_deduplicated_and_sorted() {
         let state = test_state();
         let alice = user(&state, "alice").await;
-        let admin = auth_header(Uuid::now_v7(), true, &state);
+        let admin = create_user_auth_header(&state, "admin", true).await;
 
         let body = json!({"groups": ["sre", " finance ", "sre", "ops.eu-1"]});
         let (status, body) = put_groups(&state, &admin, alice.id, body).await;
@@ -304,7 +305,7 @@ mod tests {
     async fn an_empty_list_clears_the_groups() {
         let state = test_state();
         let alice = user(&state, "alice").await;
-        let admin = auth_header(Uuid::now_v7(), true, &state);
+        let admin = create_user_auth_header(&state, "admin", true).await;
         let body = json!({"groups": ["finance"]});
         let (status, _) = put_groups(&state, &admin, alice.id, body).await;
         assert_eq!(status, StatusCode::OK);
@@ -334,7 +335,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_user_is_not_found() {
         let state = test_state();
-        let admin = auth_header(Uuid::now_v7(), true, &state);
+        let admin = create_user_auth_header(&state, "admin", true).await;
         let unknown = Uuid::now_v7();
 
         let body = json!({"groups": ["finance"]});
@@ -349,7 +350,7 @@ mod tests {
     async fn invalid_group_names_are_rejected() {
         let state = test_state();
         let alice = user(&state, "alice").await;
-        let admin = auth_header(Uuid::now_v7(), true, &state);
+        let admin = create_user_auth_header(&state, "admin", true).await;
 
         let too_long = "g".repeat(MAX_GROUP_LEN + 1);
         let invalid = [
@@ -374,7 +375,7 @@ mod tests {
     async fn too_many_groups_are_rejected() {
         let state = test_state();
         let alice = user(&state, "alice").await;
-        let admin = auth_header(Uuid::now_v7(), true, &state);
+        let admin = create_user_auth_header(&state, "admin", true).await;
 
         let groups: Vec<String> = (0..=MAX_GROUPS).map(|i| format!("group-{i}")).collect();
         let (status, _) = put_groups(&state, &admin, alice.id, json!({ "groups": groups })).await;

@@ -112,7 +112,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
@@ -126,9 +126,9 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -176,18 +176,6 @@ mod tests {
         )
     }
 
-    fn make_admin_token(state: &AppState) -> String {
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "admin", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
-    fn make_regular_token(state: &AppState) -> String {
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "user", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     fn app(state: AppState) -> Router {
         Router::new()
             .route("/rotate", post(rotate_secrets))
@@ -223,7 +211,7 @@ mod tests {
     #[tokio::test]
     async fn rotate_is_admin_only() {
         let state = test_state(2);
-        let auth = make_regular_token(&state);
+        let auth = create_user_auth_header(&state, "user", false).await;
         let resp = app(state)
             .oneshot(rotate_request(Some(&auth), "{}"))
             .await
@@ -237,7 +225,7 @@ mod tests {
         state.store.set_secret("a", "va").await.unwrap();
         state.store.set_secret("b", "vb").await.unwrap();
 
-        let auth = make_admin_token(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let store = Arc::clone(&state.store);
 
         let resp = app(state)
@@ -264,7 +252,7 @@ mod tests {
         // rotating backwards, then let the default bring it back.
         state.store.set_secret("a", "va").await.unwrap();
 
-        let auth = make_admin_token(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let store = Arc::clone(&state.store);
         let router = app(state);
 
@@ -291,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn rotate_to_unconfigured_version_is_a_bad_request() {
         let state = test_state(2);
-        let auth = make_admin_token(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let resp = app(state)
             .oneshot(rotate_request(Some(&auth), r#"{"to_version":9}"#))
@@ -308,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn rotate_rejects_non_positive_version() {
         let state = test_state(2);
-        let auth = make_admin_token(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let resp = app(state)
             .oneshot(rotate_request(Some(&auth), r#"{"to_version":0}"#))
@@ -324,7 +312,7 @@ mod tests {
             state.store.set_secret(&format!("k{i}"), "v").await.unwrap();
         }
 
-        let auth = make_admin_token(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let store = Arc::clone(&state.store);
         let router = app(state);
 
@@ -364,7 +352,7 @@ mod tests {
             .await
             .unwrap();
 
-        let auth = make_admin_token(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let store = Arc::clone(&state.store);
 
         let resp = app(state)
@@ -397,7 +385,7 @@ mod tests {
         let state = test_state(2);
         state.store.set_secret("a", "va").await.unwrap();
 
-        let auth = make_admin_token(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let store = Arc::clone(&state.store);
 
         let resp = app(state)

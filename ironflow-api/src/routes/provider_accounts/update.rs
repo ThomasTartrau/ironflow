@@ -75,7 +75,7 @@ mod tests {
             &state,
             "PATCH",
             "/api/v1/provider-accounts/perso-max",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             Some(json!({"enabled": false, "max_concurrency": 2, "tags": ["team"]})),
         )
         .await;
@@ -88,7 +88,7 @@ mod tests {
             &state,
             "PATCH",
             "/api/v1/provider-accounts/perso-max",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             Some(json!({"max_concurrency": null})),
         )
         .await;
@@ -104,7 +104,7 @@ mod tests {
             &state,
             "PATCH",
             "/api/v1/provider-accounts/perso-max",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             Some(json!({"name": "renamed"})),
         )
         .await;
@@ -128,7 +128,7 @@ mod tests {
             &state,
             "PATCH",
             "/api/v1/provider-accounts/perso-max",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             Some(json!({"token": new_token})),
         )
         .await;
@@ -178,7 +178,7 @@ mod tests {
             &state,
             "PATCH",
             "/api/v1/provider-accounts/perso-max",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             Some(json!({"token": "sk-ant-oat01-short"})),
         )
         .await;

@@ -64,7 +64,7 @@ mod tests {
             &state,
             "GET",
             "/api/v1/provider-accounts/kinds",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             None,
         )
         .await;

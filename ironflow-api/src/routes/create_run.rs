@@ -219,12 +219,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -333,7 +328,7 @@ mod tests {
     #[tokio::test]
     async fn create_run_success() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new().route("/", post(create_run)).with_state(state);
 
         let req = Request::builder()
@@ -361,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn create_run_defaults_to_no_automatic_retry() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new().route("/", post(create_run)).with_state(state);
 
         let req = Request::builder()
@@ -385,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn create_run_honours_max_retries() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new().route("/", post(create_run)).with_state(state);
 
         let req = Request::builder()
@@ -413,7 +408,7 @@ mod tests {
     #[tokio::test]
     async fn create_run_unknown_workflow() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new().route("/", post(create_run)).with_state(state);
 
         let req = Request::builder()
@@ -436,7 +431,7 @@ mod tests {
 
     /// Send a `POST /` with the given JSON body against a router built on `state`.
     async fn send_run(state: AppState, body: JsonValue) -> Response<Body> {
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new().route("/", post(create_run)).with_state(state);
 
         let req = Request::builder()
@@ -539,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn create_run_without_payload() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new().route("/", post(create_run)).with_state(state);
 
         let req = Request::builder()
@@ -637,16 +632,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_run_author_label_falls_back_when_the_user_is_unknown() {
-        // A valid token for a user that is not in the store (e.g. deleted).
+    async fn create_run_author_label_is_the_username_of_the_stored_user() {
+        // Tokens of unknown users are rejected, so the author is always a stored user.
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
 
         let body = post_create_run(state, &auth_header).await;
 
         assert_eq!(body["data"]["created_by"]["kind"], "user");
-        let label = body["data"]["created_by"]["label"].as_str().unwrap();
-        assert!(label.starts_with("user "), "unexpected label: {label}");
+        assert_eq!(body["data"]["created_by"]["label"], "testuser");
     }
 
     // ---- Idempotency-Key ----
@@ -658,7 +652,7 @@ mod tests {
     #[tokio::test]
     async fn without_header_always_creates_a_new_run() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let first = router(state.clone())
             .oneshot(post_run(&auth, deploy_body(), None))
@@ -680,7 +674,7 @@ mod tests {
     #[tokio::test]
     async fn without_header_response_omits_the_key() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let resp = router(state)
             .oneshot(post_run(&auth, deploy_body(), None))
@@ -694,7 +688,7 @@ mod tests {
     #[tokio::test]
     async fn first_call_with_a_key_creates_the_run() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let resp = router(state)
             .oneshot(post_run(&auth, deploy_body(), Some("github:abc-123")))
@@ -709,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn replayed_key_returns_200_and_the_original_run() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let first = router(state.clone())
             .oneshot(post_run(&auth, deploy_body(), Some("github:abc-123")))
@@ -731,7 +725,7 @@ mod tests {
     #[tokio::test]
     async fn replayed_key_with_a_different_payload_conflicts() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let first = router(state.clone())
             .oneshot(post_run(&auth, deploy_body(), Some("github:abc-123")))
@@ -754,7 +748,7 @@ mod tests {
     #[tokio::test]
     async fn replayed_key_with_a_different_workflow_conflicts() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         router(state.clone())
             .oneshot(post_run(&auth, deploy_body(), Some("shared-key")))
@@ -773,7 +767,7 @@ mod tests {
     #[tokio::test]
     async fn replay_returns_the_run_even_in_a_terminal_state() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let first = router(state.clone())
             .oneshot(post_run(&auth, deploy_body(), Some("github:abc-123")))
@@ -806,7 +800,7 @@ mod tests {
     #[tokio::test]
     async fn empty_key_is_rejected() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let resp = router(state)
             .oneshot(post_run(&auth, deploy_body(), Some("")))
@@ -819,7 +813,7 @@ mod tests {
     #[tokio::test]
     async fn key_at_the_length_limit_is_accepted() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
         let key = "a".repeat(255);
 
         let resp = router(state)
@@ -833,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn key_over_the_length_limit_is_rejected() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
         let key = "a".repeat(256);
 
         let resp = router(state)
@@ -847,7 +841,7 @@ mod tests {
     #[tokio::test]
     async fn non_ascii_key_is_rejected() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let resp = router(state)
             .oneshot(post_run(&auth, deploy_body(), Some("cle-\u{e9}")))
@@ -860,7 +854,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_workflow_does_not_consume_the_key() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let unknown = json!({"workflow": "nope", "payload": {"env": "prod"}});
         let rejected = router(state.clone())
@@ -880,7 +874,7 @@ mod tests {
     #[tokio::test]
     async fn replay_publishes_a_single_run_created_event() {
         let (state, created_events) = test_state_counting_created();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         for _ in 0..3 {
             router(state.clone())
@@ -902,7 +896,7 @@ mod tests {
     #[tokio::test]
     async fn every_distinct_key_publishes_its_own_event() {
         let (state, created_events) = test_state_counting_created();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         for i in 0..3 {
             router(state.clone())
@@ -919,7 +913,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_calls_with_the_same_key_create_one_run() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         let mut handles = Vec::new();
         for _ in 0..20 {

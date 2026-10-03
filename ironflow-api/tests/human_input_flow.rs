@@ -20,7 +20,7 @@ use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunStatus, StepKind, StepStatus, TriggerKind};
+use ironflow_store::models::{NewUser, RunStatus, StepKind, StepStatus, TriggerKind};
 use ironflow_store::store::RunStore;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -28,7 +28,6 @@ use serde_json::{Value, from_slice, json};
 use tokio::sync::broadcast;
 use tokio::time::{sleep, timeout};
 use tower::ServiceExt;
-use uuid::Uuid;
 
 use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::state::AppState;
@@ -95,9 +94,19 @@ fn test_app(store: Arc<InMemoryStore>, received: Arc<Mutex<Vec<String>>>) -> (Ro
     (create_router(state.clone(), config), state)
 }
 
-fn admin_header(state: &AppState) -> String {
-    let token =
-        AccessToken::for_user(Uuid::now_v7(), "admin", true, &state.jwt_config).expect("token");
+async fn admin_header(state: &AppState) -> String {
+    let user = state
+        .store
+        .create_user(NewUser {
+            email: "admin@test.com".to_string(),
+            username: "admin".to_string(),
+            password_hash: "argon2hash".to_string(),
+            is_admin: Some(true),
+        })
+        .await
+        .expect("create user");
+    let token = AccessToken::for_user(user.id, &user.username, user.is_admin, &state.jwt_config)
+        .expect("token");
     format!("Bearer {}", token.0)
 }
 
@@ -127,7 +136,7 @@ async fn human_input_end_to_end_submit_then_conflict() {
         let store = Arc::new(InMemoryStore::new());
         let received = Arc::new(Mutex::new(Vec::new()));
         let (app, state) = test_app(store.clone(), received.clone());
-        let auth = admin_header(&state);
+        let auth = admin_header(&state).await;
 
         // The handler suspends on the input.
         let result = state

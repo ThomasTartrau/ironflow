@@ -56,7 +56,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::delete;
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
@@ -68,9 +68,9 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -112,22 +112,10 @@ mod tests {
         )
     }
 
-    fn make_admin_token(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "admin", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
-    fn make_regular_token(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "user", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     #[tokio::test]
     async fn delete_secret_admin_only() {
         let state = test_state();
-        let auth_header = make_regular_token(&state);
+        let auth_header = create_user_auth_header(&state, "user", false).await;
 
         let app = Router::new()
             .route("/{key}", delete(delete_secret))
@@ -153,7 +141,7 @@ mod tests {
             .await
             .unwrap();
 
-        let auth_header = make_admin_token(&state);
+        let auth_header = create_user_auth_header(&state, "admin", true).await;
 
         let app = Router::new()
             .route("/{key}", delete(delete_secret))
@@ -173,7 +161,7 @@ mod tests {
     #[tokio::test]
     async fn delete_secret_not_found() {
         let state = test_state();
-        let auth_header = make_admin_token(&state);
+        let auth_header = create_user_auth_header(&state, "admin", true).await;
 
         let app = Router::new()
             .route("/{key}", delete(delete_secret))

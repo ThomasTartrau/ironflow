@@ -90,7 +90,7 @@ mod tests {
             &state,
             "GET",
             "/api/v1/provider-accounts",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             None,
         )
         .await;
@@ -111,7 +111,7 @@ mod tests {
             &state,
             "GET",
             "/api/v1/provider-accounts?kind=other",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             None,
         )
         .await;
@@ -123,7 +123,7 @@ mod tests {
     async fn provider_accounts_member_forbidden() {
         let state = state_with_stub(Stub::Valid).await;
         let created = create_account(&state, "perso-max").await;
-        let member = bearer(&state, false);
+        let member = bearer(&state, false).await;
 
         let (status, body, _) =
             call(&state, "GET", "/api/v1/provider-accounts", &member, None).await;
@@ -147,7 +147,7 @@ mod tests {
                 "/api/v1/provider-accounts/{}",
                 created["data"]["id"].as_str().unwrap()
             ),
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             None,
         )
         .await;

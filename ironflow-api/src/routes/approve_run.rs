@@ -387,12 +387,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
+    use crate::routes::test_helpers::create_user_auth_header;
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
         let provider = Arc::new(ClaudeCodeProvider::new());
@@ -452,7 +447,7 @@ mod tests {
         let run = create_awaiting_approval_run(&store).await;
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/approve", post(approve_run))
             .with_state(state);
@@ -501,7 +496,7 @@ mod tests {
         let run = create_awaiting_approval_run(&store).await;
 
         let state = workers_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/approve", post(approve_run))
             .with_state(state);
@@ -531,7 +526,7 @@ mod tests {
         let run = create_awaiting_approval_run(&store).await;
 
         let state = workers_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/reject", post(reject_run))
             .with_state(state);
@@ -576,7 +571,7 @@ mod tests {
             .into_run();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/approve", post(approve_run))
             .with_state(state);
@@ -597,7 +592,7 @@ mod tests {
     async fn approve_nonexistent_run_returns_404() {
         let store = Arc::new(InMemoryStore::new());
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/approve", post(approve_run))
             .with_state(state);
@@ -622,7 +617,7 @@ mod tests {
         let run = create_awaiting_approval_run(&store).await;
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/reject", post(reject_run))
             .with_state(state);
@@ -672,7 +667,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/reject", post(reject_run))
             .with_state(state);
@@ -736,7 +731,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/reject", post(reject_run))
             .with_state(state);
@@ -777,7 +772,7 @@ mod tests {
             .into_run();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/reject", post(reject_run))
             .with_state(state);
@@ -837,7 +832,7 @@ mod tests {
     /// Hit `/{id}/{verb}` and return the HTTP status.
     async fn resolve(store: Arc<InMemoryStore>, run_id: Uuid, verb: &str) -> HttpStatusCode {
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/approve", post(approve_run))
             .route("/{id}/reject", post(reject_run))
@@ -1388,7 +1383,7 @@ mod tests {
 
         let state = test_state_with_audit_log(store.clone());
         // `make_auth_header` mints an admin token, as every pre-existing test uses.
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
 
         assert_eq!(
             resolve_as(state, &auth, run_id, "approve").await,
@@ -1610,7 +1605,7 @@ mod tests {
         let (run_id, gate_id) = run_with_gate_requiring(&store, 2, &["finance"]).await;
 
         let state = test_state(store.clone());
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
         assert_eq!(
             resolve_as(state, &auth, run_id, "approve").await,
             HttpStatusCode::OK
@@ -1682,7 +1677,7 @@ mod tests {
         let run_id = run_with_gate_assigned_to(&store, "deploy", None).await;
 
         let state = test_state_with_audit_log(store.clone());
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", true).await;
         assert_eq!(
             resolve_as(state, &auth, run_id, "approve").await,
             HttpStatusCode::OK
@@ -1700,7 +1695,7 @@ mod tests {
     async fn reject_nonexistent_run_returns_404() {
         let store = Arc::new(InMemoryStore::new());
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/reject", post(reject_run))
             .with_state(state);

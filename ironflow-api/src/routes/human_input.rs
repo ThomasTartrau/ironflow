@@ -307,6 +307,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     /// The answer type the test steps ask for.
     #[allow(dead_code)]
@@ -346,12 +347,6 @@ mod tests {
             "test-worker-token".to_string(),
             event_sender,
         )
-    }
-
-    fn admin_header(state: &AppState) -> String {
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "admin", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
     }
 
     async fn member(store: &Arc<InMemoryStore>, username: &str) -> User {
@@ -499,7 +494,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_submit_valid_answer_resumes_the_run() {
         let (store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let answer = json!({"answers": ["staging"]});
 
         let (status, body) = call(
@@ -524,7 +519,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_submit_invalid_answer_returns_422() {
         let (store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         for answer in [json!({"answers": 3}), json!({})] {
             let (status, body) = call(&state, &auth, run_id, step_id, "input", Some(answer)).await;
@@ -546,7 +541,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_submit_twice_returns_409() {
         let (_store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let answer = json!({"answers": ["yes"]});
 
         let (first, _) = call(
@@ -571,7 +566,7 @@ mod tests {
         let run_id = awaiting_run(&store).await;
         let step_id = awaiting_step(&store, run_id, StepKind::Approval, None).await;
         let state = test_state(store);
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let answer = json!({"answers": []});
         let (status, _) = call(&state, &auth, run_id, step_id, "input", Some(answer)).await;
@@ -585,7 +580,7 @@ mod tests {
             .update_run_status(run_id, RunStatus::Running)
             .await
             .unwrap();
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let answer = json!({"answers": []});
         let (status, _) = call(&state, &auth, run_id, step_id, "input", Some(answer)).await;
@@ -595,7 +590,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_unknown_step_or_step_of_another_run_returns_404() {
         let (store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let answer = json!({"answers": []});
 
         let unknown = Uuid::now_v7();
@@ -619,7 +614,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_unknown_run_returns_404() {
         let (_store, state, _run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let answer = json!({"answers": []});
         let (status, body) = call(
@@ -668,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_reject_marks_the_step_and_resumes_the_run() {
         let (store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let body = json!({"reason": "out of scope"});
         let (status, resp) = call(&state, &auth, run_id, step_id, "reject", Some(body)).await;
@@ -744,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_reject_without_body_uses_the_default_reason() {
         let (store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let (status, _) = call(&state, &auth, run_id, step_id, "reject", None).await;
 
@@ -756,7 +751,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_reject_with_a_blank_reason_uses_the_default_reason() {
         let (store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let body = json!({"reason": "   "});
         let (status, _) = call(&state, &auth, run_id, step_id, "reject", Some(body)).await;
@@ -769,7 +764,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_reject_after_submit_returns_409() {
         let (_store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let answer = json!({"answers": ["yes"]});
         let (first, _) = call(&state, &auth, run_id, step_id, "input", Some(answer)).await;
@@ -782,7 +777,7 @@ mod tests {
     #[tokio::test]
     async fn human_input_submit_after_reject_returns_409() {
         let (_store, state, run_id, step_id) = setup().await;
-        let auth = admin_header(&state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let (first, _) = call(&state, &auth, run_id, step_id, "reject", None).await;
         assert_eq!(first, StatusCode::OK);

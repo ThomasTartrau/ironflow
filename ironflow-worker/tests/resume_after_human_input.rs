@@ -24,8 +24,9 @@ use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
 use ironflow_engine::operation::{Operation, OperationContext};
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunStatus, StepKind, StepStatus, TriggerKind};
+use ironflow_store::models::{NewUser, RunStatus, StepKind, StepStatus, TriggerKind};
 use ironflow_store::store::RunStore;
+use ironflow_store::user_store::UserStore;
 use ironflow_worker::WorkerBuilder;
 use reqwest::{Client, StatusCode};
 use schemars::JsonSchema;
@@ -35,7 +36,6 @@ use tokio::net::TcpListener;
 use tokio::spawn;
 use tokio::sync::broadcast;
 use tokio::time::{sleep, timeout};
-use uuid::Uuid;
 
 /// Workflow name registered on both the API and the worker.
 const WORKFLOW: &str = "resume-after-input";
@@ -146,8 +146,7 @@ async fn worker_resumes_run_after_human_input_without_rerunning_prior_steps() {
             }
         });
 
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "admin", true, &jwt_config).expect("token");
+        let token = admin_token(&store, &jwt_config).await;
         let resp = Client::new()
             .post(format!(
                 "{base_url}/api/v1/runs/{run_id}/steps/{step_id}/input"
@@ -354,8 +353,7 @@ async fn worker_resumes_run_after_human_input_without_rerunning_operation_or_par
             }
         });
 
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "admin", true, &jwt_config).expect("token");
+        let token = admin_token(&store, &jwt_config).await;
         let resp = Client::new()
             .post(format!(
                 "{base_url}/api/v1/runs/{run_id}/steps/{step_id}/input"
@@ -430,4 +428,19 @@ async fn worker_resumes_run_after_human_input_without_rerunning_operation_or_par
     })
     .await
     .expect("test timed out");
+}
+
+/// Signs an access token for an admin stored in `store`: the API rejects a
+/// token whose user does not exist.
+async fn admin_token(store: &InMemoryStore, jwt_config: &JwtConfig) -> AccessToken {
+    let user = store
+        .create_user(NewUser {
+            email: "admin@test.com".to_string(),
+            username: "admin".to_string(),
+            password_hash: "argon2hash".to_string(),
+            is_admin: Some(true),
+        })
+        .await
+        .expect("create admin");
+    AccessToken::for_user(user.id, &user.username, user.is_admin, jwt_config).expect("token")
 }

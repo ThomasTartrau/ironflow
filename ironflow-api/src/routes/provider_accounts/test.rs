@@ -61,7 +61,7 @@ mod tests {
     async fn provider_accounts_test_route_results() {
         let state = state_with_stub(Stub::Valid).await;
         create_account(&state, "perso-max").await;
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
         let uri = "/api/v1/provider-accounts/perso-max/test";
 
         let (status, resp, _) = call(&state, "POST", uri, &auth, None).await;

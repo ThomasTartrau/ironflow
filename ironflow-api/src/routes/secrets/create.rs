@@ -59,7 +59,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::{get, put};
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
@@ -75,6 +75,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::routes::secrets;
+    use crate::routes::test_helpers::create_user_auth_header;
     use crate::state::AppState;
 
     struct TestWorkflow;
@@ -118,13 +119,6 @@ mod tests {
         )
     }
 
-    fn make_auth_header(is_admin: bool, state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token =
-            AccessToken::for_user(user_id, "testuser", is_admin, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     fn secrets_router(state: AppState) -> Router {
         Router::new()
             .route(
@@ -141,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn create_secret_as_admin() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let app = secrets_router(state);
 
         let req = Request::builder()
@@ -166,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn create_secret_as_member_forbidden() {
         let state = test_state();
-        let auth = make_auth_header(false, &state);
+        let auth = create_user_auth_header(&state, "member", false).await;
         let app = secrets_router(state);
 
         let req = Request::builder()
@@ -186,7 +180,7 @@ mod tests {
     #[tokio::test]
     async fn create_secret_invalid_key_chars() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let app = secrets_router(state);
 
         let req = Request::builder()
@@ -206,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn create_secret_invalid_key_leading_slash() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let app = secrets_router(state);
 
         let req = Request::builder()
@@ -226,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn list_secrets_empty() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let app = secrets_router(state);
 
         let req = Request::builder()
@@ -246,7 +240,7 @@ mod tests {
     #[tokio::test]
     async fn update_secret_not_found() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let app = secrets_router(state);
 
         let req = Request::builder()
@@ -264,7 +258,7 @@ mod tests {
     #[tokio::test]
     async fn delete_secret_not_found() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let app = secrets_router(state);
 
         let req = Request::builder()
@@ -281,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn full_crud_lifecycle() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let app = secrets_router(state.clone());
         let req = Request::builder()
@@ -345,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn create_secret_rejects_accounts_prefix() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         let key = format!("accounts/{}/credential", Uuid::now_v7());
 
         let app = secrets_router(state.clone());
@@ -386,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn list_secrets_hides_provider_account_credentials() {
         let state = test_state();
-        let auth = make_auth_header(true, &state);
+        let auth = create_user_auth_header(&state, "admin", true).await;
         state
             .store
             .set_secret(

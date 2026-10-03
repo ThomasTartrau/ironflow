@@ -3,13 +3,12 @@ use std::sync::Arc;
 
 use serde_json::json;
 use tokio::sync::broadcast;
-use uuid::Uuid;
 
 use ironflow_auth::jwt::{AccessToken, JwtConfig};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::Event;
-use ironflow_store::entities::{Run, RunStatus, TriggerKind};
+use ironflow_store::entities::{NewUser, Run, RunStatus, TriggerKind};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::NewRun;
 use ironflow_store::store::Store;
@@ -40,8 +39,38 @@ pub(crate) fn test_state() -> AppState {
 }
 
 /// A `Bearer` header for a non-admin user of this state.
-pub(crate) fn auth_header(state: &AppState) -> String {
-    let token = AccessToken::for_user(Uuid::now_v7(), "testuser", false, &state.jwt_config)
+pub(crate) async fn auth_header(state: &AppState) -> String {
+    create_user_auth_header(state, "testuser", false).await
+}
+
+/// A `Bearer` header for the stored user `username`, created on first use.
+///
+/// The token must belong to a user in the store: a token whose user does not
+/// exist is rejected. A second call with the same `username` reuses the user.
+pub(crate) async fn create_user_auth_header(
+    state: &AppState,
+    username: &str,
+    is_admin: bool,
+) -> String {
+    let existing = state
+        .store
+        .find_user_by_username(username)
+        .await
+        .expect("look up user");
+    let user = match existing {
+        Some(user) => user,
+        None => state
+            .store
+            .create_user(NewUser {
+                email: format!("{username}@test.com"),
+                username: username.to_string(),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(is_admin),
+            })
+            .await
+            .expect("create user"),
+    };
+    let token = AccessToken::for_user(user.id, &user.username, user.is_admin, &state.jwt_config)
         .expect("issue token");
     format!("Bearer {}", token.0)
 }

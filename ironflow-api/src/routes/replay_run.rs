@@ -125,6 +125,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     const WORKFLOW: &str = "replay-wf";
 
@@ -139,12 +140,6 @@ mod tests {
         fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
             Box::pin(async { Ok(()) })
         }
-    }
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
     }
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
@@ -225,7 +220,7 @@ mod tests {
         let store = Arc::new(InMemoryStore::new());
         let run = create_run_in(&store, WORKFLOW, Some("2.0.0"), path).await;
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         send_replay(state, auth_header, run.id).await.status()
     }
 
@@ -241,7 +236,7 @@ mod tests {
         .await;
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let resp = send_replay(state, auth_header, original.id).await;
         assert_eq!(resp.status(), HttpStatusCode::CREATED);
 
@@ -318,7 +313,7 @@ mod tests {
         let run = create_run_in(&store, WORKFLOW, Some("2.0.0"), &[RunStatus::Running]).await;
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let resp = send_replay(state, auth_header, run.id).await;
         assert_eq!(resp.status(), HttpStatusCode::BAD_REQUEST);
 
@@ -343,7 +338,7 @@ mod tests {
         .await;
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let resp = send_replay(state, auth_header, original.id).await;
         assert_eq!(resp.status(), HttpStatusCode::CREATED);
 
@@ -364,7 +359,7 @@ mod tests {
         .await;
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let resp = send_replay(state, auth_header, original.id).await;
         assert_eq!(resp.status(), HttpStatusCode::NOT_FOUND);
 
@@ -377,7 +372,7 @@ mod tests {
     async fn replay_nonexistent_run_returns_404() {
         let store = Arc::new(InMemoryStore::new());
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let resp = send_replay(state, auth_header, Uuid::now_v7()).await;
         assert_eq!(resp.status(), HttpStatusCode::NOT_FOUND);
     }
@@ -394,9 +389,8 @@ mod tests {
         .await;
 
         let state = test_state(store);
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "viewer", false, &state.jwt_config).unwrap();
-        let resp = send_replay(state, format!("Bearer {}", token.0), original.id).await;
+        let auth = create_user_auth_header(&state, "viewer", false).await;
+        let resp = send_replay(state, auth, original.id).await;
         assert_eq!(resp.status(), HttpStatusCode::FORBIDDEN);
     }
 
@@ -412,7 +406,7 @@ mod tests {
         .await;
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let resp = send_replay(state, auth_header, original.id).await;
         assert_eq!(resp.status(), HttpStatusCode::CREATED);
 

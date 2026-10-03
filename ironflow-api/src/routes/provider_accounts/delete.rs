@@ -58,7 +58,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
 
         let (status, _, _) = call(
             &state,
