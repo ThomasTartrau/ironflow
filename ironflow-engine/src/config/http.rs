@@ -35,6 +35,10 @@ pub struct HttpConfig {
     /// Optional W3C trace context for distributed tracing propagation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_context: Option<WorkflowTraceContext>,
+    /// Hosts this step may reach even when they are internal. See
+    /// [`allow_host`](Self::allow_host).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<String>,
 }
 
 impl HttpConfig {
@@ -82,6 +86,7 @@ impl HttpConfig {
             allow_failure: false,
             retry: None,
             trace_context: None,
+            allowed_hosts: Vec::new(),
         }
     }
 
@@ -134,6 +139,27 @@ impl HttpConfig {
         self.retry = Some(policy);
         self
     }
+
+    /// Let this step reach `host` even when it is, or resolves to, a private, loopback,
+    /// link-local or cloud metadata address.
+    ///
+    /// Without it, the step fails before anything is sent. Hosts allowed for the whole
+    /// deployment go in the worker's `IRONFLOW_HTTP_ALLOWED_HOSTS` environment variable
+    /// instead. See [`Http::allow_host`](ironflow_core::operations::http::Http::allow_host).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::HttpConfig;
+    ///
+    /// let config = HttpConfig::get("http://billing.internal:8080/invoices")
+    ///     .allow_host("billing.internal");
+    /// assert_eq!(config.allowed_hosts, ["billing.internal"]);
+    /// ```
+    pub fn allow_host(mut self, host: &str) -> Self {
+        self.allowed_hosts.push(host.to_string());
+        self
+    }
 }
 
 #[cfg(test)]
@@ -179,5 +205,27 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let back: HttpConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.retry.as_ref().unwrap().max_retries(), 3);
+    }
+
+    #[test]
+    fn a_config_predating_allowed_hosts_still_deserializes() {
+        let config: HttpConfig = serde_json::from_str(
+            r#"{"url":"http://x","method":"GET","headers":[],"body":null,"timeout_secs":null}"#,
+        )
+        .expect("deserialize");
+        assert!(config.allowed_hosts.is_empty());
+    }
+
+    #[test]
+    fn allowed_hosts_roundtrip_and_stay_out_of_json_when_empty() {
+        let config = HttpConfig::get("http://billing.internal")
+            .allow_host("billing.internal")
+            .allow_host("10.0.0.5");
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: HttpConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.allowed_hosts, ["billing.internal", "10.0.0.5"]);
+
+        let json = serde_json::to_string(&HttpConfig::get("http://x")).expect("serialize");
+        assert!(!json.contains("allowed_hosts"), "{json}");
     }
 }

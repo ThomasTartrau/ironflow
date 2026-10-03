@@ -31,6 +31,12 @@ if output.is_success() {
 let response = ctx.http("fetch-data", HttpConfig::get("https://api.example.com/data")).await?;
 ```
 
+An HTTP step refuses a host that is, or resolves to, a private, loopback, link-local or
+cloud metadata address (`localhost`, `10.0.0.5`, a Kubernetes service name,
+`169.254.169.254`). Allow an internal service with `.allow_host("billing.internal")`, or
+for the whole deployment with the worker's `IRONFLOW_HTTP_ALLOWED_HOSTS`
+(comma-separated).
+
 A shell step reads back through `stdout()`, `stderr()` and `exit_code()`, an
 HTTP step through `status()` and `body()`. A step tolerated with
 `allow_failure()` that failed reads back its message through `error()`. Files a shell step declares with

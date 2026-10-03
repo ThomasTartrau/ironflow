@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 schemars = "1"
-tokio = { version = "1", features = ["process", "time", "macros", "rt-multi-thread", "signal", "fs"] }
+tokio = { version = "1", features = ["process", "time", "macros", "rt-multi-thread", "signal", "fs", "net"] }
 async-trait = "0.1"
 reqwest = { version = "0.13", features = ["json"] }
 url = "2"

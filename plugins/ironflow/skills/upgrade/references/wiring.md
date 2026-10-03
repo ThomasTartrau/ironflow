@@ -76,3 +76,18 @@ body of the old job becomes steps (see the workflow skill).
 A workflow with a `ctx.decision` step fails with `NoDecisionProvider` on a worker that has
 none. Check the worker's `main.rs` calls `WorkerBuilder::decision_provider(..)`; tests use
 `Engine::with_decision_provider(..)`.
+
+## web-fetch-internal-hosts
+- kind: behavior
+- since: ironflow-core after 4.8.0 (#155)
+
+The `web_fetch` agent tool refuses a URL that is, resolves to, or redirects to a private,
+loopback, link-local or cloud metadata address, including decimal, hex, octal and
+IPv4-mapped forms; proxy variables are ignored. An agent that read an internal page now
+gets a tool error. Allow each internal host the agent must read where the worker registers
+the tool:
+
+```diff
+- .register(WebFetchTool::new())
++ .register(WebFetchTool::new().allow_host("docs.internal"))
+```

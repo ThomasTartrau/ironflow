@@ -94,6 +94,13 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 `HttpConfig::{get, post, put, patch, delete}`, plus `allow_failure()` and
 `retry_policy(...)`.
 
+A host that is, or resolves to, a private, loopback, link-local or cloud metadata address
+(`localhost`, `10.0.0.5`, a Kubernetes service name, `169.254.169.254`) is refused before
+anything is sent. Allow an internal service per step with `.allow_host("billing.internal")`,
+or for the whole deployment with the worker's `IRONFLOW_HTTP_ALLOWED_HOSTS`
+(comma-separated). A test that serves a stub on `127.0.0.1` needs
+`.allow_host("localhost")` too.
+
 ## Agent
 
 Either tools or a structured output, never both (enforced by the type state).
