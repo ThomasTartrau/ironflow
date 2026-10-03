@@ -8,13 +8,13 @@
 //! | Variable | Required | Default | Description |
 //! |----------|----------|---------|-------------|
 //! | `DATABASE_URL` | **prod** | - | PostgreSQL connection string |
-//! | `JWT_SECRET` | **prod** | dev default | JWT signing secret |
-//! | `WORKER_TOKEN` | **prod** | dev default | Worker-to-API auth token |
+//! | `JWT_SECRET` | **yes**, except explicit dev | random in explicit dev | JWT signing secret, >= 32 bytes |
+//! | `WORKER_TOKEN` | **yes**, except explicit dev | random in explicit dev | Worker-to-API auth token, >= 32 bytes |
 //! | `PORT` | no | `3000` | HTTP listen port |
 //! | `ALLOWED_ORIGINS` | no | same-origin | Comma-separated CORS origins |
 //! | `DASHBOARD_DIR` | no | embedded | Filesystem path to dashboard assets |
 //! | `WEBHOOK_URL` | no | - | Outbound webhook URL for notifications |
-//! | `IRONFLOW_ENV` | no | `development` | `production` or `development` |
+//! | `IRONFLOW_ENV` | no | unset (strict) | `production`, or `development` for explicit dev mode |
 //! | `RATE_LIMIT_AUTH` | no | `10` | Auth rate limit (req/min/IP). `0` = disabled |
 //! | `RATE_LIMIT_GENERAL` | no | `60` | General rate limit (req/min/IP). `0` = disabled |
 //! | `ARTIFACTS_DIR` | no | - | Filesystem root for artifact blobs. Unset disables artifacts |
@@ -52,6 +52,10 @@ use std::path::PathBuf;
 
 use ironflow_artifacts::local::DEFAULT_MAX_ARTIFACT_BYTES;
 use tracing::warn;
+
+use self::secrets::{ResolvedSecret, SecretMode, resolve_secret};
+
+mod secrets;
 
 /// Server configuration loaded from environment variables.
 ///
@@ -184,38 +188,6 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-const DEV_JWT_SECRET: &str = "ironflow-dev-secret";
-const DEV_WORKER_TOKEN: &str = "ironflow-dev-worker-token";
-
-/// Prefix shared by every known development secret default. In production a
-/// secret carrying this prefix is refused outright, so a fresh deploy that
-/// copied the setup template verbatim cannot boot with a value published in
-/// the repository.
-const DEV_SECRET_PREFIX: &str = "ironflow-dev-";
-
-/// Minimum accepted length, in bytes, for a production secret. A value shorter
-/// than this is trivially brute-forced against an HS256 signature.
-const MIN_PROD_SECRET_BYTES: usize = 32;
-
-/// Reject a production secret that is a known development default or too short.
-///
-/// Pushes at most one message to `errors` (a known default is reported as such,
-/// not also as "too short"), so the collect-all pattern lists each faulty
-/// secret exactly once. Called only in production and only for a secret that
-/// was explicitly set; an unset secret is handled by the "required" check.
-fn reject_insecure_secret(name: &str, value: &str, errors: &mut Vec<String>) {
-    if value.starts_with(DEV_SECRET_PREFIX) {
-        errors.push(format!(
-            "{name} must not use a known development default in production"
-        ));
-    } else if value.len() < MIN_PROD_SECRET_BYTES {
-        errors.push(format!(
-            "{name} must be at least {MIN_PROD_SECRET_BYTES} bytes in production, got {}",
-            value.len()
-        ));
-    }
-}
-
 /// Parse an optional u32 env var. Returns `Some(default)` if unset,
 /// `Some(value)` if set to a positive number, `None` if set to `0`
 /// (meaning disabled). Pushes to `errors` if the value is not a valid u32.
@@ -238,12 +210,16 @@ fn parse_optional_u32(name: &str, default: u32, errors: &mut Vec<String>) -> Opt
 impl ServerConfig {
     /// Load configuration from environment variables and validate.
     ///
-    /// In production mode (`IRONFLOW_ENV=production`), `JWT_SECRET` and
-    /// `WORKER_TOKEN` must be explicitly set, must not carry the known
-    /// development prefix `ironflow-dev-`, and must be at least 32 bytes long.
-    /// `DATABASE_URL` is required in production.
+    /// `JWT_SECRET` and `WORKER_TOKEN` must be set, at least 32 bytes long and
+    /// must not carry the prefix `ironflow-dev-` of the development values once
+    /// published in the repository. `DATABASE_URL` is also required in
+    /// production (`IRONFLOW_ENV=production`).
     ///
-    /// In development mode, insecure defaults are used with a warning.
+    /// Only an explicit `IRONFLOW_ENV=development` relaxes this: a missing
+    /// secret is then generated at random for this process (the worker token
+    /// is logged so a worker can be started with it), and the length check is
+    /// waived. The `ironflow-dev-` prefix and empty values are refused in every
+    /// mode. No secret is compiled into the binary.
     ///
     /// # Errors
     ///
@@ -261,9 +237,8 @@ impl ServerConfig {
     /// # }
     /// ```
     pub fn from_env() -> Result<Self, ConfigError> {
-        let is_production = env::var("IRONFLOW_ENV")
-            .map(|v| v.eq_ignore_ascii_case("production"))
-            .unwrap_or(false);
+        let secret_mode = SecretMode::from_ironflow_env(env::var("IRONFLOW_ENV").ok().as_deref());
+        let is_production = secret_mode == SecretMode::Production;
 
         let mut errors = Vec::new();
 
@@ -272,41 +247,41 @@ impl ServerConfig {
             errors.push("DATABASE_URL is required in production".to_string());
         }
 
-        let jwt_secret_env = env::var("JWT_SECRET").ok();
-        let jwt_secret = match jwt_secret_env {
-            Some(val) => {
-                if is_production {
-                    reject_insecure_secret("JWT_SECRET", &val, &mut errors);
-                }
-                val
+        let jwt_secret = match resolve_secret(
+            "JWT_SECRET",
+            env::var("JWT_SECRET").ok(),
+            secret_mode,
+        ) {
+            Ok(ResolvedSecret::Provided(secret)) => secret,
+            Ok(ResolvedSecret::Generated(secret)) => {
+                warn!(
+                    "JWT_SECRET not set, generated an ephemeral secret: dashboard sessions end with this process"
+                );
+                secret
             }
-            None if is_production => {
-                errors.push("JWT_SECRET is required in production".to_string());
+            Err(e) => {
+                errors.push(e);
                 String::new()
-            }
-            None => {
-                warn!("JWT_SECRET not set, using insecure dev default -- do NOT use in production");
-                DEV_JWT_SECRET.to_string()
             }
         };
 
-        let worker_token_env = env::var("WORKER_TOKEN").ok();
-        let worker_token = match worker_token_env {
-            Some(val) => {
-                if is_production {
-                    reject_insecure_secret("WORKER_TOKEN", &val, &mut errors);
-                }
-                val
-            }
-            None if is_production => {
-                errors.push("WORKER_TOKEN is required in production".to_string());
-                String::new()
-            }
-            None => {
+        let worker_token = match resolve_secret(
+            "WORKER_TOKEN",
+            env::var("WORKER_TOKEN").ok(),
+            secret_mode,
+        ) {
+            Ok(ResolvedSecret::Provided(token)) => token,
+            // Shown on purpose: a worker is a separate process and cannot
+            // reach this process without it. Development only.
+            Ok(ResolvedSecret::Generated(token)) => {
                 warn!(
-                    "WORKER_TOKEN not set, using insecure dev default -- do NOT use in production"
+                    "WORKER_TOKEN not set, generated an ephemeral token for this process: start workers with WORKER_TOKEN={token}"
                 );
-                DEV_WORKER_TOKEN.to_string()
+                token
+            }
+            Err(e) => {
+                errors.push(e);
+                String::new()
             }
         };
 
@@ -529,6 +504,19 @@ mod tests {
         }
     }
 
+    /// Wipe the environment, then opt into explicit development mode, the only
+    /// mode that boots without secrets.
+    ///
+    /// # Safety
+    ///
+    /// Must be called while holding `ENV_LOCK`.
+    unsafe fn setup_dev() {
+        unsafe {
+            clear_env();
+            env::set_var("IRONFLOW_ENV", "development");
+        }
+    }
+
     #[test]
     fn config_error_display_lists_all_errors() {
         let err = ConfigError::new(vec![
@@ -548,15 +536,67 @@ mod tests {
     }
 
     #[test]
-    fn default_dev_config_succeeds() {
+    fn unset_env_without_secrets_fails() {
+        // Non-regression #149: with nothing set, the server booted on secrets
+        // published in the repository (internal API open, JWT forgeable).
         let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
         unsafe { clear_env() };
 
-        let config = ServerConfig::from_env().expect("dev config should succeed");
-        assert!(!config.is_production);
-        assert_eq!(config.port, 3000);
-        assert_eq!(config.jwt_secret, DEV_JWT_SECRET);
-        assert_eq!(config.worker_token, DEV_WORKER_TOKEN);
+        let err = ServerConfig::from_env().unwrap_err();
+        for name in ["JWT_SECRET", "WORKER_TOKEN"] {
+            assert!(
+                err.errors
+                    .iter()
+                    .any(|e| e.contains(name) && e.contains("required")),
+                "{name} must be required, got {:?}",
+                err.errors
+            );
+        }
+        // Outside production the in-memory store stays usable.
+        assert!(!err.errors.iter().any(|e| e.contains("DATABASE_URL")));
+    }
+
+    #[test]
+    fn unset_env_rejects_known_default_and_short_secret() {
+        // Non-regression #149, acceptance gate 2.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe {
+            clear_env();
+            env::set_var("JWT_SECRET", "ironflow-dev-secret");
+            env::set_var("WORKER_TOKEN", "x");
+        }
+
+        let err = ServerConfig::from_env().unwrap_err();
+        let has = |name: &str, needle: &str| {
+            err.errors
+                .iter()
+                .any(|e| e.contains(name) && e.contains(needle))
+        };
+        assert!(has("JWT_SECRET", "known development default"), "{err}");
+        assert!(has("WORKER_TOKEN", "32 bytes"), "{err}");
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn explicit_dev_without_secrets_generates_ephemeral_ones() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_dev() };
+
+        let first = ServerConfig::from_env().expect("explicit dev boots without secrets");
+        let second = ServerConfig::from_env().expect("explicit dev boots without secrets");
+        assert!(!first.is_production);
+        assert!(first.jwt_secret.len() >= 32 && first.worker_token.len() >= 32);
+        assert!(!first.worker_token.starts_with("ironflow-dev-"));
+        // A constant in disguise would give the same value on every boot.
+        assert_ne!(first.jwt_secret, second.jwt_secret);
+        assert_ne!(first.worker_token, second.worker_token);
+        assert_ne!(first.jwt_secret, first.worker_token);
+
+        unsafe { clear_env() };
     }
 
     #[test]
@@ -582,7 +622,7 @@ mod tests {
     fn invalid_port_returns_error() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            clear_env();
+            setup_dev();
             env::set_var("PORT", "not-a-number");
         }
 
@@ -597,7 +637,7 @@ mod tests {
     #[test]
     fn default_rate_limits() {
         let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { clear_env() };
+        unsafe { setup_dev() };
 
         let config = ServerConfig::from_env().unwrap();
         assert_eq!(config.rate_limit_auth, Some(10));
@@ -608,7 +648,7 @@ mod tests {
     fn custom_rate_limits() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            clear_env();
+            setup_dev();
             env::set_var("RATE_LIMIT_AUTH", "20");
             env::set_var("RATE_LIMIT_GENERAL", "120");
         }
@@ -627,7 +667,7 @@ mod tests {
     fn zero_rate_limit_disables() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            clear_env();
+            setup_dev();
             env::set_var("RATE_LIMIT_AUTH", "0");
             env::set_var("RATE_LIMIT_GENERAL", "0");
         }
@@ -646,7 +686,7 @@ mod tests {
     fn invalid_rate_limit_returns_error() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            clear_env();
+            setup_dev();
             env::set_var("RATE_LIMIT_AUTH", "not-a-number");
         }
 
@@ -661,7 +701,7 @@ mod tests {
     #[test]
     fn default_purge_config() {
         let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { clear_env() };
+        unsafe { setup_dev() };
 
         let config = ServerConfig::from_env().unwrap();
         assert_eq!(config.purge_max_age_days, 90);
@@ -676,7 +716,7 @@ mod tests {
     fn provider_account_usage_retention_days_from_env() {
         let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: env writes serialized by ENV_LOCK, held above.
-        unsafe { clear_env() };
+        unsafe { setup_dev() };
         unsafe { env::set_var("PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS", "7") };
         let config = ServerConfig::from_env().unwrap();
         assert_eq!(config.provider_account_usage_retention_days, 7);
@@ -690,7 +730,7 @@ mod tests {
     fn signal_retention_days_from_env() {
         let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: env writes serialized by ENV_LOCK, held above.
-        unsafe { clear_env() };
+        unsafe { setup_dev() };
         unsafe { env::set_var("SIGNAL_RETENTION_DAYS", "3") };
         let config = ServerConfig::from_env().unwrap();
         assert_eq!(config.signal_retention_days, 3);
@@ -706,7 +746,7 @@ mod tests {
     fn purger_from_config_uses_env_values() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            clear_env();
+            setup_dev();
             env::set_var("SIGNAL_RETENTION_DAYS", "1");
             env::set_var("PURGE_MAX_AGE_DAYS", "30");
             env::set_var("PURGE_MAX_RUNS_PER_WORKFLOW", "50");
@@ -729,7 +769,7 @@ mod tests {
     #[test]
     fn purger_from_config_defaults() {
         let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { clear_env() };
+        unsafe { setup_dev() };
         let config = ServerConfig::from_env().unwrap();
 
         let purger = RunPurger::from_config(Arc::new(InMemoryStore::new()), &config);
@@ -741,7 +781,7 @@ mod tests {
     fn custom_purge_config() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            clear_env();
+            setup_dev();
             env::set_var("PURGE_MAX_AGE_DAYS", "30");
             env::set_var("PURGE_MAX_RUNS_PER_WORKFLOW", "500");
             env::set_var("PURGE_DRY_RUN", "true");
@@ -766,7 +806,7 @@ mod tests {
     fn invalid_purge_max_age_days_returns_error() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
-            clear_env();
+            setup_dev();
             env::set_var("PURGE_MAX_AGE_DAYS", "not-a-number");
         }
 
@@ -826,7 +866,7 @@ mod tests {
     fn from_env_production_rejects_known_dev_worker_token() {
         let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: env writes serialized by ENV_LOCK, held above.
-        unsafe { setup_prod(STRONG_JWT, DEV_WORKER_TOKEN) };
+        unsafe { setup_prod(STRONG_JWT, "ironflow-dev-worker-token") };
 
         let err = ServerConfig::from_env().unwrap_err();
         assert!(
@@ -837,43 +877,6 @@ mod tests {
             err.errors
         );
         assert!(!err.errors.iter().any(|e| e.contains("JWT_SECRET")));
-
-        unsafe { clear_env() };
-    }
-
-    #[test]
-    fn from_env_production_rejects_short_jwt_secret() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // "shortsecret" is not a dev default, but is under 32 bytes.
-        // SAFETY: env writes serialized by ENV_LOCK, held above.
-        unsafe { setup_prod("shortsecret", STRONG_WORKER) };
-
-        let err = ServerConfig::from_env().unwrap_err();
-        assert!(
-            err.errors
-                .iter()
-                .any(|e| e.contains("JWT_SECRET") && e.contains("32 bytes")),
-            "expected a length rejection for JWT_SECRET, got {:?}",
-            err.errors
-        );
-
-        unsafe { clear_env() };
-    }
-
-    #[test]
-    fn from_env_production_rejects_short_worker_token() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // SAFETY: env writes serialized by ENV_LOCK, held above.
-        unsafe { setup_prod(STRONG_JWT, "tinytoken") };
-
-        let err = ServerConfig::from_env().unwrap_err();
-        assert!(
-            err.errors
-                .iter()
-                .any(|e| e.contains("WORKER_TOKEN") && e.contains("32 bytes")),
-            "expected a length rejection for WORKER_TOKEN, got {:?}",
-            err.errors
-        );
 
         unsafe { clear_env() };
     }
@@ -893,52 +896,27 @@ mod tests {
     }
 
     #[test]
-    fn from_env_production_secret_length_boundary() {
-        // Exactly 32 bytes is accepted; 31 is rejected. Guards the `<` in the
-        // length check against an off-by-one drift to `<=`.
-        let exactly_32: &str = "0123456789abcdef0123456789abcdef";
-        let just_under: &str = "0123456789abcdef0123456789abcde";
-        assert_eq!(exactly_32.len(), 32);
-        assert_eq!(just_under.len(), 31);
-
-        let _guard = ENV_LOCK.lock().unwrap();
-
-        // SAFETY: env writes serialized by ENV_LOCK, held above.
-        unsafe { setup_prod(exactly_32, STRONG_WORKER) };
-        let config = ServerConfig::from_env().expect("a 32-byte secret is accepted");
-        assert_eq!(config.jwt_secret, exactly_32);
-
-        // SAFETY: ENV_LOCK still held.
-        unsafe { setup_prod(just_under, STRONG_WORKER) };
-        let err = ServerConfig::from_env().unwrap_err();
-        assert!(
-            err.errors
-                .iter()
-                .any(|e| e.contains("JWT_SECRET") && e.contains("32 bytes")),
-            "31 bytes must be rejected, got {:?}",
-            err.errors
-        );
-
-        unsafe { clear_env() };
-    }
-
-    #[test]
-    fn from_env_development_accepts_weak_secret() {
-        // The value/length checks run in production only: a short, dev-prefixed
-        // secret set outside production is accepted and used unchanged.
+    fn from_env_explicit_dev_accepts_short_secret_but_not_dev_default() {
+        // Explicit dev waives the length check only: a dev-prefixed value is
+        // still refused, the same as in production.
         let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: env writes serialized by ENV_LOCK, held above.
         unsafe {
-            clear_env();
-            env::set_var("IRONFLOW_ENV", "development");
-            env::set_var("JWT_SECRET", "ironflow-dev-jwt-secret");
+            setup_dev();
+            env::set_var("JWT_SECRET", "local-jwt");
             env::set_var("WORKER_TOKEN", "tinytoken");
         }
-
-        let config = ServerConfig::from_env().expect("weak secrets are allowed outside production");
-        assert!(!config.is_production);
-        assert_eq!(config.jwt_secret, "ironflow-dev-jwt-secret");
+        let config = ServerConfig::from_env().expect("short secrets are allowed in explicit dev");
+        assert_eq!(config.jwt_secret, "local-jwt");
         assert_eq!(config.worker_token, "tinytoken");
+
+        // SAFETY: ENV_LOCK still held.
+        unsafe { env::set_var("WORKER_TOKEN", "ironflow-dev-worker-token") };
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(
+            err.to_string().contains("known development default"),
+            "{err}"
+        );
 
         unsafe { clear_env() };
     }

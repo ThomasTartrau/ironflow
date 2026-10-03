@@ -76,7 +76,8 @@ Report the generated layout in five lines, then point to the next verbs: `/ironf
 ```text
 <target>/
   Cargo.toml            workspace: workflows, server, worker
-  .env.example          every variable, commented; copied to .env
+  .env.example          every variable, commented; copied to .env with fresh
+                        WORKER_TOKEN and JWT_SECRET
   scripts/dev.sh        server then worker, Ctrl+C stops both
   workflows/            lib: handlers() + hello.rs + tests/hello.rs
   server/               API server, dashboard embedded, reaper, SSE

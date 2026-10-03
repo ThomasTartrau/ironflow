@@ -133,12 +133,13 @@ cd ironflow-dashboard && pnpm install && pnpm build && cd ..
 
 ```bash
 # Terminal 1 - API + embedded dashboard on http://localhost:3000
-cargo run -p ironflow-example-server
+# Development mode generates the secrets and logs the worker token.
+IRONFLOW_ENV=development cargo run -p ironflow-example-server
 ```
 
 ```bash
-# Terminal 2 - worker polling the API
-cargo run -p ironflow-example-worker
+# Terminal 2 - worker polling the API, with the token the server logged
+WORKER_TOKEN=<token from the server log> cargo run -p ironflow-example-worker
 ```
 
 Open <http://localhost:3000>, create an account, and trigger a workflow from the UI. To drive it
@@ -718,10 +719,10 @@ Ironflow reads `.env` via [dotenvy](https://crates.io/crates/dotenvy).
 
 | Variable | Required | Default |
 |----------|----------|---------|
-| `IRONFLOW_ENV` | no | `development` |
+| `IRONFLOW_ENV` | no | unset: secrets required |
 | `DATABASE_URL` | in production | - |
-| `JWT_SECRET` | in production | development secret |
-| `WORKER_TOKEN` | in production | development token |
+| `JWT_SECRET` | yes, except `IRONFLOW_ENV=development` | random per process in development |
+| `WORKER_TOKEN` | yes, except `IRONFLOW_ENV=development` | random per process in development, logged |
 | `IRONFLOW_SECRET_KEYS` | no | unset, secret store disabled |
 | `IRONFLOW_SECRET_ACTIVE_KEY_VERSION` | no | highest configured version |
 | `IRONFLOW_SECRET_KEY` | no | deprecated, see below |
@@ -734,8 +735,11 @@ Ironflow reads `.env` via [dotenvy](https://crates.io/crates/dotenvy).
 | `ARTIFACTS_DIR` | no | unset, artifacts disabled |
 | `ARTIFACT_MAX_BYTES` | no | `104857600` (100 MiB) |
 
-Starting in production without `DATABASE_URL`, `JWT_SECRET` or `WORKER_TOKEN` aborts at boot
-rather than falling back to development defaults.
+No secret is built into the binary. `JWT_SECRET` and `WORKER_TOKEN` must be at least 32 bytes
+and must not start with `ironflow-dev-` (the development values once published here); generate
+them with `openssl rand -hex 32`. Only `IRONFLOW_ENV=development` boots without them: each
+missing secret is then generated for the process, and the length minimum is waived. Production
+also requires `DATABASE_URL`. Any violation aborts at boot with every error listed.
 
 ### Secret encryption keys
 
@@ -796,7 +800,7 @@ secrets, and which can be retired.
 | Variable | Required | Default |
 |----------|----------|---------|
 | `API_URL` | no | `http://localhost:3000` |
-| `WORKER_TOKEN` | must match the API | development token |
+| `WORKER_TOKEN` | yes, must match the API | - |
 | `CONCURRENCY` | no | `2` |
 | `POLL_INTERVAL_SECS` | no | `2` |
 
