@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth"
-version = "2.4.50"
+version = "2.4.51"
 dependencies = [
  "argon2 0.5.3",
  "axum",
