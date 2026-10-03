@@ -15,11 +15,12 @@
 //! ```
 
 use std::collections::HashMap;
+use std::env::{self, VarError};
 use std::future::{Future, IntoFuture};
-use std::net::IpAddr;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+use reqwest::redirect::Policy;
 use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -29,6 +30,7 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::retry::RetryPolicy;
+use crate::ssrf::{self, AllowedHosts, GuardedResolver};
 use crate::trace_context::WorkflowTraceContext;
 
 /// Default timeout for HTTP requests (30 seconds).
@@ -39,47 +41,35 @@ use crate::error::OperationError;
 use crate::metric_names;
 use crate::utils::MAX_OUTPUT_SIZE;
 
-/// Returns `true` if the given IP address is private, loopback, link-local,
-/// or a cloud metadata endpoint - i.e. a target that should not be reachable
-/// via SSRF.
-fn is_blocked_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()              // 127.0.0.0/8
-                || v4.is_private()         // 10/8, 172.16/12, 192.168/16
-                || v4.is_link_local()      // 169.254.0.0/16 (includes AWS metadata)
-                || v4.is_broadcast()       // 255.255.255.255
-                || v4.is_unspecified() // 0.0.0.0
+/// Environment variable listing, comma-separated, the hosts every [`Http`] request of
+/// the deployment may reach even when they are internal.
+const ALLOWED_HOSTS_ENV: &str = "IRONFLOW_HTTP_ALLOWED_HOSTS";
+
+static ENV_ALLOWED_HOSTS: LazyLock<AllowedHosts> =
+    LazyLock::new(|| match env::var(ALLOWED_HOSTS_ENV) {
+        Ok(list) => AllowedHosts::parse_list(&list),
+        Err(VarError::NotPresent) => AllowedHosts::default(),
+        Err(err) => {
+            warn!(error = %err, "{ALLOWED_HOSTS_ENV} ignored: no internal host is allowed");
+            AllowedHosts::default()
         }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()              // ::1
-                || v6.is_unspecified() // ::
-        }
-    }
-}
+    });
 
-/// Check if a URL host is a blocked IP address (literal IP in the URL).
-/// Returns an error message if blocked, None if safe (or if host is a hostname
-/// that needs DNS resolution - runtime check happens at connect time).
-fn check_url_host(raw: &str) -> Option<String> {
-    let parsed = Url::parse(raw).ok()?;
-    let host_str = parsed.host_str()?;
-
-    let host_clean = host_str.trim_start_matches('[').trim_end_matches(']');
-
-    if let Ok(ip) = host_clean.parse::<IpAddr>()
-        && is_blocked_ip(ip)
-    {
-        return Some(format!(
-            "URL targets a blocked IP address ({ip}): private, loopback, and link-local addresses are not allowed"
-        ));
-    }
-    None
-}
-
+/// Client for hosts that may be internal: no SSRF guard, environment proxies honored.
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(Policy::none())
+        .build()
+        .expect("failed to build HTTP client")
+});
+
+/// Client for every other host. Proxies are ignored: a proxy resolves the target
+/// itself, out of reach of [`GuardedResolver`].
+static GUARDED_HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .redirect(Policy::none())
+        .no_proxy()
+        .dns_resolver(GuardedResolver::default())
         .build()
         .expect("failed to build HTTP client")
 });
@@ -122,6 +112,7 @@ pub struct Http {
     max_response_size: usize,
     dry_run: Option<bool>,
     retry_policy: Option<RetryPolicy>,
+    allowed_hosts: AllowedHosts,
 }
 
 enum HttpBody {
@@ -151,6 +142,7 @@ impl Http {
             max_response_size: MAX_OUTPUT_SIZE,
             dry_run: None,
             retry_policy: None,
+            allowed_hosts: AllowedHosts::default(),
         }
     }
 
@@ -219,6 +211,32 @@ impl Http {
     /// [`OperationError::Http`] is returned. Defaults to 30 seconds.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Allow this request to reach `host` even when it is, or resolves to, a private,
+    /// loopback, link-local or cloud metadata address.
+    ///
+    /// Without it, such a target fails with [`OperationError::Http`] before anything is
+    /// sent. Pass the host as it appears in the URL (`"billing.internal"`, `"10.0.0.5"`,
+    /// `"::1"`); the match ignores case and IPv6 brackets. Hosts allowed for the whole
+    /// deployment go in the `IRONFLOW_HTTP_ALLOWED_HOSTS` environment variable, a
+    /// comma-separated list read once at the first request.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::operations::http::Http;
+    ///
+    /// # async fn example() -> Result<(), ironflow_core::error::OperationError> {
+    /// let output = Http::get("http://billing.internal:8080/invoices")
+    ///     .allow_host("billing.internal")
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn allow_host(mut self, host: &str) -> Self {
+        self.allowed_hosts.add(host);
         self
     }
 
@@ -340,6 +358,11 @@ impl Http {
     /// Returns [`OperationError::Http`] if the request fails at the transport
     /// layer (network error, DNS failure, timeout) or if the response body
     /// cannot be read. Non-2xx status codes are **not** treated as errors.
+    ///
+    /// Also returns [`OperationError::Http`], before anything is sent and without
+    /// retries, if the URL cannot be parsed, or if its host is, or resolves to, a
+    /// private, loopback, link-local or cloud metadata address that
+    /// [`allow_host`](Http::allow_host) or `IRONFLOW_HTTP_ALLOWED_HOSTS` does not allow.
     #[tracing::instrument(name = "http", skip_all, fields(method = %self.method, url = %self.url))]
     pub async fn run(self) -> Result<HttpOutput, OperationError> {
         if crate::dry_run::effective_dry_run(self.dry_run) {
@@ -352,14 +375,25 @@ impl Http {
             });
         }
 
-        if let Some(reason) = check_url_host(&self.url) {
-            return Err(OperationError::Http {
-                status: None,
-                message: reason,
-            });
-        }
+        let url = Url::parse(&self.url).map_err(|e| OperationError::Http {
+            status: None,
+            message: format!("invalid URL {}: {e}", self.url),
+        })?;
+        let client = if self.allowed_hosts.contains_url_host(&url)
+            || ENV_ALLOWED_HOSTS.contains_url_host(&url)
+        {
+            &*HTTP_CLIENT
+        } else {
+            ssrf::check_url(&url)
+                .await
+                .map_err(|blocked| OperationError::Http {
+                    status: None,
+                    message: blocked.to_string(),
+                })?;
+            &*GUARDED_HTTP_CLIENT
+        };
 
-        let result = self.execute_once().await;
+        let result = self.execute_once(client).await;
 
         let policy = match &self.retry_policy {
             Some(p) => p,
@@ -386,7 +420,7 @@ impl Http {
             );
             time::sleep(delay).await;
 
-            last_result = self.execute_once().await;
+            last_result = self.execute_once(client).await;
 
             match &last_result {
                 Ok(output) if !crate::retry::is_retryable_status(output.status) => {
@@ -401,14 +435,14 @@ impl Http {
     }
 
     /// Execute a single HTTP request attempt (no retry logic).
-    async fn execute_once(&self) -> Result<HttpOutput, OperationError> {
+    async fn execute_once(&self, client: &Client) -> Result<HttpOutput, OperationError> {
         debug!(method = %self.method, url = %self.url, "executing http request");
         let start = Instant::now();
 
         #[cfg(feature = "prometheus")]
         let method_label = self.method.to_string();
 
-        let mut builder = HTTP_CLIENT.request(self.method.clone(), &self.url);
+        let mut builder = client.request(self.method.clone(), &self.url);
 
         if let Some(timeout) = self.timeout {
             builder = builder.timeout(timeout);
@@ -437,7 +471,12 @@ impl Http {
                 }
                 return Err(OperationError::Http {
                     status: None,
-                    message: format!("request failed: {e}"),
+                    // A DNS answer that changed since `check_url` (rebinding) is refused
+                    // by the resolver, deep in the source chain.
+                    message: match ssrf::find_blocked(&e) {
+                        Some(blocked) => blocked.to_string(),
+                        None => format!("request failed: {e}"),
+                    },
                 });
             }
         };
@@ -579,379 +618,4 @@ impl HttpOutput {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn get_builder_sets_method_and_url() {
-        let http = Http::get("https://example.com");
-        assert_eq!(http.method, Method::GET);
-        assert_eq!(http.url, "https://example.com");
-    }
-
-    #[test]
-    fn post_builder_sets_method() {
-        let http = Http::post("https://example.com");
-        assert_eq!(http.method, Method::POST);
-    }
-
-    #[test]
-    fn put_builder_sets_method() {
-        assert_eq!(Http::put("https://x.com").method, Method::PUT);
-    }
-
-    #[test]
-    fn patch_builder_sets_method() {
-        assert_eq!(Http::patch("https://x.com").method, Method::PATCH);
-    }
-
-    #[test]
-    fn delete_builder_sets_method() {
-        assert_eq!(Http::delete("https://x.com").method, Method::DELETE);
-    }
-
-    #[test]
-    fn header_builder_stores_headers() {
-        let http = Http::get("https://x.com")
-            .header("Authorization", "Bearer token")
-            .header("Accept", "application/json");
-        assert_eq!(http.headers.get("Authorization").unwrap(), "Bearer token");
-        assert_eq!(http.headers.get("Accept").unwrap(), "application/json");
-    }
-
-    #[test]
-    fn timeout_builder_stores_duration() {
-        let http = Http::get("https://x.com").timeout(Duration::from_secs(60));
-        assert_eq!(http.timeout, Some(Duration::from_secs(60)));
-    }
-
-    #[test]
-    fn default_timeout_is_30_seconds() {
-        let http = Http::get("https://x.com");
-        assert_eq!(http.timeout, Some(DEFAULT_HTTP_TIMEOUT));
-    }
-
-    #[test]
-    fn http_output_is_success_for_2xx() {
-        for status in [200, 201, 202, 204, 299] {
-            let output = HttpOutput {
-                status,
-                headers: HashMap::new(),
-                body: String::new(),
-                duration_ms: 0,
-            };
-            assert!(output.is_success(), "expected {status} to be success");
-        }
-    }
-
-    #[test]
-    fn http_output_is_not_success_for_non_2xx() {
-        for status in [100, 301, 400, 401, 403, 404, 500, 503] {
-            let output = HttpOutput {
-                status,
-                headers: HashMap::new(),
-                body: String::new(),
-                duration_ms: 0,
-            };
-            assert!(!output.is_success(), "expected {status} to not be success");
-        }
-    }
-
-    #[test]
-    fn http_output_json_parses_valid_json() {
-        let output = HttpOutput {
-            status: 200,
-            headers: HashMap::new(),
-            body: r#"{"name":"test","count":42}"#.to_string(),
-            duration_ms: 0,
-        };
-        let parsed: serde_json::Value = output.json().unwrap();
-        assert_eq!(parsed["name"], "test");
-        assert_eq!(parsed["count"], 42);
-    }
-
-    #[test]
-    fn http_output_json_fails_on_invalid_json() {
-        let output = HttpOutput {
-            status: 200,
-            headers: HashMap::new(),
-            body: "not json".to_string(),
-            duration_ms: 0,
-        };
-        let err = output.json::<serde_json::Value>().unwrap_err();
-        assert!(matches!(err, OperationError::Deserialize { .. }));
-    }
-
-    #[test]
-    #[should_panic(expected = "url must not be empty")]
-    fn empty_url_panics() {
-        let _ = Http::get("");
-    }
-
-    #[test]
-    #[should_panic(expected = "url must not be empty")]
-    fn whitespace_url_panics() {
-        let _ = Http::post("   ");
-    }
-
-    #[test]
-    #[should_panic(expected = "url must use http:// or https://")]
-    fn non_http_scheme_panics() {
-        let _ = Http::get("file:///etc/passwd");
-    }
-
-    #[test]
-    #[should_panic(expected = "url must use http:// or https://")]
-    fn ftp_scheme_panics() {
-        let _ = Http::get("ftp://example.com");
-    }
-
-    #[tokio::test]
-    async fn ssrf_localhost_blocked() {
-        let err = Http::get("http://127.0.0.1/secret")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[tokio::test]
-    async fn ssrf_metadata_blocked() {
-        let err = Http::get("http://169.254.169.254/latest/meta-data/")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[tokio::test]
-    async fn ssrf_private_10_blocked() {
-        let err = Http::get("http://10.0.0.1/internal")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[tokio::test]
-    async fn ssrf_ipv6_loopback_blocked() {
-        let err = Http::get("http://[::1]/secret").run().await.unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[test]
-    fn ssrf_public_ip_allowed() {
-        // Should not panic at construction time
-        let _ = Http::get("http://8.8.8.8/dns");
-    }
-
-    #[test]
-    fn ssrf_hostname_allowed() {
-        // Hostnames are not blocked at URL parse time (would need DNS)
-        let _ = Http::get("https://example.com/api");
-    }
-
-    #[tokio::test]
-    async fn ssrf_172_16_blocked() {
-        let err = Http::get("http://172.16.0.1/internal")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[tokio::test]
-    async fn ssrf_192_168_blocked() {
-        let err = Http::get("http://192.168.1.1/admin")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[tokio::test]
-    async fn ssrf_unspecified_blocked() {
-        let err = Http::get("http://0.0.0.0/").run().await.unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[tokio::test]
-    async fn ssrf_broadcast_blocked() {
-        let err = Http::get("http://255.255.255.255/")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[tokio::test]
-    async fn ssrf_localhost_with_port_blocked() {
-        let err = Http::get("http://127.0.0.1:8080/secret")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[test]
-    fn url_trimming_stores_trimmed() {
-        let http = Http::get("  https://example.com  ");
-        assert_eq!(http.url, "https://example.com");
-    }
-
-    #[test]
-    fn text_body_builder() {
-        let http = Http::post("https://x.com").text("hello body");
-        assert!(matches!(http.body, Some(HttpBody::Text(ref s)) if s == "hello body"));
-    }
-
-    #[test]
-    fn json_body_builder_stores_value() {
-        let http = Http::post("https://x.com").json(serde_json::json!({"k": "v"}));
-        assert!(matches!(http.body, Some(HttpBody::Json(_))));
-    }
-
-    #[test]
-    fn max_response_size_builder() {
-        let http = Http::get("https://x.com").max_response_size(1024);
-        assert_eq!(http.max_response_size, 1024);
-    }
-
-    #[test]
-    fn dry_run_builder_stores_flag() {
-        let http = Http::get("https://x.com").dry_run(true);
-        assert_eq!(http.dry_run, Some(true));
-    }
-
-    #[test]
-    fn retry_builder_stores_policy() {
-        let http = Http::get("https://x.com").retry(3);
-        assert!(http.retry_policy.is_some());
-        assert_eq!(http.retry_policy.unwrap().max_retries(), 3);
-    }
-
-    #[test]
-    fn retry_policy_builder_stores_custom_policy() {
-        let policy = RetryPolicy::new(5)
-            .backoff(Duration::from_secs(1))
-            .multiplier(3.0);
-        let http = Http::get("https://x.com").retry_policy(policy);
-        let p = http.retry_policy.unwrap();
-        assert_eq!(p.max_retries(), 5);
-        assert_eq!(p.initial_backoff, Duration::from_secs(1));
-    }
-
-    #[test]
-    fn no_retry_by_default() {
-        let http = Http::get("https://x.com");
-        assert!(http.retry_policy.is_none());
-    }
-
-    #[test]
-    fn http_output_accessors() {
-        let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "text/plain".to_string());
-        let output = HttpOutput {
-            status: 201,
-            headers,
-            body: "hello".to_string(),
-            duration_ms: 42,
-        };
-        assert_eq!(output.status(), 201);
-        assert_eq!(output.body(), "hello");
-        assert_eq!(output.duration_ms(), 42);
-        assert_eq!(output.headers().get("content-type").unwrap(), "text/plain");
-    }
-
-    #[tokio::test]
-    async fn ssrf_userinfo_in_url_blocked() {
-        let err = Http::get("http://user:pass@127.0.0.1/secret")
-            .run()
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("blocked IP address"));
-    }
-
-    #[test]
-    fn check_url_host_with_userinfo_detects_blocked_ip() {
-        let result = check_url_host("http://admin:secret@10.0.0.1/path");
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("blocked IP address"));
-    }
-
-    #[test]
-    fn check_url_host_public_ip_with_userinfo_allowed() {
-        let result = check_url_host("http://user:pass@8.8.8.8/dns");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn redirect_policy_is_none() {
-        let client = &*HTTP_CLIENT;
-        let _ = client;
-    }
-
-    #[tokio::test]
-    async fn no_redirect_returns_3xx_status() {
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            use tokio::io::AsyncWriteExt;
-            let response =
-                "HTTP/1.1 302 Found\r\nLocation: http://10.0.0.1/evil\r\nContent-Length: 0\r\n\r\n";
-            socket.write_all(response.as_bytes()).await.unwrap();
-            socket.shutdown().await.unwrap();
-        });
-
-        let url = format!("http://localhost:{port}/test");
-
-        let output = Http::get(&url)
-            .timeout(Duration::from_secs(5))
-            .run()
-            .await
-            .unwrap();
-
-        assert_eq!(output.status(), 302);
-
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn streaming_body_size_check_aborts_over_limit() {
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            use tokio::io::AsyncWriteExt;
-            let body = "x".repeat(2048);
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
-                body.len(),
-                body,
-            );
-            socket.write_all(response.as_bytes()).await.unwrap();
-            socket.shutdown().await.unwrap();
-        });
-
-        let url = format!("http://localhost:{port}/big");
-
-        let result = Http::new(Method::GET, &url)
-            .max_response_size(1024)
-            .timeout(Duration::from_secs(5))
-            .run()
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("response body too large"));
-
-        server.await.unwrap();
-    }
-}
+mod tests;

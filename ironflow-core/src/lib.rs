@@ -81,6 +81,7 @@ pub mod provider;
 pub mod providers;
 pub mod retry;
 pub mod schema_transform;
+pub(crate) mod ssrf;
 #[cfg(feature = "opentelemetry")]
 pub mod telemetry;
 #[cfg(test)]

@@ -214,3 +214,25 @@ being dropped. `McpError` is `#[non_exhaustive]`: a `match` on it needs a `_` ar
 The `opus` and `sonnet` aliases resolve to the Claude 5 family; the Anthropic API adapter
 defaults to `claude-sonnet-5`. Cost and output change without a code change. Keep the alias
 (recommended), or pin a full model id string per step to keep the old model.
+
+## http-internal-hosts
+- kind: behavior
+- since: ironflow-core after 4.8.0, ironflow-engine after 2.44.0 (#155)
+- detect: `HttpConfig::(get|post|put|patch|delete)\("https?://(localhost|127\.|10\.|192\.168\.|[^"/]*\.svc[.:/"])`
+
+`ctx.http` and `Http` refuse a host that resolves to a private, loopback, link-local or
+cloud metadata address, not only an IP literal: `localhost`, a Kubernetes service name or
+an internal DNS name now fail before anything is sent, without retries. The step fails with
+`URL host <name> resolves to a blocked IP address`. Allow each internal service the step
+must reach, or every one of the deployment through the worker's
+`IRONFLOW_HTTP_ALLOWED_HOSTS` (comma-separated). Proxy variables are ignored for hosts that
+are not allowed. A test serving a stub on `127.0.0.1` needs the same allowance.
+
+```diff
+- ctx.http("invoices", HttpConfig::get("http://billing.internal:8080/invoices")).await?;
++ ctx.http(
++     "invoices",
++     HttpConfig::get("http://billing.internal:8080/invoices").allow_host("billing.internal"),
++ )
++ .await?;
+```

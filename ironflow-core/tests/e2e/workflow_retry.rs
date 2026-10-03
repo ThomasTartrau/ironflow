@@ -38,6 +38,7 @@ async fn http_retry_succeeds_after_503() {
 
     let url = format!("http://localhost:{port}/test");
     let output = Http::get(&url)
+        .allow_host("localhost")
         .timeout(Duration::from_secs(5))
         .retry_policy(RetryPolicy::new(3).backoff(Duration::from_millis(10)))
         .await
@@ -79,6 +80,7 @@ async fn http_retry_returns_last_503_when_exhausted() {
 
     let url = format!("http://localhost:{port}/test");
     let output = Http::get(&url)
+        .allow_host("localhost")
         .timeout(Duration::from_secs(5))
         .retry_policy(RetryPolicy::new(2).backoff(Duration::from_millis(10)))
         .await
@@ -121,6 +123,7 @@ async fn http_retry_on_429_then_success() {
 
     let url = format!("http://localhost:{port}/test");
     let output = Http::get(&url)
+        .allow_host("localhost")
         .timeout(Duration::from_secs(5))
         .retry_policy(RetryPolicy::new(2).backoff(Duration::from_millis(10)))
         .await
@@ -157,6 +160,7 @@ async fn http_no_retry_on_404() {
 
     let url = format!("http://localhost:{port}/test");
     let output = Http::get(&url)
+        .allow_host("localhost")
         .timeout(Duration::from_secs(5))
         .retry_policy(RetryPolicy::new(3).backoff(Duration::from_millis(10)))
         .await
@@ -193,6 +197,7 @@ async fn http_no_retry_without_policy() {
 
     let url = format!("http://localhost:{port}/test");
     let output = Http::get(&url)
+        .allow_host("localhost")
         .timeout(Duration::from_secs(5))
         .await
         .unwrap();

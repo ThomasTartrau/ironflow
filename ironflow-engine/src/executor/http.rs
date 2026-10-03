@@ -63,6 +63,9 @@ impl StepExecutor for HttpExecutor<'_> {
         if let Some(secs) = self.config.timeout_secs {
             http = http.timeout(Duration::from_secs(secs));
         }
+        for host in &self.config.allowed_hosts {
+            http = http.allow_host(host);
+        }
 
         let output = http.run().await?;
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -139,9 +142,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_get_method() {
+    async fn http_internal_host_refused_without_allow_host() {
         let base = start_test_server().await;
         let config = HttpConfig::get(&format!("{base}/status/200"));
+        let executor = HttpExecutor::new(&config);
+        let provider = create_test_provider();
+
+        let err = executor.execute(&provider).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("URL host localhost resolves to a blocked IP address"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_get_method() {
+        let base = start_test_server().await;
+        let config = HttpConfig::get(&format!("{base}/status/200")).allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -156,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn http_post_method() {
         let base = start_test_server().await;
-        let config = HttpConfig::post(&format!("{base}/post"));
+        let config = HttpConfig::post(&format!("{base}/post")).allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -167,7 +185,7 @@ mod tests {
     #[tokio::test]
     async fn http_put_method() {
         let base = start_test_server().await;
-        let config = HttpConfig::put(&format!("{base}/put"));
+        let config = HttpConfig::put(&format!("{base}/put")).allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -178,7 +196,7 @@ mod tests {
     #[tokio::test]
     async fn http_patch_method() {
         let base = start_test_server().await;
-        let config = HttpConfig::patch(&format!("{base}/patch"));
+        let config = HttpConfig::patch(&format!("{base}/patch")).allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -189,7 +207,7 @@ mod tests {
     #[tokio::test]
     async fn http_delete_method() {
         let base = start_test_server().await;
-        let config = HttpConfig::delete(&format!("{base}/delete"));
+        let config = HttpConfig::delete(&format!("{base}/delete")).allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -220,7 +238,8 @@ mod tests {
         let base = start_test_server().await;
         let config = HttpConfig::get(&format!("{base}/headers"))
             .header("X-Custom-Header", "test-value")
-            .header("Authorization", "Bearer token");
+            .header("Authorization", "Bearer token")
+            .allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -231,8 +250,9 @@ mod tests {
     #[tokio::test]
     async fn http_with_json_body() {
         let base = start_test_server().await;
-        let config =
-            HttpConfig::post(&format!("{base}/post")).json(json!({"key": "value", "number": 42}));
+        let config = HttpConfig::post(&format!("{base}/post"))
+            .json(json!({"key": "value", "number": 42}))
+            .allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
@@ -243,7 +263,7 @@ mod tests {
     #[tokio::test]
     async fn http_step_output_has_structure() {
         let base = start_test_server().await;
-        let config = HttpConfig::get(&format!("{base}/status/200"));
+        let config = HttpConfig::get(&format!("{base}/status/200")).allow_host("localhost");
         let executor = HttpExecutor::new(&config);
         let provider = create_test_provider();
 
