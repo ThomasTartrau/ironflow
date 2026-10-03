@@ -12,6 +12,7 @@ use ironflow_store::models::{
     Assignee, Run, RunStatus, Step, StepApproval, StepKind, StepStatus, StepUpdate,
 };
 use tokio::spawn;
+use tracing::error;
 use uuid::Uuid;
 
 use crate::entities::RunResponse;
@@ -208,6 +209,9 @@ fn caller_name(auth: &Authenticated) -> String {
 /// approval resumes it according to the engine's [`ExecutionMode`]:
 /// `Local` moves the run to `Running` and resumes it in this process,
 /// `Workers` requeues it to `Pending` for a worker to pick up.
+///
+/// A rejection inside a sub-workflow child run also fails every ancestor
+/// suspended with it, up to the root (see `Engine::fail_ancestors`).
 async fn resolve_approval(
     auth: Authenticated,
     State(state): State<AppState>,
@@ -322,6 +326,17 @@ async fn resolve_approval(
     };
     state.store.update_run_status(id, next_status).await?;
 
+    // A rejected gate inside a sub-workflow fails the runs suspended with
+    // its child run, up to the root: none of them can resume any more.
+    if target_status == RunStatus::Failed
+        && let Err(err) = state
+            .engine
+            .fail_ancestors(id, &format!("approval rejected in child run {id}"))
+            .await
+    {
+        error!(run_id = %id, error = %err, "failed to fail the ancestors of a rejected run");
+    }
+
     match granted {
         Some(event) => publisher.publish(Event::ApprovalGranted(event)),
         None => publisher.publish(Event::ApprovalRejected(ApprovalRejectedEvent {
@@ -344,7 +359,7 @@ async fn resolve_approval(
         let engine = state.engine.clone();
         spawn(async move {
             if let Err(err) = engine.resume_run(id).await {
-                tracing::error!(run_id = %id, error = %err, "failed to resume run after approval");
+                error!(run_id = %id, error = %err, "failed to resume run after approval");
             }
         });
     }
@@ -366,7 +381,9 @@ mod tests {
     use http_body_util::BodyExt;
     use ironflow_auth::jwt::{AccessToken, JwtConfig};
     use ironflow_auth::password;
+    use ironflow_core::provider::LABEL_ROOT_RUN_ID;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::context::PARENT_RUN_ID_LABEL;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::{AuditLogSubscriber, Event};
     use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
@@ -879,6 +896,97 @@ mod tests {
         let step = store.get_step(step_id).await.unwrap().unwrap();
         assert_eq!(step.status.state, StepStatus::Rejected);
         assert!(step.approval_deadline_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn reject_in_a_sub_workflow_child_fails_the_parent_run() {
+        let store = Arc::new(InMemoryStore::new());
+        // The parent waits on its open `Workflow` step while the child is
+        // suspended on an approval gate.
+        let parent = create_awaiting_approval_run(&store).await;
+        let workflow_step = store
+            .create_step(NewStep {
+                run_id: parent.id,
+                trace_id: step_trace_id(parent.id, "child", 0),
+                name: "child".to_string(),
+                kind: StepKind::Workflow,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+        store
+            .update_step(
+                workflow_step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let child = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "child".to_string(),
+                trigger: TriggerKind::Workflow,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::from([
+                    (PARENT_RUN_ID_LABEL.to_string(), parent.id.to_string()),
+                    (LABEL_ROOT_RUN_ID.to_string(), parent.id.to_string()),
+                ]),
+                scheduled_at: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(child.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(child.id, RunStatus::AwaitingApproval)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolve(store.clone(), child.id, "reject").await,
+            HttpStatusCode::OK
+        );
+
+        let child = store.get_run(child.id).await.unwrap().unwrap();
+        assert_eq!(child.status.state, RunStatus::Failed);
+        let parent = store.get_run(parent.id).await.unwrap().unwrap();
+        assert_eq!(
+            parent.status.state,
+            RunStatus::Failed,
+            "a parent must not stay suspended on a rejected child"
+        );
+        let workflow_step = store.get_step(workflow_step.id).await.unwrap().unwrap();
+        assert_eq!(workflow_step.status.state, StepStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn reject_of_a_top_level_run_leaves_other_runs_untouched_sub_workflow() {
+        let store = Arc::new(InMemoryStore::new());
+        let bystander = create_awaiting_approval_run(&store).await;
+        let run = create_awaiting_approval_run(&store).await;
+
+        assert_eq!(
+            resolve(store.clone(), run.id, "reject").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Failed);
+        let bystander = store.get_run(bystander.id).await.unwrap().unwrap();
+        assert_eq!(bystander.status.state, RunStatus::AwaitingApproval);
     }
 
     #[tokio::test]

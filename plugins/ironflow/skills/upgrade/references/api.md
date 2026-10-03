@@ -236,3 +236,22 @@ are not allowed. A test serving a stub on `127.0.0.1` needs the same allowance.
 + )
 + .await?;
 ```
+
+## sub-workflow-suspension
+- kind: behavior
+- since: ironflow-engine after 2.44.1 (#160)
+
+A child called through `ctx.workflow` may now suspend on an approval, a human input, a
+signal wait or a delay. The child run keeps its status, the parent's `Workflow` step stays
+`Running`, and the parent and every ancestor suspend with it. Resolving the child (answer,
+approval, signal, elapsed delay) resumes the root run, which re-enters the same child run;
+rejecting an approval inside the child fails every ancestor. A handler that kept gates out
+of its children, or copied them into the parent to avoid a failed step, can move them back.
+
+```diff
+- // Gate kept in the parent: a child could not suspend.
+- ctx.approval("release", ApprovalConfig::new("Release?")).await?;
+- ctx.workflow(&Release, ReleaseInput { version }).await?;
++ // `Release` holds its own `ctx.approval("release", ..)`.
++ ctx.workflow(&Release, ReleaseInput { version }).await?;
+```

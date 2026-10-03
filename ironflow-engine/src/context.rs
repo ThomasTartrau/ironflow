@@ -60,6 +60,31 @@ use crate::notify::WorkflowEventBus;
 use crate::operation::OperationContext;
 use crate::plan::SharedPlanRecorder;
 
+/// Label set on every child run of a sub-workflow step, holding the id of the
+/// run that started it.
+///
+/// The root of the chain is recorded under
+/// [`LABEL_ROOT_RUN_ID`](ironflow_core::provider::LABEL_ROOT_RUN_ID). Both are
+/// set on the child run when it is created, so a suspended child can be
+/// listed by label and resumed through its root.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::collections::HashMap;
+/// use ironflow_engine::context::PARENT_RUN_ID_LABEL;
+/// use ironflow_store::models::RunFilter;
+/// use uuid::Uuid;
+///
+/// # fn example(parent: Uuid) {
+/// let children = RunFilter {
+///     labels: Some(HashMap::from([(PARENT_RUN_ID_LABEL.to_string(), parent.to_string())])),
+///     ..RunFilter::default()
+/// };
+/// # }
+/// ```
+pub const PARENT_RUN_ID_LABEL: &str = "ironflow.io/parent-run-id";
+
 /// Callback type for resolving workflow handlers by name.
 pub(crate) type HandlerResolver =
     Arc<dyn Fn(&str) -> Option<Arc<dyn WorkflowHandler>> + Send + Sync>;
