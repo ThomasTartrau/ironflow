@@ -65,7 +65,14 @@ dep worker ironflow-worker
 dep worker ironflow-core
 cargo add -p worker dotenvy
 
-cp .env.example .env
+# Fresh secrets for this project: no value shared with any other install, and
+# the server and the worker read the same WORKER_TOKEN from .env.
+gen_secret() { openssl rand -hex 32 2>/dev/null || od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }
+sed -e "s/^# WORKER_TOKEN=\$/WORKER_TOKEN=$(gen_secret)/" \
+    -e "s/^# JWT_SECRET=\$/JWT_SECRET=$(gen_secret)/" .env.example > .env
+for var in WORKER_TOKEN JWT_SECRET; do
+  grep -Eq "^$var=[0-9a-f]{64}\$" .env || { echo "failed to generate $var in .env" >&2; exit 1; }
+done
 echo
 echo "Scaffolded ironflow project in $TARGET"
 echo "  next: cargo build && scripts/dev.sh"

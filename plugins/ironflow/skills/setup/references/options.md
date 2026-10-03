@@ -151,7 +151,9 @@ fn provider() -> Arc<dyn AgentProvider> {
 
 ## Production checklist
 
-`IRONFLOW_ENV=production` makes the server refuse to boot without `DATABASE_URL`,
-`JWT_SECRET` and `WORKER_TOKEN`. Generate secrets with `openssl rand -hex 32`. Set
+The server refuses to boot without `JWT_SECRET` and `WORKER_TOKEN` (>= 32 bytes, never
+starting with `ironflow-dev-`) unless `IRONFLOW_ENV=development`; `IRONFLOW_ENV=production`
+also requires `DATABASE_URL`. `scaffold.sh` writes fresh secrets into `.env`: do not ship
+them, generate new ones per environment with `openssl rand -hex 32`. Set
 `IRONFLOW_SECRET_KEYS` before the first workflow that reads a secret; the key rotation
 procedure is in the Ironflow README.

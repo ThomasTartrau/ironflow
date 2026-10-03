@@ -14,10 +14,10 @@ The repository includes a complete example server:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `IRONFLOW_ENV` | `development` | `production` or `development` |
+| `IRONFLOW_ENV` | unset | `production`, or `development` to boot without secrets |
 | `DATABASE_URL` | -- | PostgreSQL URL (required in production) |
-| `JWT_SECRET` | dev secret | JWT signing key (**in production: mandatory, >= 32 bytes, must not start with `ironflow-dev-`**) |
-| `WORKER_TOKEN` | dev token | Shared secret for worker auth (**in production: mandatory, >= 32 bytes, must not start with `ironflow-dev-`**) |
+| `JWT_SECRET` | -- | JWT signing key (**mandatory, >= 32 bytes, must not start with `ironflow-dev-`**; with `IRONFLOW_ENV=development`: random per process if unset, no minimum length) |
+| `WORKER_TOKEN` | -- | Shared secret for worker auth (same rules as `JWT_SECRET`; a generated one is logged at startup so a worker can use it) |
 | `PORT` | `3000` | HTTP listen port |
 | `ALLOWED_ORIGINS` | same-origin | Comma-separated CORS origins |
 | `ARTIFACTS_DIR` | -- | Filesystem root for step artifacts |
@@ -46,7 +46,10 @@ tokio::spawn(
 ## Running
 
 ```sh
-cargo run -p ironflow-example-server
+IRONFLOW_ENV=development cargo run -p ironflow-example-server
 ```
 
 The server starts on `http://localhost:3000`. The dashboard is available at the root URL.
+In development it generates its secrets and logs the worker token
+(`start workers with WORKER_TOKEN=...`). Without `IRONFLOW_ENV=development`, set
+`JWT_SECRET` and `WORKER_TOKEN` (`openssl rand -hex 32`): no secret is built in.
