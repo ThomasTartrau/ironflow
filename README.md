@@ -732,6 +732,7 @@ Ironflow reads `.env` via [dotenvy](https://crates.io/crates/dotenvy).
 | `WEBHOOK_URL` | no | no outbound webhook |
 | `RATE_LIMIT_AUTH` | no | `10` req/min |
 | `RATE_LIMIT_GENERAL` | no | `60` req/min |
+| `TRUSTED_PROXIES` | behind a reverse proxy | none: the TCP peer is the client |
 | `ARTIFACTS_DIR` | no | unset, artifacts disabled |
 | `ARTIFACT_MAX_BYTES` | no | `104857600` (100 MiB) |
 

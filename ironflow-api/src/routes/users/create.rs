@@ -21,7 +21,8 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// - 403 if the caller is not an admin
-/// - 400 if input validation fails
+/// - 400 if input validation fails, `WEAK_PASSWORD` if the password breaks
+///   the password policy
 /// - 409 if email or username is already taken
 #[cfg_attr(
     feature = "openapi",
@@ -51,6 +52,7 @@ pub async fn create_user(
 
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    password::check_strength(&req.password, &[&req.email, &req.username])?;
 
     let hash =
         password::hash(&req.password).map_err(|_| ApiError::Internal("hashing failed".into()))?;
@@ -151,7 +153,7 @@ mod tests {
                 to_string(&json!({
                     "email": "new@example.com",
                     "username": "newuser",
-                    "password": "password123",
+                    "password": "correct horse battery staple",
                     "is_admin": false
                 }))
                 .unwrap(),
@@ -179,7 +181,7 @@ mod tests {
                 to_string(&json!({
                     "email": "new@example.com",
                     "username": "newuser",
-                    "password": "password123",
+                    "password": "correct horse battery staple",
                     "is_admin": false
                 }))
                 .unwrap(),
@@ -207,7 +209,7 @@ mod tests {
                 to_string(&json!({
                     "email": "invalid",
                     "username": "newuser",
-                    "password": "password123",
+                    "password": "correct horse battery staple",
                     "is_admin": false
                 }))
                 .unwrap(),

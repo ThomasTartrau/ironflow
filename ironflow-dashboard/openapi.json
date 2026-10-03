@@ -490,7 +490,7 @@
           "auth"
         ],
         "summary": "Change the authenticated user's password.",
-        "description": "Verifies the old password, hashes the new one, and persists it.\n\n# Errors\n\n- 400 if old password is incorrect or new password fails validation\n- 401 if no valid token is provided\n- 404 if the user no longer exists in the store",
+        "description": "Verifies the old password, hashes the new one, and persists it.\n\n# Errors\n\n- 400 if old password is incorrect, or `WEAK_PASSWORD` if the new one\n  breaks the password policy\n- 401 if no valid token is provided\n- 404 if the user no longer exists in the store",
         "operationId": "change_password",
         "requestBody": {
           "description": "Old and new passwords",
@@ -508,7 +508,7 @@
             "description": "Password changed successfully"
           },
           "400": {
-            "description": "Invalid old password or validation error"
+            "description": "Invalid old password, or new password breaks the strength policy (WEAK_PASSWORD)"
           },
           "401": {
             "description": "Unauthorized"
@@ -596,7 +596,7 @@
           "auth"
         ],
         "summary": "Register a new user with email and password.",
-        "description": "Returns access and refresh tokens on success, and sets HttpOnly cookies.\n\n# Errors\n\n- 400 if email/username/password is invalid\n- 409 if email or username is already taken",
+        "description": "The answer is the same `204` whether the email was free or already\nregistered, and it never carries a session: the client signs in next\nwith the same credentials. Without that, the status code or the presence\nof session cookies would tell anyone which emails have an account.\n\nA taken username is still reported (`409`). It is checked before the\nemail, so that answer says nothing about the email.\n\n# Errors\n\n- 400 if the email or username is invalid\n- 400 `WEAK_PASSWORD` if the password breaks the password policy\n- 409 if the username is already taken",
         "operationId": "sign_up",
         "requestBody": {
           "description": "Sign up credentials",
@@ -611,13 +611,13 @@
         },
         "responses": {
           "204": {
-            "description": "User registered successfully, cookies set"
+            "description": "Request accepted. Same answer whether the email was free or already registered; no session is issued, sign in next"
           },
           "400": {
-            "description": "Invalid email, username, or password"
+            "description": "Invalid email or username, or password breaks the strength policy (WEAK_PASSWORD)"
           },
           "409": {
-            "description": "Email or username already taken"
+            "description": "Username already taken"
           }
         }
       }
@@ -3030,7 +3030,7 @@
           "users"
         ],
         "summary": "Create a new user account. Admin only.",
-        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 400 if input validation fails\n- 409 if email or username is already taken",
+        "description": "# Errors\n\n- 403 if the caller is not an admin\n- 400 if input validation fails, `WEAK_PASSWORD` if the password breaks\n  the password policy\n- 409 if email or username is already taken",
         "operationId": "create_user",
         "requestBody": {
           "description": "User account details",
@@ -4101,7 +4101,7 @@
         "properties": {
           "new_password": {
             "type": "string",
-            "description": "New password (min 8 characters)."
+            "description": "New password: 12 to 128 characters, not a common password, not\ncontaining the email or username, not repetitive."
           },
           "old_password": {
             "type": "string",
@@ -4466,7 +4466,7 @@
           },
           "password": {
             "type": "string",
-            "description": "Plaintext password (min 8 characters)."
+            "description": "Plaintext password: 12 to 128 characters, not a common password, not\ncontaining the email or username, not repetitive."
           },
           "username": {
             "type": "string",
@@ -6686,7 +6686,7 @@
           },
           "password": {
             "type": "string",
-            "description": "Plaintext password (min 8 characters)."
+            "description": "Plaintext password: 12 to 128 characters, not a common password, not\ncontaining the email or username, not repetitive."
           },
           "username": {
             "type": "string",

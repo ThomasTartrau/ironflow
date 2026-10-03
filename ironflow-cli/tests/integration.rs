@@ -1171,7 +1171,7 @@ async fn user_create_then_set_role_then_delete() {
         command: UserCommands::Create {
             username: "alice".to_string(),
             email: "alice@test.local".to_string(),
-            password: Some("hunter2hunter2".to_string()),
+            password: Some("correct horse battery staple".to_string()),
             admin: false,
         },
     };
@@ -1281,15 +1281,14 @@ async fn user_create_rejects_a_duplicate_email() {
         command: UserCommands::Create {
             username: "clone".to_string(),
             email: "cli-test@test.local".to_string(),
-            password: Some("hunter2hunter2".to_string()),
+            password: Some("correct horse battery staple".to_string()),
             admin: false,
         },
     };
-    assert!(
-        commands::user::execute(&client, &args, false)
-            .await
-            .is_err()
-    );
+    let err = commands::user::execute(&client, &args, false)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("DUPLICATE_EMAIL"), "{err}");
 }
 
 #[tokio::test]

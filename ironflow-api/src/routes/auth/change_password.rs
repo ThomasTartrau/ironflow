@@ -4,7 +4,6 @@ use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use serde_json::json;
-use validator::Validate;
 
 use ironflow_auth::extractor::AuthenticatedUser;
 use ironflow_auth::password;
@@ -21,7 +20,8 @@ use crate::state::AppState;
 ///
 /// # Errors
 ///
-/// - 400 if old password is incorrect or new password fails validation
+/// - 400 if old password is incorrect, or `WEAK_PASSWORD` if the new one
+///   breaks the password policy
 /// - 401 if no valid token is provided
 /// - 404 if the user no longer exists in the store
 #[cfg_attr(
@@ -33,7 +33,7 @@ use crate::state::AppState;
         request_body(content = ChangePasswordRequest, description = "Old and new passwords"),
         responses(
             (status = 200, description = "Password changed successfully"),
-            (status = 400, description = "Invalid old password or validation error"),
+            (status = 400, description = "Invalid old password, or new password breaks the strength policy (WEAK_PASSWORD)"),
             (status = 401, description = "Unauthorized")
         ),
         security(("Bearer" = []))
@@ -44,9 +44,6 @@ pub async fn change_password(
     user: AuthenticatedUser,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    req.validate()
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-
     let stored_user = state
         .store
         .find_user_by_id(user.user_id)
@@ -59,6 +56,11 @@ pub async fn change_password(
     if !valid {
         return Err(ApiError::BadRequest("incorrect old password".to_string()));
     }
+
+    password::check_strength(
+        &req.new_password,
+        &[&stored_user.email, &stored_user.username],
+    )?;
 
     let new_hash = password::hash(&req.new_password)
         .map_err(|_| ApiError::Internal("password hashing failed".to_string()))?;

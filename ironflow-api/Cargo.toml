@@ -47,6 +47,7 @@ chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde-float"] }
 subtle = "2"
 dashmap = "6"
+ipnet = "2"
 rand = "0.9"
 hex = "0.4"
 ironflow-artifacts = { version = "0.1.2", path = "../ironflow-artifacts" }

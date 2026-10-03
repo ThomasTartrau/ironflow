@@ -47,8 +47,8 @@ pub struct CreateUserRequest {
     /// Display username.
     #[validate(length(min = 3, message = "username must be at least 3 characters"))]
     pub username: String,
-    /// Plaintext password (min 8 characters).
-    #[validate(length(min = 8, message = "password must be at least 8 characters"))]
+    /// Plaintext password: 12 to 128 characters, not a common password, not
+    /// containing the email or username, not repetitive.
     pub password: String,
     /// Whether the new user should be an admin.
     pub is_admin: bool,

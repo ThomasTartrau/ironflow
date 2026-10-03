@@ -54,8 +54,12 @@ use std::path::PathBuf;
 use ironflow_artifacts::local::DEFAULT_MAX_ARTIFACT_BYTES;
 use tracing::warn;
 
+use crate::rate_limit::TrustedProxies;
+
+use self::proxies::parse_trusted_proxies;
 use self::secrets::{ResolvedSecret, SecretMode, resolve_secret};
 
+mod proxies;
 mod secrets;
 
 /// Server configuration loaded from environment variables.
@@ -139,6 +143,10 @@ pub struct ServerConfig {
     /// Rate limit for general public API routes in requests per minute per IP.
     /// `None` disables rate limiting on these routes.
     pub rate_limit_general: Option<u32>,
+    /// Reverse proxies whose `X-Forwarded-For` / `X-Real-IP` the rate limiters
+    /// believe, from `TRUSTED_PROXIES` (comma-separated IPs or CIDR ranges).
+    /// Unset: none, the client IP is the TCP peer.
+    pub trusted_proxies: TrustedProxies,
     /// Blob storage backend: `local` or `s3`.
     pub artifact_backend: String,
     /// S3 bucket name (required when `artifact_backend` is `s3`).
@@ -318,6 +326,8 @@ impl ServerConfig {
 
         let rate_limit_auth = parse_optional_u32("RATE_LIMIT_AUTH", 10, &mut errors);
         let rate_limit_general = parse_optional_u32("RATE_LIMIT_GENERAL", 60, &mut errors);
+        let trusted_proxies =
+            parse_trusted_proxies(env::var("TRUSTED_PROXIES").ok().as_deref(), &mut errors);
 
         let artifacts_dir = env::var("ARTIFACTS_DIR").ok().map(PathBuf::from);
         let artifact_max_bytes = match env::var("ARTIFACT_MAX_BYTES").ok() {
@@ -458,6 +468,7 @@ impl ServerConfig {
             cookie_secure,
             rate_limit_auth,
             rate_limit_general,
+            trusted_proxies,
             artifacts_dir,
             artifact_max_bytes,
             purge_max_age_days,
@@ -508,6 +519,7 @@ mod tests {
             env::remove_var("WEBHOOK_URL");
             env::remove_var("RATE_LIMIT_AUTH");
             env::remove_var("RATE_LIMIT_GENERAL");
+            env::remove_var("TRUSTED_PROXIES");
             env::remove_var("PURGE_MAX_AGE_DAYS");
             env::remove_var("PURGE_MAX_RUNS_PER_WORKFLOW");
             env::remove_var("PURGE_DRY_RUN");
@@ -717,6 +729,23 @@ mod tests {
         assert!(err.errors.iter().any(|e| e.contains("RATE_LIMIT_AUTH")));
 
         unsafe { env::remove_var("RATE_LIMIT_AUTH") };
+    }
+
+    #[test]
+    fn trusted_proxies_are_read_from_the_environment() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { setup_dev() };
+        assert!(ServerConfig::from_env().unwrap().trusted_proxies.is_empty());
+
+        unsafe { env::set_var("TRUSTED_PROXIES", "10.0.0.0/8") };
+        let config = ServerConfig::from_env().unwrap();
+        assert!(config.trusted_proxies.contains("10.1.2.3".parse().unwrap()));
+
+        unsafe { env::set_var("TRUSTED_PROXIES", "not-an-ip") };
+        let err = ServerConfig::from_env().unwrap_err();
+        assert!(err.errors.iter().any(|e| e.contains("TRUSTED_PROXIES")));
+
+        unsafe { env::remove_var("TRUSTED_PROXIES") };
     }
 
     #[test]

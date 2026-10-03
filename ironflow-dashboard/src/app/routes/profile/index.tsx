@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { withToast } from "@/app/lib/api-toast";
+import { PASSWORD_HINT, PASSWORD_MIN_LENGTH } from "@/app/lib/password";
 import { TimeAgo } from "@/app/components/TimeAgo";
 
 export function Component() {
@@ -57,7 +58,7 @@ export function Component() {
 		confirmPassword.length > 0 && newPassword !== confirmPassword;
 	const canSubmit =
 		oldPassword.length > 0 &&
-		newPassword.length >= 8 &&
+		newPassword.length >= PASSWORD_MIN_LENGTH &&
 		newPassword === confirmPassword &&
 		!changing;
 
@@ -130,13 +131,20 @@ export function Component() {
 									value={newPassword}
 									onChange={(e) => setNewPassword(e.target.value)}
 									autoComplete="new-password"
-									minLength={8}
+									minLength={PASSWORD_MIN_LENGTH}
+									aria-describedby="new-password-hint"
 								/>
-								{newPassword.length > 0 && newPassword.length < 8 && (
-									<p className="text-xs text-destructive">
-										Must be at least 8 characters
-									</p>
-								)}
+								<p
+									id="new-password-hint"
+									className={
+										newPassword.length > 0 &&
+										newPassword.length < PASSWORD_MIN_LENGTH
+											? "text-xs text-destructive"
+											: "text-xs text-muted-foreground"
+									}
+								>
+									{PASSWORD_HINT}
+								</p>
 							</div>
 							<div className="space-y-2">
 								<label

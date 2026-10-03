@@ -23,6 +23,53 @@ Check every place the server runs (`.env`, compose files, Helm values, CI): each
 secrets, generated with `openssl rand -hex 32`, the server and its workers sharing the same
 `WORKER_TOKEN`. Tell the user before they deploy: it is a boot failure, not a compile error.
 
+## rate-limit-peer-address
+- kind: breaking
+- since: ironflow-api after 2.43.5 (#152)
+- detect: `\.into_make_service\(\)`
+- compiler: `missing field `trusted_proxies` in initializer of `RouterConfig``
+
+The rate limiters key on the TCP peer address and no longer believe `X-Forwarded-For` or
+`X-Real-IP` from an arbitrary client. Serve the router with connect info, and pass the
+trusted proxies through. Without connect info every client shares one bucket (a warning
+is logged once).
+
+```diff
++ use std::net::SocketAddr;
+  let router_config = RouterConfig {
+      dashboard_dir: config.dashboard_dir.clone(),
+      rate_limit_auth: config.rate_limit_auth,
+      rate_limit_general: config.rate_limit_general,
++     trusted_proxies: config.trusted_proxies.clone(),
+      enforce_https: config.is_production,
+  };
+  let app = create_router(state, router_config)
+      .layer(build_cors(&config))
+-     .into_make_service();
++     .into_make_service_with_connect_info::<SocketAddr>();
+```
+
+Behind a reverse proxy (ingress, load balancer, nginx), set `TRUSTED_PROXIES` to its
+addresses or CIDR ranges (`TRUSTED_PROXIES=10.0.0.0/8`), otherwise all users share the
+proxy's bucket and hit `429` together. Tell the user before they deploy.
+
+## sign-up-uniform-answer
+- kind: behavior
+- since: ironflow-api after 2.43.5 (#152)
+
+`POST /auth/sign-up` answers `204` without session cookies, whether the email was free or
+already registered: a client signs in next with the same credentials. `409
+DUPLICATE_EMAIL` is gone from sign-up (a taken username still answers `409
+DUPLICATE_USERNAME`). Passwords chosen at sign-up, at `PATCH /auth/password` and at
+`POST /users` must pass `ironflow_auth::password::check_strength` (12 to 128 characters,
+not common, not containing the email or username), otherwise `400 WEAK_PASSWORD`.
+Existing passwords keep working at sign-in.
+
+```diff
+  client.post("/api/v1/auth/sign-up", &body).await?;
++ client.post("/api/v1/auth/sign-in", &credentials).await?;
+```
+
 ## run-purger
 - kind: behavior
 - since: ironflow-api 2.43.0 (#148)

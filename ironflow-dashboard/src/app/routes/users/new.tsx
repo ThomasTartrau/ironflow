@@ -7,10 +7,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { HeaderApp } from "@/app/components/HeaderApp";
 import { useDocumentMeta } from "@/app/hooks/use-document-meta";
 import { withToast } from "@/app/lib/api-toast";
+import { PASSWORD_HINT, PASSWORD_MIN_LENGTH } from "@/app/lib/password";
 import { createUser } from "./_actions/actions";
 
 const USERNAME_MIN_LENGTH = 3;
-const PASSWORD_MIN_LENGTH = 8;
 
 export function Component() {
 	const navigate = useNavigate();
@@ -120,7 +120,7 @@ export function Component() {
 									id="password-hint"
 									className="text-xs text-muted-foreground mt-1"
 								>
-									At least {PASSWORD_MIN_LENGTH} characters
+									{PASSWORD_HINT}
 								</p>
 							</div>
 

@@ -18,7 +18,8 @@ pub struct CreateUserTool {
     pub email: String,
     /// Display username (min 3 characters).
     pub username: String,
-    /// Plaintext password (min 8 characters).
+    /// Plaintext password: 12 to 128 characters, not a common password, not
+    /// containing the email or username.
     pub password: String,
     /// Whether the new user should be an admin.
     pub is_admin: bool,

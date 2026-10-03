@@ -7,6 +7,7 @@
 //!
 //! Configuration comes from the environment (see `.env.example`).
 
+use std::net::SocketAddr;
 use std::process;
 use std::sync::Arc;
 
@@ -160,11 +161,13 @@ async fn main() {
         dashboard_dir: config.dashboard_dir.clone(),
         rate_limit_auth: config.rate_limit_auth,
         rate_limit_general: config.rate_limit_general,
+        trusted_proxies: config.trusted_proxies.clone(),
         enforce_https: config.is_production,
     };
+    // The rate limiters key on the TCP peer address: connect info is required.
     let app = create_router(state, router_config)
         .layer(build_cors(&config))
-        .into_make_service();
+        .into_make_service_with_connect_info::<SocketAddr>();
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = TcpListener::bind(&addr).await.expect("bind address");
