@@ -86,7 +86,6 @@ mod tests {
     use axum::http::{Request, StatusCode as HttpStatusCode};
     use axum::routing::post;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
@@ -100,12 +99,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
+    use crate::routes::test_helpers::create_user_auth_header;
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
         Arc::new(InMemoryStore::new());
@@ -149,7 +143,7 @@ mod tests {
             .into_run();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/cancel", post(cancel_run))
             .with_state(state);
@@ -203,7 +197,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/cancel", post(cancel_run))
             .with_state(state);
@@ -246,7 +240,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/cancel", post(cancel_run))
             .with_state(state);
@@ -305,7 +299,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/cancel", post(cancel_run))
             .with_state(state);
@@ -355,7 +349,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/cancel", post(cancel_run))
             .with_state(state);
@@ -376,7 +370,7 @@ mod tests {
     async fn cancel_nonexistent_run_returns_404() {
         let store = Arc::new(InMemoryStore::new());
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/cancel", post(cancel_run))
             .with_state(state);

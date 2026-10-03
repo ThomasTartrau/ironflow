@@ -95,7 +95,7 @@ mod tests {
     use tower::ServiceExt;
     use uuid::Uuid;
 
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
@@ -103,6 +103,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     fn new_test_entry(event_type: EventKind, run_id: Option<Uuid>) -> NewAuditLogEntry {
         NewAuditLogEntry {
@@ -135,22 +136,10 @@ mod tests {
         )
     }
 
-    fn make_admin_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "admin", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
-    fn make_user_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "user", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     #[tokio::test]
     async fn empty_list() {
         let state = test_state();
-        let auth_header = make_admin_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "admin", true).await;
         let app = Router::new()
             .route("/", get(list_audit_logs))
             .with_state(state);
@@ -173,7 +162,7 @@ mod tests {
     #[tokio::test]
     async fn non_admin_gets_403() {
         let state = test_state();
-        let auth_header = make_user_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "user", false).await;
         let app = Router::new()
             .route("/", get(list_audit_logs))
             .with_state(state);
@@ -191,7 +180,7 @@ mod tests {
     #[tokio::test]
     async fn returns_entries_with_pagination() {
         let state = test_state();
-        let auth_header = make_admin_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "admin", true).await;
 
         let kinds = [
             EventKind::RunCreated,
@@ -232,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn filters_by_event_type() {
         let state = test_state();
-        let auth_header = make_admin_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "admin", true).await;
 
         state
             .store
@@ -265,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn filters_by_run_id() {
         let state = test_state();
-        let auth_header = make_admin_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "admin", true).await;
         let target_run = Uuid::now_v7();
 
         state
@@ -298,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn per_page_capped_at_100() {
         let state = test_state();
-        let auth_header = make_admin_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "admin", true).await;
         let app = Router::new()
             .route("/", get(list_audit_logs))
             .with_state(state);

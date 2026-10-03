@@ -88,7 +88,7 @@ mod tests {
     use tower::ServiceExt;
     use uuid::Uuid;
 
-    use crate::routes::test_helpers::create_terminal_run;
+    use crate::routes::test_helpers::{create_terminal_run, create_user_auth_header};
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
@@ -112,19 +112,10 @@ mod tests {
         )
     }
 
-    fn make_auth_header(state: &AppState) -> String {
-        use ironflow_auth::jwt::AccessToken;
-        use uuid::Uuid;
-
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     #[tokio::test]
     async fn empty_list() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new().route("/", get(list_runs)).with_state(state);
 
         let req = Request::builder()
@@ -144,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn with_workflow_filter() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         state
             .store
             .create_run(NewRun {
@@ -198,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn with_status_filter() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let run = state
             .store
@@ -261,7 +252,7 @@ mod tests {
     #[tokio::test]
     async fn pagination_meta_returned() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         for i in 0..5 {
             state
@@ -303,7 +294,7 @@ mod tests {
     #[tokio::test]
     async fn per_page_capped_at_100() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new().route("/", get(list_runs)).with_state(state);
 
         let req = Request::builder()
@@ -322,7 +313,7 @@ mod tests {
     #[tokio::test]
     async fn has_steps_true_filters_completed_and_cancelled_empty_runs() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let run_with =
             create_terminal_run(state.store.as_ref(), "with-steps", RunStatus::Completed).await;
@@ -361,7 +352,7 @@ mod tests {
     #[tokio::test]
     async fn has_steps_false_returns_only_completed_or_cancelled_empty_runs() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let run_with =
             create_terminal_run(state.store.as_ref(), "with-steps", RunStatus::Cancelled).await;
@@ -400,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn has_steps_true_does_not_hide_pending_runs_without_steps() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         state
             .store
@@ -497,7 +488,7 @@ mod tests {
     #[tokio::test]
     async fn created_by_filter_keeps_only_the_matching_author() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let alice = seed_user(&state, "alice").await;
         let bob = seed_user(&state, "bob").await;
 
@@ -517,7 +508,7 @@ mod tests {
     #[tokio::test]
     async fn created_by_filter_also_matches_runs_from_the_users_api_keys() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let alice = seed_user(&state, "alice").await;
         let key = state
             .store
@@ -554,7 +545,7 @@ mod tests {
     #[tokio::test]
     async fn created_by_filter_with_an_unknown_author_returns_an_empty_page() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         create_run_authored_by(&state, "by-system", None).await;
 
         let (status, body) = list(
@@ -572,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn created_by_filter_rejects_a_non_uuid_value() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let (status, _) = list(state, auth_header, "created_by=not-a-uuid").await;
 
@@ -582,7 +573,7 @@ mod tests {
     #[tokio::test]
     async fn a_run_without_an_author_is_listed_as_system() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         create_run_authored_by(&state, "legacy", None).await;
 
         let (status, body) = list(state, auth_header, "").await;

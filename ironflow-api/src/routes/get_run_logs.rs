@@ -134,7 +134,7 @@ mod tests {
     use tower::ServiceExt;
     use uuid::Uuid;
 
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
@@ -142,6 +142,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
@@ -162,12 +163,6 @@ mod tests {
             "test-worker-token".to_string(),
             event_sender,
         )
-    }
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
     }
 
     async fn create_run(state: &AppState) -> Uuid {
@@ -209,7 +204,7 @@ mod tests {
     #[tokio::test]
     async fn returns_persisted_logs() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let run_id = create_run(&state).await;
         let step_id = Uuid::now_v7();
 
@@ -240,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn filters_by_step_id() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let run_id = create_run(&state).await;
         let step_a = Uuid::now_v7();
         let step_b = Uuid::now_v7();
@@ -269,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn filters_by_stream() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let run_id = create_run(&state).await;
         let step_id = Uuid::now_v7();
 
@@ -296,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn cursor_based_pagination() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let run_id = create_run(&state).await;
         let step_id = Uuid::now_v7();
 
@@ -352,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn run_not_found_returns_404() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new()
             .route("/runs/{id}/logs", get(get_run_logs))
             .with_state(state);
@@ -387,7 +382,7 @@ mod tests {
     #[tokio::test]
     async fn limit_capped_at_1000() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let run_id = create_run(&state).await;
         let step_id = Uuid::now_v7();
 
@@ -414,7 +409,7 @@ mod tests {
     #[tokio::test]
     async fn empty_logs_returns_empty_array() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let run_id = create_run(&state).await;
 
         let app = Router::new()

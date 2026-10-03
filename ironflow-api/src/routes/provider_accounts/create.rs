@@ -72,7 +72,7 @@ mod tests {
     #[tokio::test]
     async fn provider_accounts_create_as_admin_returns_201_without_token() {
         let state = state_with_stub(Stub::Valid).await;
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
         let (status, resp, text) = call(
             &state,
             "POST",
@@ -107,7 +107,7 @@ mod tests {
     async fn provider_accounts_create_malformed_token_returns_422() {
         // Unreachable provider: a malformed token must fail before any call.
         let state = state_with_api("http://127.0.0.1:1");
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
         let (status, resp, _) = call(
             &state,
             "POST",
@@ -123,7 +123,7 @@ mod tests {
     #[tokio::test]
     async fn provider_accounts_create_unauthorized_token_returns_422_and_stores_nothing() {
         let state = state_with_stub(Stub::Unauthorized).await;
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
         let (status, resp, text) = call(
             &state,
             "POST",
@@ -150,7 +150,7 @@ mod tests {
     #[tokio::test]
     async fn provider_accounts_create_unreachable_provider_returns_502() {
         let state = state_with_api("http://127.0.0.1:1");
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
         let (status, _, _) = call(
             &state,
             "POST",
@@ -179,7 +179,7 @@ mod tests {
             &state,
             "POST",
             "/api/v1/provider-accounts",
-            &bearer(&state, true),
+            &bearer(&state, true).await,
             Some(body("perso-max", TOKEN)),
         )
         .await;
@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn provider_accounts_create_rejects_unknown_kind_and_bad_name() {
         let state = state_with_stub(Stub::Valid).await;
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
         let (status, _, _) = call(
             &state,
             "POST",

@@ -98,9 +98,9 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -142,9 +142,7 @@ mod tests {
     #[tokio::test]
     async fn list_api_keys_empty() {
         let state = test_state();
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        let auth_header = format!("Bearer {}", token.0);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let app = Router::new()
             .route("/", get(list_api_keys))

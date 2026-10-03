@@ -248,7 +248,7 @@ mod tests {
     use axum::response::Response;
     use axum::routing::post;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::config::{ShellConfig, StepConfig};
     use ironflow_engine::context::WorkflowContext;
@@ -260,9 +260,9 @@ mod tests {
     use serde_json::{Value as JsonValue, from_slice};
     use tokio::sync::broadcast;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct PlannedWorkflow;
 
@@ -337,12 +337,6 @@ mod tests {
         )
     }
 
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     fn app(state: AppState) -> Router {
         Router::new()
             .route("/api/v1/workflows/{name}/plan", post(plan_workflow))
@@ -368,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn plan_returns_steps_for_registered_workflow() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let response = app(state)
             .oneshot(plan_request("planned", Some(&auth), json!({})))
             .await
@@ -389,7 +383,7 @@ mod tests {
     #[tokio::test]
     async fn plan_marks_parallel_group() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let response = app(state)
             .oneshot(plan_request("planned", Some(&auth), json!({})))
             .await
@@ -405,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn plan_evaluates_condition_from_payload() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let router = app(state);
 
         let response = router
@@ -442,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn plan_unknown_workflow_returns_404() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let response = app(state)
             .oneshot(plan_request("nonexistent", Some(&auth), json!({})))
             .await
@@ -454,7 +448,7 @@ mod tests {
     #[tokio::test]
     async fn plan_rejects_zero_and_excessive_max_depth() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let router = app(state);
 
         let response = router
@@ -482,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn plan_rejects_non_object_payload() {
         let state = test_state();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let response = app(state)
             .oneshot(plan_request(
                 "planned",
@@ -510,7 +504,7 @@ mod tests {
     async fn plan_does_not_create_a_run() {
         let state = test_state();
         let store = state.store.clone();
-        let auth = make_auth_header(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let response = app(state)
             .oneshot(plan_request("planned", Some(&auth), json!({})))
             .await

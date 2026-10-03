@@ -121,7 +121,7 @@ mod tests {
     use axum::routing::get;
     use chrono::{Datelike, Timelike, Weekday};
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
@@ -135,10 +135,9 @@ mod tests {
     use serde_json::{Value as JsonValue, from_slice, json};
     use tokio::sync::broadcast;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use super::*;
-    use crate::routes::test_helpers::create_terminal_run;
+    use crate::routes::test_helpers::{create_terminal_run, create_user_auth_header};
 
     const COUNTERS: [&str; 9] = [
         "completed",
@@ -151,12 +150,6 @@ mod tests {
         "awaiting_approval",
         "sleeping",
     ];
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
         let provider = Arc::new(ClaudeCodeProvider::new());
@@ -214,7 +207,7 @@ mod tests {
 
     async fn fetch(store: Arc<InMemoryStore>, uri: &str) -> (StatusCode, JsonValue) {
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new()
             .route("/", get(get_stats_history))
             .with_state(state);

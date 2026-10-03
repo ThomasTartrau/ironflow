@@ -25,7 +25,7 @@ pub(crate) mod test_support {
     use chrono::{TimeDelta, Utc};
     use http_body_util::BodyExt;
     use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_auth::password;
     use ironflow_core::account::ClaudeSubscriptionKind;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -42,6 +42,7 @@ pub(crate) mod test_support {
     use tower::ServiceExt;
     use uuid::Uuid;
 
+    use crate::routes::test_helpers::create_user_auth_header;
     use crate::routes::{RouterConfig, create_router};
     use crate::state::AppState;
 
@@ -145,10 +146,9 @@ pub(crate) mod test_support {
     }
 
     /// A `Bearer` header for a user of this state.
-    pub(crate) fn bearer(state: &AppState, is_admin: bool) -> String {
-        let token = AccessToken::for_user(Uuid::now_v7(), "tester", is_admin, &state.jwt_config)
-            .expect("issue token");
-        format!("Bearer {}", token.0)
+    pub(crate) async fn bearer(state: &AppState, is_admin: bool) -> String {
+        let username = if is_admin { "admin" } else { "member" };
+        create_user_auth_header(state, username, is_admin).await
     }
 
     /// A `Bearer` header carrying an admin-owned API key with `scopes`.
@@ -214,7 +214,7 @@ pub(crate) mod test_support {
 
     /// Create `name` through the API as an admin; returns the response body.
     pub(crate) async fn create_account(state: &AppState, name: &str) -> Value {
-        let auth = bearer(state, true);
+        let auth = bearer(state, true).await;
         let (status, body, _) = call(
             state,
             "POST",

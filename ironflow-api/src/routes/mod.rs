@@ -423,6 +423,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
@@ -471,20 +472,11 @@ mod tests {
         assert_eq!(&body[..], b"OK");
     }
 
-    fn make_auth_header(state: &AppState) -> String {
-        use ironflow_auth::jwt::AccessToken;
-        use uuid::Uuid;
-
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     #[tokio::test]
     async fn runs_route_exists() {
         let state = test_state();
         let app = create_router(state.clone(), RouterConfig::default());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let req = Request::builder()
             .uri("/api/v1/runs?page=1&per_page=20")
@@ -500,7 +492,7 @@ mod tests {
     async fn stats_route_exists() {
         let state = test_state();
         let app = create_router(state.clone(), RouterConfig::default());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         let req = Request::builder()
             .uri("/api/v1/stats")
@@ -551,7 +543,7 @@ mod tests {
     async fn body_size_limit_rejects_oversized_payload() {
         let state = test_state();
         let app = create_router(state.clone(), RouterConfig::default());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
 
         // 3 MiB payload — exceeds the 2 MiB limit
         let oversized = vec![0u8; 3 * 1024 * 1024];

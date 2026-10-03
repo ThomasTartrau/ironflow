@@ -68,10 +68,10 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use super::*;
     use crate::routes::auth::me::me;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -112,17 +112,10 @@ mod tests {
         )
     }
 
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config)
-            .expect("failed to create token");
-        format!("Bearer {}", token.0)
-    }
-
     #[tokio::test]
     async fn sign_out_success() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new().route("/", post(sign_out)).with_state(state);
 
         let req = Request::builder()

@@ -94,6 +94,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -221,9 +222,8 @@ mod tests {
     #[tokio::test]
     async fn update_role_as_member_forbidden() {
         let state = test_state();
-        let member_id = Uuid::now_v7();
         let target_id = Uuid::now_v7();
-        let auth_header = make_auth_header(member_id, false, &state);
+        let auth_header = create_user_auth_header(&state, "member", false).await;
         let app = Router::new()
             .route("/{id}/role", patch(update_role))
             .with_state(state);

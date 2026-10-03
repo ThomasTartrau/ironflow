@@ -157,7 +157,6 @@ mod tests {
     use axum::Router;
     use axum::routing::get;
     use chrono::Utc;
-    use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::{
@@ -175,6 +174,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::run_events;
+    use crate::routes::test_helpers::create_user_auth_header;
     use crate::state::AppState;
 
     fn test_state_with_bus() -> (AppState, WorkflowEventBus) {
@@ -201,12 +201,6 @@ mod tests {
         (state, bus)
     }
 
-    fn make_auth_token(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
-
     async fn create_run(state: &AppState) -> Uuid {
         state
             .store
@@ -229,7 +223,7 @@ mod tests {
     }
 
     async fn start_sse_server(state: AppState) -> (String, String) {
-        let auth = make_auth_token(&state);
+        let auth = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new()
             .route("/{id}/events", get(run_events))
             .with_state(state);

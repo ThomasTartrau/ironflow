@@ -173,10 +173,10 @@ mod tests {
             .with_state(state)
     }
 
-    fn request(state: &AppState, uri: String) -> Request<Body> {
+    async fn request(state: &AppState, uri: String) -> Request<Body> {
         Request::builder()
             .uri(uri)
-            .header("authorization", auth_header(state))
+            .header("authorization", auth_header(state).await)
             .body(Body::empty())
             .expect("request")
     }
@@ -188,7 +188,7 @@ mod tests {
             "/runs/{}/steps/{}/artifacts/report.html",
             fixture.run_id, fixture.step_id
         );
-        let req = request(&fixture.state, uri);
+        let req = request(&fixture.state, uri).await;
 
         let resp = app(fixture.state).oneshot(req).await.expect("response");
 
@@ -211,7 +211,7 @@ mod tests {
             "/runs/{}/steps/{}/artifacts/nope.html",
             fixture.run_id, fixture.step_id
         );
-        let req = request(&fixture.state, uri);
+        let req = request(&fixture.state, uri).await;
 
         let resp = app(fixture.state).oneshot(req).await.expect("response");
 
@@ -226,7 +226,7 @@ mod tests {
             "/runs/{}/steps/{}/artifacts/report.html",
             other_run.id, fixture.step_id
         );
-        let req = request(&fixture.state, uri);
+        let req = request(&fixture.state, uri).await;
 
         let resp = app(fixture.state).oneshot(req).await.expect("response");
 
@@ -241,7 +241,7 @@ mod tests {
             fixture.run_id,
             Uuid::now_v7()
         );
-        let req = request(&fixture.state, uri);
+        let req = request(&fixture.state, uri).await;
 
         let resp = app(fixture.state).oneshot(req).await.expect("response");
 
@@ -274,7 +274,7 @@ mod tests {
             run.id,
             Uuid::now_v7()
         );
-        let req = request(&state, uri);
+        let req = request(&state, uri).await;
 
         let resp = app(state).oneshot(req).await.expect("response");
 
@@ -304,7 +304,7 @@ mod tests {
             "/runs/{}/steps/{}/artifacts/report.html",
             fixture.run_id, fixture.step_id
         );
-        let req = request(&fixture.state, uri);
+        let req = request(&fixture.state, uri).await;
 
         let resp = app(fixture.state).oneshot(req).await.expect("response");
 

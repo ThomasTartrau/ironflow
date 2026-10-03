@@ -182,12 +182,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", true, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
+    use crate::routes::test_helpers::create_user_auth_header;
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
         Arc::new(InMemoryStore::new());
@@ -240,7 +235,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -297,7 +292,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -342,7 +337,7 @@ mod tests {
             .into_run();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -389,7 +384,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -432,7 +427,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -479,7 +474,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -529,7 +524,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -550,7 +545,7 @@ mod tests {
     async fn retry_nonexistent_run_returns_404() {
         let store = Arc::new(InMemoryStore::new());
         let state = test_state(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -679,7 +674,7 @@ mod tests {
             .unwrap();
 
         let state = test_state(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -803,7 +798,7 @@ mod tests {
         let run = create_failed_run(&store, "versioned-wf", Some("2.0.0")).await;
 
         let state = test_state_with_handlers(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -826,7 +821,7 @@ mod tests {
         let run = create_failed_run(&store, "versioned-wf", Some("1.0.0")).await;
 
         let state = test_state_with_handlers(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -856,7 +851,7 @@ mod tests {
         let run = create_failed_run(&store, "versioned-wf", Some("1.0.0")).await;
 
         let state = test_state_with_handlers(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -885,7 +880,7 @@ mod tests {
         let run = create_failed_run(&store, "compat-wf", Some("1.0.0")).await;
 
         let state = test_state_with_handlers(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -908,7 +903,7 @@ mod tests {
         let run = create_failed_run(&store, "versioned-wf", None).await;
 
         let state = test_state_with_handlers(store);
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);
@@ -931,7 +926,7 @@ mod tests {
         let run = create_failed_run(&store, "versioned-wf", Some("2.0.0")).await;
 
         let state = test_state_with_handlers(store.clone());
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
         let app = Router::new()
             .route("/{id}/retry", post(retry_run))
             .with_state(state);

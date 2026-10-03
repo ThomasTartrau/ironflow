@@ -98,10 +98,11 @@ where
 /// Decode an access token and check it against the stored user.
 ///
 /// A token whose `ver` no longer matches the user's `token_version` has been
-/// revoked (sign-out, password or role change). For a known user, the admin
-/// flag and username come from the store, never from the claims, so a
-/// demotion takes effect on the next request. A token whose user is not in
-/// the store keeps its claims.
+/// revoked (sign-out, password or role change). A token whose user no longer
+/// exists in the store (deleted account) is rejected as revoked too, so a
+/// client cannot tell a deletion from a sign-out. The admin flag and username
+/// come from the store, never from the claims, so a demotion takes effect on
+/// the next request.
 pub(crate) async fn verify_access_token(
     token: &str,
     jwt_config: &JwtConfig,
@@ -122,17 +123,15 @@ pub(crate) async fn verify_access_token(
         }
     })?;
 
-    if let Some(user) = user {
-        if user.token_version != claims.ver {
-            return Err(AuthRejection {
-                status: StatusCode::UNAUTHORIZED,
-                code: "TOKEN_REVOKED",
-                message: "Authentication token has been revoked",
-            });
-        }
-        claims.is_admin = user.is_admin;
-        claims.username = user.username;
-    }
+    let user = user
+        .filter(|user| user.token_version == claims.ver)
+        .ok_or(AuthRejection {
+            status: StatusCode::UNAUTHORIZED,
+            code: "TOKEN_REVOKED",
+            message: "Authentication token has been revoked",
+        })?;
+    claims.is_admin = user.is_admin;
+    claims.username = user.username;
 
     Ok(claims)
 }
@@ -517,7 +516,7 @@ mod tests {
     #[tokio::test]
     async fn jwt_extractor_from_bearer_header() {
         let state = test_state();
-        let user_id = Uuid::now_v7();
+        let user_id = stored_user(&state.store, "alice", false).await;
         let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
 
         let app = Router::new()
@@ -551,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn jwt_extractor_from_cookie() {
         let state = test_state();
-        let user_id = Uuid::now_v7();
+        let user_id = stored_user(&state.store, "bob", true).await;
         let token = AccessToken::for_user(user_id, "bob", true, &state.jwt_config).unwrap();
 
         let app = Router::new()
@@ -787,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn authenticated_via_jwt() {
         let state = test_state();
-        let user_id = Uuid::now_v7();
+        let user_id = stored_user(&state.store, "alice", true).await;
         let token = AccessToken::for_user(user_id, "alice", true, &state.jwt_config).unwrap();
 
         let app = Router::new()
@@ -1041,6 +1040,56 @@ mod tests {
         let user_id = stored_user(&state.store, "alice", false).await;
         let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
         state.store.revoke_user_sessions(user_id).await.unwrap();
+
+        let app = Router::new()
+            .route("/auth", get(|_auth: Authenticated| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/auth", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_rejects_token_of_deleted_user() {
+        let state = test_state();
+        let user_id = stored_user(&state.store, "alice", false).await;
+        let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
+        state.store.delete_user(user_id).await.unwrap();
+
+        let app = Router::new()
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/me", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_rejects_token_of_unknown_user() {
+        let state = test_state();
+        let token =
+            AccessToken::for_user(Uuid::now_v7(), "ghost", true, &state.jwt_config).unwrap();
+
+        let app = Router::new()
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/me", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
+    }
+
+    #[tokio::test]
+    async fn dual_auth_rejects_jwt_of_deleted_user() {
+        let state = test_state();
+        let user_id = stored_user(&state.store, "alice", false).await;
+        let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
+        state.store.delete_user(user_id).await.unwrap();
 
         let app = Router::new()
             .route("/auth", get(|_auth: Authenticated| async { "ok" }))

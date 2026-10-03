@@ -8,7 +8,7 @@ Authentication library for **ironflow** -- JWT tokens, password hashing, and Axu
 - **Password hashing** -- Argon2id (OWASP-recommended parameters)
 - **Cookie management** -- HttpOnly secure cookies for token storage
 - **Axum extractor** -- `AuthenticatedUser` extractor for route handlers
-- **Session revocation** -- tokens carry the user's `token_version`, checked against the store on every request
+- **Session revocation** -- tokens carry the user's `token_version`, checked against the store on every request; a token whose user was deleted is rejected the same way
 
 ## Quick start
 

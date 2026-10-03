@@ -53,7 +53,7 @@ mod tests {
         let state = state_with_stub(Stub::Valid).await;
         let created = create_account(&state, "perso-max").await;
         let id = created["data"]["id"].as_str().unwrap().to_string();
-        let auth = bearer(&state, true);
+        let auth = bearer(&state, true).await;
 
         let (status, by_name, _) = call(
             &state,

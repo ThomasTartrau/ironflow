@@ -3,7 +3,8 @@
 //! This middleware validates that a request contains a valid JWT token
 //! (in a cookie or `Authorization: Bearer` header) before allowing the request
 //! to reach the handler. It rejects with 401 if no token is found, if the
-//! token is invalid, or if the user's sessions have been revoked.
+//! token is invalid, if the user's sessions have been revoked, or if the user
+//! no longer exists.
 //!
 //! Use this to protect route groups without adding `AuthenticatedUser` as a parameter
 //! to every handler.
@@ -47,6 +48,7 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
 /// - No token is present in cookies or `Authorization` header
 /// - The token is invalid or expired
 /// - The token was issued before the user's sessions were revoked
+/// - The token belongs to a user that no longer exists (deleted account)
 ///
 /// On success, the request proceeds to the handler. A store failure while
 /// looking up the user rejects with 500.
@@ -114,7 +116,6 @@ mod tests {
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use crate::jwt::AccessToken;
 
@@ -205,8 +206,17 @@ mod tests {
     #[tokio::test]
     async fn allows_valid_bearer_token() {
         let state = test_state();
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
+        let user = state
+            .store
+            .create_user(NewUser {
+                email: "testuser@test.com".to_string(),
+                username: "testuser".to_string(),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .unwrap();
+        let token = AccessToken::for_user(user.id, "testuser", false, &state.jwt_config).unwrap();
 
         let app = protected_app(state);
 

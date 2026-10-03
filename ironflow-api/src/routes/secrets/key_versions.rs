@@ -57,7 +57,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
@@ -70,9 +70,9 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     use super::*;
+    use crate::routes::test_helpers::create_user_auth_header;
 
     struct TestWorkflow;
 
@@ -142,9 +142,7 @@ mod tests {
     #[tokio::test]
     async fn key_versions_is_admin_only() {
         let state = test_state(2);
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "user", false, &state.jwt_config).unwrap();
-        let auth = format!("Bearer {}", token.0);
+        let auth = create_user_auth_header(&state, "user", false).await;
 
         let resp = app(state).oneshot(request(Some(&auth))).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -155,9 +153,7 @@ mod tests {
         let state = test_state(2);
         state.store.set_secret("a", "va").await.unwrap();
 
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "admin", true, &state.jwt_config).unwrap();
-        let auth = format!("Bearer {}", token.0);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let resp = app(state).oneshot(request(Some(&auth))).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -177,9 +173,7 @@ mod tests {
         let state = test_state(1);
         state.store.set_secret("a", "va").await.unwrap();
 
-        let token =
-            AccessToken::for_user(Uuid::now_v7(), "admin", true, &state.jwt_config).unwrap();
-        let auth = format!("Bearer {}", token.0);
+        let auth = create_user_auth_header(&state, "admin", true).await;
 
         let resp = app(state).oneshot(request(Some(&auth))).await.unwrap();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();

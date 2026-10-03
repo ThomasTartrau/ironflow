@@ -91,7 +91,6 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::AccessToken;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
@@ -105,12 +104,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    fn make_auth_header(state: &AppState) -> String {
-        let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
-        format!("Bearer {}", token.0)
-    }
+    use crate::routes::test_helpers::create_user_auth_header;
 
     fn test_state() -> AppState {
         let store = Arc::new(InMemoryStore::new());
@@ -172,7 +166,7 @@ mod tests {
             "test-worker-token".to_string(),
             event_sender,
         );
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new().route("/{id}", get(get_run)).with_state(state);
 
         let req = Request::builder()
@@ -192,7 +186,7 @@ mod tests {
     #[tokio::test]
     async fn not_found() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let app = Router::new().route("/{id}", get(get_run)).with_state(state);
 
         let req = Request::builder()
@@ -208,7 +202,7 @@ mod tests {
     #[tokio::test]
     async fn detail_exposes_the_run_author() {
         let state = test_state();
-        let auth_header = make_auth_header(&state);
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
         let user = state
             .store
             .create_user(NewUser {

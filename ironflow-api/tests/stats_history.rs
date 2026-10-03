@@ -11,13 +11,12 @@ use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::Event;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{NewRun, RunStatus, RunUpdate, TriggerKind};
+use ironflow_store::models::{NewRun, NewUser, RunStatus, RunUpdate, TriggerKind};
 use ironflow_store::store::Store;
 use rust_decimal::Decimal;
 use serde_json::{Value as JsonValue, from_slice, json};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
-use uuid::Uuid;
 
 use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::state::AppState;
@@ -42,9 +41,19 @@ fn test_state(store: Arc<dyn Store>) -> AppState {
     )
 }
 
-fn make_auth_header(state: &AppState) -> String {
-    let user_id = Uuid::now_v7();
-    let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
+async fn make_auth_header(state: &AppState) -> String {
+    let user = state
+        .store
+        .create_user(NewUser {
+            email: "testuser@test.com".to_string(),
+            username: "testuser".to_string(),
+            password_hash: "argon2hash".to_string(),
+            is_admin: Some(false),
+        })
+        .await
+        .expect("create user");
+    let token = AccessToken::for_user(user.id, &user.username, user.is_admin, &state.jwt_config)
+        .expect("token");
     format!("Bearer {}", token.0)
 }
 
@@ -120,7 +129,7 @@ async fn returns_buckets_with_mixed_statuses() {
     .await;
 
     let state = test_state(store);
-    let auth_header = make_auth_header(&state);
+    let auth_header = make_auth_header(&state).await;
     let app = create_router(state, RouterConfig::default());
 
     let req = Request::builder()
@@ -178,7 +187,7 @@ async fn filters_by_workflow_name() {
     .await;
 
     let state = test_state(store);
-    let auth_header = make_auth_header(&state);
+    let auth_header = make_auth_header(&state).await;
     let app = create_router(state, RouterConfig::default());
 
     let req = Request::builder()
@@ -206,7 +215,7 @@ async fn filters_by_workflow_name() {
 async fn auto_granularity_defaults() {
     let store = Arc::new(InMemoryStore::new());
     let state = test_state(store);
-    let auth_header = make_auth_header(&state);
+    let auth_header = make_auth_header(&state).await;
 
     for (period, expected_gran) in [("24h", "1h"), ("7d", "1d"), ("30d", "1d"), ("90d", "1w")] {
         let app = create_router(state.clone(), RouterConfig::default());
@@ -232,7 +241,7 @@ async fn auto_granularity_defaults() {
 async fn explicit_granularity_overrides() {
     let store = Arc::new(InMemoryStore::new());
     let state = test_state(store);
-    let auth_header = make_auth_header(&state);
+    let auth_header = make_auth_header(&state).await;
     let app = create_router(state, RouterConfig::default());
 
     let req = Request::builder()
@@ -253,7 +262,7 @@ async fn explicit_granularity_overrides() {
 async fn invalid_period_returns_400() {
     let store = Arc::new(InMemoryStore::new());
     let state = test_state(store);
-    let auth_header = make_auth_header(&state);
+    let auth_header = make_auth_header(&state).await;
     let app = create_router(state, RouterConfig::default());
 
     let req = Request::builder()
@@ -288,7 +297,7 @@ async fn unauthenticated_returns_401() {
 async fn empty_store_returns_zero_filled_buckets() {
     let store = Arc::new(InMemoryStore::new());
     let state = test_state(store);
-    let auth_header = make_auth_header(&state);
+    let auth_header = make_auth_header(&state).await;
     let app = create_router(state, RouterConfig::default());
 
     let req = Request::builder()
