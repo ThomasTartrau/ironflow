@@ -117,11 +117,46 @@ impl StepExecutor for ShellExecutor<'_> {
 }
 
 impl ShellExecutor<'_> {
+    /// The process to spawn: the program itself with its arguments in exec
+    /// mode, `sh -c <command>` otherwise.
+    fn command(&self) -> Command {
+        match self.config.args {
+            Some(ref args) => {
+                let mut cmd = Command::new(&self.config.command);
+                cmd.args(args);
+                cmd
+            }
+            None => {
+                let mut cmd = Command::new("sh");
+                cmd.arg("-c").arg(&self.config.command);
+                cmd
+            }
+        }
+    }
+
+    /// The command as shown in logs and timeout errors.
+    fn display(&self) -> String {
+        match self.config.args {
+            Some(ref args) => [self.config.command.as_str()]
+                .into_iter()
+                .chain(args.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => self.config.command.clone(),
+        }
+    }
+
     /// Non-streaming execution via [`Shell::run()`].
     async fn execute_buffered(&self) -> Result<StepOutput, EngineError> {
         let start = Instant::now();
 
-        let mut shell = Shell::new(&self.config.command);
+        let mut shell = match self.config.args {
+            Some(ref args) => Shell::exec(
+                &self.config.command,
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            ),
+            None => Shell::new(&self.config.command),
+        };
         if let Some(secs) = self.config.timeout_secs {
             shell = shell.timeout(Duration::from_secs(secs));
         }
@@ -152,7 +187,7 @@ impl ShellExecutor<'_> {
 
         info!(
             step_kind = "shell",
-            command = %self.config.command,
+            command = %self.display(),
             exit_code,
             duration_ms,
             "shell step completed"
@@ -166,8 +201,7 @@ impl ShellExecutor<'_> {
     /// Run the command to completion and keep stdout, stderr and the exit
     /// code whatever the code is. Used when `exit_code_as_output` is set.
     async fn run_capturing(&self) -> Result<(String, String, i32), EngineError> {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(&self.config.command);
+        let mut cmd = self.command();
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -205,7 +239,7 @@ impl ShellExecutor<'_> {
             }
             Err(_) => {
                 return Err(EngineError::Operation(OperationError::Timeout {
-                    step: self.config.command.clone(),
+                    step: self.display(),
                     limit: timeout_dur,
                 }));
             }
@@ -222,8 +256,7 @@ impl ShellExecutor<'_> {
     async fn execute_streaming(&self, sender: StepLogSender) -> Result<StepOutput, EngineError> {
         let start = Instant::now();
 
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(&self.config.command);
+        let mut cmd = self.command();
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -272,7 +305,7 @@ impl ShellExecutor<'_> {
             Err(_) => {
                 child.kill().await.ok();
                 return Err(EngineError::Operation(OperationError::Timeout {
-                    step: self.config.command.clone(),
+                    step: self.display(),
                     limit: timeout_dur,
                 }));
             }
@@ -289,7 +322,7 @@ impl ShellExecutor<'_> {
 
         info!(
             step_kind = "shell",
-            command = %self.config.command,
+            command = %self.display(),
             exit_code,
             duration_ms,
             streaming = true,
@@ -325,8 +358,12 @@ impl ShellExecutor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
+    use tempfile::tempdir;
+    use uuid::Uuid;
 
     fn create_test_provider() -> Arc<dyn AgentProvider> {
         let inner = ClaudeCodeProvider::new();
@@ -571,6 +608,141 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    /// Shell metacharacters that `sh -c` would act on.
+    const HOSTILE_ARG: &str = "x'; echo injected; echo '$(echo sub) `echo tick` ${HOME} \\n";
+
+    #[tokio::test]
+    async fn exec_passes_each_argument_verbatim_buffered() {
+        let config = ShellConfig::exec("printf", &["%s|%s", HOSTILE_ARG, "two words"]);
+        let provider = create_test_provider();
+
+        let output = ShellExecutor::new(&config)
+            .execute(&provider)
+            .await
+            .expect("printf runs");
+
+        assert_eq!(output.stdout(), format!("{HOSTILE_ARG}|two words"));
+        assert_eq!(output.exit_code(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn exec_passes_each_argument_verbatim_streaming() {
+        let config = ShellConfig::exec("printf", &["%s\n", HOSTILE_ARG]);
+        let (sender, mut receiver) = crate::log_sender::channel();
+        let step_sender =
+            StepLogSender::new(sender, Uuid::now_v7(), Uuid::now_v7(), "test".to_string());
+        let provider = create_test_provider();
+
+        let output = ShellExecutor::new(&config)
+            .with_log_sender(step_sender)
+            .execute(&provider)
+            .await
+            .expect("printf runs");
+
+        assert_eq!(output.stdout(), HOSTILE_ARG);
+        let line = receiver.try_recv().expect("one streamed line");
+        assert_eq!(line.line, HOSTILE_ARG);
+    }
+
+    #[tokio::test]
+    async fn exec_with_exit_code_as_output_keeps_the_code_and_args() {
+        let config =
+            ShellConfig::exec("sh", &["-c", "printf %s \"$1\"; exit 3", "sh", HOSTILE_ARG])
+                .exit_code_as_output();
+        let provider = create_test_provider();
+
+        let buffered = ShellExecutor::new(&config)
+            .execute(&provider)
+            .await
+            .expect("a non-zero exit is an output");
+        assert_eq!(buffered.exit_code(), Some(3));
+        assert_eq!(buffered.stdout(), HOSTILE_ARG);
+
+        let streaming = ShellExecutor::new(&config)
+            .with_log_sender(streaming_sender())
+            .execute(&provider)
+            .await
+            .expect("a non-zero exit is an output");
+        assert_eq!(streaming.exit_code(), Some(3));
+        assert_eq!(streaming.stdout(), HOSTILE_ARG);
+    }
+
+    #[tokio::test]
+    async fn exec_nonzero_exit_returns_error() {
+        let config = ShellConfig::exec("false", &[]);
+        let provider = create_test_provider();
+
+        let buffered = ShellExecutor::new(&config).execute(&provider).await;
+        assert!(matches!(
+            buffered,
+            Err(EngineError::Operation(OperationError::Shell {
+                exit_code: 1,
+                ..
+            }))
+        ));
+
+        let streaming = ShellExecutor::new(&config)
+            .with_log_sender(streaming_sender())
+            .execute(&provider)
+            .await;
+        assert!(matches!(
+            streaming,
+            Err(EngineError::Operation(OperationError::Shell {
+                exit_code: 1,
+                ..
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn exec_of_a_missing_program_is_a_spawn_error() {
+        let config = ShellConfig::exec("ironflow-no-such-program", &["arg"]);
+        let provider = create_test_provider();
+
+        for result in [
+            ShellExecutor::new(&config).execute(&provider).await,
+            ShellExecutor::new(&config)
+                .with_log_sender(streaming_sender())
+                .execute(&provider)
+                .await,
+            ShellExecutor::new(&config.clone().exit_code_as_output())
+                .execute(&provider)
+                .await,
+        ] {
+            match result {
+                Err(EngineError::Operation(OperationError::Shell { exit_code, stderr })) => {
+                    assert_eq!(exit_code, -1);
+                    assert!(stderr.starts_with("failed to spawn"), "stderr: {stderr}");
+                }
+                other => panic!("expected a spawn error, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_honours_dir_and_env() {
+        let dir = tempdir().expect("temp dir");
+        let config = ShellConfig::exec("sh", &["-c", "pwd; printf %s \"$GREETING\""])
+            .dir(dir.path().to_str().expect("utf-8 path"))
+            .env("GREETING", "hi; echo no");
+        let provider = create_test_provider();
+
+        let output = ShellExecutor::new(&config)
+            .execute(&provider)
+            .await
+            .expect("sh runs");
+
+        let canonical = dir.path().canonicalize().expect("canonical dir");
+        let mut lines = output.stdout().lines();
+        assert_eq!(
+            Path::new(lines.next().expect("pwd line"))
+                .canonicalize()
+                .expect("canonical pwd"),
+            canonical
+        );
+        assert_eq!(lines.next(), Some("hi; echo no"));
     }
 
     #[tokio::test]

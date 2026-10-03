@@ -19,8 +19,16 @@ use super::artifact::{ArtifactInput, ArtifactOutput, ArtifactRef};
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShellConfig {
-    /// The shell command to execute.
+    /// The command line passed to `sh -c`, or the program to run when
+    /// [`args`](Self::args) is set.
     pub command: String,
+    /// Arguments of [`command`](Self::command) when it runs without a shell.
+    ///
+    /// `Some` means exec mode: `command` is spawned directly with these
+    /// arguments, none of them is interpreted. `None` means `command` goes
+    /// through `sh -c`. Set by [`ShellConfig::exec`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
     /// Timeout in seconds (default: 300).
     pub timeout_secs: Option<u64>,
     /// Working directory.
@@ -37,7 +45,7 @@ pub struct ShellConfig {
     pub inputs: Vec<ArtifactInput>,
     /// When `true`, a failure of this step does not fail the run. The step is
     /// still marked `Failed` but execution continues and the run finishes with
-    /// [`RunStatus::Warning`] instead of `Failed`.
+    /// `RunStatus::Warning` instead of `Failed`.
     #[serde(default)]
     pub allow_failure: bool,
     /// When `true`, a non-zero exit code is a normal output instead of an
@@ -54,6 +62,16 @@ pub struct ShellConfig {
 impl ShellConfig {
     /// Create a new shell config with the given command.
     ///
+    /// The command is passed to `sh -c`, so pipes, redirects and globs work.
+    ///
+    /// # Security
+    ///
+    /// Never build the command from data the workflow does not control (its
+    /// input, a webhook payload, a human answer, an agent output): a quote or a
+    /// `;` in that data runs arbitrary commands on the worker. Use
+    /// [`ShellConfig::exec`] to pass such data as arguments, or
+    /// [`env`](Self::env) to hand it to a script as a variable.
+    ///
     /// # Examples
     ///
     /// ```
@@ -65,6 +83,7 @@ impl ShellConfig {
     pub fn new(command: &str) -> Self {
         Self {
             command: command.to_string(),
+            args: None,
             timeout_secs: None,
             dir: None,
             env: Vec::new(),
@@ -74,6 +93,29 @@ impl ShellConfig {
             allow_failure: false,
             exit_code_as_output: false,
             retry: None,
+        }
+    }
+
+    /// Create a config that runs `program` directly, without a shell.
+    ///
+    /// Each argument reaches the program as is: quotes, `;`, `$(..)`,
+    /// backticks and globs are plain text. This is the way to run a command
+    /// built from untrusted data. The program is looked up in `PATH`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::ShellConfig;
+    ///
+    /// let name = "Ada'; rm -rf / #";
+    /// let config = ShellConfig::exec("printf", &["Hello, %s!\n", name]);
+    /// assert_eq!(config.command, "printf");
+    /// assert_eq!(config.args.as_deref().map(<[String]>::len), Some(2));
+    /// ```
+    pub fn exec(program: &str, args: &[&str]) -> Self {
+        Self {
+            args: Some(args.iter().map(|arg| (*arg).to_string()).collect()),
+            ..Self::new(program)
         }
     }
 
@@ -332,6 +374,50 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let back: ShellConfig = serde_json::from_str(&json).expect("deserialize");
         assert!(back.exit_code_as_output);
+    }
+
+    #[test]
+    fn exec_keeps_the_program_and_each_argument_apart() {
+        let config = ShellConfig::exec("printf", &["%s\n", "a b; rm -rf /"]);
+
+        assert_eq!(config.command, "printf");
+        assert_eq!(
+            config.args,
+            Some(vec!["%s\n".to_string(), "a b; rm -rf /".to_string()])
+        );
+    }
+
+    #[test]
+    fn exec_with_no_argument_is_still_exec_mode() {
+        let config = ShellConfig::exec("true", &[]);
+        assert_eq!(config.args, Some(Vec::new()));
+    }
+
+    #[test]
+    fn new_runs_through_the_shell() {
+        assert!(ShellConfig::new("echo hi").args.is_none());
+    }
+
+    #[test]
+    fn exec_args_roundtrip_and_are_omitted_in_shell_mode() {
+        let shell = serde_json::to_string(&ShellConfig::new("echo hi")).expect("serialize");
+        assert!(!shell.contains("args"));
+
+        let json =
+            serde_json::to_string(&ShellConfig::exec("git", &["log", "-1"])).expect("serialize");
+        let back: ShellConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.command, "git");
+        assert_eq!(back.args, Some(vec!["log".to_string(), "-1".to_string()]));
+    }
+
+    #[test]
+    fn a_config_predating_exec_still_deserializes_in_shell_mode() {
+        let config: ShellConfig = serde_json::from_str(
+            r#"{"command":"echo hi","timeout_secs":null,"dir":null,"env":[],"clean_env":false,"allow_failure":false}"#,
+        )
+        .expect("deserialize");
+
+        assert!(config.args.is_none());
     }
 
     #[test]

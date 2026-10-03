@@ -39,12 +39,16 @@ impl WorkflowHandler for SecretDemo {
                     )
                 })?;
 
-            let value_len = secret.value.len();
+            let value_len = secret.value.len().to_string();
             ctx.shell(
                 "use-secret",
-                ShellConfig::new(&format!(
-                    "echo 'Secret successfully retrieved: value_length={value_len} chars'"
-                )),
+                ShellConfig::exec(
+                    "printf",
+                    &[
+                        "Secret successfully retrieved: value_length=%s chars\n",
+                        &value_len,
+                    ],
+                ),
             )
             .await?;
 

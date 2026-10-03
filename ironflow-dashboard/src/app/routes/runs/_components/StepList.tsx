@@ -684,6 +684,28 @@ function AgentInput({ input }: { input: Record<string, unknown> }) {
 	);
 }
 
+const PLAIN_ARG = /^[A-Za-z0-9_./:=@%+,-]+$/;
+
+/**
+ * The command line of a shell step input: the `sh -c` string as written, or,
+ * for a step run without a shell, the program followed by its arguments.
+ * An argument that is not a plain word is shown as a JSON string, so the
+ * boundary between arguments stays visible.
+ */
+export function shellCommandLine(
+	input: Record<string, unknown>,
+): string | null {
+	if (typeof input.command !== "string") return null;
+	const args = input.args;
+	if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) {
+		return input.command;
+	}
+	return [
+		input.command,
+		...args.map((arg) => (PLAIN_ARG.test(arg) ? arg : JSON.stringify(arg))),
+	].join(" ");
+}
+
 function StepInput({ step }: { step: StepResponse }) {
 	const input = step.input;
 	if (!input) return null;
@@ -697,7 +719,7 @@ function StepInput({ step }: { step: StepResponse }) {
 	}
 
 	if (step.kind === "shell") {
-		const command = typeof input.command === "string" ? input.command : null;
+		const command = shellCommandLine(input);
 		if (command) {
 			return (
 				<div>
