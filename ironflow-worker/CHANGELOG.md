@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.23.6](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.23.5...ironflow-worker-v2.23.6) - 2026-10-03
 ## [2.23.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.23.4...ironflow-worker-v2.23.5) - 2026-10-03
 ## [2.23.3](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-worker-v2.23.2...ironflow-worker-v2.23.3) - 2026-10-03
 
