@@ -155,3 +155,8 @@ fn provider() -> Arc<dyn AgentProvider> {
 `JWT_SECRET` and `WORKER_TOKEN`. Generate secrets with `openssl rand -hex 32`. Set
 `IRONFLOW_SECRET_KEYS` before the first workflow that reads a secret; the key rotation
 procedure is in the Ironflow README.
+
+In production, session cookies are always `Secure` and a request carrying
+`X-Forwarded-Proto: http` is redirected with a `308` to HTTPS, so the reverse proxy must
+set that header. `IRONFLOW_INSECURE_COOKIES=1` drops the `Secure` flag in development
+only.

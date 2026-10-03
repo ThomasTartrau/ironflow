@@ -129,12 +129,16 @@ async fn main() {
     let engine = Arc::new(engine);
 
     // ---- HTTP -------------------------------------------------------------
+    if !config.cookie_secure {
+        warn!("IRONFLOW_INSECURE_COOKIES is set: session cookies are sent without the Secure flag");
+    }
+
     let jwt_config = Arc::new(JwtConfig {
         secret: config.jwt_secret.clone(),
         access_token_ttl_secs: 900,
         refresh_token_ttl_secs: 604800,
         cookie_domain: None,
-        cookie_secure: config.is_production,
+        cookie_secure: config.cookie_secure,
     });
     let mut state = AppState::new(
         store.clone(),
@@ -156,6 +160,7 @@ async fn main() {
         dashboard_dir: config.dashboard_dir.clone(),
         rate_limit_auth: config.rate_limit_auth,
         rate_limit_general: config.rate_limit_general,
+        enforce_https: config.is_production,
     };
     let app = create_router(state, router_config)
         .layer(build_cors(&config))

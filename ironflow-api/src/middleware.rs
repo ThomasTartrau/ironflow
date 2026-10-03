@@ -3,8 +3,8 @@
 use axum::Json;
 use axum::extract::Request;
 use axum::http::header::{
-    CONTENT_SECURITY_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
-    X_XSS_PROTECTION,
+    CONTENT_SECURITY_POLICY, HOST, LOCATION, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
+    X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
@@ -73,6 +73,58 @@ pub async fn request_metrics(req: Request, next: Next) -> Response {
     histogram!(API_REQUEST_DURATION_SECONDS, "method" => method, "path" => path).record(duration);
 
     resp
+}
+
+/// Middleware that redirects plain-HTTP requests to HTTPS.
+///
+/// TLS terminates at a reverse proxy, so plain HTTP is detected through the
+/// `X-Forwarded-Proto` header (first value of a comma-separated list,
+/// case-insensitive). When it is `http`, the response is a
+/// `308 Permanent Redirect` to `https://{host}{path_and_query}`, which keeps
+/// the method and body. The host comes from `X-Forwarded-Host`, falling back
+/// to `Host`. Requests without `X-Forwarded-Proto` (probes, worker traffic) and
+/// requests with no usable host pass through untouched.
+///
+/// # Examples
+///
+/// ```
+/// use axum::Router;
+/// use axum::middleware::from_fn;
+/// use axum::routing::get;
+/// use ironflow_api::middleware::https_redirect;
+///
+/// let app: Router = Router::new()
+///     .route("/", get(|| async { "ok" }))
+///     .layer(from_fn(https_redirect));
+/// ```
+pub async fn https_redirect(req: Request, next: Next) -> Response {
+    let is_http = req
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("http"));
+
+    if is_http {
+        let host = req
+            .headers()
+            .get("x-forwarded-host")
+            .or_else(|| req.headers().get(HOST))
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(',').next().unwrap_or(v).trim())
+            .filter(|v| !v.is_empty());
+        let path = req.uri().path_and_query().map_or("/", |pq| pq.as_str());
+
+        if let Some(host) = host
+            && let Ok(location) = HeaderValue::from_str(&format!("https://{host}{path}"))
+        {
+            let mut resp = StatusCode::PERMANENT_REDIRECT.into_response();
+            resp.headers_mut().insert(LOCATION, location);
+            return resp;
+        }
+    }
+
+    next.run(req).await
 }
 
 /// Middleware that injects standard HTTP security headers on every response.
@@ -193,6 +245,124 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert_eq!(json_val["error"]["code"], "INVALID_WORKER_TOKEN");
+    }
+
+    fn https_request(method: &str, proto: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri("/api/v1/health-check?x=1")
+            .header("host", "example.com");
+        if let Some(proto) = proto {
+            builder = builder.header("x-forwarded-proto", proto);
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    fn enforcing_router() -> axum::Router {
+        let config = RouterConfig {
+            enforce_https: true,
+            ..RouterConfig::default()
+        };
+        create_router(test_state(), config)
+    }
+
+    #[tokio::test]
+    async fn https_redirect_redirects_plain_http() {
+        let resp = enforcing_router()
+            .oneshot(https_request("GET", Some("http")))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            resp.headers().get("location").unwrap(),
+            "https://example.com/api/v1/health-check?x=1"
+        );
+        assert!(resp.headers().get("strict-transport-security").is_some());
+    }
+
+    #[tokio::test]
+    async fn https_redirect_uses_first_value_and_ignores_case() {
+        let resp = enforcing_router()
+            .oneshot(https_request("GET", Some("HTTP, https")))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+    }
+
+    #[tokio::test]
+    async fn https_redirect_prefers_forwarded_host() {
+        let req = Request::builder()
+            .uri("/api/v1/health-check")
+            .header("host", "internal:3000")
+            .header("x-forwarded-host", "public.example.com")
+            .header("x-forwarded-proto", "http")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = enforcing_router().oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            resp.headers().get("location").unwrap(),
+            "https://public.example.com/api/v1/health-check"
+        );
+    }
+
+    #[tokio::test]
+    async fn https_redirect_passes_https_through() {
+        let resp = enforcing_router()
+            .oneshot(https_request("GET", Some("https")))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn https_redirect_passes_without_forwarded_proto() {
+        let resp = enforcing_router()
+            .oneshot(https_request("GET", None))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn https_redirect_without_host_passes_through() {
+        let req = Request::builder()
+            .uri("/api/v1/health-check")
+            .header("x-forwarded-proto", "http")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = enforcing_router().oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn https_redirect_disabled_by_default() {
+        let app = create_router(test_state(), RouterConfig::default());
+
+        let resp = app
+            .oneshot(https_request("GET", Some("http")))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn https_redirect_post_gets_308() {
+        let resp = enforcing_router()
+            .oneshot(https_request("POST", Some("http")))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
     }
 
     #[tokio::test]

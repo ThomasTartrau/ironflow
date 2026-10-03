@@ -15,6 +15,7 @@ The repository includes a complete example server:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `IRONFLOW_ENV` | `development` | `production` or `development` |
+| `IRONFLOW_INSECURE_COOKIES` | `false` | `1` or `true` drops the `Secure` flag from session cookies. Development only, ignored in production |
 | `DATABASE_URL` | -- | PostgreSQL URL (required in production) |
 | `JWT_SECRET` | dev secret | JWT signing key (**in production: mandatory, >= 32 bytes, must not start with `ironflow-dev-`**) |
 | `WORKER_TOKEN` | dev token | Shared secret for worker auth (**in production: mandatory, >= 32 bytes, must not start with `ironflow-dev-`**) |
@@ -27,6 +28,23 @@ The repository includes a complete example server:
 | `PURGE_INTERVAL_SECS` | `86400` | Seconds between purger ticks (min 60) |
 | `PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS` | `30` | Days of Provider Account usage history kept (min 1) |
 | `SIGNAL_RETENTION_DAYS` | `7` | Days received [signals](../concepts/signals.md) are kept before the purger deletes them (min 1) |
+
+### Transport security
+
+Session cookies are `HttpOnly`, `SameSite=Lax` and `Secure`. Browsers treat
+`http://localhost` as a secure context, so `Secure` cookies work in local development. For
+a plain-HTTP setup on another origin, set `IRONFLOW_INSECURE_COOKIES=1`; the flag is
+ignored when `IRONFLOW_ENV=production`.
+
+In production the example server also sets `RouterConfig::enforce_https`: TLS terminates at
+your reverse proxy, and any request that arrives with `X-Forwarded-Proto: http` is answered
+with a `308 Permanent Redirect` to `https://<host><path>` (the host comes from
+`X-Forwarded-Host`, then `Host`). The method and body are preserved. Requests without
+`X-Forwarded-Proto`, such as in-cluster health probes and worker traffic, are not
+redirected. Every response carries `Strict-Transport-Security`.
+
+The reverse proxy must therefore set `X-Forwarded-Proto` (and `X-Forwarded-Host` if it
+rewrites `Host`), and must overwrite any value sent by the client.
 
 ### Retention
 

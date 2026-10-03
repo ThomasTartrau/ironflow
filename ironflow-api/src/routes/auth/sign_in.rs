@@ -90,16 +90,24 @@ mod tests {
     }
 
     fn test_jwt_config() -> Arc<JwtConfig> {
+        jwt_config_with_secure(false)
+    }
+
+    fn jwt_config_with_secure(cookie_secure: bool) -> Arc<JwtConfig> {
         Arc::new(JwtConfig {
             secret: "test-secret-for-auth-tests".to_string(),
             access_token_ttl_secs: 900,
             refresh_token_ttl_secs: 604800,
             cookie_domain: None,
-            cookie_secure: false,
+            cookie_secure,
         })
     }
 
     fn test_state() -> AppState {
+        test_state_with(test_jwt_config())
+    }
+
+    fn test_state_with(jwt_config: Arc<JwtConfig>) -> AppState {
         let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
@@ -110,7 +118,7 @@ mod tests {
         AppState::new(
             store,
             Arc::new(engine),
-            test_jwt_config(),
+            jwt_config,
             "test-worker-token".to_string(),
             event_sender,
         )
@@ -151,6 +159,46 @@ mod tests {
 
         let set_cookie = resp.headers().get_all("set-cookie");
         assert!(set_cookie.iter().count() > 0);
+    }
+
+    #[tokio::test]
+    async fn sign_in_set_cookie_has_secure_flag() {
+        let state = test_state_with(jwt_config_with_secure(true));
+        let hash = password::hash("password123").expect("failed to hash password");
+        state
+            .store
+            .create_user(NewUser {
+                email: "test@example.com".to_string(),
+                username: "testuser".to_string(),
+                password_hash: hash,
+                is_admin: None,
+            })
+            .await
+            .expect("failed to create user");
+
+        let app = Router::new().route("/", post(sign_in)).with_state(state);
+
+        let req = Request::builder()
+            .uri("/")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                to_string(&json!({
+                    "email": "test@example.com",
+                    "password": "password123"
+                }))
+                .expect("failed to serialize"),
+            ))
+            .expect("failed to build request");
+
+        let resp = app.oneshot(req).await.expect("request failed");
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let cookies: Vec<_> = resp.headers().get_all("set-cookie").iter().collect();
+        assert!(!cookies.is_empty());
+        for cookie in cookies {
+            assert!(cookie.to_str().expect("ascii cookie").contains("Secure"));
+        }
     }
 
     #[tokio::test]

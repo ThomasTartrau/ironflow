@@ -44,7 +44,7 @@ use axum::routing::{delete, get, patch, post, put};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::middleware::{WorkerToken, security_headers, worker_token_auth};
+use crate::middleware::{WorkerToken, https_redirect, security_headers, worker_token_auth};
 use crate::rate_limit::{RateLimitContext, per_minute, rate_limit};
 use crate::state::AppState;
 
@@ -72,6 +72,7 @@ const MAX_ARTIFACT_BODY_SIZE: usize = 128 * 1024 * 1024;
 /// // All defaults: rate limiting enabled, no custom dashboard dir
 /// let config = RouterConfig::default();
 /// assert_eq!(config.rate_limit_auth, Some(10));
+/// assert!(!config.enforce_https);
 ///
 /// // Disable auth rate limiting, custom dashboard
 /// let config = RouterConfig {
@@ -90,6 +91,11 @@ pub struct RouterConfig {
     /// Rate limit for general public API routes in requests per minute
     /// per IP. `None` disables the limiter.
     pub rate_limit_general: Option<u32>,
+    /// When `true`, requests carrying `X-Forwarded-Proto: http` are answered
+    /// with a `308` redirect to the HTTPS URL. Defaults to `false`.
+    ///
+    /// Only enable behind a reverse proxy that sets `X-Forwarded-Proto`.
+    pub enforce_https: bool,
 }
 
 impl Default for RouterConfig {
@@ -98,6 +104,7 @@ impl Default for RouterConfig {
             dashboard_dir: None,
             rate_limit_auth: Some(10),
             rate_limit_general: Some(60),
+            enforce_https: false,
         }
     }
 }
@@ -399,8 +406,13 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .nest("/api/v1", api_v1)
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .merge(artifact_upload_routes)
-        .layer(axum_mw::from_fn(security_headers));
+        .merge(artifact_upload_routes);
+
+    if config.enforce_https {
+        app = app.layer(axum_mw::from_fn(https_redirect));
+    }
+
+    app = app.layer(axum_mw::from_fn(security_headers));
 
     #[cfg(feature = "prometheus")]
     {

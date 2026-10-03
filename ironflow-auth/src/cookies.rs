@@ -136,6 +136,20 @@ mod tests {
     }
 
     #[test]
+    fn session_cookie_has_secure_httponly_samesite() {
+        let mut config = test_config();
+        config.cookie_secure = true;
+        for cookie in [
+            build_auth_cookie("tok", &config),
+            build_refresh_cookie("tok", &config),
+        ] {
+            assert!(cookie.contains("Secure"));
+            assert!(cookie.contains("HttpOnly"));
+            assert!(cookie.contains("SameSite=Lax"));
+        }
+    }
+
+    #[test]
     fn secure_flag_on_clear_when_enabled() {
         let mut config = test_config();
         config.cookie_secure = true;
