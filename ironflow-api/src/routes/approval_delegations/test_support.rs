@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use uuid::Uuid;
 
 use ironflow_auth::jwt::{AccessToken, JwtConfig};
 use ironflow_auth::password;
@@ -73,16 +72,30 @@ async fn create_user(store: &dyn Store, username: &str) -> User {
 
 /// A `Bearer` header for a non-admin user.
 pub(super) fn member_header(user: &User, state: &AppState) -> String {
-    bearer(user.id, &user.username, false, state)
+    bearer(user, state)
 }
 
 /// A `Bearer` header for an admin session bound to `user`.
-pub(super) fn admin_header(user: &User, state: &AppState) -> String {
-    bearer(user.id, &user.username, true, state)
+///
+/// The role is read from the store on every request, so `user` is promoted
+/// first and the token is minted at the version the promotion leaves.
+pub(super) async fn admin_header(user: &User, state: &AppState) -> String {
+    let admin = state
+        .store
+        .update_user_role(user.id, true)
+        .await
+        .expect("promote user");
+    bearer(&admin, state)
 }
 
-fn bearer(user_id: Uuid, username: &str, is_admin: bool, state: &AppState) -> String {
-    let token =
-        AccessToken::for_user(user_id, username, is_admin, &state.jwt_config).expect("token");
+fn bearer(user: &User, state: &AppState) -> String {
+    let token = AccessToken::for_user_with_version(
+        user.id,
+        &user.username,
+        user.is_admin,
+        user.token_version,
+        &state.jwt_config,
+    )
+    .expect("token");
     format!("Bearer {}", token.0)
 }

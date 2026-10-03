@@ -18,10 +18,11 @@ use chrono::Utc;
 use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::store::Store;
 use serde_json::json;
+use tracing::error;
 use uuid::Uuid;
 
 use crate::cookies::AUTH_COOKIE_NAME;
-use crate::jwt::{AccessToken, JwtConfig};
+use crate::jwt::{AccessToken, AccessTokenClaims, JwtConfig};
 use crate::password;
 
 // ---------------------------------------------------------------------------
@@ -31,7 +32,8 @@ use crate::password;
 /// An authenticated user extracted from a JWT.
 ///
 /// Use as an Axum handler parameter to enforce JWT authentication.
-/// Requires `Arc<JwtConfig>` to be extractable from state via `FromRef`.
+/// Requires `Arc<JwtConfig>` and `Arc<dyn Store>` to be extractable from state
+/// via `FromRef`: the token is checked against the stored user on every request.
 ///
 /// # Examples
 ///
@@ -56,11 +58,13 @@ impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
     Arc<JwtConfig>: FromRef<S>,
+    Arc<dyn Store>: FromRef<S>,
 {
     type Rejection = AuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let jwt_config = Arc::<JwtConfig>::from_ref(state);
+        let store = Arc::<dyn Store>::from_ref(state);
 
         let jar = CookieJar::from_headers(&parts.headers);
         let token = jar
@@ -81,11 +85,7 @@ where
             message: "No authentication token provided",
         })?;
 
-        let claims = AccessToken::decode(&token, &jwt_config).map_err(|_| AuthRejection {
-            status: StatusCode::UNAUTHORIZED,
-            code: "INVALID_TOKEN",
-            message: "Invalid or expired authentication token",
-        })?;
+        let claims = verify_access_token(&token, &jwt_config, store.as_ref()).await?;
 
         Ok(AuthenticatedUser {
             user_id: claims.user_id,
@@ -93,6 +93,48 @@ where
             is_admin: claims.is_admin,
         })
     }
+}
+
+/// Decode an access token and check it against the stored user.
+///
+/// A token whose `ver` no longer matches the user's `token_version` has been
+/// revoked (sign-out, password or role change). For a known user, the admin
+/// flag and username come from the store, never from the claims, so a
+/// demotion takes effect on the next request. A token whose user is not in
+/// the store keeps its claims.
+pub(crate) async fn verify_access_token(
+    token: &str,
+    jwt_config: &JwtConfig,
+    store: &dyn Store,
+) -> Result<AccessTokenClaims, AuthRejection> {
+    let mut claims = AccessToken::decode(token, jwt_config).map_err(|_| AuthRejection {
+        status: StatusCode::UNAUTHORIZED,
+        code: "INVALID_TOKEN",
+        message: "Invalid or expired authentication token",
+    })?;
+
+    let user = store.find_user_by_id(claims.user_id).await.map_err(|e| {
+        error!(user_id = %claims.user_id, error = %e, "failed to look up user for token");
+        AuthRejection {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "INTERNAL_ERROR",
+            message: "Failed to look up user",
+        }
+    })?;
+
+    if let Some(user) = user {
+        if user.token_version != claims.ver {
+            return Err(AuthRejection {
+                status: StatusCode::UNAUTHORIZED,
+                code: "TOKEN_REVOKED",
+                message: "Authentication token has been revoked",
+            });
+        }
+        claims.is_admin = user.is_admin;
+        claims.username = user.username;
+    }
+
+    Ok(claims)
 }
 
 /// Rejection type when JWT authentication fails.
@@ -329,7 +371,9 @@ pub enum AuthMethod {
 impl Authenticated {
     /// Whether the authenticated caller has admin privileges.
     ///
-    /// For JWT users, checks the `is_admin` claim.
+    /// For JWT users, checks the user's current admin status, read from the
+    /// store at request time (the token's `is_admin` claim is not trusted
+    /// for a stored user, and a role change revokes the token).
     /// For API key users, checks the owner's current admin status
     /// (fetched at request time, so demotions take effect immediately).
     pub fn is_admin(&self) -> bool {
@@ -390,11 +434,8 @@ where
         })?;
 
         let jwt_config = Arc::<JwtConfig>::from_ref(state);
-        let claims = AccessToken::decode(&token, &jwt_config).map_err(|_| AuthRejection {
-            status: StatusCode::UNAUTHORIZED,
-            code: "INVALID_TOKEN",
-            message: "Invalid or expired authentication token",
-        })?;
+        let store = Arc::<dyn Store>::from_ref(state);
+        let claims = verify_access_token(&token, &jwt_config, store.as_ref()).await?;
 
         Ok(Authenticated {
             user_id: claims.user_id,
@@ -921,5 +962,153 @@ mod tests {
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["code"], "KEY_DISABLED");
         assert_eq!(json["error"]["message"], "API key is disabled");
+    }
+
+    // ---------------------------------------------------------------
+    // Server-side revocation
+    // ---------------------------------------------------------------
+
+    async fn stored_user(store: &Arc<dyn Store>, username: &str, is_admin: bool) -> Uuid {
+        store
+            .create_user(NewUser {
+                email: format!("{username}@test.com"),
+                username: username.to_string(),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(is_admin),
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    fn bearer(uri: &str, token: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_accepts_token_at_current_version() {
+        let state = test_state();
+        let user_id = stored_user(&state.store, "alice", false).await;
+        let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
+        let app = Router::new()
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/me", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_rejects_token_after_session_revoked() {
+        let state = test_state();
+        let user_id = stored_user(&state.store, "alice", false).await;
+        let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
+        state.store.revoke_user_sessions(user_id).await.unwrap();
+
+        let app = Router::new()
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/me", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
+    }
+
+    #[tokio::test]
+    async fn jwt_extractor_accepts_token_issued_at_new_version() {
+        let state = test_state();
+        let user_id = stored_user(&state.store, "alice", false).await;
+        let v = state.store.revoke_user_sessions(user_id).await.unwrap();
+        let jwt = state.jwt_config.clone();
+        let token = AccessToken::for_user_with_version(user_id, "alice", false, v, &jwt).unwrap();
+
+        let app = Router::new()
+            .route("/me", get(|_user: AuthenticatedUser| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/me", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn dual_auth_rejects_jwt_after_session_revoked() {
+        let state = test_state();
+        let user_id = stored_user(&state.store, "alice", false).await;
+        let token = AccessToken::for_user(user_id, "alice", false, &state.jwt_config).unwrap();
+        state.store.revoke_user_sessions(user_id).await.unwrap();
+
+        let app = Router::new()
+            .route("/auth", get(|_auth: Authenticated| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/auth", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
+    }
+
+    #[tokio::test]
+    async fn demoted_admin_token_is_rejected() {
+        let state = test_state();
+        let admin_id = stored_user(&state.store, "root", true).await;
+        let token = AccessToken::for_user(admin_id, "root", true, &state.jwt_config).unwrap();
+        state.store.update_user_role(admin_id, false).await.unwrap();
+
+        let app = Router::new()
+            .route("/admin", get(|_auth: Authenticated| async { "ok" }))
+            .with_state(state);
+
+        let resp = app.oneshot(bearer("/admin", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = response_json(resp).await;
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
+    }
+
+    #[tokio::test]
+    async fn jwt_is_admin_comes_from_store() {
+        let state = test_state();
+        let user_id = stored_user(&state.store, "member", false).await;
+        // The claim says admin, the store says member: the store wins.
+        let token = AccessToken::for_user(user_id, "forged", true, &state.jwt_config).unwrap();
+
+        let app = Router::new()
+            .route(
+                "/auth",
+                get(|auth: Authenticated| async move {
+                    let username = match &auth.method {
+                        AuthMethod::Jwt { username, .. } => username.clone(),
+                        AuthMethod::ApiKey { .. } => String::new(),
+                    };
+                    Json(json!({ "is_admin": auth.is_admin(), "username": username }))
+                }),
+            )
+            .route(
+                "/me",
+                get(|user: AuthenticatedUser| async move {
+                    Json(json!({ "is_admin": user.is_admin, "username": user.username }))
+                }),
+            )
+            .with_state(state);
+
+        let resp = app
+            .clone()
+            .oneshot(bearer("/auth", &token.0))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = response_json(resp).await;
+        assert_eq!(json["is_admin"], false);
+        assert_eq!(json["username"], "member");
+
+        let resp = app.oneshot(bearer("/me", &token.0)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = response_json(resp).await;
+        assert_eq!(json["is_admin"], false);
+        assert_eq!(json["username"], "member");
     }
 }

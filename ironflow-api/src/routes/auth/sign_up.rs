@@ -2,19 +2,18 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use validator::Validate;
 
-use ironflow_auth::cookies::{build_auth_cookie, build_refresh_cookie};
-use ironflow_auth::jwt::{AccessToken, RefreshToken};
 use ironflow_auth::password;
 use ironflow_store::entities::NewUser;
 use ironflow_store::error::StoreError;
 
 use crate::entities::SignUpRequest;
 use crate::error::ApiError;
+use crate::routes::auth::session::issue_session;
 use crate::state::AppState;
 
 /// Register a new user with email and password.
@@ -64,18 +63,7 @@ pub async fn sign_up(
             other => ApiError::Store(other),
         })?;
 
-    let access = AccessToken::for_user(user.id, &user.username, user.is_admin, &state.jwt_config)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let refresh = RefreshToken::for_user(user.id, &user.username, user.is_admin, &state.jwt_config)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let mut headers = HeaderMap::new();
-    if let Ok(val) = HeaderValue::from_str(&build_auth_cookie(&access.0, &state.jwt_config)) {
-        headers.append("Set-Cookie", val);
-    }
-    if let Ok(val) = HeaderValue::from_str(&build_refresh_cookie(&refresh.0, &state.jwt_config)) {
-        headers.append("Set-Cookie", val);
-    }
+    let headers = issue_session(&state, &user).await?;
 
     Ok((StatusCode::NO_CONTENT, headers))
 }

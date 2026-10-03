@@ -71,4 +71,4 @@ pub use step_dependency::{NewStepDependency, StepDependency};
 pub use step_kind::StepKind;
 pub use step_status::StepStatus;
 pub use trigger_kind::TriggerKind;
-pub use user::{NewUser, User};
+pub use user::{NewRefreshToken, NewUser, User};

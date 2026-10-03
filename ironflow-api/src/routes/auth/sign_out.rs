@@ -8,7 +8,9 @@ use serde_json::json;
 
 use ironflow_auth::cookies::{clear_auth_cookie, clear_refresh_cookie};
 use ironflow_auth::extractor::AuthenticatedUser;
+use ironflow_store::error::StoreError;
 
+use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
 
@@ -28,8 +30,16 @@ use crate::state::AppState;
 )]
 pub async fn sign_out(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
-) -> impl IntoResponse {
+    user: AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    // Revoke every session of the user: the access token presented here and
+    // any copy of it stop working, and stored refresh tokens are dropped. A
+    // token whose user no longer exists has nothing left to revoke.
+    match state.store.revoke_user_sessions(user.user_id).await {
+        Ok(_) | Err(StoreError::UserNotFound(_)) => {}
+        Err(e) => return Err(ApiError::Store(e)),
+    }
+
     let mut headers = HeaderMap::new();
     if let Ok(val) = HeaderValue::from_str(&clear_auth_cookie(&state.jwt_config)) {
         headers.append("Set-Cookie", val);
@@ -38,7 +48,7 @@ pub async fn sign_out(
         headers.append("Set-Cookie", val);
     }
 
-    (headers, ok(json!({ "signed_out": true })))
+    Ok((headers, ok(json!({ "signed_out": true }))))
 }
 
 #[cfg(test)]
@@ -46,13 +56,14 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use ironflow_auth::jwt::{AccessToken, JwtConfig};
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
+    use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -60,6 +71,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::routes::auth::me::me;
 
     struct TestWorkflow;
 
@@ -140,5 +152,65 @@ mod tests {
 
         let resp = app.oneshot(req).await.expect("request failed");
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn access_token_rejected_after_sign_out() {
+        let state = test_state();
+        let user = state
+            .store
+            .create_user(NewUser {
+                email: "signout@example.com".to_string(),
+                username: "signoutuser".to_string(),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .expect("failed to create user");
+        let token = AccessToken::for_user(user.id, "signoutuser", false, &state.jwt_config)
+            .expect("failed to create token");
+        let auth_header = format!("Bearer {}", token.0);
+        let app = Router::new()
+            .route("/me", get(me))
+            .route("/sign-out", post(sign_out))
+            .with_state(state);
+
+        let send = |method: &str, uri: &str| {
+            Request::builder()
+                .uri(uri)
+                .method(method)
+                .header("authorization", &auth_header)
+                .body(Body::empty())
+                .expect("failed to build request")
+        };
+
+        let before = app
+            .clone()
+            .oneshot(send("GET", "/me"))
+            .await
+            .expect("request failed");
+        assert_eq!(before.status(), StatusCode::OK);
+
+        let signed_out = app
+            .clone()
+            .oneshot(send("POST", "/sign-out"))
+            .await
+            .expect("request failed");
+        assert_eq!(signed_out.status(), StatusCode::OK);
+
+        // The token is still correctly signed and unexpired, but the session
+        // it belonged to was revoked server-side.
+        let after = app
+            .clone()
+            .oneshot(send("GET", "/me"))
+            .await
+            .expect("request failed");
+        assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+
+        let replay = app
+            .oneshot(send("POST", "/sign-out"))
+            .await
+            .expect("request failed");
+        assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -56,6 +56,9 @@ pub async fn update_role(
         ));
     }
 
+    // The store bumps the target's token_version and drops its refresh tokens
+    // in the same write, so a demoted admin loses admin access on the next
+    // request instead of when the access token expires.
     let user = state
         .store
         .update_user_role(id, req.is_admin)
@@ -235,5 +238,58 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn demoted_admin_token_is_rejected() {
+        let state = test_state();
+        let admin = state
+            .store
+            .create_user(NewUser {
+                email: "admin@example.com".to_string(),
+                username: "admin".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+        let other_admin = state
+            .store
+            .create_user(NewUser {
+                email: "other@example.com".to_string(),
+                username: "other".to_string(),
+                password_hash: "hash".to_string(),
+                is_admin: Some(true),
+            })
+            .await
+            .unwrap();
+
+        let admin_header = make_auth_header(admin.id, true, &state);
+        let other_header = make_auth_header(other_admin.id, true, &state);
+        let app = Router::new()
+            .route("/{id}/role", patch(update_role))
+            .with_state(state);
+
+        let demote = Request::builder()
+            .uri(format!("/{}/role", other_admin.id))
+            .method("PATCH")
+            .header("content-type", "application/json")
+            .header("authorization", admin_header)
+            .body(Body::from(to_string(&json!({"is_admin": false})).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(demote).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // The demoted admin's token still claims is_admin = true and has not
+        // expired, but it was issued before the role change.
+        let retaliate = Request::builder()
+            .uri(format!("/{}/role", admin.id))
+            .method("PATCH")
+            .header("content-type", "application/json")
+            .header("authorization", other_header)
+            .body(Body::from(to_string(&json!({"is_admin": false})).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(retaliate).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

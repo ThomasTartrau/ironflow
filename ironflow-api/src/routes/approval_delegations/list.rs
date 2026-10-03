@@ -198,7 +198,7 @@ mod tests {
     async fn an_admin_sees_every_active_delegation() {
         let (state, users) = test_state().await;
         let (granted, received, third_party, expired) = seed(&state, &users).await;
-        let auth = admin_header(&users.alice, &state);
+        let auth = admin_header(&users.alice, &state).await;
 
         let ids = list_ids(state, &auth, "/").await;
 
@@ -213,7 +213,7 @@ mod tests {
     async fn an_admin_can_filter_by_delegate() {
         let (state, users) = test_state().await;
         let (granted, _, third_party, _) = seed(&state, &users).await;
-        let auth = admin_header(&users.alice, &state);
+        let auth = admin_header(&users.alice, &state).await;
 
         let uri = format!("/?to_user_id={}", users.bob.id);
         let ids = list_ids(state, &auth, &uri).await;
@@ -256,7 +256,7 @@ mod tests {
     async fn per_page_is_capped_at_one_hundred() {
         let (state, users) = test_state().await;
         seed(&state, &users).await;
-        let auth = admin_header(&users.alice, &state);
+        let auth = admin_header(&users.alice, &state).await;
 
         let app = Router::new()
             .route("/", get(list_approval_delegations))

@@ -2,7 +2,7 @@
 
 use uuid::Uuid;
 
-use crate::entities::{NewUser, Page, User};
+use crate::entities::{NewRefreshToken, NewUser, Page, User};
 use crate::store::StoreFuture;
 
 /// Async storage abstraction for users.
@@ -45,12 +45,18 @@ pub trait UserStore: Send + Sync {
 
     /// Update a user's admin role.
     ///
+    /// Also bumps [`User::token_version`] and deletes the user's refresh
+    /// tokens, so tokens carrying the old role stop being accepted.
+    ///
     /// # Errors
     ///
     /// Returns [`StoreError::UserNotFound`] if the user does not exist.
     fn update_user_role(&self, id: Uuid, is_admin: bool) -> StoreFuture<'_, User>;
 
     /// Update a user's password hash.
+    ///
+    /// Also bumps [`User::token_version`] and deletes the user's refresh
+    /// tokens, revoking every session issued before the change.
     ///
     /// # Errors
     ///
@@ -77,4 +83,37 @@ pub trait UserStore: Send + Sync {
     /// Returns [`StoreError::UserNotFound`](crate::error::StoreError::UserNotFound)
     /// if the user does not exist.
     fn set_user_groups(&self, user_id: Uuid, groups: Vec<String>) -> StoreFuture<'_, Vec<String>>;
+
+    /// Revoke every session of a user.
+    ///
+    /// Increments [`User::token_version`], deletes all of the user's refresh
+    /// tokens and returns the new version. Access tokens carrying an older
+    /// version are rejected from then on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::UserNotFound`](crate::error::StoreError::UserNotFound)
+    /// if the user does not exist.
+    fn revoke_user_sessions(&self, id: Uuid) -> StoreFuture<'_, i64>;
+
+    /// Record an issued refresh token.
+    ///
+    /// Also drops the user's refresh tokens that have already expired.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::UserNotFound`](crate::error::StoreError::UserNotFound)
+    /// if the user does not exist.
+    fn store_refresh_token(&self, token: NewRefreshToken) -> StoreFuture<'_, ()>;
+
+    /// Atomically remove a refresh token and return its owner.
+    ///
+    /// A refresh token is single use: once consumed it is gone. Returns `None`
+    /// when the token is unknown, already used or expired.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Database`](crate::error::StoreError::Database) on
+    /// a storage failure.
+    fn consume_refresh_token(&self, token_hash: &str) -> StoreFuture<'_, Option<Uuid>>;
 }
