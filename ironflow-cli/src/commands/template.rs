@@ -73,11 +73,14 @@ pub enum TemplateCommands {
     },
     /// Check for or apply template updates.
     Update {
-        /// Template name to update (omit to check all).
+        /// Template name to update (omit for all).
         name: Option<String>,
         /// Only check for updates, do not modify files.
         #[arg(long)]
         check: bool,
+        /// Skip Ironflow version compatibility check.
+        #[arg(long)]
+        force: bool,
         /// Registry URL (overrides config).
         #[arg(long)]
         registry_url: Option<String>,
@@ -121,8 +124,9 @@ pub fn execute(args: &TemplateArgs) -> Result<()> {
         TemplateCommands::Update {
             name,
             check,
+            force,
             registry_url,
-        } => registry_ops::cmd_update(name.as_deref(), *check, registry_url.as_deref()),
+        } => registry_ops::cmd_update(name.as_deref(), *check, *force, registry_url.as_deref()),
     }
 }
 
