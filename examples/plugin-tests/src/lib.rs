@@ -54,3 +54,19 @@ pub mod operation_gitlab_issue {}
 /// `skills/test/SKILL.md`
 #[doc = include_str!("../../../plugins/ironflow/skills/test/SKILL.md")]
 pub mod test {}
+
+/// `skills/upgrade/SKILL.md`
+#[doc = include_str!("../../../plugins/ironflow/skills/upgrade/SKILL.md")]
+pub mod upgrade {}
+
+/// `skills/upgrade/references/api.md`
+#[doc = include_str!("../../../plugins/ironflow/skills/upgrade/references/api.md")]
+pub mod upgrade_api {}
+
+/// `skills/upgrade/references/wiring.md`
+#[doc = include_str!("../../../plugins/ironflow/skills/upgrade/references/wiring.md")]
+pub mod upgrade_wiring {}
+
+/// `skills/upgrade/references/adopt.md`
+#[doc = include_str!("../../../plugins/ironflow/skills/upgrade/references/adopt.md")]
+pub mod upgrade_adopt {}

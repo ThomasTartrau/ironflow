@@ -25,6 +25,8 @@ One entry point, `/ironflow`, with a verb:
 | `/ironflow operation <name>` | Writes a custom `Operation` (any API call tracked as a step) |
 | `/ironflow test <workflow>` | Writes an end-to-end test: real engine, in-memory store, record/replay provider |
 | `/ironflow review [file]` | Runs the workflow reviewer agent on a handler |
+| `/ironflow upgrade [version]` | Bumps every ironflow crate (latest by default), reads the changelog in between, maps each change to your code, then proposes or applies the migrations (`--apply`). `--from <git-rev>` analyses a bump already made |
+| `/ironflow audit` | Checks existing code against the current idioms (typed API, deprecated calls, wiring) without bumping |
 
 The sub-skills are hidden from the `/` menu; the hub loads the right one.
 
@@ -47,6 +49,8 @@ plugins/ironflow/
     workflow/      handler recipe, step catalogue, approval replay pitfalls
     operation/     Operation trait recipe, HTTP JSON and GitLab issue examples
     test/          end-to-end test recipe
+    upgrade/       upgrade and audit procedure, migration catalogue in references/,
+                   changes.sh (changelog between two Cargo.lock), scan.sh (catalogue grep)
   agents/
     workflow-reviewer.md
 ```
@@ -57,3 +61,13 @@ The project template is scaffolded and compiled against the workspace by
 `scripts/check-plugin-template.sh`. Every Rust snippet in the skills is compiled as a
 doctest by `examples/plugin-tests`. Both run in CI, so a change to the Ironflow API that
 breaks a skill breaks the pipeline.
+
+The upgrade catalogue (`skills/upgrade/references/`) is written by hand: a change that
+breaks, deprecates or changes the behavior of code an Ironflow user writes adds an entry
+there, with a `detect:` pattern when a line of code can reveal it. An entry is a `## <id>`
+heading followed by `- kind:` (`breaking`, `deprecated`, `behavior`, `idiom` or `adopt`),
+`- since: <crate> <version> (#<issue>)`, any number of ``- detect: `<grep -E pattern>` ``
+lines, an optional `- compiler:` line quoting the error it fixes, then a `diff` block from
+the old form to the new one. Check a new pattern against the workspace:
+`plugins/ironflow/skills/upgrade/scripts/scan.sh .` must not report code that is already
+up to date.

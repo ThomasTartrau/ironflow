@@ -1,7 +1,7 @@
 ---
 name: ironflow
-description: Entry point for building on the Ironflow workflow engine. Use for setting up an Ironflow project (server + worker), writing a WorkflowHandler, writing a custom Operation, testing a workflow end to end, or reviewing a handler. Trigger on "ironflow", "workflow handler", "ironflow setup", "ctx.shell", "ctx.agent", "approval gate", "créer un workflow ironflow", "mettre en place ironflow".
-argument-hint: "[setup|workflow|operation|test|review] [name]"
+description: Entry point for building on the Ironflow workflow engine. Use for setting up an Ironflow project (server + worker), writing a WorkflowHandler, writing a custom Operation, testing a workflow end to end, reviewing a handler, upgrading the ironflow crates and migrating the code, or auditing existing code against the current Ironflow idioms. Trigger on "ironflow", "workflow handler", "ironflow setup", "ctx.shell", "ctx.agent", "approval gate", "upgrade ironflow", "bump ironflow", "créer un workflow ironflow", "mettre en place ironflow", "mettre à jour ironflow", "migrer ironflow".
+argument-hint: "[setup|workflow|operation|test|review|upgrade|audit] [name|version]"
 ---
 
 # Ironflow
@@ -17,8 +17,10 @@ Routes to one sub-skill per verb. Arguments: `$ARGUMENTS`.
 | `operation <name>` | skill `ironflow:operation` | Write a custom `Operation` (API call tracked as a step) |
 | `test <workflow>` | skill `ironflow:test` | Write an end-to-end test for a handler |
 | `review [file]` | agent `ironflow:workflow-reviewer` | Review a handler for replay, naming and secret pitfalls |
+| `upgrade [version]` | skill `ironflow:upgrade` | Bump every ironflow crate (latest by default), then migrate the code to that release |
+| `audit` | skill `ironflow:upgrade` | Check existing code against the current idioms, without bumping |
 
-Invoke the sub-skill with the Skill tool, passing the remaining arguments. For `review`, spawn the agent with the file path (or the handler name to locate).
+Invoke the sub-skill with the Skill tool, passing the remaining arguments (`audit` included, it selects the mode). For `review`, spawn the agent with the file path (or the handler name to locate).
 
 ## No verb given
 
@@ -33,6 +35,7 @@ grep -rn "impl WorkflowHandler for" --include=*.rs . 2>/dev/null | head -20
 
 - No `ironflow-engine` dependency anywhere: propose `setup`. Say what it creates in one line.
 - Dependency present: list the handlers found and propose `workflow`, `operation`, `test` or `review`. One question, not a menu of everything.
+- `ironflow-engine` in `Cargo.lock` older than `cargo search ironflow-engine --limit 1`: say so, and add `upgrade` to the proposal.
 
 ## Conventions shared by every sub-skill
 

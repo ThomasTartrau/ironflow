@@ -1,7 +1,7 @@
 {
   "name": "ironflow",
-  "version": "0.1.0",
-  "description": "Set up an Ironflow project, write workflows and custom operations, test them end to end, and review handlers for replay and secret pitfalls",
+  "version": "0.2.0",
+  "description": "Set up an Ironflow project, write workflows and custom operations, test them end to end, review handlers for replay and secret pitfalls, and upgrade or audit a project against the latest release",
   "author": {
     "name": "Thomas Tartrau",
     "url": "https://gitlab.com/ThomasTartrau"

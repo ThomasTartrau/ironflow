@@ -29,8 +29,8 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 ```
 
 Other builders: `clean_env()` (start from an empty environment), `allow_failure()`, `exit_code_as_output()`,
-`retry_policy(RetryPolicy)`, `output("target/*.log")` and `input("build", "report.html")`
-for artifacts (below).
+`retry_policy(RetryPolicy)`, `output("target/*.log")` and `input(&handle)` for artifacts
+(below).
 
 A non-zero exit code fails the step. When the code is data the handler branches on
 (a conflicting `git merge`, red tests), add `exit_code_as_output()`: the step is
