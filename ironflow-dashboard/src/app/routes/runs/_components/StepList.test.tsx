@@ -1,9 +1,10 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { StepResponse } from "@/app/lib/types";
 import {
 	ApprovalProgress,
 	describeApprovalReason,
+	StepList,
 	StepTokenUsage,
 } from "./StepList";
 
@@ -163,5 +164,74 @@ describe("StepTokenUsage", () => {
 
 		expect(screen.queryByText(/cache read/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/cache write/)).not.toBeInTheDocument();
+	});
+});
+
+describe("StepList long step names", () => {
+	const longName =
+		"thread api/crates/rest/companies/src/companies/edit-database-lock-acquired-before-permission-check";
+
+	function longStep(overrides: Partial<StepResponse> = {}): StepResponse {
+		return stepFixture({
+			name: longName,
+			kind: "gitlab",
+			status: "completed",
+			approval_requirement: undefined,
+			approvals: [],
+			approvals_required: undefined,
+			...overrides,
+		});
+	}
+
+	function expectFlatRow(container: HTMLElement) {
+		expect(container.querySelectorAll("td td")).toHaveLength(0);
+		const headers = container.querySelectorAll("th");
+		const cells = container
+			.querySelectorAll("tbody tr")[0]
+			.querySelectorAll("td");
+		expect(headers).toHaveLength(6);
+		expect(cells).toHaveLength(headers.length);
+	}
+
+	it("renders the name in a truncate element without nested cells", () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const { container } = render(<StepList steps={[longStep()]} />);
+
+		expect(errorSpy).not.toHaveBeenCalled();
+		errorSpy.mockRestore();
+		expectFlatRow(container);
+		expect(screen.getByText(longName).classList.contains("truncate")).toBe(
+			true,
+		);
+	});
+
+	it("keeps the running dot beside a truncated name", () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const { container } = render(
+			<StepList steps={[longStep({ status: "running" })]} />,
+		);
+
+		expect(errorSpy).not.toHaveBeenCalled();
+		errorSpy.mockRestore();
+		expectFlatRow(container);
+		expect(container.querySelector(".animate-ping")).not.toBeNull();
+		expect(screen.getByText(longName).classList.contains("truncate")).toBe(
+			true,
+		);
+	});
+
+	it("truncates the shortened name of a URL step", () => {
+		const { container } = render(
+			<StepList
+				steps={[
+					longStep({ name: "fetch-https://example.com/a/very/long/path" }),
+				]}
+			/>,
+		);
+
+		expectFlatRow(container);
+		expect(
+			screen.getByText("fetch: example.com").classList.contains("truncate"),
+		).toBe(true);
 	});
 });

@@ -247,27 +247,20 @@ function StepNameCell({
 	isRunning: boolean;
 }) {
 	const shortName = shortenStepName(name);
-	const needsTooltip = shortName !== name;
 	return (
-		<TableCell className="font-medium">
-			<span className="flex items-center gap-2 min-w-0">
-				{isRunning && <RunningDot />}
-				{needsTooltip ? (
-					<TooltipProvider delay={200}>
-						<Tooltip>
-							<TooltipTrigger
-								render={<span className="truncate">{shortName}</span>}
-							/>
-							<TooltipContent side="bottom">
-								<span className="font-mono text-xs">{name}</span>
-							</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
-				) : (
-					<span className="truncate">{name}</span>
-				)}
-			</span>
-		</TableCell>
+		<span className="flex items-center gap-2 min-w-0 overflow-hidden">
+			{isRunning && <RunningDot />}
+			<TooltipProvider delay={200}>
+				<Tooltip>
+					<TooltipTrigger
+						render={<span className="truncate min-w-0">{shortName}</span>}
+					/>
+					<TooltipContent side="bottom">
+						<span className="font-mono text-xs">{name}</span>
+					</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
+		</span>
 	);
 }
 
@@ -358,9 +351,8 @@ function NestedStep({ step }: { step: StepResponse }) {
 				) : (
 					<ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
 				)}
-				<span className="font-medium truncate flex items-center gap-2">
-					{isRunning && <RunningDot />}
-					{step.name}
+				<span className="min-w-0 flex-1 font-medium">
+					<StepNameCell name={step.name} isRunning={isRunning} />
 				</span>
 				<Badge
 					variant="outline"
@@ -783,7 +775,7 @@ function StepRow({ step }: { step: StepResponse }) {
 				onClick={() => setIsExpanded(!isExpanded)}
 				className={`cursor-pointer hover:bg-muted/50 transition-colors duration-700 ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-[var(--status-running-bg)] border-l-2 border-l-[var(--status-running-fg)]" : ""}`}
 			>
-				<TableCell className="font-medium">
+				<TableCell className="font-medium max-w-0 overflow-hidden">
 					<StepNameCell name={step.name} isRunning={isRunning} />
 				</TableCell>
 				<TableCell>
