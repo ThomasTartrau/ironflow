@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.8.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.8.0...ironflow-core-v4.8.1) - 2026-10-03
+
+### Fixed
+
+- #155 block SSRF to internal hosts in web_fetch and Http
+
 ## [4.8.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.7.1...ironflow-core-v4.8.0) - 2026-10-01
 
 ### Added
