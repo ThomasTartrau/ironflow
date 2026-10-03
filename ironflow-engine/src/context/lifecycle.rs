@@ -22,7 +22,9 @@ use ironflow_store::models::{
 use crate::budget::step_budget_usd;
 use crate::config::StepConfig;
 use crate::error::EngineError;
-use crate::executor::{StepArtifacts, StepOutput, StepResult, execute_step_config_intercepted};
+use crate::executor::{
+    ERROR_KEY, StepArtifacts, StepOutput, StepResult, execute_step_config_intercepted,
+};
 use crate::log_sender::StepLogSender;
 use crate::notify::{
     WorkflowAgentStepTokensUsedEvent, WorkflowEvent, WorkflowStepCompletedEvent,
@@ -350,7 +352,7 @@ impl WorkflowContext {
                     "step input preparation failed but allow_failure is set, continuing"
                 );
                 return Ok(StepOutput {
-                    output: json!({"error": err.to_string()}),
+                    output: json!({ (ERROR_KEY): err.to_string() }),
                     duration_ms: 0,
                     cost_usd: Decimal::ZERO,
                     input_tokens: None,

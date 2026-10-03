@@ -32,7 +32,8 @@ let response = ctx.http("fetch-data", HttpConfig::get("https://api.example.com/d
 ```
 
 A shell step reads back through `stdout()`, `stderr()` and `exit_code()`, an
-HTTP step through `status()` and `body()`. Files a shell step declares with
+HTTP step through `status()` and `body()`. A step tolerated with
+`allow_failure()` that failed reads back its message through `error()`. Files a shell step declares with
 `.output("target/*.log")` are handed to later steps through a handle:
 `build.artifact("build.log")?`, passed to `ShellConfig::input(&handle)` or
 `ctx.get_artifact(&handle)`. A name the step did not declare fails with

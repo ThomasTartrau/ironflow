@@ -11,7 +11,7 @@ use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::retry::is_retryable;
 
 use crate::error::EngineError;
-use crate::executor::{StepArtifacts, StepOutput};
+use crate::executor::{ERROR_KEY, StepArtifacts, StepOutput};
 
 #[cfg(feature = "prometheus")]
 pub(super) fn record_retry_metric(kind: &str, outcome: &str) {
@@ -53,7 +53,7 @@ pub(super) fn allowed_failure_output(
     partial: Option<&StepPartialUsage>,
 ) -> StepOutput {
     StepOutput {
-        output: raw_response.unwrap_or_else(|| json!({"error": error_msg})),
+        output: raw_response.unwrap_or_else(|| json!({ (ERROR_KEY): error_msg })),
         duration_ms: partial.and_then(|p| p.duration_ms).unwrap_or(0),
         cost_usd: partial.and_then(|p| p.cost_usd).unwrap_or(Decimal::ZERO),
         input_tokens: partial.and_then(|p| p.input_tokens),

@@ -15,7 +15,7 @@ typed accessors; a stored step through `StepOutput::from(&step)`.
 
 ```diff
 - let out = log.output.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-+ let out = log.stdout();               // also stderr(), exit_code(), status(), body(), text()
++ let out = log.stdout();               // also stderr(), exit_code(), status(), body(), text(), error()
 - s.output.as_ref().and_then(|o| o.get("stdout")).and_then(|v| v.as_str())
 + StepOutput::from(&s).stdout()          // use ironflow_engine::executor::StepOutput;
 ```
