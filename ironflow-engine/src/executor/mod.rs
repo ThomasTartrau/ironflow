@@ -43,6 +43,9 @@ pub use shell::ShellExecutor;
 pub use step_artifacts::StepArtifacts;
 pub use workflow_output::SubWorkflowOutput;
 
+/// Key under which a tolerated (`allow_failure`) step failure stores its message.
+pub(crate) const ERROR_KEY: &str = "error";
+
 /// Result of executing a single step.
 #[derive(Debug, Clone)]
 pub struct StepOutput {
@@ -308,6 +311,66 @@ impl StepOutput {
     /// ```
     pub fn text(&self) -> &str {
         self.output.as_str().unwrap_or_default()
+    }
+
+    /// Error message of a step tolerated with `allow_failure()` that failed.
+    ///
+    /// An `allow_failure` step that failed (timeout, spawn failure, non-zero
+    /// exit of a shell step without `exit_code_as_output()`, failed input
+    /// preparation) has the output `{"error": "<message>"}`. This accessor
+    /// returns that message. It returns `None` for a successful step, and for
+    /// a shell step configured with `exit_code_as_output()`: the exit code is
+    /// data there, read it with [`exit_code`](Self::exit_code).
+    ///
+    /// It complements [`stdout`](Self::stdout), [`stderr`](Self::stderr),
+    /// [`exit_code`](Self::exit_code), [`status`](Self::status),
+    /// [`body`](Self::body) and [`text`](Self::text). It reads the `"error"`
+    /// key of the output, so it is meant for `allow_failure` steps: an agent or
+    /// operation whose own JSON has an `"error"` key is read the same way.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::{StepArtifacts, StepOutput};
+    /// use rust_decimal::Decimal;
+    /// use serde_json::json;
+    ///
+    /// let failed = StepOutput {
+    ///     output: json!({"error": "timed out"}),
+    ///     duration_ms: 3,
+    ///     cost_usd: Decimal::ZERO,
+    ///     input_tokens: None,
+    ///     cache_read_input_tokens: None,
+    ///     cache_creation_input_tokens: None,
+    ///     output_tokens: None,
+    ///     model: None,
+    ///     debug_messages: None,
+    ///     artifacts: StepArtifacts::default(),
+    ///     account_id: None,
+    /// };
+    /// assert_eq!(failed.error(), Some("timed out"));
+    /// assert!(!failed.is_success());
+    ///
+    /// let ok = StepOutput { output: json!({"stdout": "", "stderr": "", "exit_code": 0}), ..failed };
+    /// assert_eq!(ok.error(), None);
+    /// ```
+    ///
+    /// ```no_run
+    /// use ironflow_engine::config::ShellConfig;
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let out = ctx
+    ///     .shell("fetch", ShellConfig::new("sleep 30").timeout_secs(1).allow_failure())
+    ///     .await?;
+    /// assert!(out.error().is_some());
+    /// assert!(!out.is_success());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn error(&self) -> Option<&str> {
+        self.output.get(ERROR_KEY).and_then(Value::as_str)
     }
 
     /// Whether the step succeeded from the point of view of its own kind.
@@ -687,6 +750,50 @@ mod tests {
         AgentStepConfig, ApprovalConfig, DecisionConfig, DelayConfig, HttpConfig, ShellConfig,
         WorkflowStepConfig,
     };
+
+    fn output_of(value: Value) -> StepOutput {
+        StepOutput {
+            output: value,
+            duration_ms: 1,
+            cost_usd: rust_decimal::Decimal::ZERO,
+            input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            output_tokens: None,
+            model: None,
+            debug_messages: None,
+            artifacts: StepArtifacts::default(),
+            account_id: None,
+        }
+    }
+
+    #[test]
+    fn step_output_error_is_some_for_failure_output() {
+        let output = output_of(json!({"error": "boom"}));
+
+        assert_eq!(output.error(), Some("boom"));
+        assert!(!output.is_success());
+    }
+
+    #[test]
+    fn step_output_error_is_none_for_success_shell_output() {
+        let output = output_of(json!({"stdout": "hi", "stderr": "", "exit_code": 0}));
+
+        assert_eq!(output.error(), None);
+        assert!(output.is_success());
+    }
+
+    #[test]
+    fn step_output_error_is_none_for_http_and_agent_text() {
+        assert_eq!(output_of(json!({"status": 200, "body": ""})).error(), None);
+        assert_eq!(output_of(json!("fine")).error(), None);
+    }
+
+    #[test]
+    fn step_output_error_is_none_when_error_key_not_a_string() {
+        assert_eq!(output_of(json!({"error": 5})).error(), None);
+        assert_eq!(output_of(Value::Null).error(), None);
+    }
 
     #[test]
     fn step_output_with_no_debug_messages_returns_none() {

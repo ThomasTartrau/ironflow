@@ -136,6 +136,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn step_output_error_reads_from_stored_step() {
+        let step = stored_step(Some(json!({"error": "x"}))).await;
+        assert_eq!(StepOutput::from(&step).error(), Some("x"));
+
+        let step = stored_step(None).await;
+        assert_eq!(StepOutput::from(&step).error(), None);
+    }
+
+    #[tokio::test]
     async fn a_step_without_output_reads_as_empty() {
         let step = stored_step(None).await;
 

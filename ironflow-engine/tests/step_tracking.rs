@@ -153,3 +153,62 @@ async fn workflow_result_carries_step_results() {
     assert_eq!(result.steps[1].status, StepStatus::Completed);
     assert!(result.run.duration_ms > 0);
 }
+
+#[tokio::test]
+async fn step_output_error_is_some_for_timed_out_allow_failure_shell() {
+    let (mut ctx, _store) = run_ctx().await;
+
+    let out = ctx
+        .shell(
+            "slow",
+            ShellConfig::new("sleep 5").timeout_secs(1).allow_failure(),
+        )
+        .await
+        .unwrap();
+
+    assert!(out.error().is_some());
+    assert!(!out.is_success());
+    assert_eq!(out.stdout(), "");
+}
+
+#[tokio::test]
+async fn step_output_error_is_some_for_nonzero_allow_failure_shell() {
+    let (mut ctx, _store) = run_ctx().await;
+
+    let out = ctx
+        .shell("boom", ShellConfig::new("exit 3").allow_failure())
+        .await
+        .unwrap();
+
+    assert!(out.error().is_some());
+}
+
+#[tokio::test]
+async fn step_output_error_is_none_for_successful_shell() {
+    let (mut ctx, _store) = run_ctx().await;
+
+    let out = ctx
+        .shell("fine", ShellConfig::new("echo ok").allow_failure())
+        .await
+        .unwrap();
+
+    assert_eq!(out.error(), None);
+}
+
+#[tokio::test]
+async fn step_output_error_is_none_for_exit_code_as_output() {
+    let (mut ctx, _store) = run_ctx().await;
+
+    let out = ctx
+        .shell(
+            "code",
+            ShellConfig::new("exit 3")
+                .exit_code_as_output()
+                .allow_failure(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(out.error(), None);
+    assert_eq!(out.exit_code(), Some(3));
+}
