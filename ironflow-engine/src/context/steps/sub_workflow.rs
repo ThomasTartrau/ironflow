@@ -3,29 +3,59 @@
 //! A sub-workflow runs a registered [`WorkflowHandler`] in its own child run.
 //! The child context is built here from the parent's private fields, which is
 //! possible because this module is a descendant of `context`.
+//!
+//! A child that suspends (approval, human input, delay, signal) keeps its own
+//! suspension status and the parent's `Workflow` step stays open with the
+//! child run id in its output. The whole chain is suspended with it; when the
+//! root run replays, the open step re-enters the same child run.
 
 use std::collections::HashMap;
 use std::time::Instant;
 
 use chrono::Utc;
 use rust_decimal::Decimal;
-use serde_json::{Value, to_value};
-use tracing::{error, info};
+use serde_json::{Value, from_value, json, to_value};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::provider::LABEL_ROOT_RUN_ID;
+use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, NewStep, RunStatus, RunUpdate, StepKind, StepStatus, StepUpdate, TriggerKind,
+    NewRun, NewStep, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate, TriggerKind,
     step_trace_id,
 };
 
 use crate::config::WorkflowStepConfig;
-use crate::context::WorkflowContext;
 use crate::context::lifecycle::check_replay_identity;
+use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use crate::error::EngineError;
 use crate::executor::SubWorkflowOutput;
 use crate::guard::WorkflowRejection;
 use crate::handler::{TypedWorkflow, WorkflowHandler};
 use crate::plan::{SharedPlanRecorder, lock_plan};
+
+/// Key of the open `Workflow` step output that records the child run id.
+const CHILD_RUN_ID_KEY: &str = "child_run_id";
+
+/// The child run id recorded on an open `Workflow` step, if any.
+///
+/// A missing or unparsable id means the parent stopped before the child run
+/// was recorded: the step is reused but a new child run is started.
+fn recorded_child_run_id(step: &Step) -> Option<Uuid> {
+    let raw = step.output.as_ref()?.get(CHILD_RUN_ID_KEY)?.as_str()?;
+    match Uuid::parse_str(raw) {
+        Ok(id) => Some(id),
+        Err(err) => {
+            warn!(
+                step_id = %step.id,
+                value = %raw,
+                error = %err,
+                "open workflow step records an invalid child run id"
+            );
+            None
+        }
+    }
+}
 
 impl WorkflowContext {
     /// Execute a sub-workflow step.
@@ -34,6 +64,11 @@ impl WorkflowContext {
     /// with its own steps and lifecycle, and returns its run ID and aggregated
     /// metrics. The child declares its input type through [`TypedWorkflow`],
     /// so only a `W::Input` is accepted.
+    ///
+    /// When the child suspends (approval, human input, delay or signal), the
+    /// parent is suspended with it and this step stays open. Resuming the
+    /// child resumes the whole chain: the parent replays and re-enters the
+    /// same child run, whose completed steps are replayed.
     ///
     /// Requires the context to be created with
     /// `with_handler_resolver`.
@@ -44,7 +79,8 @@ impl WorkflowContext {
     /// with the given name, or if no handler resolver is available, and
     /// [`EngineError::Serialization`] if `input` cannot be serialized. Returns
     /// [`EngineError::ReplayDivergence`] when the step recorded at this
-    /// position has a different name or kind.
+    /// position has a different name or kind, and
+    /// [`EngineError::ChildSuspended`] when the child run suspended.
     ///
     /// # Examples
     ///
@@ -145,6 +181,10 @@ impl WorkflowContext {
     }
 
     /// Record, then run or plan, a sub-workflow step.
+    ///
+    /// A `Workflow` step completed in a previous execution is replayed without
+    /// running the child again. A step left open (`Running`) by a suspended
+    /// child is reused and re-enters the child run it recorded.
     async fn run_sub_workflow(
         &mut self,
         handler: &dyn WorkflowHandler,
@@ -157,6 +197,22 @@ impl WorkflowContext {
             return self.plan_sub_workflow(&plan, handler, payload).await;
         }
 
+        let config = WorkflowStepConfig::new(handler.name(), payload);
+        let position = self.position;
+
+        let existing = self.replay_steps.get(&position).cloned();
+        if let Some(existing) = &existing {
+            check_replay_identity(
+                existing,
+                position,
+                &config.workflow_name,
+                &StepKind::Workflow,
+            )?;
+            if existing.status.state == StepStatus::Completed {
+                return self.replay_sub_workflow(existing);
+            }
+        }
+
         // Guard check: verify limits before creating the step.
         if let (Some(guard_config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
             let state = guard_state
@@ -165,35 +221,34 @@ impl WorkflowContext {
             state.check(guard_config, handler.name())?;
         }
 
-        let config = WorkflowStepConfig::new(handler.name(), payload);
-        let position = self.position;
-
-        if let Some(existing) = self.replay_steps.get(&position) {
-            check_replay_identity(
-                existing,
-                position,
-                &config.workflow_name,
-                &StepKind::Workflow,
-            )?;
-        }
-
         self.position += 1;
 
-        let trace_id = step_trace_id(self.run_id, &config.workflow_name, position);
-        let step = self
-            .store
-            .create_step(NewStep {
-                run_id: self.run_id,
-                trace_id,
-                name: config.workflow_name.clone(),
-                kind: StepKind::Workflow,
-                position,
-                input: Some(to_value(&config)?),
-                is_error_handler: false,
-            })
-            .await?;
+        // An open step was left by a child that suspended: reuse it instead of
+        // recording a second step at the same position.
+        let (step, resume) = match existing.filter(|s| s.status.state == StepStatus::Running) {
+            Some(step) => {
+                let resume = recorded_child_run_id(&step);
+                (step, resume)
+            }
+            None => {
+                let trace_id = step_trace_id(self.run_id, &config.workflow_name, position);
+                let step = self
+                    .store
+                    .create_step(NewStep {
+                        run_id: self.run_id,
+                        trace_id,
+                        name: config.workflow_name.clone(),
+                        kind: StepKind::Workflow,
+                        position,
+                        input: Some(to_value(&config)?),
+                        is_error_handler: false,
+                    })
+                    .await?;
 
-        self.start_step(step.id, Utc::now()).await?;
+                self.start_step(step.id, Utc::now()).await?;
+                (step, None)
+            }
+        };
 
         // Record invocation in guard state (fail-closed).
         if let Some(guard_state) = &self.guard_state {
@@ -203,7 +258,7 @@ impl WorkflowContext {
             state.record_invocation(handler.name());
         }
 
-        match self.execute_child_workflow(&config).await {
+        match self.execute_child_workflow(&config, step.id, resume).await {
             Ok((output, child_had_allowed_failure)) => {
                 self.total_cost_usd += output.cost_usd();
                 self.total_duration_ms += output.duration_ms();
@@ -238,6 +293,12 @@ impl WorkflowContext {
                 self.guard_record_return();
                 Ok(output)
             }
+            // The child suspended: the step stays open, neither failed nor
+            // completed, so the next replay re-enters the same child run.
+            Err(err) if err.is_suspension() => {
+                self.guard_record_return();
+                Err(err)
+            }
             Err(err) => {
                 let completed_at = Utc::now();
                 if let Err(store_err) = self
@@ -260,6 +321,36 @@ impl WorkflowContext {
                 Err(err)
             }
         }
+    }
+
+    /// Replay a `Workflow` step completed in a previous execution: the child
+    /// run is not executed again and nothing is re-counted by the guard.
+    fn replay_sub_workflow(&mut self, step: &Step) -> Result<SubWorkflowOutput, EngineError> {
+        let recorded = step.output.clone().ok_or_else(|| {
+            EngineError::StepConfig(format!(
+                "completed workflow step {} has no recorded output",
+                step.id
+            ))
+        })?;
+        let output: SubWorkflowOutput = from_value(recorded)?;
+
+        self.position += 1;
+        // Cost is not added: `carry_over_run_totals` seeded `total_cost_usd`
+        // from the run totals persisted before the suspension, which already
+        // include this child.
+        self.total_duration_ms += output.duration_ms();
+        if output.status() == RunStatus::Warning {
+            self.has_allowed_failure = true;
+        }
+        self.last_step_ids = vec![step.id];
+
+        info!(
+            run_id = %self.run_id,
+            child_run_id = %output.run_id(),
+            step = %step.name,
+            "workflow step replayed from previous execution"
+        );
+        Ok(output)
     }
 
     /// Record a sub-workflow invocation while planning, expanding the child
@@ -321,9 +412,16 @@ impl WorkflowContext {
 
     /// Execute a child workflow and return aggregated output plus whether
     /// at least one `allow_failure` step failed.
+    ///
+    /// `resume` is the child run recorded on an open step: that run is
+    /// re-entered, with its completed steps replayed, instead of creating a
+    /// new one. A child that suspends is left in its suspension status and
+    /// [`EngineError::ChildSuspended`] is returned.
     async fn execute_child_workflow(
         &self,
         config: &WorkflowStepConfig,
+        step_id: Uuid,
+        resume: Option<Uuid>,
     ) -> Result<(SubWorkflowOutput, bool), EngineError> {
         let resolver = self.handler_resolver.as_ref().ok_or_else(|| {
             EngineError::InvalidWorkflow(
@@ -335,41 +433,80 @@ impl WorkflowContext {
             EngineError::InvalidWorkflow(format!("no handler registered: {}", config.workflow_name))
         })?;
 
-        // A child run inherits both the parent labels and the parent author:
-        // whoever triggered the parent workflow is accountable for its children.
-        let parent = self.store.get_run(self.run_id).await?;
-        let (parent_labels, parent_author) =
-            parent.map(|r| (r.labels, r.created_by)).unwrap_or_default();
+        let (child_run_id, carried_cost_usd, carried_duration_ms) = match resume {
+            Some(child_run_id) => {
+                let child_run = self
+                    .store
+                    .get_run(child_run_id)
+                    .await?
+                    .ok_or(EngineError::Store(StoreError::RunNotFound(child_run_id)))?;
 
-        let child_run = self
-            .store
-            .create_run(NewRun {
-                workflow_name: config.workflow_name.clone(),
-                trigger: TriggerKind::Workflow,
-                payload: config.payload.clone(),
-                max_retries: 0,
-                handler_version: None,
-                labels: parent_labels,
-                scheduled_at: None,
-                created_by: parent_author,
-                idempotency_key: None,
-                // The child shares the parent's cap; it does not get its own budget.
-                max_cost_usd: self.max_cost_usd,
-            })
-            .await?
-            .into_run();
+                match child_run.status.state {
+                    // Already moved to Running by the path that resumed it.
+                    RunStatus::Running => {}
+                    RunStatus::AwaitingApproval | RunStatus::Pending => {
+                        self.store
+                            .update_run_status(child_run_id, RunStatus::Running)
+                            .await?;
+                    }
+                    RunStatus::Sleeping => {
+                        self.store
+                            .update_run_status(child_run_id, RunStatus::Pending)
+                            .await?;
+                        self.store
+                            .update_run_status(child_run_id, RunStatus::Running)
+                            .await?;
+                    }
+                    // The child finished but the parent stopped before closing
+                    // its step: report the recorded outcome, run nothing.
+                    status @ (RunStatus::Completed | RunStatus::Warning) => {
+                        return Ok((
+                            SubWorkflowOutput::new(
+                                child_run_id,
+                                &config.workflow_name,
+                                status,
+                                child_run.cost_usd,
+                                child_run.duration_ms,
+                            ),
+                            status == RunStatus::Warning,
+                        ));
+                    }
+                    other => {
+                        return Err(EngineError::InvalidWorkflow(format!(
+                            "child run {child_run_id} is {other}"
+                        )));
+                    }
+                }
 
-        let child_run_id = child_run.id;
-        info!(
-            parent_run_id = %self.run_id,
-            child_run_id = %child_run_id,
-            workflow = %config.workflow_name,
-            "child run created"
-        );
+                info!(
+                    parent_run_id = %self.run_id,
+                    child_run_id = %child_run_id,
+                    workflow = %config.workflow_name,
+                    "child run re-entered"
+                );
+                (child_run_id, child_run.cost_usd, child_run.duration_ms)
+            }
+            None => {
+                let child_run_id = self.create_child_run(config).await?;
 
-        self.store
-            .update_run_status(child_run_id, RunStatus::Running)
-            .await?;
+                // Recorded before the child runs, so a suspension of the child
+                // can be resumed into this same run.
+                self.store
+                    .update_step(
+                        step_id,
+                        StepUpdate {
+                            output: Some(json!({ CHILD_RUN_ID_KEY: child_run_id })),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                self.store
+                    .update_run_status(child_run_id, RunStatus::Running)
+                    .await?;
+                (child_run_id, Decimal::ZERO, 0)
+            }
+        };
 
         let run_start = Instant::now();
         let mut child_ctx = WorkflowContext {
@@ -382,7 +519,9 @@ impl WorkflowContext {
             handler_resolver: self.handler_resolver.clone(),
             position: 0,
             last_step_ids: Vec::new(),
-            total_cost_usd: Decimal::ZERO,
+            // A re-entered child starts from what it already spent, like a
+            // resumed top-level run.
+            total_cost_usd: carried_cost_usd,
             total_duration_ms: 0,
             max_cost_usd: self.max_cost_usd,
             // Everything the parent chain already spent counts against the
@@ -392,9 +531,9 @@ impl WorkflowContext {
             replay_wave_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
             answered_inputs: HashMap::new(),
-            // A child run is created fresh here; it is never itself retried.
+            // A child run is never itself retried.
             attempt: 1,
-            carried_duration_ms: 0,
+            carried_duration_ms,
             log_sender: self.log_sender.clone(),
             // A child shares the storage backend but not the parent's artifacts:
             // input lookups are scoped to the child's own run.
@@ -413,8 +552,18 @@ impl WorkflowContext {
             plan: None,
         };
 
-        let result = handler.execute(&mut child_ctx).await;
-        let total_duration = run_start.elapsed().as_millis() as u64;
+        // A re-entered child replays its completed steps and is served the
+        // answer, signal or elapsed delay it was suspended on.
+        let loaded = if resume.is_some() {
+            child_ctx.load_replay_steps().await
+        } else {
+            Ok(())
+        };
+        let result = match loaded {
+            Ok(()) => handler.execute(&mut child_ctx).await,
+            Err(err) => Err(err),
+        };
+        let total_duration = child_ctx.carried_duration_ms + run_start.elapsed().as_millis() as u64;
         let completed_at = Utc::now();
 
         match result {
@@ -449,31 +598,166 @@ impl WorkflowContext {
                     child_had_allowed_failure,
                 ))
             }
-            Err(err) => {
-                if let Err(store_err) = self
-                    .store
-                    .update_run(
-                        child_run_id,
-                        RunUpdate {
-                            status: Some(RunStatus::Failed),
-                            error: Some(err.to_string()),
-                            cost_usd: Some(child_ctx.total_cost_usd),
-                            duration_ms: Some(total_duration),
-                            completed_at: Some(completed_at),
-                            ..RunUpdate::default()
-                        },
-                    )
+            Err(err) if err.is_suspension() => {
+                match self
+                    .suspend_child_run(child_run_id, &err, child_ctx.total_cost_usd, total_duration)
                     .await
                 {
-                    error!(
-                        child_run_id = %child_run_id,
-                        store_error = %store_err,
-                        "failed to persist child run failure"
-                    );
+                    Ok(()) => {
+                        info!(
+                            parent_run_id = %self.run_id,
+                            child_run_id = %child_run_id,
+                            cause = %err.suspension_leaf(),
+                            "child run suspended"
+                        );
+                        Err(EngineError::ChildSuspended {
+                            run_id: child_run_id,
+                            cause: Box::new(err),
+                        })
+                    }
+                    Err(store_err) => {
+                        self.fail_child_run(
+                            child_run_id,
+                            &store_err,
+                            child_ctx.total_cost_usd,
+                            total_duration,
+                        )
+                        .await;
+                        Err(store_err)
+                    }
                 }
-
+            }
+            Err(err) => {
+                self.fail_child_run(child_run_id, &err, child_ctx.total_cost_usd, total_duration)
+                    .await;
                 Err(err)
             }
+        }
+    }
+
+    /// Create the child run of a sub-workflow step and return its id.
+    ///
+    /// The child inherits the parent labels and author, and is linked to its
+    /// parent and to the root of the chain by two labels, so a suspended child
+    /// can be found and resumed like a top-level run.
+    async fn create_child_run(&self, config: &WorkflowStepConfig) -> Result<Uuid, EngineError> {
+        // Whoever triggered the parent workflow is accountable for its children.
+        let parent = self.store.get_run(self.run_id).await?;
+        let (mut labels, parent_author) =
+            parent.map(|r| (r.labels, r.created_by)).unwrap_or_default();
+        // Overwritten, never inherited: a grand-child must point at its own
+        // parent, not at its grand-parent.
+        labels.insert(PARENT_RUN_ID_LABEL.to_string(), self.run_id.to_string());
+        labels.insert(LABEL_ROOT_RUN_ID.to_string(), self.root_run_id.to_string());
+
+        let child_run = self
+            .store
+            .create_run(NewRun {
+                workflow_name: config.workflow_name.clone(),
+                trigger: TriggerKind::Workflow,
+                payload: config.payload.clone(),
+                max_retries: 0,
+                handler_version: None,
+                labels,
+                scheduled_at: None,
+                created_by: parent_author,
+                idempotency_key: None,
+                // The child shares the parent's cap; it does not get its own budget.
+                max_cost_usd: self.max_cost_usd,
+            })
+            .await?
+            .into_run();
+
+        info!(
+            parent_run_id = %self.run_id,
+            child_run_id = %child_run.id,
+            workflow = %config.workflow_name,
+            "child run created"
+        );
+        Ok(child_run.id)
+    }
+
+    /// Persist the suspension of a child run, with no event: the root run
+    /// publishes the suspension once the whole chain is suspended.
+    ///
+    /// A direct suspension is persisted like a top-level run's (a delay or a
+    /// signal deadline arms `scheduled_at`). A child suspended because of its
+    /// own child gets no `scheduled_at`: only the deepest run owns the
+    /// wake-up, so the chain is never resumed twice.
+    async fn suspend_child_run(
+        &self,
+        child_run_id: Uuid,
+        err: &EngineError,
+        cost_usd: Decimal,
+        duration_ms: u64,
+    ) -> Result<(), EngineError> {
+        let totals = RunUpdate {
+            cost_usd: Some(cost_usd),
+            duration_ms: Some(duration_ms),
+            ..RunUpdate::default()
+        };
+
+        let update = match err {
+            EngineError::DelaySleeping { wake_at, .. } => RunUpdate {
+                status: Some(RunStatus::Sleeping),
+                scheduled_at: Some(*wake_at),
+                ..totals
+            },
+            EngineError::SignalWaiting {
+                step_id,
+                deadline_at,
+                ..
+            } => {
+                // Atomic with the step lock, like a top-level run.
+                self.store
+                    .suspend_run_on_signal(child_run_id, *step_id, *deadline_at)
+                    .await?;
+                totals
+            }
+            EngineError::ChildSuspended { cause, .. } => RunUpdate {
+                status: Some(cause.suspension_status()),
+                ..totals
+            },
+            _ => RunUpdate {
+                status: Some(RunStatus::AwaitingApproval),
+                ..totals
+            },
+        };
+
+        self.store.update_run(child_run_id, update).await?;
+        Ok(())
+    }
+
+    /// Mark a child run failed after its handler (or its suspension) failed.
+    ///
+    /// Best effort: the original error is what the parent reports.
+    async fn fail_child_run(
+        &self,
+        child_run_id: Uuid,
+        err: &EngineError,
+        cost_usd: Decimal,
+        duration_ms: u64,
+    ) {
+        if let Err(store_err) = self
+            .store
+            .update_run(
+                child_run_id,
+                RunUpdate {
+                    status: Some(RunStatus::Failed),
+                    error: Some(err.to_string()),
+                    cost_usd: Some(cost_usd),
+                    duration_ms: Some(duration_ms),
+                    completed_at: Some(Utc::now()),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+        {
+            error!(
+                child_run_id = %child_run_id,
+                store_error = %store_err,
+                "failed to persist child run failure"
+            );
         }
     }
 }

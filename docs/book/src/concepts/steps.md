@@ -94,6 +94,25 @@ let child = ctx.workflow(&Collect, CollectInput { host: "db-1".into() }).await?;
 println!("child run {}", child.run_id());
 ```
 
+### Suspension of a child
+
+A child may suspend like any run: an approval, a human input, a signal wait or
+a delay. The whole chain is then suspended, durably:
+
+- the child run keeps its own status (`AwaitingApproval` or `Sleeping`) and
+  owns the wake-up (`scheduled_at` of a delay or a signal deadline);
+- the parent's `Workflow` step stays `Running` and records the child run id;
+- the parent, and every ancestor up to the root, takes the same status without
+  any `scheduled_at`.
+
+The child run carries two labels, `ironflow.io/parent-run-id` and
+`ironflow.io/root-run-id`, so it can be listed and resolved like a top-level
+run: answer its human input, approve its gate or send it a signal through the
+usual API routes. Resuming the child resumes the root run: it replays its
+completed steps (a child that already completed is not run again) and
+re-enters the same child run, which picks up where it stopped. Rejecting an
+approval gate inside the child fails the child and every ancestor.
+
 ## Approval steps
 
 ```rust,ignore

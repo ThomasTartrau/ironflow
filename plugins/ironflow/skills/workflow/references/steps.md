@@ -594,6 +594,12 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 `child.run_id()` is a `Uuid` (nil while planning). A child never sees the parent's
 artifacts; pass what it needs in its input.
 
+A child may suspend (approval, human input, signal wait, delay): the parent and every
+ancestor suspend with it, durably. Resolve the child run itself, by its id or by the
+`ironflow.io/parent-run-id` label (`PARENT_RUN_ID_LABEL` from `ironflow_engine::context`):
+resuming it resumes the root run, which replays its completed steps and re-enters the
+same child run. A child already completed is not run again.
+
 Inside the child, `ctx.run_id()` is the child run and `ctx.root_run_id()` the top-level
 run that started the chain (both equal at the top). A pod you create yourself in a
 step (`PodRun`, `JobRun` of `ironflow-ops-k8s`) carries both, as

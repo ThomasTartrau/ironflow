@@ -22,7 +22,7 @@ use ironflow_store::store::{RunStore, Store};
 use ironflow_store::workflow_secrets::ScopedSecretStore;
 
 use crate::config::{HttpConfig, HumanInputConfig, ShellConfig};
-use crate::engine::{Engine, WorkflowResult};
+use crate::engine::{Engine, WorkflowResult, chain_root};
 use crate::error::EngineError;
 use crate::executor::{ApprovalOutcome, HumanInputOutcome, SignalOutcome, StepInterceptor};
 use crate::handler::WorkflowHandler;
@@ -592,13 +592,22 @@ impl TestEngine {
         self.collect(run.id, execution).await
     }
 
-    /// Resume a run suspended on an approval gate, the way the API server does.
+    /// Resume a run suspended on an approval gate, a human input, a delay or a
+    /// signal wait, the way the API server and the waker do.
+    ///
+    /// A suspended sub-workflow child run is resumed through its root run,
+    /// like in production: the root replays and re-enters the child. The
+    /// returned [`TestResult`] then describes the root run.
     ///
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] when the run does not exist or is not
     /// resumable, and [`EngineError::InvalidWorkflow`] when its handler is no
     /// longer registered.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the engine is built by `ensure_engine` just before.
     ///
     /// # Examples
     ///
@@ -621,11 +630,23 @@ impl TestEngine {
         self.ensure_engine()?;
         let engine = self.engine.as_ref().expect("ensure_engine built it");
 
+        let run = self
+            .store
+            .get_run(run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+        // A sleeping run is woken through `Pending`, like the waker does.
+        if run.status.state == RunStatus::Sleeping {
+            self.store
+                .update_run_status(run_id, RunStatus::Pending)
+                .await?;
+        }
         self.store
             .update_run_status(run_id, RunStatus::Running)
             .await?;
         let execution = engine.resume_run(run_id).await;
-        self.collect(run_id, execution).await
+        let reported = chain_root(&run).unwrap_or(run_id);
+        self.collect(reported, execution).await
     }
 
     /// Read the run and its steps back from the store.

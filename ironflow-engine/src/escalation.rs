@@ -478,6 +478,20 @@ impl ApprovalEscalator {
                 at: now,
             }));
 
+        // A gate inside a sub-workflow fails the whole chain, like a human
+        // rejection. The gate is already rejected, so a failure is reported.
+        if let Err(err) = self
+            .engine
+            .fail_ancestors(step.run_id, APPROVAL_TIMEOUT_ERROR)
+            .await
+        {
+            error!(
+                run_id = %step.run_id,
+                error = %err,
+                "failed to fail the ancestors of an auto-rejected run"
+            );
+        }
+
         Ok(EscalationAction::Rejected)
     }
 

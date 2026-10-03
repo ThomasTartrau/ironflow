@@ -62,7 +62,10 @@
 //!   non-zero delay still suspends the run with
 //!   [`RunStatus::Sleeping`](ironflow_store::models::RunStatus::Sleeping). The run
 //!   resumes once [`RunWaker::tick`](crate::wake::RunWaker::tick) runs after its
-//!   `scheduled_at`.
+//!   `scheduled_at`, or right away with [`TestEngine::resume`].
+//! * A step that suspends inside a `ctx.workflow` child suspends the whole
+//!   chain. Resume it with [`TestEngine::resume`] on the child run id: like in
+//!   production, the root run is resumed and re-enters the child.
 //! * [`ctx.decision`](crate::context::WorkflowContext::decision) needs a real
 //!   [`DecisionProvider`](ironflow_core::decision::DecisionProvider), wired with
 //!   [`TestEngine::with_decision_provider`].

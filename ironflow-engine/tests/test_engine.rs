@@ -20,7 +20,7 @@ use ironflow_core::error::OperationError;
 use ironflow_core::provider::{AgentOutput, AgentProvider};
 use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_engine::config::{
-    AgentStepConfig, ApprovalConfig, HttpConfig, ShellConfig, StepConfig,
+    AgentStepConfig, ApprovalConfig, DelayConfig, HttpConfig, ShellConfig, StepConfig,
 };
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
@@ -29,7 +29,8 @@ use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_engine::testing::{
     ApprovalOutcome, MockAgentProvider, MockHttpResponse, MockShellOutput, TestEngine,
 };
-use ironflow_store::models::{RunStatus, StepKind, StepStatus};
+use ironflow_store::memory::InMemoryStore;
+use ironflow_store::models::{Run, RunFilter, RunStatus, StepKind, StepStatus};
 use ironflow_store::store::RunStore;
 
 // ---------------------------------------------------------------------------
@@ -214,6 +215,78 @@ impl WorkflowHandler for Parent {
                 },
             )
             .await?;
+            Ok(())
+        })
+    }
+}
+
+/// A child suspended on an approval gate.
+struct GatedChild;
+
+impl TypedWorkflow for GatedChild {
+    type Input = ChildInput;
+}
+
+impl WorkflowHandler for GatedChild {
+    fn name(&self) -> &str {
+        "gated-child"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.approval("gate", ApprovalConfig::new("Ship the child?"))
+                .await?;
+            ctx.shell("child-ship", ShellConfig::new("./ship.sh"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+/// A child suspended on a five-minute delay.
+struct PausedChild;
+
+impl TypedWorkflow for PausedChild {
+    type Input = ChildInput;
+}
+
+impl WorkflowHandler for PausedChild {
+    fn name(&self) -> &str {
+        "paused-child"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.delay("pause", DelayConfig::from_secs(300)).await?;
+            ctx.shell("child-ship", ShellConfig::new("./ship.sh"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+/// Invokes [`GatedChild`] or [`PausedChild`], then runs one more step.
+struct SuspendingParent {
+    paused: bool,
+}
+
+impl WorkflowHandler for SuspendingParent {
+    fn name(&self) -> &str {
+        "suspending-parent"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let input = ChildInput {
+                from: "suspending-parent".to_string(),
+            };
+            if self.paused {
+                ctx.workflow(&PausedChild, input).await?;
+            } else {
+                ctx.workflow(&GatedChild, input).await?;
+            }
+            ctx.shell("parent-done", ShellConfig::new("./done.sh"))
+                .await?;
             Ok(())
         })
     }
@@ -637,6 +710,84 @@ async fn test_engine_mocks_steps_of_a_sub_workflow() {
     assert_eq!(child_steps[0].status.state, StepStatus::Completed);
     let child_output = child_steps[0].output.as_ref().expect("has output");
     assert_eq!(child_output["stdout"], "child ran");
+}
+
+/// The single run of `workflow` in the harness store.
+async fn single_run(store: &InMemoryStore, workflow: &str) -> Run {
+    let filter = RunFilter {
+        workflow_name: Some(workflow.to_string()),
+        ..RunFilter::default()
+    };
+    let mut runs = store
+        .list_runs(filter, 1, 10)
+        .await
+        .expect("list runs")
+        .items;
+    assert_eq!(runs.len(), 1, "expected exactly one {workflow} run");
+    runs.remove(0)
+}
+
+#[tokio::test]
+async fn test_engine_resumes_a_suspended_sub_workflow_through_its_root() {
+    let mut harness = TestEngine::new()
+        .with_handler(SuspendingParent { paused: false })
+        .with_handler(GatedChild)
+        .with_mock_shell(|_cfg| Ok(MockShellOutput::ok("ok")));
+    let store = harness.store();
+
+    let suspended = harness
+        .run_workflow("suspending-parent", json!({}))
+        .await
+        .expect("the harness ran the parent");
+    assert_eq!(suspended.status(), RunStatus::AwaitingApproval);
+    assert_eq!(suspended.step("gated-child").status(), StepStatus::Running);
+
+    let child = single_run(&store, "gated-child").await;
+    assert_eq!(child.status.state, RunStatus::AwaitingApproval);
+
+    let resumed = harness.resume(child.id).await.expect("the resume pass ran");
+
+    assert_eq!(resumed.run_id(), suspended.run_id(), "the root is reported");
+    assert_eq!(resumed.status(), RunStatus::Completed);
+    assert_eq!(resumed.step_names(), vec!["gated-child", "parent-done"]);
+    let output: SubWorkflowOutput = resumed
+        .step("gated-child")
+        .step_output()
+        .json()
+        .expect("the child run is recorded");
+    assert_eq!(output.run_id(), child.id);
+    assert_eq!(output.status(), RunStatus::Completed);
+    assert_eq!(
+        single_run(&store, "gated-child").await.status.state,
+        RunStatus::Completed
+    );
+}
+
+#[tokio::test]
+async fn test_engine_resumes_a_sleeping_sub_workflow() {
+    let mut harness = TestEngine::new()
+        .with_handler(SuspendingParent { paused: true })
+        .with_handler(PausedChild)
+        .with_mock_shell(|_cfg| Ok(MockShellOutput::ok("ok")));
+    let store = harness.store();
+
+    let suspended = harness
+        .run_workflow("suspending-parent", json!({}))
+        .await
+        .expect("the harness ran the parent");
+    assert_eq!(suspended.status(), RunStatus::Sleeping);
+    assert!(suspended.run().scheduled_at.is_none());
+
+    let child = single_run(&store, "paused-child").await;
+    assert_eq!(child.status.state, RunStatus::Sleeping);
+
+    let resumed = harness.resume(child.id).await.expect("the resume pass ran");
+
+    assert_eq!(resumed.run_id(), suspended.run_id());
+    assert_eq!(resumed.status(), RunStatus::Completed);
+    let child_steps = store.list_steps(child.id).await.expect("list steps");
+    let names: Vec<&str> = child_steps.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["pause", "child-ship"]);
 }
 
 // ---------------------------------------------------------------------------

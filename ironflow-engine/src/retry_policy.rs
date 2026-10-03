@@ -67,6 +67,7 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::MonthlyBudgetExceeded`] | the monthly quota is exhausted for every run |
 /// | [`EngineError::ApprovalRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::ApprovalRejected`] | a human decision, replaying cannot change it |
+/// | [`EngineError::ChildSuspended`] | not a failure; the run is suspended with its child |
 /// | [`EngineError::HumanInputRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::HumanInputRejected`] | a human decision, replaying cannot change it |
 /// | [`EngineError::ReplayDivergence`] | replaying reproduces the same position divergence |
@@ -114,6 +115,8 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::NoDecisionProvider { .. }
         | EngineError::DelaySleeping { .. }
         | EngineError::SignalWaiting { .. }
+        // Not a failure: a child run suspended and the run waits with it.
+        | EngineError::ChildSuspended { .. }
         | EngineError::InvalidSignal(_)
         // Deterministic: replaying reproduces the same position divergence or
         // the same incompatible handler version.
@@ -247,6 +250,19 @@ mod tests {
             run_id: Uuid::nil(),
             step_id: Uuid::nil(),
             reason: "out of scope".to_string(),
+        };
+        assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn child_suspended_is_not_retryable() {
+        let err = EngineError::ChildSuspended {
+            run_id: Uuid::nil(),
+            cause: Box::new(EngineError::HumanInputRequired {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                message: "answer?".to_string(),
+            }),
         };
         assert!(!is_run_retryable(&err));
     }

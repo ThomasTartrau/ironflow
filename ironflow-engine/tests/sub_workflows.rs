@@ -4,26 +4,39 @@
 //! `ctx.workflow(&Child, ChildInput { .. })` and gets the child run id back as
 //! a [`Uuid`]. Every test drives a real [`Engine`] over a real
 //! [`InMemoryStore`] and real shell steps.
+//!
+//! A child that suspends (human input, signal wait, delay) suspends its whole
+//! chain; resuming the child resumes the root run, which re-enters the same
+//! child run. Test names contain `sub_workflow` so `cargo test -p
+//! ironflow-engine sub_workflow` selects them.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{TimeDelta, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tokio::time::timeout;
+use serde_json::{Value, json};
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-use ironflow_core::provider::AgentProvider;
+use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
-use ironflow_engine::config::ShellConfig;
-use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::config::{DelayConfig, HumanInputConfig, ShellConfig};
+use ironflow_engine::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use ironflow_engine::engine::Engine;
+use ironflow_engine::error::EngineError;
+use ironflow_engine::guard::WorkflowGuardConfig;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_engine::plan::{ConditionResult, PlanOptions};
+use ironflow_engine::signal::Signal;
+use ironflow_engine::wake::RunWaker;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunFilter, RunStatus, StepKind, TriggerKind};
+use ironflow_store::models::{
+    Run, RunFilter, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate, TriggerKind,
+};
 use ironflow_store::store::{RunStore, Store};
 
 /// Test timeout for bodies that spawn processes.
@@ -176,6 +189,750 @@ async fn a_planned_sub_workflow_is_expanded_with_its_typed_input_and_a_nil_run_i
                 .is_empty(),
             "planning must not create runs"
         );
+    })
+    .await
+    .expect("test timed out");
+}
+
+// -- Suspension of a child run --
+
+/// Workflow name of [`Parent`].
+const PARENT: &str = "parent";
+
+/// Workflow name of [`Grandparent`].
+const GRANDPARENT: &str = "grandparent";
+
+/// Key [`Waiter`] waits on.
+const SIGNAL_KEY: &str = "release-42";
+
+/// Payload of a workflow that takes nothing.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct NoInput {}
+
+/// The answer [`Asker`] waits for.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct NameAnswer {
+    name: String,
+}
+
+/// The signal [`Waiter`] waits for.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct Deployed {
+    version: String,
+}
+
+impl Signal for Deployed {
+    const NAME: &'static str = "test.deployed";
+}
+
+/// What the suspending children saw once resumed, shared with the test.
+type Seen = Arc<Mutex<Vec<String>>>;
+
+fn seen(seen: &Seen) -> Vec<String> {
+    seen.lock().expect("seen lock").clone()
+}
+
+/// A child that asks a human for a name.
+struct Asker {
+    seen: Seen,
+}
+
+impl WorkflowHandler for Asker {
+    fn name(&self) -> &str {
+        "asker"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let answer: NameAnswer = ctx
+                .human_input("ask-name", HumanInputConfig::new("Who ships it?"))
+                .await?;
+            self.seen.lock().expect("seen lock").push(answer.name);
+            ctx.shell("after-input", ShellConfig::new("echo answered"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for Asker {
+    type Input = NoInput;
+}
+
+/// A child that waits for [`Deployed`] on [`SIGNAL_KEY`].
+struct Waiter {
+    seen: Seen,
+}
+
+impl WorkflowHandler for Waiter {
+    fn name(&self) -> &str {
+        "waiter"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let deployed = ctx
+                .wait_for_signal::<Deployed>("wait-deploy", SIGNAL_KEY, Duration::from_secs(3600))
+                .await?;
+            let seen_value = match deployed {
+                Some(deployed) => deployed.version,
+                None => "timed out".to_string(),
+            };
+            self.seen.lock().expect("seen lock").push(seen_value);
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for Waiter {
+    type Input = NoInput;
+}
+
+/// A child that pauses for five minutes.
+struct Sleeper {
+    seen: Seen,
+}
+
+impl WorkflowHandler for Sleeper {
+    fn name(&self) -> &str {
+        "sleeper"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.delay("pause", DelayConfig::from_secs(300)).await?;
+            self.seen
+                .lock()
+                .expect("seen lock")
+                .push("slept".to_string());
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for Sleeper {
+    type Input = NoInput;
+}
+
+/// What the suspending child of [`Parent`] waits on.
+#[derive(Clone, Copy)]
+enum Suspends {
+    HumanInput,
+    Signal,
+    Delay,
+}
+
+/// Runs [`Greeter`] to completion, then a child that suspends, then a step.
+struct Parent {
+    suspends: Suspends,
+    seen: Seen,
+}
+
+impl WorkflowHandler for Parent {
+    fn name(&self) -> &str {
+        PARENT
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.workflow(
+                &Greeter,
+                GreetInput {
+                    name: "sibling".to_string(),
+                    shout: false,
+                },
+            )
+            .await?;
+            let seen = self.seen.clone();
+            match self.suspends {
+                Suspends::HumanInput => ctx.workflow(&Asker { seen }, NoInput {}).await?,
+                Suspends::Signal => ctx.workflow(&Waiter { seen }, NoInput {}).await?,
+                Suspends::Delay => ctx.workflow(&Sleeper { seen }, NoInput {}).await?,
+            };
+            ctx.shell("after-child", ShellConfig::new("echo done"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for Parent {
+    type Input = NoInput;
+}
+
+/// Runs [`Parent`] as a sub-workflow: the suspending run is a grandchild.
+struct Grandparent {
+    suspends: Suspends,
+    seen: Seen,
+}
+
+impl WorkflowHandler for Grandparent {
+    fn name(&self) -> &str {
+        GRANDPARENT
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let parent = Parent {
+                suspends: self.suspends,
+                seen: self.seen.clone(),
+            };
+            ctx.workflow(&parent, NoInput {}).await?;
+            Ok(())
+        })
+    }
+}
+
+fn new_engine(store: &Arc<InMemoryStore>) -> Engine {
+    let store: Arc<dyn Store> = store.clone();
+    Engine::new(store, provider())
+}
+
+/// Register the whole chain on `engine`, `Parent` suspending on `suspends`.
+fn build_chain(mut engine: Engine, suspends: Suspends) -> (Arc<Engine>, Seen) {
+    let seen = Seen::default();
+    engine.register(Greeter).expect("register greeter");
+    engine
+        .register(Asker { seen: seen.clone() })
+        .expect("register asker");
+    engine
+        .register(Waiter { seen: seen.clone() })
+        .expect("register waiter");
+    engine
+        .register(Sleeper { seen: seen.clone() })
+        .expect("register sleeper");
+    engine
+        .register(Parent {
+            suspends,
+            seen: seen.clone(),
+        })
+        .expect("register parent");
+    engine
+        .register(Grandparent {
+            suspends,
+            seen: seen.clone(),
+        })
+        .expect("register grandparent");
+    (Arc::new(engine), seen)
+}
+
+/// Run `root` until its chain suspends, returning the root run.
+async fn start_chain(engine: &Engine, root: &str) -> Run {
+    engine
+        .run_handler(root, TriggerKind::Manual, json!({}))
+        .await
+        .expect("the chain suspends")
+        .run
+}
+
+async fn load_run(store: &InMemoryStore, run_id: Uuid) -> Run {
+    store
+        .get_run(run_id)
+        .await
+        .expect("get run")
+        .expect("run exists")
+}
+
+/// The single run of `workflow`.
+async fn run_of(store: &InMemoryStore, workflow: &str) -> Run {
+    let filter = RunFilter {
+        workflow_name: Some(workflow.to_string()),
+        ..RunFilter::default()
+    };
+    let mut runs = store
+        .list_runs(filter, 1, 50)
+        .await
+        .expect("list runs")
+        .items;
+    // The store filter matches on a substring (`parent` also matches
+    // `grandparent`): keep the exact name only.
+    runs.retain(|r| r.workflow_name == workflow);
+    assert_eq!(runs.len(), 1, "expected exactly one {workflow} run");
+    runs.remove(0)
+}
+
+/// The `Workflow` step of `run_id` that calls `child`.
+async fn workflow_step(store: &InMemoryStore, run_id: Uuid, child: &str) -> Step {
+    store
+        .list_steps(run_id)
+        .await
+        .expect("list steps")
+        .into_iter()
+        .find(|s| s.kind == StepKind::Workflow && s.name == child)
+        .expect("the workflow step exists")
+}
+
+/// The open human input step of `run_id`.
+async fn open_input_step(store: &InMemoryStore, run_id: Uuid) -> Step {
+    let step = store
+        .list_steps(run_id)
+        .await
+        .expect("list steps")
+        .into_iter()
+        .find(|s| s.kind == StepKind::HumanInput)
+        .expect("a human input step");
+    assert_eq!(step.status.state, StepStatus::AwaitingApproval);
+    step
+}
+
+/// Answer the human input of `run_id` and mark the run running, like the API does.
+async fn answer(store: &InMemoryStore, run_id: Uuid, name: &str) {
+    let step = open_input_step(store, run_id).await;
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Completed),
+                output: Some(json!({ "name": name })),
+                completed_at: Some(Utc::now()),
+                clear_approval_deadline: true,
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("store the answer");
+    store
+        .update_run_status(run_id, RunStatus::Running)
+        .await
+        .expect("mark running");
+}
+
+/// Reject the human input of `run_id` and mark the run running, like the API does.
+async fn reject(store: &InMemoryStore, run_id: Uuid, reason: &str) {
+    let step = open_input_step(store, run_id).await;
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Rejected),
+                error: Some(reason.to_string()),
+                completed_at: Some(Utc::now()),
+                clear_approval_deadline: true,
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("reject the input");
+    store
+        .update_run_status(run_id, RunStatus::Running)
+        .await
+        .expect("mark running");
+}
+
+/// Poll the store until the run reaches `status`.
+async fn wait_for_status(store: &InMemoryStore, run_id: Uuid, status: RunStatus) {
+    timeout(TEST_TIMEOUT, async {
+        loop {
+            if load_run(store, run_id).await.status.state == status {
+                return;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run never reached the expected status");
+}
+
+#[tokio::test]
+async fn sub_workflow_human_input_suspends_the_parent_and_resumes_through_the_root() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_names) = build_chain(new_engine(&store), Suspends::HumanInput);
+
+        let parent = start_chain(&engine, PARENT).await;
+        assert_eq!(parent.status.state, RunStatus::AwaitingApproval);
+        assert!(parent.scheduled_at.is_none());
+
+        let child = run_of(&store, "asker").await;
+        assert_eq!(child.status.state, RunStatus::AwaitingApproval);
+        assert_eq!(child.trigger, TriggerKind::Workflow);
+
+        let step = workflow_step(&store, parent.id, "asker").await;
+        assert_eq!(
+            step.status.state,
+            StepStatus::Running,
+            "the step stays open while its child is suspended"
+        );
+        assert_eq!(step.output, Some(json!({ "child_run_id": child.id })));
+        assert!(seen(&seen_names).is_empty());
+
+        answer(&store, child.id, "Ada").await;
+        let result = engine
+            .resume_run(child.id)
+            .await
+            .expect("the chain resumes");
+
+        assert_eq!(result.run.id, parent.id, "the root run is the one resumed");
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+        assert_eq!(
+            run_of(&store, "asker").await.id,
+            child.id,
+            "the same child run is re-entered, never a new one"
+        );
+        assert_eq!(
+            load_run(&store, child.id).await.status.state,
+            RunStatus::Completed
+        );
+
+        let step = workflow_step(&store, parent.id, "asker").await;
+        assert_eq!(step.status.state, StepStatus::Completed);
+        let output: Value = step.output.expect("the step has an output");
+        assert_eq!(output["run_id"], json!(child.id));
+        assert_eq!(output["status"], json!("completed"));
+        assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
+
+        let parent_steps = store.list_steps(parent.id).await.expect("list steps");
+        let names: Vec<&str> = parent_steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["greeter", "asker", "after-child"]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_completed_sibling_is_not_run_again_on_resume() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, _seen) = build_chain(new_engine(&store), Suspends::HumanInput);
+
+        let parent = start_chain(&engine, PARENT).await;
+        let sibling = run_of(&store, "greeter").await;
+        assert_eq!(sibling.status.state, RunStatus::Completed);
+
+        let child = run_of(&store, "asker").await;
+        answer(&store, child.id, "Ada").await;
+        engine
+            .resume_run(child.id)
+            .await
+            .expect("the chain resumes");
+
+        assert_eq!(
+            run_of(&store, "greeter").await.id,
+            sibling.id,
+            "a completed child is replayed, never run again"
+        );
+        let sibling_steps = store.list_steps(sibling.id).await.expect("list steps");
+        assert_eq!(sibling_steps.len(), 1);
+        let step = workflow_step(&store, parent.id, "greeter").await;
+        assert_eq!(step.status.state, StepStatus::Completed);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_suspended_child_is_listed_by_its_chain_labels() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, _seen) = build_chain(new_engine(&store), Suspends::HumanInput);
+
+        let parent = start_chain(&engine, PARENT).await;
+
+        let waiting = store
+            .list_runs(
+                RunFilter {
+                    labels: Some(HashMap::from([(
+                        PARENT_RUN_ID_LABEL.to_string(),
+                        parent.id.to_string(),
+                    )])),
+                    status: Some(RunStatus::AwaitingApproval),
+                    ..RunFilter::default()
+                },
+                1,
+                50,
+            )
+            .await
+            .expect("list runs")
+            .items;
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].workflow_name, "asker");
+
+        let chain = store
+            .list_runs(
+                RunFilter {
+                    labels: Some(HashMap::from([(
+                        LABEL_ROOT_RUN_ID.to_string(),
+                        parent.id.to_string(),
+                    )])),
+                    ..RunFilter::default()
+                },
+                1,
+                50,
+            )
+            .await
+            .expect("list runs")
+            .items;
+        let mut names: Vec<&str> = chain.iter().map(|r| r.workflow_name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["asker", "greeter"]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_child_executed_by_a_worker_resumes_its_root() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_names) = build_chain(new_engine(&store), Suspends::HumanInput);
+
+        let parent = start_chain(&engine, PARENT).await;
+        let child = run_of(&store, "asker").await;
+
+        // A worker picks the requeued child and executes it: the child must
+        // not run on its own, outside of its parent.
+        answer(&store, child.id, "Grace").await;
+        let result = engine
+            .execute_handler_run(child.id)
+            .await
+            .expect("the chain resumes");
+
+        assert_eq!(result.run.id, parent.id);
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+        assert_eq!(
+            load_run(&store, child.id).await.status.state,
+            RunStatus::Completed
+        );
+        assert_eq!(seen(&seen_names), vec!["Grace".to_string()]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_signal_wait_suspends_the_chain_until_the_signal_arrives() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_versions) = build_chain(new_engine(&store), Suspends::Signal);
+
+        let parent = start_chain(&engine, PARENT).await;
+        assert_eq!(parent.status.state, RunStatus::Sleeping);
+        assert!(
+            parent.scheduled_at.is_none(),
+            "only the waiting child owns the wake-up"
+        );
+
+        let child = run_of(&store, "waiter").await;
+        assert_eq!(child.status.state, RunStatus::Sleeping);
+        assert!(child.scheduled_at.is_some(), "the child arms the deadline");
+
+        let delivery = engine
+            .send_signal(
+                &Deployed {
+                    version: "1.2.3".to_string(),
+                },
+                SIGNAL_KEY,
+                None,
+            )
+            .await
+            .expect("deliver");
+        assert_eq!(delivery.resumed.len(), 1);
+        assert_eq!(delivery.resumed[0].run_id, child.id);
+
+        wait_for_status(&store, parent.id, RunStatus::Completed).await;
+        assert_eq!(
+            load_run(&store, child.id).await.status.state,
+            RunStatus::Completed
+        );
+        assert_eq!(seen(&seen_versions), vec!["1.2.3".to_string()]);
+        assert_eq!(run_of(&store, "waiter").await.id, child.id);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_delay_wakes_the_chain_through_the_waker() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_wakes) = build_chain(new_engine(&store), Suspends::Delay);
+
+        let parent = start_chain(&engine, PARENT).await;
+        assert_eq!(parent.status.state, RunStatus::Sleeping);
+        assert!(parent.scheduled_at.is_none());
+
+        let child = run_of(&store, "sleeper").await;
+        assert_eq!(child.status.state, RunStatus::Sleeping);
+        assert!(child.scheduled_at.is_some());
+
+        // Move the wake-up to the past: the waker only claims a due run.
+        store
+            .update_run(
+                child.id,
+                RunUpdate {
+                    scheduled_at: Some(Utc::now() - TimeDelta::seconds(1)),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .expect("move the wake-up");
+
+        let woken = RunWaker::new(engine.clone()).tick().await.expect("tick");
+        assert_eq!(
+            woken.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![child.id],
+            "the parent is never woken on its own"
+        );
+
+        wait_for_status(&store, parent.id, RunStatus::Completed).await;
+        assert_eq!(
+            load_run(&store, child.id).await.status.state,
+            RunStatus::Completed
+        );
+        assert_eq!(seen(&seen_wakes), vec!["slept".to_string()]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_rejected_human_input_fails_the_child_and_the_parent() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_names) = build_chain(new_engine(&store), Suspends::HumanInput);
+
+        let parent = start_chain(&engine, PARENT).await;
+        let child = run_of(&store, "asker").await;
+
+        reject(&store, child.id, "nobody").await;
+        let err = engine
+            .resume_run(child.id)
+            .await
+            .expect_err("a rejected input fails the chain");
+        assert!(
+            matches!(err, EngineError::HumanInputRejected { .. }),
+            "got {err}"
+        );
+
+        assert_eq!(
+            load_run(&store, child.id).await.status.state,
+            RunStatus::Failed
+        );
+        assert_eq!(
+            load_run(&store, parent.id).await.status.state,
+            RunStatus::Failed
+        );
+        let step = workflow_step(&store, parent.id, "asker").await;
+        assert_eq!(step.status.state, StepStatus::Failed);
+        assert!(seen(&seen_names).is_empty());
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_child_of_a_cancelled_root_cannot_resume() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_names) = build_chain(new_engine(&store), Suspends::HumanInput);
+
+        let parent = start_chain(&engine, PARENT).await;
+        let child = run_of(&store, "asker").await;
+        store
+            .update_run_status(parent.id, RunStatus::Cancelled)
+            .await
+            .expect("cancel the root");
+
+        answer(&store, child.id, "Ada").await;
+        let err = engine
+            .resume_run(child.id)
+            .await
+            .expect_err("a cancelled root cannot take its child back");
+        assert!(matches!(err, EngineError::InvalidWorkflow(_)), "got {err}");
+
+        assert_eq!(
+            load_run(&store, child.id).await.status.state,
+            RunStatus::Failed
+        );
+        assert_eq!(
+            load_run(&store, parent.id).await.status.state,
+            RunStatus::Cancelled
+        );
+        assert!(seen(&seen_names).is_empty());
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_nested_grandchild_suspends_and_resumes_the_whole_chain() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_names) = build_chain(new_engine(&store), Suspends::HumanInput);
+
+        let root = start_chain(&engine, GRANDPARENT).await;
+        assert_eq!(root.status.state, RunStatus::AwaitingApproval);
+
+        let parent = run_of(&store, PARENT).await;
+        assert_eq!(parent.status.state, RunStatus::AwaitingApproval);
+        assert!(
+            parent.scheduled_at.is_none(),
+            "an intermediate run never owns a wake-up"
+        );
+        assert_eq!(
+            parent.labels.get(PARENT_RUN_ID_LABEL),
+            Some(&root.id.to_string())
+        );
+
+        let grandchild = run_of(&store, "asker").await;
+        assert_eq!(grandchild.status.state, RunStatus::AwaitingApproval);
+        assert_eq!(
+            grandchild.labels.get(PARENT_RUN_ID_LABEL),
+            Some(&parent.id.to_string())
+        );
+        assert_eq!(
+            grandchild.labels.get(LABEL_ROOT_RUN_ID),
+            Some(&root.id.to_string())
+        );
+
+        answer(&store, grandchild.id, "Ada").await;
+        let result = engine
+            .resume_run(grandchild.id)
+            .await
+            .expect("the chain resumes");
+
+        assert_eq!(result.run.id, root.id);
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+        for run_id in [parent.id, grandchild.id] {
+            assert_eq!(
+                load_run(&store, run_id).await.status.state,
+                RunStatus::Completed
+            );
+        }
+        assert_eq!(run_of(&store, PARENT).await.id, parent.id);
+        assert_eq!(run_of(&store, "asker").await.id, grandchild.id);
+        assert_eq!(
+            run_of(&store, "greeter").await.status.state,
+            RunStatus::Completed
+        );
+        assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_resume_stays_within_the_guard_fan_out() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        // Room for exactly the two children of `Parent`: the resumed
+        // execution, which replays the sibling and re-enters the suspended
+        // child, must stay within it.
+        let engine =
+            new_engine(&store).with_guard_config(WorkflowGuardConfig::new().with_max_fan_out(2));
+        let (engine, seen_names) = build_chain(engine, Suspends::HumanInput);
+
+        start_chain(&engine, PARENT).await;
+        let child = run_of(&store, "asker").await;
+
+        answer(&store, child.id, "Ada").await;
+        let result = engine
+            .resume_run(child.id)
+            .await
+            .expect("the guard lets the chain resume");
+
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+        assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
     })
     .await
     .expect("test timed out");

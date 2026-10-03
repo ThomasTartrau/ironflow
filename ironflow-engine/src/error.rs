@@ -8,6 +8,7 @@ use uuid::Uuid;
 use ironflow_artifacts::error::ArtifactError;
 use ironflow_core::error::OperationError;
 use ironflow_store::error::StoreError;
+use ironflow_store::models::RunStatus;
 
 use crate::guard::{WORKFLOW_GUARD_REJECTED_CODE, WorkflowRejection};
 
@@ -227,6 +228,44 @@ pub enum EngineError {
         deadline_at: DateTime<Utc>,
     },
 
+    /// A child run started by
+    /// [`WorkflowContext::workflow`](crate::context::WorkflowContext::workflow)
+    /// suspended (approval, human input, delay or signal), and the parent run
+    /// is suspended with it.
+    ///
+    /// The child keeps its own suspension status and the parent's `Workflow`
+    /// step stays open. Resuming the child requeues the root run, which
+    /// replays and re-enters the same child run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// let err = EngineError::ChildSuspended {
+    ///     run_id: Uuid::nil(),
+    ///     cause: Box::new(EngineError::HumanInputRequired {
+    ///         run_id: Uuid::nil(),
+    ///         step_id: Uuid::nil(),
+    ///         message: "Answer the questions".to_string(),
+    ///     }),
+    /// };
+    /// assert!(err.is_suspension());
+    /// ```
+    #[error("child run {run_id} suspended: {cause}")]
+    ChildSuspended {
+        /// The direct child run that suspended.
+        run_id: Uuid,
+        /// Why the child suspended: a leaf suspension
+        /// ([`ApprovalRequired`](EngineError::ApprovalRequired),
+        /// [`HumanInputRequired`](EngineError::HumanInputRequired),
+        /// [`DelaySleeping`](EngineError::DelaySleeping),
+        /// [`SignalWaiting`](EngineError::SignalWaiting)) or a nested
+        /// `ChildSuspended` for a grand-child.
+        cause: Box<EngineError>,
+    },
+
     /// A signal could not be delivered because it is malformed (empty name or
     /// key).
     #[error("invalid signal: {0}")]
@@ -288,6 +327,75 @@ pub enum EngineError {
         /// The handler's current version.
         current_version: String,
     },
+}
+
+impl EngineError {
+    /// Whether this error suspends the run instead of failing it.
+    ///
+    /// True for [`ApprovalRequired`](EngineError::ApprovalRequired),
+    /// [`HumanInputRequired`](EngineError::HumanInputRequired),
+    /// [`DelaySleeping`](EngineError::DelaySleeping),
+    /// [`SignalWaiting`](EngineError::SignalWaiting) and
+    /// [`ChildSuspended`](EngineError::ChildSuspended).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    ///
+    /// assert!(!EngineError::StepConfig("bad".to_string()).is_suspension());
+    /// ```
+    pub fn is_suspension(&self) -> bool {
+        matches!(
+            self,
+            EngineError::ApprovalRequired { .. }
+                | EngineError::HumanInputRequired { .. }
+                | EngineError::DelaySleeping { .. }
+                | EngineError::SignalWaiting { .. }
+                | EngineError::ChildSuspended { .. }
+        )
+    }
+
+    /// The leaf suspension behind a chain of
+    /// [`ChildSuspended`](EngineError::ChildSuspended) errors.
+    ///
+    /// Returns `self` for any error that is not `ChildSuspended`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// let err = EngineError::ChildSuspended {
+    ///     run_id: Uuid::nil(),
+    ///     cause: Box::new(EngineError::ApprovalRequired {
+    ///         run_id: Uuid::nil(),
+    ///         step_id: Uuid::nil(),
+    ///         message: "deploy?".to_string(),
+    ///     }),
+    /// };
+    /// assert!(matches!(err.suspension_leaf(), EngineError::ApprovalRequired { .. }));
+    /// ```
+    pub fn suspension_leaf(&self) -> &EngineError {
+        let mut current = self;
+        while let EngineError::ChildSuspended { cause, .. } = current {
+            current = cause;
+        }
+        current
+    }
+
+    /// The status a run suspended by this error takes: `Sleeping` when the
+    /// leaf suspension is a delay or a signal, `AwaitingApproval` otherwise (a
+    /// gate a human resolves).
+    pub(crate) fn suspension_status(&self) -> RunStatus {
+        match self.suspension_leaf() {
+            EngineError::DelaySleeping { .. } | EngineError::SignalWaiting { .. } => {
+                RunStatus::Sleeping
+            }
+            _ => RunStatus::AwaitingApproval,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -476,5 +584,120 @@ mod tests {
         assert!(msg.contains(HANDLER_VERSION_MISMATCH_CODE));
         assert!(msg.contains("1.0.0"));
         assert!(msg.contains("2.0.0"));
+    }
+
+    fn human_input_required() -> EngineError {
+        EngineError::HumanInputRequired {
+            run_id: Uuid::nil(),
+            step_id: Uuid::nil(),
+            message: "Answer the questions".to_string(),
+        }
+    }
+
+    #[test]
+    fn child_suspended_display_carries_child_and_cause() {
+        let child = Uuid::now_v7();
+        let err = EngineError::ChildSuspended {
+            run_id: child,
+            cause: Box::new(human_input_required()),
+        };
+
+        let msg = err.to_string();
+        assert!(msg.contains(&child.to_string()));
+        assert!(msg.contains("human input required"));
+    }
+
+    #[test]
+    fn leaf_suspensions_and_child_suspended_are_suspensions() {
+        let wake_at = Utc::now();
+        let suspensions = [
+            EngineError::ApprovalRequired {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                message: "deploy?".to_string(),
+            },
+            human_input_required(),
+            EngineError::DelaySleeping {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                wake_at,
+            },
+            EngineError::SignalWaiting {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                step_name: "wait".to_string(),
+                name: "payment".to_string(),
+                key: "order-1".to_string(),
+                deadline_at: wake_at,
+            },
+            EngineError::ChildSuspended {
+                run_id: Uuid::nil(),
+                cause: Box::new(human_input_required()),
+            },
+        ];
+        for err in &suspensions {
+            assert!(err.is_suspension(), "{err} should be a suspension");
+        }
+    }
+
+    #[test]
+    fn failures_and_rejections_are_not_suspensions() {
+        let failures = [
+            EngineError::InvalidWorkflow("x".to_string()),
+            EngineError::HumanInputRejected {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                reason: "no".to_string(),
+            },
+            EngineError::ApprovalRejected {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                reason: "no".to_string(),
+            },
+        ];
+        for err in &failures {
+            assert!(!err.is_suspension(), "{err} should not be a suspension");
+        }
+    }
+
+    #[test]
+    fn suspension_leaf_unwraps_nested_child_suspensions() {
+        let err = EngineError::ChildSuspended {
+            run_id: Uuid::now_v7(),
+            cause: Box::new(EngineError::ChildSuspended {
+                run_id: Uuid::now_v7(),
+                cause: Box::new(human_input_required()),
+            }),
+        };
+
+        assert!(matches!(
+            err.suspension_leaf(),
+            EngineError::HumanInputRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn suspension_status_follows_the_leaf() {
+        let human = EngineError::ChildSuspended {
+            run_id: Uuid::nil(),
+            cause: Box::new(human_input_required()),
+        };
+        assert_eq!(human.suspension_status(), RunStatus::AwaitingApproval);
+
+        let delay = EngineError::ChildSuspended {
+            run_id: Uuid::nil(),
+            cause: Box::new(EngineError::DelaySleeping {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                wake_at: Utc::now(),
+            }),
+        };
+        assert_eq!(delay.suspension_status(), RunStatus::Sleeping);
+    }
+
+    #[test]
+    fn suspension_leaf_of_a_plain_error_is_itself() {
+        let err = EngineError::StepConfig("bad".to_string());
+        assert!(matches!(err.suspension_leaf(), EngineError::StepConfig(_)));
     }
 }

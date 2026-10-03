@@ -6,7 +6,7 @@
 //! Handlers are Rust-native: steps can reference previous outputs, use native
 //! `if`/`else`/`match` for conditional branching, and execute in parallel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -23,7 +23,7 @@ use ironflow_core::error::OperationError;
 use ironflow_core::metric_names::{
     RUN_BUDGET_EXCEEDED_TOTAL, RUN_COST_USD, RUN_DURATION_SECONDS, RUNS_ACTIVE, RUNS_TOTAL,
 };
-use ironflow_core::provider::AgentProvider;
+use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
     NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter, RunStatus, RunUpdate, SignalInsert,
@@ -35,7 +35,7 @@ use metrics::{counter, gauge, histogram};
 
 use crate::artifact::ArtifactSink;
 use crate::budget::{BudgetConfig, month_start};
-use crate::context::WorkflowContext;
+use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use crate::error::EngineError;
 use crate::executor::{StepInterceptor, StepResult};
 use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
@@ -235,6 +235,31 @@ fn validate_category(handler_name: &str, category: &str) -> Result<(), EngineErr
         }
     }
     Ok(())
+}
+
+/// Read a run id from the label `key` of a sub-workflow child run.
+///
+/// `None` when the run was not started by a `Workflow` step, when the label
+/// is missing or invalid, or when it points back at the run itself.
+fn chain_label(run: &Run, key: &str) -> Option<Uuid> {
+    if !matches!(run.trigger, TriggerKind::Workflow) {
+        return None;
+    }
+    let id = Uuid::parse_str(run.labels.get(key)?).ok()?;
+    (id != run.id).then_some(id)
+}
+
+/// The root run of the chain a sub-workflow child run belongs to.
+///
+/// Resuming a child resumes this root instead: the root replays its steps
+/// and re-enters the same child run through its open `Workflow` step.
+pub(crate) fn chain_root(run: &Run) -> Option<Uuid> {
+    chain_label(run, LABEL_ROOT_RUN_ID)
+}
+
+/// The run whose `Workflow` step started this sub-workflow child run.
+fn chain_parent(run: &Run) -> Option<Uuid> {
+    chain_label(run, PARENT_RUN_ID_LABEL)
 }
 
 impl Engine {
@@ -1109,6 +1134,10 @@ impl Engine {
     /// [`EngineError::HandlerVersionMismatch`] when the handler's current
     /// version is incompatible with the run's `handler_version` -- checked
     /// before any step is replayed.
+    ///
+    /// A suspended child run of a sub-workflow is never executed on its own:
+    /// its root run is resumed instead, and re-enters the child (see
+    /// [`resume_run`](Self::resume_run)).
     #[tracing::instrument(name = "engine.execute_handler_run", skip_all, fields(run_id = %run_id))]
     pub async fn execute_handler_run(&self, run_id: Uuid) -> Result<WorkflowResult, EngineError> {
         let run = self
@@ -1116,6 +1145,10 @@ impl Engine {
             .get_run(run_id)
             .await?
             .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+
+        if let Some(root_run_id) = chain_root(&run) {
+            return self.resume_chain(run_id, root_run_id).await;
+        }
 
         let handler = self
             .handlers
@@ -1195,13 +1228,20 @@ impl Engine {
     /// Supports multiple approval gates -- each resume replays all prior
     /// steps and stops at the next approval (or completes the run).
     ///
+    /// When `run_id` is a child run of a sub-workflow, the root run of its
+    /// chain is moved back to `Running` and resumed instead: it replays, and
+    /// its open `Workflow` step re-enters the same child run. The returned
+    /// result is the root run's.
+    ///
     /// Like [`execute_handler_run`](Self::execute_handler_run), the handler
     /// only starts once [`AgentProvider::release_run`] has stopped whatever
     /// a previous execution of the run left running.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches.
+    /// Returns [`EngineError::InvalidWorkflow`] if no handler matches, or when
+    /// the root run of a child cannot be resumed (it is running or finished:
+    /// the child is then failed).
     /// Returns [`EngineError`] if execution fails or hits another approval.
     /// A failed release fails the execution with [`EngineError::Operation`].
     /// Returns [`EngineError::HandlerVersionMismatch`] when the handler's
@@ -1215,6 +1255,80 @@ impl Engine {
             .await?
             .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
 
+        if let Some(root_run_id) = chain_root(&run) {
+            return self.resume_chain(run_id, root_run_id).await;
+        }
+
+        self.resume_loaded_run(run).await
+    }
+
+    /// Resume the root run of a suspended child run.
+    ///
+    /// The root waits without `scheduled_at` while its child is suspended, so
+    /// nothing but this path ever wakes it. It is moved to `Running` and
+    /// resumed; its replay re-enters the child. A root that is not suspended
+    /// (already running, or finished) cannot take the child back: the child
+    /// is failed.
+    async fn resume_chain(
+        &self,
+        child_run_id: Uuid,
+        root_run_id: Uuid,
+    ) -> Result<WorkflowResult, EngineError> {
+        let root = self
+            .store
+            .get_run(root_run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(root_run_id)))?;
+
+        match root.status.state {
+            RunStatus::AwaitingApproval | RunStatus::Pending => {
+                self.store
+                    .update_run_status(root_run_id, RunStatus::Running)
+                    .await?;
+            }
+            RunStatus::Sleeping => {
+                self.store
+                    .update_run_status(root_run_id, RunStatus::Pending)
+                    .await?;
+                self.store
+                    .update_run_status(root_run_id, RunStatus::Running)
+                    .await?;
+            }
+            other => {
+                let reason = format!(
+                    "cannot resume child run {child_run_id}: root run {root_run_id} is {other}"
+                );
+                if let Err(err) = self
+                    .fail_or_schedule_retry(child_run_id, &reason, false, None, None)
+                    .await
+                {
+                    error!(
+                        run_id = %child_run_id,
+                        error = %err,
+                        "failed to fail a child run whose root cannot resume"
+                    );
+                }
+                return Err(EngineError::InvalidWorkflow(reason));
+            }
+        }
+
+        info!(
+            run_id = %child_run_id,
+            root_run_id = %root_run_id,
+            "child run resumed through its root run"
+        );
+
+        let root = self
+            .store
+            .get_run(root_run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(root_run_id)))?;
+        self.resume_loaded_run(root).await
+    }
+
+    /// Resume `run`, already loaded and already `Running`.
+    async fn resume_loaded_run(&self, run: Run) -> Result<WorkflowResult, EngineError> {
+        let run_id = run.id;
         let handler = self
             .handlers
             .get(&run.workflow_name)
@@ -1758,20 +1872,71 @@ impl Engine {
                     "run awaiting approval"
                 );
 
-                // The requirement was recorded when the gate opened.
-                let requirement = self
+                self.publish_approval_requested(approval_run_id, step_id, message)
+                    .await?;
+            }
+            Err(EngineError::ChildSuspended {
+                run_id: child_run_id,
+                ref cause,
+            }) => {
+                final_status = cause.suspension_status();
+                // No `scheduled_at`: the suspended descendant owns the wake-up
+                // and resumes this run through `resume_chain`. A wake-up armed
+                // here too would resume the chain twice.
+                final_run = self
                     .store
-                    .get_step(step_id)
-                    .await?
-                    .and_then(|s| s.approval_requirement);
-                self.event_publisher
-                    .publish(Event::ApprovalRequested(ApprovalRequestedEvent {
+                    .update_run_returning(
+                        run_id,
+                        RunUpdate {
+                            status: Some(final_status),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                let leaf = cause.suspension_leaf();
+                info!(
+                    run_id = %run_id,
+                    child_run_id = %child_run_id,
+                    status = %final_status,
+                    cause = %leaf,
+                    "run suspended with its child run"
+                );
+
+                match leaf {
+                    EngineError::ApprovalRequired {
                         run_id: approval_run_id,
                         step_id,
-                        message: message.clone(),
-                        requirement,
-                        at: Utc::now(),
-                    }));
+                        message,
+                    } => {
+                        self.publish_approval_requested(*approval_run_id, *step_id, message)
+                            .await?;
+                    }
+                    EngineError::SignalWaiting {
+                        run_id: wait_run_id,
+                        step_id,
+                        step_name,
+                        name,
+                        key,
+                        deadline_at,
+                    } => {
+                        self.event_publisher
+                            .publish(Event::SignalAwaited(SignalAwaitedEvent {
+                                run_id: *wait_run_id,
+                                step_id: *step_id,
+                                step_name: step_name.clone(),
+                                name: name.clone(),
+                                key: key.clone(),
+                                deadline_at: *deadline_at,
+                                at: Utc::now(),
+                            }));
+                    }
+                    // A human input or a delay publishes no suspension event,
+                    // like on a top-level run.
+                    _ => {}
+                }
             }
             Err(EngineError::HumanInputRequired {
                 run_id: input_run_id,
@@ -1967,6 +2132,90 @@ impl Engine {
             run: final_run,
             steps: ctx.step_results().to_vec(),
         })
+    }
+
+    /// Publish [`Event::ApprovalRequested`] for an approval gate that opened
+    /// on `run_id`, with the requirement recorded when the gate opened.
+    async fn publish_approval_requested(
+        &self,
+        run_id: Uuid,
+        step_id: Uuid,
+        message: &str,
+    ) -> Result<(), EngineError> {
+        let requirement = self
+            .store
+            .get_step(step_id)
+            .await?
+            .and_then(|s| s.approval_requirement);
+        self.event_publisher
+            .publish(Event::ApprovalRequested(ApprovalRequestedEvent {
+                run_id,
+                step_id,
+                message: message.to_string(),
+                requirement,
+                at: Utc::now(),
+            }));
+        Ok(())
+    }
+
+    /// Fail every ancestor of a child run, closest first.
+    ///
+    /// Used when a gate inside a sub-workflow is rejected: the child run
+    /// fails, and the runs suspended with it (its parent, up to the root)
+    /// must not stay suspended on a child that will never resume. Each
+    /// ancestor goes through [`fail_or_schedule_retry`](Self::fail_or_schedule_retry)
+    /// without a retry, which also fails its open `Workflow` step. A run that
+    /// is not a child of a sub-workflow has no ancestor: nothing happens.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Store`] if a run of the chain does not exist or
+    /// its failure cannot be persisted.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example(engine: &Engine, child_run_id: Uuid) -> Result<(), EngineError> {
+    /// engine
+    ///     .fail_ancestors(child_run_id, "approval rejected in a sub-workflow")
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn fail_ancestors(&self, run_id: Uuid, reason: &str) -> Result<(), EngineError> {
+        let mut current = self
+            .store
+            .get_run(run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+        // Labels are data: a chain that loops back on itself stops there.
+        let mut visited = HashSet::from([run_id]);
+
+        while let Some(parent_id) = chain_parent(&current) {
+            if !visited.insert(parent_id) {
+                break;
+            }
+            let status = self
+                .fail_or_schedule_retry(parent_id, reason, false, None, None)
+                .await?;
+            info!(
+                run_id = %run_id,
+                ancestor_run_id = %parent_id,
+                status = %status,
+                "ancestor run failed with its child"
+            );
+            current = self
+                .store
+                .get_run(parent_id)
+                .await?
+                .ok_or(EngineError::Store(StoreError::RunNotFound(parent_id)))?;
+        }
+
+        Ok(())
     }
 
     /// Emit Prometheus metrics for a completed run.
