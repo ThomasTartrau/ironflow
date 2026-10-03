@@ -203,10 +203,21 @@ pub fn replace_template(
     let staged_path = staging.keep();
     if let Err(e) = fs::rename(&staged_path, destination) {
         // The swap error is the one worth reporting; restoring is best effort.
-        if fs::rename(&backup_path, destination).is_ok() {
-            drop(fs::remove_dir_all(&staged_path));
-        }
-        return Err(TemplateError::Io(e));
+        return Err(match fs::rename(&backup_path, destination) {
+            Ok(()) => {
+                drop(fs::remove_dir_all(&staged_path));
+                TemplateError::Io(e)
+            }
+            Err(restore) => {
+                // Restoring failed: the backup holds the only copy of the old
+                // template, so it must outlive this function.
+                let kept = backup.keep().join("old");
+                TemplateError::Io(Error::other(format!(
+                    "failed to install update ({e}) and to restore the previous version ({restore}); previous files kept in {}",
+                    kept.display()
+                )))
+            }
+        });
     }
     fs::remove_dir_all(backup.path()).map_err(TemplateError::Io)?;
 

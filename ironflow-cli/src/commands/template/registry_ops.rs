@@ -308,7 +308,7 @@ pub fn cmd_update(
     name: Option<&str>,
     check_only: bool,
     force: bool,
-    registry_url: Option<&str>,
+    _registry_url: Option<&str>,
 ) -> Result<()> {
     let lock_path = PathBuf::from(LOCKFILE_NAME);
     let mut lock = LockFile::load(&lock_path)?;
@@ -318,9 +318,8 @@ pub fn cmd_update(
         return Ok(());
     }
 
-    let reg_url = resolve_registry_url(registry_url);
-    println!("Checking registry at {reg_url}...");
-    let index = fetch_registry_index(&reg_url).context("failed to fetch registry")?;
+    // Updates come from the repository recorded at install time, so a template
+    // added with `--from` is never replaced by a same-named registry one.
 
     let entries_to_check: Vec<InstalledEntry> = match name {
         Some(n) => {
@@ -335,18 +334,7 @@ pub fn cmd_update(
     let mut has_updates = false;
 
     for installed in entries_to_check {
-        let registry_entry = match resolve_template_entry(&index, &installed.name) {
-            Ok(e) => e,
-            Err(_) => {
-                println!(
-                    "  {} v{} -- not found in registry (skipped)",
-                    installed.name, installed.version
-                );
-                continue;
-            }
-        };
-
-        let latest_tag = match fetch_latest_tag(&registry_entry.repo) {
+        let latest_tag = match fetch_latest_tag(&installed.repo) {
             Ok(tag) => tag,
             Err(_) => {
                 println!(
@@ -381,7 +369,7 @@ pub fn cmd_update(
                 installed.name, current, latest
             );
         } else {
-            apply_update(&installed, &registry_entry.repo, &latest, force, &mut lock)?;
+            apply_update(&installed, &latest, force, &mut lock)?;
         }
     }
 
@@ -395,11 +383,10 @@ pub fn cmd_update(
 
 /// Replace the installed copy of a template with the version tagged `latest`.
 ///
-/// Every fallible step before the swap leaves the old folder and the
-/// lockfile untouched.
+/// Dependencies are injected before the swap and the lockfile write, so a
+/// failure leaves the lockfile on the old version and the next run retries.
 fn apply_update(
     installed: &InstalledEntry,
-    repo: &str,
     latest: &Version,
     force: bool,
     lock: &mut LockFile,
@@ -412,9 +399,16 @@ fn apply_update(
         );
     }
 
-    let tmp = fetch_repo_at_tag(repo, &format_tag(&latest.to_string()))?;
+    let tmp = fetch_repo_at_tag(&installed.repo, &format_tag(&latest.to_string()))?;
     let (manifest, template_dir) = find_template(tmp.path(), &installed.name)?;
     check_min_version(&manifest, force)?;
+
+    let cargo_toml = PathBuf::from("Cargo.toml");
+    let injection = if cargo_toml.exists() && !manifest.dependencies.is_empty() {
+        Some(inject_dependencies(&cargo_toml, &manifest.dependencies)?)
+    } else {
+        None
+    };
 
     let result = replace_template(&manifest, &template_dir, &destination)?;
 
@@ -441,10 +435,8 @@ fn apply_update(
         println!("    - {file}");
     }
 
-    let cargo_toml = PathBuf::from("Cargo.toml");
-    if cargo_toml.exists() && !manifest.dependencies.is_empty() {
-        let injection = inject_dependencies(&cargo_toml, &manifest.dependencies)?;
-        print_injection_result(&injection);
+    if let Some(injection) = &injection {
+        print_injection_result(injection);
     }
 
     let requirements = manifest.requirements.render();
