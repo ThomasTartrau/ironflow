@@ -11,3 +11,8 @@ ironflow-store = { path = "../../ironflow-store" }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+ironflow-core = { path = "../../ironflow-core" }
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }

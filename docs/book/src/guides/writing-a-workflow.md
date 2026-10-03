@@ -48,15 +48,15 @@ impl WorkflowHandler for Deploy {
 
             ctx.shell(
                 "build",
-                ShellConfig::new(&format!("echo 'Building {}'", input.version)),
+                ShellConfig::exec("printf", &["Building %s\n", &input.version]),
             ).await?;
 
             ctx.shell(
                 "deploy",
-                ShellConfig::new(&format!(
-                    "echo 'Deploying {} to {}'",
-                    input.version, input.environment
-                )),
+                ShellConfig::exec(
+                    "printf",
+                    &["Deploying %s to %s\n", &input.version, &input.environment],
+                ),
             ).await?;
 
             Ok(())
@@ -64,6 +64,11 @@ impl WorkflowHandler for Deploy {
     }
 }
 ```
+
+The input comes from whoever triggers the run, so it never goes into a command line:
+`ShellConfig::new` hands its string to `sh -c`, and a quote or a `;` in `version` would
+run arbitrary commands on the worker. `ShellConfig::exec` spawns the program directly and
+passes each argument as is. Keep `ShellConfig::new` for commands you write in full.
 
 Branching is plain Rust `if`/`else`. When a branch depends on the run input,
 declare it with `ctx.when("production run", |i: &DeployInput| i.environment == "production")`

@@ -1054,7 +1054,9 @@ use ironflow_runtime::prelude::*;
 
 async fn on_push(payload: serde_json::Value, provider: &ClaudeCodeProvider) {
     let branch = payload["ref"].as_str().unwrap_or("main");
-    let diff = Shell::new(&format!("git diff origin/main...origin/{branch}"))
+    // The branch comes from the webhook: an argument, never a `sh -c` string.
+    let range = format!("origin/main...origin/{branch}");
+    let diff = Shell::exec("git", &["diff", &range])
         .await
         .expect("git diff");
     let review = Agent::new()

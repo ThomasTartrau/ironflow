@@ -6,6 +6,7 @@ import {
 	describeApprovalReason,
 	StepList,
 	StepTokenUsage,
+	shellCommandLine,
 } from "./StepList";
 
 const RUN_ID = "019a3f2b-0000-7000-8000-0000000000ff";
@@ -121,6 +122,39 @@ describe("describeApprovalReason", () => {
 		expect(
 			describeApprovalReason(requirementFixture({ reason: undefined })),
 		).toBe("No reason given");
+	});
+});
+
+describe("shellCommandLine", () => {
+	it("shows a shell-mode command as written", () => {
+		expect(shellCommandLine({ command: "cargo build | tee log" })).toBe(
+			"cargo build | tee log",
+		);
+	});
+
+	it("shows an exec-mode program followed by its arguments", () => {
+		expect(shellCommandLine({ command: "git", args: ["diff", "--stat"] })).toBe(
+			"git diff --stat",
+		);
+	});
+
+	it("quotes an argument holding spaces, quotes or control characters", () => {
+		expect(
+			shellCommandLine({
+				command: "printf",
+				args: ["%s\n", "x'; touch /tmp/pwned; echo '", ""],
+			}),
+		).toBe(`printf "%s\\n" "x'; touch /tmp/pwned; echo '" ""`);
+	});
+
+	it("returns null without a command string", () => {
+		expect(shellCommandLine({ args: ["a"] })).toBeNull();
+		expect(shellCommandLine({ command: 42 })).toBeNull();
+	});
+
+	it("ignores args that are not a list of strings", () => {
+		expect(shellCommandLine({ command: "ls", args: "-la" })).toBe("ls");
+		expect(shellCommandLine({ command: "ls", args: [1, 2] })).toBe("ls");
 	});
 });
 

@@ -80,7 +80,9 @@ impl WorkflowHandler for Greeting {
                 message = message.to_uppercase();
             }
 
-            ctx.shell("greet", ShellConfig::new(&format!("echo '{message}'")))
+            // `name` is untrusted: pass it as an argument, never inside a
+            // command line, so no shell ever parses it.
+            ctx.shell("greet", ShellConfig::exec("printf", &["%s\n", &message]))
                 .await?;
 
             Ok(())

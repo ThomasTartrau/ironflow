@@ -4138,11 +4138,14 @@ dependencies = [
 name = "ironflow-workflows"
 version = "0.1.0"
 dependencies = [
+ "ironflow-core",
  "ironflow-engine",
  "ironflow-store",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

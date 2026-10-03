@@ -28,6 +28,24 @@ so it is replayed on resume. Wait for a signal instead; the producer posts it to
 
 The key identifies one occurrence (a commit SHA, not a merge request). Section: Signal.
 
+## shell-exec
+- kind: adopt
+- since: ironflow-engine 2.44.1 (#154)
+- detect: `ShellConfig::new\(&format!`
+
+`ShellConfig::new` runs its string through `sh -c`, so data interpolated into it (the run
+input, a webhook payload, a human answer, an agent output) can close a quote and run any
+command on the worker. Pass that data as arguments with `ShellConfig::exec`, which spawns
+the program without a shell. A command built only from constants can stay as it is.
+
+```diff
+- ctx.shell("greet", ShellConfig::new(&format!("echo 'Hello, {}!'", input.name))).await?;
++ ctx.shell("greet", ShellConfig::exec("printf", &["Hello, %s!\n", &input.name])).await?;
+```
+
+Pipes and redirects need a shell: keep `ShellConfig::new` with a fixed script and hand the
+data over with `.env("NAME", &input.name)`, read as `"$NAME"`. Section: Shell.
+
 ## exit-code-as-output
 - kind: adopt
 - since: ironflow-engine 2.42.0 (#138)

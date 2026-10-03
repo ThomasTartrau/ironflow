@@ -25,6 +25,19 @@ if output.is_success() {
 }
 ```
 
+`ShellConfig::new` hands its string to `sh -c`: pipes, redirects and globs work, and
+so would a quote or a `;` smuggled into it. When the command carries data the workflow
+does not control (its input, a webhook payload, a human answer, an agent output), use
+`ShellConfig::exec`, which spawns the program directly and passes each argument as is:
+
+```rust,ignore
+let input: GreetInput = ctx.input().await?;
+ctx.shell("greet", ShellConfig::exec("printf", &["Hello, %s!\n", &input.name])).await?;
+```
+
+The step's `command` holds the program and its `args` the arguments; `timeout_secs`,
+`dir`, `env`, `exit_code_as_output` and artifacts work the same in both modes.
+
 ## HTTP steps
 
 ```rust,ignore

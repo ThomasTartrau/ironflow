@@ -129,7 +129,8 @@ with the reason, the run resumes, and `human_input` returns
 match ctx.human_input::<Answers>("clarify", config).await {
     Ok(answers) => { /* use the answers */ }
     Err(EngineError::HumanInputRejected { reason, .. }) => {
-        ctx.shell("notify", ShellConfig::new(&format!("./notify.sh '{reason}'")))
+        // The reason is free text typed by a person: an argument, not a command line.
+        ctx.shell("notify", ShellConfig::exec("./notify.sh", &[&reason]))
             .await?;
     }
     Err(err) => return Err(err),

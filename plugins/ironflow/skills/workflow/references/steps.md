@@ -32,6 +32,34 @@ Other builders: `clean_env()` (start from an empty environment), `allow_failure(
 `retry_policy(RetryPolicy)`, `output("target/*.log")` and `input(&handle)` for artifacts
 (below).
 
+`ShellConfig::new` hands its string to `sh -c`. Never `format!` the run input, a webhook
+payload, a human answer or an agent output into it: a quote or a `;` in that data runs
+arbitrary commands on the worker. `ShellConfig::exec` spawns the program directly and
+passes each argument as is; every builder above works the same on it.
+
+```rust,no_run
+use ironflow_engine::config::ShellConfig;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+struct Input {
+    branch: String,
+}
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let input: Input = ctx.input().await?;
+    let range = format!("origin/main...origin/{}", input.branch);
+    let diff = ctx
+        .shell("diff", ShellConfig::exec("git", &["diff", "--stat", &range]).dir("/repo"))
+        .await?;
+    let _stat = diff.stdout();
+    Ok(())
+}
+```
+
 A non-zero exit code fails the step. When the code is data the handler branches on
 (a conflicting `git merge`, red tests), add `exit_code_as_output()`: the step is
 `Completed`, the run is not degraded, and the code is read with `exit_code()`.
@@ -322,13 +350,14 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
     match ctx.human_input::<Answers>("clarify", config).await {
         Ok(answers) => {
+            // Answers are typed by a person: arguments, never a command line.
             let joined = answers.answers.join(", ");
-            ctx.shell("record", ShellConfig::new(&format!("echo '{joined}'")))
+            ctx.shell("record", ShellConfig::exec("printf", &["%s\n", &joined]))
                 .await?;
         }
         // The person refused: decide here, or propagate to fail the run.
         Err(EngineError::HumanInputRejected { reason, .. }) => {
-            ctx.shell("notify", ShellConfig::new(&format!("echo '{reason}'")))
+            ctx.shell("notify", ShellConfig::exec("printf", &["%s\n", &reason]))
                 .await?;
         }
         Err(err) => return Err(err),

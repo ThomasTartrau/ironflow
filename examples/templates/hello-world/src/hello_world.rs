@@ -60,9 +60,11 @@ impl WorkflowHandler for HelloWorld {
             let input: HelloWorldInput = serde_json::from_value(payload)
                 .map_err(|e| EngineError::StepConfig(e.to_string()))?;
 
+            // `name` is untrusted: pass it as an argument, never inside a
+            // command line, so no shell ever parses it.
             ctx.shell(
                 "greet",
-                ShellConfig::new(&format!("echo 'Hello, {}!'", input.name)),
+                ShellConfig::exec("printf", &["Hello, %s!\n", &input.name]),
             )
             .await?;
 
