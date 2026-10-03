@@ -15,6 +15,7 @@
 //! | `DASHBOARD_DIR` | no | embedded | Filesystem path to dashboard assets |
 //! | `WEBHOOK_URL` | no | - | Outbound webhook URL for notifications |
 //! | `IRONFLOW_ENV` | no | unset (strict) | `production`, or `development` for explicit dev mode |
+//! | `IRONFLOW_INSECURE_COOKIES` | no | `false` | `1`/`true` drops the `Secure` flag from session cookies (local HTTP-only dev). Ignored in production |
 //! | `RATE_LIMIT_AUTH` | no | `10` | Auth rate limit (req/min/IP). `0` = disabled |
 //! | `RATE_LIMIT_GENERAL` | no | `60` | General rate limit (req/min/IP). `0` = disabled |
 //! | `ARTIFACTS_DIR` | no | - | Filesystem root for artifact blobs. Unset disables artifacts |
@@ -126,6 +127,12 @@ pub struct ServerConfig {
     pub signal_retention_days: u32,
     /// Whether the server is running in production mode.
     pub is_production: bool,
+    /// Whether session cookies carry the `Secure` flag.
+    ///
+    /// Always `true` in production. In development it defaults to `true` and
+    /// is switched off only by `IRONFLOW_INSECURE_COOKIES=1` (or `true`), for
+    /// local setups served over plain HTTP from a non-localhost origin.
+    pub cookie_secure: bool,
     /// Rate limit for auth credential routes (sign-in, sign-up) in requests
     /// per minute per IP. `None` disables rate limiting on these routes.
     pub rate_limit_auth: Option<u32>,
@@ -221,6 +228,10 @@ impl ServerConfig {
     /// waived. The `ironflow-dev-` prefix and empty values are refused in every
     /// mode. No secret is compiled into the binary.
     ///
+    /// Session cookies are `Secure` unless `IRONFLOW_INSECURE_COOKIES` is `1`
+    /// or `true` outside production. In production the variable is ignored
+    /// with a warning.
+    ///
     /// # Errors
     ///
     /// Returns [`ConfigError`] with all validation failures collected,
@@ -241,6 +252,14 @@ impl ServerConfig {
         let is_production = secret_mode == SecretMode::Production;
 
         let mut errors = Vec::new();
+
+        let insecure_cookies = env::var("IRONFLOW_INSECURE_COOKIES")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        if is_production && insecure_cookies {
+            warn!("IRONFLOW_INSECURE_COOKIES is ignored in production, cookies stay Secure");
+        }
+        let cookie_secure = is_production || !insecure_cookies;
 
         let database_url = env::var("DATABASE_URL").ok();
         if is_production && database_url.is_none() {
@@ -436,6 +455,7 @@ impl ServerConfig {
             dashboard_dir,
             webhook_url,
             is_production,
+            cookie_secure,
             rate_limit_auth,
             rate_limit_general,
             artifacts_dir,
@@ -478,6 +498,7 @@ mod tests {
     unsafe fn clear_env() {
         unsafe {
             env::remove_var("IRONFLOW_ENV");
+            env::remove_var("IRONFLOW_INSECURE_COOKIES");
             env::remove_var("DATABASE_URL");
             env::remove_var("JWT_SECRET");
             env::remove_var("WORKER_TOKEN");
@@ -891,6 +912,49 @@ mod tests {
         assert!(config.is_production);
         assert_eq!(config.jwt_secret, STRONG_JWT);
         assert_eq!(config.worker_token, STRONG_WORKER);
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_production_cookie_secure_even_if_insecure_requested() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe {
+            setup_prod(STRONG_JWT, STRONG_WORKER);
+            env::set_var("IRONFLOW_INSECURE_COOKIES", "true");
+        }
+
+        let config = ServerConfig::from_env().expect("production config should load");
+        assert!(config.cookie_secure);
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_development_cookie_secure_by_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe { setup_dev() };
+
+        let config = ServerConfig::from_env().expect("dev config should load");
+        assert!(!config.is_production);
+        assert!(config.cookie_secure);
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn from_env_development_insecure_cookies_opt_out() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env writes serialized by ENV_LOCK, held above.
+        unsafe {
+            setup_dev();
+            env::set_var("IRONFLOW_INSECURE_COOKIES", "TRUE");
+        }
+
+        let config = ServerConfig::from_env().expect("dev config should load");
+        assert!(!config.cookie_secure);
 
         unsafe { clear_env() };
     }

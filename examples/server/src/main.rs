@@ -9,6 +9,7 @@
 //! Environment:
 //! - `IRONFLOW_ENV` (`production`, or `development` to boot without secrets;
 //!   unset requires them)
+//! - `IRONFLOW_INSECURE_COOKIES` (`1` or `true` drops the `Secure` cookie flag, ignored in production)
 //! - `DATABASE_URL` (required in production)
 //! - `JWT_SECRET` (required, >= 32 bytes; random per process in development)
 //! - `WORKER_TOKEN` (required, >= 32 bytes; random per process in development,
@@ -130,12 +131,16 @@ async fn main() {
 
     let provider = Arc::new(ClaudeCodeProvider::new());
 
+    if !config.cookie_secure {
+        warn!("IRONFLOW_INSECURE_COOKIES is set: session cookies are sent without the Secure flag");
+    }
+
     let jwt_config = Arc::new(JwtConfig {
         secret: config.jwt_secret.clone(),
         access_token_ttl_secs: 900,
         refresh_token_ttl_secs: 604800,
         cookie_domain: None,
-        cookie_secure: config.is_production,
+        cookie_secure: config.cookie_secure,
     });
 
     let budget = BudgetConfig::from_env();
@@ -209,6 +214,7 @@ async fn main() {
         dashboard_dir: config.dashboard_dir.clone(),
         rate_limit_auth: config.rate_limit_auth,
         rate_limit_general: config.rate_limit_general,
+        enforce_https: config.is_production,
     };
     let app = create_router(state, router_config)
         .layer(cors)
