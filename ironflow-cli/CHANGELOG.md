@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.45](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.44...ironflow-cli-v0.1.45) - 2026-10-03
+
+### Fixed
+
+- address review on MR !445
+
+- #156 template update applies the update in place, version read from workspace root
+
 ## [0.1.44](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.43...ironflow-cli-v0.1.44) - 2026-10-02
 
 ### Added
