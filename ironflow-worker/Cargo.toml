@@ -41,6 +41,6 @@ axum = "0.8"
 async-trait = "0.1"
 rust_decimal = "1"
 ironflow-api = { version = "2.43.3", path = "../ironflow-api", features = ["prometheus"] }
-ironflow-auth = { version = "2.4.50", path = "../ironflow-auth" }
+ironflow-auth = { version = "2.4.51", path = "../ironflow-auth" }
 ironflow-store = { version = "2.41.3", path = "../ironflow-store", features = ["store-memory"] }
 schemars = "1"
