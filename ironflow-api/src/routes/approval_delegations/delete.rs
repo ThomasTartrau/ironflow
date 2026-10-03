@@ -161,7 +161,7 @@ mod tests {
     async fn an_admin_can_revoke_someone_elses_delegation() {
         let (state, users) = test_state().await;
         let delegation = alice_to_bob(&state, &users).await;
-        let auth = admin_header(&users.carol, &state);
+        let auth = admin_header(&users.carol, &state).await;
 
         assert_eq!(
             revoke(state, &auth, delegation.id).await,

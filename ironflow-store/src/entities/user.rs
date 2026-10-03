@@ -18,6 +18,9 @@ pub struct User {
     pub password_hash: String,
     /// Whether the user has admin privileges.
     pub is_admin: bool,
+    /// Session generation. Bumped to revoke every token issued to the user.
+    #[serde(default)]
+    pub token_version: i64,
     /// When the user was created.
     pub created_at: DateTime<Utc>,
     /// When the user was last updated.
@@ -38,6 +41,19 @@ pub struct NewUser {
     pub is_admin: Option<bool>,
 }
 
+/// Parameters for recording an issued refresh token.
+///
+/// Only the SHA-256 hash of the token is stored, never the token itself.
+#[derive(Debug, Clone)]
+pub struct NewRefreshToken {
+    /// Lowercase hex SHA-256 of the raw refresh token.
+    pub token_hash: String,
+    /// Owner of the token.
+    pub user_id: Uuid,
+    /// When the token stops being accepted.
+    pub expires_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,6 +66,7 @@ mod tests {
             username: "testuser".to_string(),
             password_hash: "secret_hash_should_not_appear".to_string(),
             is_admin: false,
+            token_version: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -70,6 +87,7 @@ mod tests {
             username: "alice".to_string(),
             password_hash: "argon2_hash".to_string(),
             is_admin: true,
+            token_version: 0,
             created_at: now,
             updated_at: now,
         };

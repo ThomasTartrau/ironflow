@@ -34,6 +34,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -79,6 +80,14 @@ pub(super) struct State {
     /// Idempotency ID -> signal holding it. Guarded by the same lock as
     /// `signals`, so check-then-insert is atomic.
     pub(super) signal_idempotency: HashMap<String, Uuid>,
+    /// Issued refresh tokens, keyed by their SHA-256 hash.
+    pub(super) refresh_tokens: HashMap<String, StoredRefreshToken>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct StoredRefreshToken {
+    pub(super) user_id: Uuid,
+    pub(super) expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]

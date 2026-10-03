@@ -28,7 +28,7 @@ use ironflow_store::entities::{
     ProviderAccountUpdate, ProviderAccountUsagePoint, ProviderAccountWindow,
 };
 use ironflow_store::entities::{
-    NewSignal, Signal, SignalFilter, SignalInsert, SignalStepResolution,
+    NewRefreshToken, NewSignal, Signal, SignalFilter, SignalInsert, SignalStepResolution,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::log_store::LogStore;
@@ -507,6 +507,30 @@ impl UserStore for ApiRunStore {
         _user_id: Uuid,
         _groups: Vec<String>,
     ) -> StoreFuture<'_, Vec<String>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn revoke_user_sessions(&self, _id: Uuid) -> StoreFuture<'_, i64> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn store_refresh_token(&self, _token: NewRefreshToken) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "UserStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn consume_refresh_token(&self, _token_hash: &str) -> StoreFuture<'_, Option<Uuid>> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "UserStore not available in worker".to_string(),

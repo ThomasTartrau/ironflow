@@ -5,12 +5,12 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::entities::{NewUser, Page, User};
+use crate::entities::{NewRefreshToken, NewUser, Page, User};
 use crate::error::StoreError;
 use crate::store::StoreFuture;
 use crate::user_store::UserStore;
 
-use super::InMemoryStore;
+use super::{InMemoryStore, StoredRefreshToken};
 
 impl UserStore for InMemoryStore {
     fn create_user(&self, req: NewUser) -> StoreFuture<'_, User> {
@@ -36,6 +36,7 @@ impl UserStore for InMemoryStore {
                 username: req.username,
                 password_hash: req.password_hash,
                 is_admin,
+                token_version: 0,
                 created_at: now,
                 updated_at: now,
             };
@@ -110,6 +111,7 @@ impl UserStore for InMemoryStore {
                 .remove(&id)
                 .ok_or(StoreError::UserNotFound(id))?;
             state.user_groups.remove(&id);
+            state.refresh_tokens.retain(|_, t| t.user_id != id);
             Ok(())
         })
     }
@@ -122,8 +124,11 @@ impl UserStore for InMemoryStore {
                 .get_mut(&id)
                 .ok_or(StoreError::UserNotFound(id))?;
             user.is_admin = is_admin;
+            user.token_version += 1;
             user.updated_at = Utc::now();
-            Ok(user.clone())
+            let user = user.clone();
+            state.refresh_tokens.retain(|_, t| t.user_id != id);
+            Ok(user)
         })
     }
 
@@ -135,7 +140,9 @@ impl UserStore for InMemoryStore {
                 .get_mut(&id)
                 .ok_or(StoreError::UserNotFound(id))?;
             user.password_hash = password_hash;
+            user.token_version += 1;
             user.updated_at = Utc::now();
+            state.refresh_tokens.retain(|_, t| t.user_id != id);
             Ok(())
         })
     }
@@ -167,11 +174,242 @@ impl UserStore for InMemoryStore {
             Ok(sorted)
         })
     }
+
+    fn revoke_user_sessions(&self, id: Uuid) -> StoreFuture<'_, i64> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let user = state
+                .users
+                .get_mut(&id)
+                .ok_or(StoreError::UserNotFound(id))?;
+            user.token_version += 1;
+            user.updated_at = Utc::now();
+            let version = user.token_version;
+            state.refresh_tokens.retain(|_, t| t.user_id != id);
+            Ok(version)
+        })
+    }
+
+    fn store_refresh_token(&self, token: NewRefreshToken) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            if !state.users.contains_key(&token.user_id) {
+                return Err(StoreError::UserNotFound(token.user_id));
+            }
+            let now = Utc::now();
+            state
+                .refresh_tokens
+                .retain(|_, t| t.user_id != token.user_id || t.expires_at > now);
+            state.refresh_tokens.insert(
+                token.token_hash,
+                StoredRefreshToken {
+                    user_id: token.user_id,
+                    expires_at: token.expires_at,
+                },
+            );
+            Ok(())
+        })
+    }
+
+    fn consume_refresh_token(&self, token_hash: &str) -> StoreFuture<'_, Option<Uuid>> {
+        let token_hash = token_hash.to_string();
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            Ok(state
+                .refresh_tokens
+                .remove(&token_hash)
+                .filter(|t| t.expires_at > Utc::now())
+                .map(|t| t.user_id))
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::Duration;
+
     use super::*;
+
+    fn refresh_token(hash: &str, user_id: Uuid, ttl: Duration) -> NewRefreshToken {
+        NewRefreshToken {
+            token_hash: hash.to_string(),
+            user_id,
+            expires_at: Utc::now() + ttl,
+        }
+    }
+
+    #[tokio::test]
+    async fn consume_refresh_token_is_single_use() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("h1", user.id, Duration::hours(1)))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.consume_refresh_token("h1").await.unwrap(),
+            Some(user.id)
+        );
+        assert_eq!(store.consume_refresh_token("h1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn consume_unknown_refresh_token_returns_none() {
+        let store = InMemoryStore::new();
+        assert_eq!(store.consume_refresh_token("missing").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn consume_expired_refresh_token_returns_none() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("old", user.id, Duration::seconds(-5)))
+            .await
+            .unwrap();
+
+        assert_eq!(store.consume_refresh_token("old").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn store_refresh_token_drops_expired_rows_of_the_user() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("old", user.id, Duration::seconds(-5)))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("new", user.id, Duration::hours(1)))
+            .await
+            .unwrap();
+
+        let state = store.state.read().await;
+        assert!(!state.refresh_tokens.contains_key("old"));
+        assert!(state.refresh_tokens.contains_key("new"));
+    }
+
+    #[tokio::test]
+    async fn store_refresh_token_unknown_user_errors() {
+        let store = InMemoryStore::new();
+        let err = store
+            .store_refresh_token(refresh_token("h1", Uuid::now_v7(), Duration::hours(1)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::UserNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn revoke_user_sessions_bumps_version_and_drops_refresh_tokens() {
+        let store = InMemoryStore::new();
+        let alice = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        let bob = store
+            .create_user(new_user("bob@example.com", "bob"))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("a1", alice.id, Duration::hours(1)))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("b1", bob.id, Duration::hours(1)))
+            .await
+            .unwrap();
+
+        assert_eq!(store.revoke_user_sessions(alice.id).await.unwrap(), 1);
+        assert_eq!(store.revoke_user_sessions(alice.id).await.unwrap(), 2);
+
+        let found = store.find_user_by_id(alice.id).await.unwrap().unwrap();
+        assert_eq!(found.token_version, 2);
+        assert_eq!(store.consume_refresh_token("a1").await.unwrap(), None);
+        // Another user's session is untouched.
+        assert_eq!(
+            store.consume_refresh_token("b1").await.unwrap(),
+            Some(bob.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_user_sessions_unknown_user_errors() {
+        let store = InMemoryStore::new();
+        let err = store
+            .revoke_user_sessions(Uuid::now_v7())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::UserNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn update_user_role_bumps_token_version() {
+        let store = InMemoryStore::new();
+        let admin = store
+            .create_user(new_user("admin@example.com", "admin"))
+            .await
+            .unwrap();
+        assert_eq!(admin.token_version, 0);
+        store
+            .store_refresh_token(refresh_token("h1", admin.id, Duration::hours(1)))
+            .await
+            .unwrap();
+
+        let demoted = store.update_user_role(admin.id, false).await.unwrap();
+
+        assert_eq!(demoted.token_version, 1);
+        assert_eq!(store.consume_refresh_token("h1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn update_user_password_bumps_token_version() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("h1", user.id, Duration::hours(1)))
+            .await
+            .unwrap();
+
+        store
+            .update_user_password(user.id, "newhash".to_string())
+            .await
+            .unwrap();
+
+        let found = store.find_user_by_id(user.id).await.unwrap().unwrap();
+        assert_eq!(found.token_version, 1);
+        assert_eq!(found.password_hash, "newhash");
+        assert_eq!(store.consume_refresh_token("h1").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn delete_user_drops_refresh_tokens() {
+        let store = InMemoryStore::new();
+        let user = store
+            .create_user(new_user("alice@example.com", "alice"))
+            .await
+            .unwrap();
+        store
+            .store_refresh_token(refresh_token("h1", user.id, Duration::hours(1)))
+            .await
+            .unwrap();
+
+        store.delete_user(user.id).await.unwrap();
+
+        assert_eq!(store.consume_refresh_token("h1").await.unwrap(), None);
+    }
 
     fn new_user(email: &str, username: &str) -> NewUser {
         NewUser {

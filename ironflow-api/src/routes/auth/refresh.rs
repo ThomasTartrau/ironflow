@@ -1,13 +1,14 @@
 //! `POST /api/v1/auth/refresh` — Refresh access token using a refresh token.
 
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 
-use ironflow_auth::cookies::{build_auth_cookie, build_refresh_cookie, extract_refresh_token};
-use ironflow_auth::jwt::{AccessToken, RefreshToken};
+use ironflow_auth::cookies::extract_refresh_token;
+use ironflow_auth::jwt::{RefreshToken, token_hash};
 
 use crate::error::ApiError;
+use crate::routes::auth::session::issue_session;
 use crate::state::AppState;
 
 /// Refresh the access token using a valid refresh token from cookies.
@@ -36,30 +37,29 @@ pub async fn refresh(
     let claims = RefreshToken::decode(&raw_refresh, &state.jwt_config)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    let new_access = AccessToken::for_user(
-        claims.user_id,
-        &claims.username,
-        claims.is_admin,
-        &state.jwt_config,
-    )
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let new_refresh = RefreshToken::for_user(
-        claims.user_id,
-        &claims.username,
-        claims.is_admin,
-        &state.jwt_config,
-    )
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let mut response_headers = HeaderMap::new();
-    if let Ok(val) = HeaderValue::from_str(&build_auth_cookie(&new_access.0, &state.jwt_config)) {
-        response_headers.append("Set-Cookie", val);
+    // A refresh token is single use: consuming it deletes the stored hash, so
+    // a replayed token, or one revoked by sign-out, finds nothing.
+    let owner = state
+        .store
+        .consume_refresh_token(&token_hash(&raw_refresh))
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    if owner != claims.user_id {
+        return Err(ApiError::Unauthorized);
     }
-    if let Ok(val) = HeaderValue::from_str(&build_refresh_cookie(&new_refresh.0, &state.jwt_config))
-    {
-        response_headers.append("Set-Cookie", val);
+
+    // The new pair is minted from the stored user, not from the old claims, so
+    // a role change or a session revocation since sign-in is picked up here.
+    let user = state
+        .store
+        .find_user_by_id(claims.user_id)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    if user.token_version != claims.ver {
+        return Err(ApiError::Unauthorized);
     }
+
+    let response_headers = issue_session(&state, &user).await?;
 
     Ok((StatusCode::NO_CONTENT, response_headers))
 }
@@ -69,13 +69,16 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use axum::response::Response;
     use axum::routing::post;
+    use ironflow_auth::cookies::REFRESH_COOKIE_NAME;
     use ironflow_auth::jwt::{JwtConfig, RefreshToken};
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
+    use ironflow_store::entities::{NewUser, User};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
     use std::sync::Arc;
@@ -124,30 +127,133 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn refresh_success() {
-        let state = test_state();
-        let jwt_config = test_jwt_config();
-        let user_id = Uuid::now_v7();
+    async fn signed_in_user(state: &AppState, is_admin: bool) -> (User, String) {
+        let user = state
+            .store
+            .create_user(NewUser {
+                email: "refresh@example.com".to_string(),
+                username: "refreshuser".to_string(),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(is_admin),
+            })
+            .await
+            .expect("failed to create user");
+        let headers = issue_session(state, &user)
+            .await
+            .expect("failed to issue session");
+        let refresh_token = refresh_cookie(&headers);
+        (user, refresh_token)
+    }
 
-        let refresh_token = RefreshToken::for_user(user_id, "testuser", false, &jwt_config)
-            .expect("failed to create refresh token");
+    fn refresh_cookie(headers: &HeaderMap) -> String {
+        let prefix = format!("{REFRESH_COOKIE_NAME}=");
+        headers
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|c| c.strip_prefix(prefix.as_str()))
+            .and_then(|rest| rest.split(';').next())
+            .expect("refresh cookie not set")
+            .to_string()
+    }
 
-        let app = Router::new().route("/", post(refresh)).with_state(state);
+    async fn post_refresh(state: &AppState, refresh_token: &str) -> Response {
+        let app = Router::new()
+            .route("/", post(refresh))
+            .with_state(state.clone());
 
         let req = Request::builder()
             .uri("/")
             .method("POST")
             .header("content-type", "application/json")
-            .header("Cookie", format!("ironflow_refresh={}", refresh_token.0))
+            .header("Cookie", format!("{REFRESH_COOKIE_NAME}={refresh_token}"))
             .body(Body::empty())
             .expect("failed to build request");
 
-        let resp = app.oneshot(req).await.expect("request failed");
+        app.oneshot(req).await.expect("request failed")
+    }
+
+    #[tokio::test]
+    async fn refresh_success() {
+        let state = test_state();
+        let (_, refresh_token) = signed_in_user(&state, false).await;
+
+        let resp = post_refresh(&state, &refresh_token).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
         let set_cookie = resp.headers().get_all("set-cookie");
-        assert!(set_cookie.iter().count() > 0);
+        assert_eq!(set_cookie.iter().count(), 2);
+        assert_ne!(refresh_cookie(resp.headers()), refresh_token);
+    }
+
+    #[tokio::test]
+    async fn rotated_refresh_token_is_accepted() {
+        let state = test_state();
+        let (_, refresh_token) = signed_in_user(&state, false).await;
+
+        let first = post_refresh(&state, &refresh_token).await;
+        assert_eq!(first.status(), StatusCode::NO_CONTENT);
+        let rotated = refresh_cookie(first.headers());
+
+        let second = post_refresh(&state, &rotated).await;
+        assert_eq!(second.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_replayed_twice_is_rejected() {
+        let state = test_state();
+        let (_, refresh_token) = signed_in_user(&state, false).await;
+
+        let first = post_refresh(&state, &refresh_token).await;
+        assert_eq!(first.status(), StatusCode::NO_CONTENT);
+
+        let replay = post_refresh(&state, &refresh_token).await;
+        assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn refresh_after_sign_out_is_rejected() {
+        let state = test_state();
+        let (user, refresh_token) = signed_in_user(&state, false).await;
+
+        state
+            .store
+            .revoke_user_sessions(user.id)
+            .await
+            .expect("failed to revoke sessions");
+
+        let resp = post_refresh(&state, &refresh_token).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn refresh_after_role_change_is_rejected() {
+        let state = test_state();
+        let (user, refresh_token) = signed_in_user(&state, true).await;
+
+        state
+            .store
+            .update_user_role(user.id, false)
+            .await
+            .expect("failed to demote user");
+
+        let resp = post_refresh(&state, &refresh_token).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_never_stored_is_rejected() {
+        let state = test_state();
+        let jwt_config = test_jwt_config();
+        let user_id = Uuid::now_v7();
+
+        // Correctly signed, but never recorded by a sign-in: the signature
+        // alone no longer buys a session.
+        let refresh_token = RefreshToken::for_user(user_id, "testuser", false, &jwt_config)
+            .expect("failed to create refresh token");
+
+        let resp = post_refresh(&state, &refresh_token.0).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

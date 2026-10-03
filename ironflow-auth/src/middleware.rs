@@ -2,7 +2,8 @@
 //!
 //! This middleware validates that a request contains a valid JWT token
 //! (in a cookie or `Authorization: Bearer` header) before allowing the request
-//! to reach the handler. It rejects with 401 if no token is found.
+//! to reach the handler. It rejects with 401 if no token is found, if the
+//! token is invalid, or if the user's sessions have been revoked.
 //!
 //! Use this to protect route groups without adding `AuthenticatedUser` as a parameter
 //! to every handler.
@@ -16,10 +17,12 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::CookieJar;
+use ironflow_store::store::Store;
 use serde_json::json;
 
 use crate::cookies::AUTH_COOKIE_NAME;
-use crate::jwt::{AccessToken, JwtConfig};
+use crate::extractor::verify_access_token;
+use crate::jwt::JwtConfig;
 
 /// Extract and validate a JWT token from request headers.
 ///
@@ -43,8 +46,10 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
 /// Validates that a request contains a valid JWT token and rejects with 401 if:
 /// - No token is present in cookies or `Authorization` header
 /// - The token is invalid or expired
+/// - The token was issued before the user's sessions were revoked
 ///
-/// On success, the request proceeds to the handler.
+/// On success, the request proceeds to the handler. A store failure while
+/// looking up the user rejects with 500.
 ///
 /// # Examples
 ///
@@ -62,14 +67,16 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
 /// # }
 /// ```
 ///
-/// The middleware will automatically extract `Arc<JwtConfig>` from the router state
-/// via `FromRef`.
+/// The middleware will automatically extract `Arc<JwtConfig>` and
+/// `Arc<dyn Store>` from the router state via `FromRef`.
 pub async fn jwt_auth<S>(State(state): State<S>, req: Request, next: Next) -> Response
 where
     S: Send + Sync,
     Arc<JwtConfig>: FromRef<S>,
+    Arc<dyn Store>: FromRef<S>,
 {
     let jwt_config = Arc::<JwtConfig>::from_ref(&state);
+    let store = Arc::<dyn Store>::from_ref(&state);
 
     let token = match extract_token(req.headers()) {
         Some(t) => t,
@@ -87,18 +94,9 @@ where
         }
     };
 
-    match AccessToken::decode(&token, &jwt_config) {
+    match verify_access_token(&token, &jwt_config, store.as_ref()).await {
         Ok(_) => next.run(req).await,
-        Err(_) => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": {
-                    "code": "INVALID_TOKEN",
-                    "message": "Invalid or expired authentication token",
-                }
-            })),
-        )
-            .into_response(),
+        Err(rejection) => rejection.into_response(),
     }
 }
 
@@ -113,8 +111,30 @@ mod tests {
     use axum::middleware;
     use axum::routing::get;
     use http_body_util::BodyExt;
+    use ironflow_store::entities::NewUser;
+    use ironflow_store::memory::InMemoryStore;
     use tower::ServiceExt;
     use uuid::Uuid;
+
+    use crate::jwt::AccessToken;
+
+    #[derive(Clone)]
+    struct TestState {
+        jwt_config: Arc<JwtConfig>,
+        store: Arc<dyn Store>,
+    }
+
+    impl FromRef<TestState> for Arc<JwtConfig> {
+        fn from_ref(state: &TestState) -> Self {
+            state.jwt_config.clone()
+        }
+    }
+
+    impl FromRef<TestState> for Arc<dyn Store> {
+        fn from_ref(state: &TestState) -> Self {
+            state.store.clone()
+        }
+    }
 
     fn test_jwt_config() -> Arc<JwtConfig> {
         Arc::new(JwtConfig {
@@ -126,20 +146,30 @@ mod tests {
         })
     }
 
+    fn test_state() -> TestState {
+        TestState {
+            jwt_config: test_jwt_config(),
+            store: Arc::new(InMemoryStore::new()),
+        }
+    }
+
     async fn protected_handler() -> &'static str {
         "protected"
     }
 
-    #[tokio::test]
-    async fn rejects_missing_token() {
-        let jwt_config = test_jwt_config();
-        let app = Router::new()
+    fn protected_app(state: TestState) -> Router {
+        Router::new()
             .route("/protected", get(protected_handler))
             .layer(middleware::from_fn_with_state(
-                jwt_config.clone(),
-                jwt_auth::<Arc<JwtConfig>>,
+                state.clone(),
+                jwt_auth::<TestState>,
             ))
-            .with_state(jwt_config);
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_token() {
+        let app = protected_app(test_state());
 
         let req = Request::builder()
             .uri("/protected")
@@ -156,14 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_token() {
-        let jwt_config = test_jwt_config();
-        let app = Router::new()
-            .route("/protected", get(protected_handler))
-            .layer(middleware::from_fn_with_state(
-                jwt_config.clone(),
-                jwt_auth::<Arc<JwtConfig>>,
-            ))
-            .with_state(jwt_config);
+        let app = protected_app(test_state());
 
         let req = Request::builder()
             .uri("/protected")
@@ -181,17 +204,11 @@ mod tests {
 
     #[tokio::test]
     async fn allows_valid_bearer_token() {
-        let jwt_config = test_jwt_config();
+        let state = test_state();
         let user_id = Uuid::now_v7();
-        let token = AccessToken::for_user(user_id, "testuser", false, &jwt_config).unwrap();
+        let token = AccessToken::for_user(user_id, "testuser", false, &state.jwt_config).unwrap();
 
-        let app = Router::new()
-            .route("/protected", get(protected_handler))
-            .layer(middleware::from_fn_with_state(
-                jwt_config.clone(),
-                jwt_auth::<Arc<JwtConfig>>,
-            ))
-            .with_state(jwt_config);
+        let app = protected_app(state);
 
         let req = Request::builder()
             .uri("/protected")
@@ -204,5 +221,37 @@ mod tests {
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..], b"protected");
+    }
+
+    #[tokio::test]
+    async fn rejects_revoked_token() {
+        let state = test_state();
+        let user = state
+            .store
+            .create_user(NewUser {
+                email: "revoked@test.com".to_string(),
+                username: "revoked".to_string(),
+                password_hash: "argon2hash".to_string(),
+                is_admin: Some(false),
+            })
+            .await
+            .unwrap();
+        let token = AccessToken::for_user(user.id, "revoked", false, &state.jwt_config).unwrap();
+        state.store.revoke_user_sessions(user.id).await.unwrap();
+
+        let app = protected_app(state);
+
+        let req = Request::builder()
+            .uri("/protected")
+            .header("authorization", format!("Bearer {}", token.0))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "TOKEN_REVOKED");
     }
 }

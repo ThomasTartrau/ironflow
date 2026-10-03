@@ -5,8 +5,10 @@
 //! Token types are enforced — a refresh token cannot be used as an access token.
 
 use chrono::Utc;
+use hex::encode;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::error::AuthError;
@@ -62,6 +64,9 @@ pub struct AccessTokenClaims {
     pub username: String,
     /// Admin flag.
     pub is_admin: bool,
+    /// Session generation of the user when the token was issued.
+    #[serde(default)]
+    pub ver: i64,
 }
 
 /// Claims embedded in a refresh token.
@@ -83,13 +88,16 @@ pub struct RefreshTokenClaims {
     pub username: String,
     /// Admin flag.
     pub is_admin: bool,
+    /// Session generation of the user when the token was issued.
+    #[serde(default)]
+    pub ver: i64,
 }
 
 /// A signed access token (JWT string).
 pub struct AccessToken(pub String);
 
 impl AccessToken {
-    /// Create an access token for a user.
+    /// Create an access token for a user, at session generation 0.
     ///
     /// # Errors
     ///
@@ -98,6 +106,47 @@ impl AccessToken {
         user_id: Uuid,
         username: &str,
         is_admin: bool,
+        config: &JwtConfig,
+    ) -> Result<Self, AuthError> {
+        Self::for_user_with_version(user_id, username, is_admin, 0, config)
+    }
+
+    /// Create an access token for a user at a given session generation.
+    ///
+    /// `token_version` is the user's current `token_version`: the token is
+    /// rejected once the stored version moves past it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::Jwt`] if JWT encoding fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_auth::jwt::{AccessToken, JwtConfig};
+    /// use uuid::Uuid;
+    /// # use ironflow_auth::error::AuthError;
+    ///
+    /// # fn example() -> Result<(), AuthError> {
+    /// let config = JwtConfig {
+    ///     secret: "my-secret-key".to_string(),
+    ///     access_token_ttl_secs: 900,
+    ///     refresh_token_ttl_secs: 604800,
+    ///     cookie_domain: None,
+    ///     cookie_secure: false,
+    /// };
+    /// let token = AccessToken::for_user_with_version(Uuid::now_v7(), "alice", false, 3, &config)?;
+    /// let claims = AccessToken::decode(&token.0, &config)?;
+    /// assert_eq!(claims.ver, 3);
+    /// # Ok(())
+    /// # }
+    /// # example().expect("example");
+    /// ```
+    pub fn for_user_with_version(
+        user_id: Uuid,
+        username: &str,
+        is_admin: bool,
+        token_version: i64,
         config: &JwtConfig,
     ) -> Result<Self, AuthError> {
         let now = Utc::now().timestamp();
@@ -110,6 +159,7 @@ impl AccessToken {
             user_id,
             username: username.to_string(),
             is_admin,
+            ver: token_version,
         };
         let token = jsonwebtoken::encode(
             &Header::default(),
@@ -141,7 +191,7 @@ impl AccessToken {
 pub struct RefreshToken(pub String);
 
 impl RefreshToken {
-    /// Create a refresh token for a user.
+    /// Create a refresh token for a user, at session generation 0.
     ///
     /// # Errors
     ///
@@ -150,6 +200,47 @@ impl RefreshToken {
         user_id: Uuid,
         username: &str,
         is_admin: bool,
+        config: &JwtConfig,
+    ) -> Result<Self, AuthError> {
+        Self::for_user_with_version(user_id, username, is_admin, 0, config)
+    }
+
+    /// Create a refresh token for a user at a given session generation.
+    ///
+    /// `token_version` is the user's current `token_version`: the token is
+    /// rejected once the stored version moves past it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::Jwt`] if JWT encoding fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_auth::jwt::{JwtConfig, RefreshToken};
+    /// use uuid::Uuid;
+    /// # use ironflow_auth::error::AuthError;
+    ///
+    /// # fn example() -> Result<(), AuthError> {
+    /// let config = JwtConfig {
+    ///     secret: "my-secret-key".to_string(),
+    ///     access_token_ttl_secs: 900,
+    ///     refresh_token_ttl_secs: 604800,
+    ///     cookie_domain: None,
+    ///     cookie_secure: false,
+    /// };
+    /// let token = RefreshToken::for_user_with_version(Uuid::now_v7(), "alice", false, 3, &config)?;
+    /// let claims = RefreshToken::decode(&token.0, &config)?;
+    /// assert_eq!(claims.ver, 3);
+    /// # Ok(())
+    /// # }
+    /// # example().expect("example");
+    /// ```
+    pub fn for_user_with_version(
+        user_id: Uuid,
+        username: &str,
+        is_admin: bool,
+        token_version: i64,
         config: &JwtConfig,
     ) -> Result<Self, AuthError> {
         let now = Utc::now().timestamp();
@@ -162,6 +253,7 @@ impl RefreshToken {
             user_id,
             username: username.to_string(),
             is_admin,
+            ver: token_version,
         };
         let token = jsonwebtoken::encode(
             &Header::default(),
@@ -187,6 +279,24 @@ impl RefreshToken {
         }
         Ok(token_data.claims)
     }
+}
+
+/// Hash a raw refresh token for storage.
+///
+/// Returns the lowercase hex SHA-256 of `raw`. Only this hash is persisted,
+/// so a leaked database row cannot be replayed as a token.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_auth::jwt::token_hash;
+///
+/// let hash = token_hash("some.jwt.value");
+/// assert_eq!(hash.len(), 64);
+/// assert_eq!(hash, token_hash("some.jwt.value"));
+/// ```
+pub fn token_hash(raw: &str) -> String {
+    encode(Sha256::digest(raw.as_bytes()))
 }
 
 #[cfg(test)]
@@ -268,6 +378,7 @@ mod tests {
             user_id,
             username: "expired".to_string(),
             is_admin: false,
+            ver: 0,
         };
         let token_str = jsonwebtoken::encode(
             &Header::default(),
@@ -345,6 +456,7 @@ mod tests {
             user_id,
             username: "alice".to_string(),
             is_admin: true,
+            ver: 0,
         };
         let json = serde_json::to_string(&claims).unwrap();
         let decoded: AccessTokenClaims = serde_json::from_str(&json).unwrap();
@@ -368,6 +480,7 @@ mod tests {
             user_id,
             username: "bob".to_string(),
             is_admin: false,
+            ver: 0,
         };
         let json = serde_json::to_string(&claims).unwrap();
         let decoded: RefreshTokenClaims = serde_json::from_str(&json).unwrap();
@@ -432,5 +545,94 @@ mod tests {
         };
         assert_eq!(config.cookie_domain.as_deref(), Some(".example.com"));
         assert!(config.cookie_secure);
+    }
+
+    #[test]
+    fn access_token_carries_version() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let token = AccessToken::for_user_with_version(user_id, "user", true, 7, &config).unwrap();
+        let claims = AccessToken::decode(&token.0, &config).unwrap();
+
+        assert_eq!(claims.ver, 7);
+        assert_eq!(claims.user_id, user_id);
+        assert!(claims.is_admin);
+
+        let legacy = AccessToken::for_user(user_id, "user", false, &config).unwrap();
+        assert_eq!(AccessToken::decode(&legacy.0, &config).unwrap().ver, 0);
+    }
+
+    #[test]
+    fn refresh_token_carries_version() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let token =
+            RefreshToken::for_user_with_version(user_id, "user", false, 4, &config).unwrap();
+        let claims = RefreshToken::decode(&token.0, &config).unwrap();
+
+        assert_eq!(claims.ver, 4);
+        assert_eq!(claims.user_id, user_id);
+
+        let legacy = RefreshToken::for_user(user_id, "user", false, &config).unwrap();
+        assert_eq!(RefreshToken::decode(&legacy.0, &config).unwrap().ver, 0);
+    }
+
+    /// Claims as encoded before `ver` existed.
+    #[derive(Serialize)]
+    struct LegacyClaims {
+        sub: Uuid,
+        jti: String,
+        iat: i64,
+        exp: i64,
+        typ: String,
+        user_id: Uuid,
+        username: String,
+        is_admin: bool,
+    }
+
+    #[test]
+    fn token_without_ver_claim_decodes_as_zero() {
+        let config = test_config();
+        let user_id = Uuid::now_v7();
+        let now = Utc::now().timestamp();
+        let legacy = |typ: &str| {
+            jsonwebtoken::encode(
+                &Header::default(),
+                &LegacyClaims {
+                    sub: user_id,
+                    jti: Uuid::now_v7().to_string(),
+                    iat: now,
+                    exp: now + 600,
+                    typ: typ.to_string(),
+                    user_id,
+                    username: "legacy".to_string(),
+                    is_admin: false,
+                },
+                &EncodingKey::from_secret(config.secret.as_bytes()),
+            )
+            .unwrap()
+        };
+
+        let access = AccessToken::decode(&legacy("access"), &config).unwrap();
+        assert_eq!(access.ver, 0);
+        assert_eq!(access.username, "legacy");
+
+        let refresh = RefreshToken::decode(&legacy("refresh"), &config).unwrap();
+        assert_eq!(refresh.ver, 0);
+    }
+
+    #[test]
+    fn token_hash_is_stable_sha256_hex() {
+        let hash = token_hash("a.b.c");
+
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
+        assert_eq!(hash, token_hash("a.b.c"));
+        assert_ne!(hash, token_hash("a.b.d"));
+        // SHA-256 of the empty string.
+        assert_eq!(
+            token_hash(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 }

@@ -3,6 +3,7 @@
 use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
+use serde_json::json;
 use validator::Validate;
 
 use ironflow_auth::extractor::AuthenticatedUser;
@@ -11,6 +12,7 @@ use ironflow_auth::password;
 use crate::entities::ChangePasswordRequest;
 use crate::error::ApiError;
 use crate::response::ok;
+use crate::routes::auth::session::issue_session;
 use crate::state::AppState;
 
 /// Change the authenticated user's password.
@@ -61,12 +63,22 @@ pub async fn change_password(
     let new_hash = password::hash(&req.new_password)
         .map_err(|_| ApiError::Internal("password hashing failed".to_string()))?;
 
+    // The store bumps the user's token_version and drops its refresh tokens,
+    // which signs out every other session. The caller gets a fresh pair at the
+    // new version so this session survives the change.
     state
         .store
         .update_user_password(user.user_id, new_hash)
         .await?;
 
-    Ok(ok(serde_json::json!({ "message": "password changed" })))
+    let updated_user = state
+        .store
+        .find_user_by_id(user.user_id)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    let headers = issue_session(&state, &updated_user).await?;
+
+    Ok((headers, ok(json!({ "message": "password changed" }))))
 }
 
 #[cfg(test)]
@@ -74,8 +86,9 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use axum::routing::patch;
+    use axum::routing::{get, patch};
     use http_body_util::BodyExt;
+    use ironflow_auth::cookies::AUTH_COOKIE_NAME;
     use ironflow_auth::jwt::{AccessToken, JwtConfig};
     use ironflow_auth::password;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -93,6 +106,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::routes::auth::me::me;
 
     struct TestWorkflow;
 
@@ -249,5 +263,100 @@ mod tests {
 
         let resp = app.oneshot(req).await.expect("request");
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    async fn stored_user(state: &AppState) -> Uuid {
+        let hash = password::hash("oldpassword123").expect("hash");
+        state
+            .store
+            .create_user(NewUser {
+                email: "test@example.com".to_string(),
+                username: "testuser".to_string(),
+                password_hash: hash,
+                is_admin: None,
+            })
+            .await
+            .expect("create user")
+            .id
+    }
+
+    fn password_and_me_app(state: AppState) -> Router {
+        Router::new()
+            .route("/password", patch(change_password))
+            .route("/me", get(me))
+            .with_state(state)
+    }
+
+    fn change_request(auth_header: &str) -> Request<Body> {
+        Request::builder()
+            .uri("/password")
+            .method("PATCH")
+            .header("authorization", auth_header)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"old_password": "oldpassword123", "new_password": "newpassword456"})
+                    .to_string(),
+            ))
+            .expect("build request")
+    }
+
+    #[tokio::test]
+    async fn old_token_rejected_after_password_change() {
+        let state = test_state();
+        let user_id = stored_user(&state).await;
+        let auth_header = make_auth_header(user_id, &state);
+        let app = password_and_me_app(state);
+
+        let resp = app
+            .clone()
+            .oneshot(change_request(&auth_header))
+            .await
+            .expect("request");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // A token stolen before the change must not outlive it.
+        let req = Request::builder()
+            .uri("/me")
+            .header("authorization", &auth_header)
+            .body(Body::empty())
+            .expect("build request");
+        let resp = app.oneshot(req).await.expect("request");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn change_password_sets_new_cookies() {
+        let state = test_state();
+        let user_id = stored_user(&state).await;
+        let auth_header = make_auth_header(user_id, &state);
+        let app = password_and_me_app(state);
+
+        let resp = app
+            .clone()
+            .oneshot(change_request(&auth_header))
+            .await
+            .expect("request");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get_all("set-cookie").iter().count(), 2);
+
+        let prefix = format!("{AUTH_COOKIE_NAME}=");
+        let new_token = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|c| c.strip_prefix(prefix.as_str()))
+            .and_then(|rest| rest.split(';').next())
+            .expect("auth cookie not set")
+            .to_string();
+
+        // The session that changed the password keeps working with the new pair.
+        let req = Request::builder()
+            .uri("/me")
+            .header("Cookie", format!("{AUTH_COOKIE_NAME}={new_token}"))
+            .body(Body::empty())
+            .expect("build request");
+        let resp = app.oneshot(req).await.expect("request");
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
