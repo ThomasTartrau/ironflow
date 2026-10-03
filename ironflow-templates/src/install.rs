@@ -22,7 +22,10 @@
 //! ```
 
 use std::fs;
+use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
+
+use tempfile::Builder;
 
 use crate::error::TemplateError;
 use crate::manifest::{DependencySpec, TemplateManifest};
@@ -90,6 +93,163 @@ pub fn install_template(
         destination: destination.to_path_buf(),
         dependencies,
     })
+}
+
+/// Result of a successful in-place template replacement.
+#[derive(Debug)]
+pub struct ReplaceResult {
+    /// Directory whose content was replaced.
+    pub destination: PathBuf,
+    /// Files present in the new version only, relative to `destination`, sorted.
+    pub added: Vec<String>,
+    /// Files present in both versions with different bytes, sorted.
+    pub modified: Vec<String>,
+    /// Files present in the old copy only (removed upstream or local), sorted.
+    pub removed: Vec<String>,
+    /// Dependencies the user should add to their `Cargo.toml`.
+    pub dependencies: Vec<String>,
+}
+
+/// Replace an installed template with the `src/` directory of a new version.
+///
+/// The new files are staged next to `destination` (same filesystem), then
+/// swapped in with two renames. If the swap fails, the old directory is put
+/// back, so `destination` is never left half-written.
+///
+/// # Errors
+///
+/// Returns [`TemplateError::Io`] if `destination` does not exist, if the
+/// template has no `src/` directory, or on filesystem errors. In every error
+/// case the old content of `destination` is preserved.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// use ironflow_templates::manifest::TemplateManifest;
+/// use ironflow_templates::install::replace_template;
+///
+/// # fn example() -> Result<(), ironflow_templates::error::TemplateError> {
+/// let manifest = TemplateManifest::from_file(Path::new("/tmp/repo/ci-pipeline/template.toml"))?;
+/// let result = replace_template(
+///     &manifest,
+///     Path::new("/tmp/repo/ci-pipeline"),
+///     Path::new("./src/workflows/ci_pipeline"),
+/// )?;
+/// println!("{} file(s) added", result.added.len());
+/// # Ok(())
+/// # }
+/// ```
+pub fn replace_template(
+    manifest: &TemplateManifest,
+    template_dir: &Path,
+    destination: &Path,
+) -> Result<ReplaceResult, TemplateError> {
+    if !destination.is_dir() {
+        return Err(TemplateError::Io(Error::new(
+            ErrorKind::NotFound,
+            format!("installed directory not found: {}", destination.display()),
+        )));
+    }
+
+    let src_dir = template_dir.join("src");
+    if !src_dir.exists() {
+        return Err(TemplateError::Io(Error::new(
+            ErrorKind::NotFound,
+            format!("template source directory not found: {}", src_dir.display()),
+        )));
+    }
+
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+
+    let staging = Builder::new()
+        .prefix(".replace-staging-")
+        .tempdir_in(parent)
+        .map_err(TemplateError::Io)?;
+    copy_dir_recursive(&src_dir, staging.path())?;
+
+    let old_files = list_files(destination)?;
+    let new_files = list_files(staging.path())?;
+    let added = new_files
+        .iter()
+        .filter(|f| !old_files.contains(f))
+        .cloned()
+        .collect();
+    let removed = old_files
+        .iter()
+        .filter(|f| !new_files.contains(f))
+        .cloned()
+        .collect();
+    let mut modified = Vec::new();
+    for file in new_files.iter().filter(|f| old_files.contains(f)) {
+        let old = fs::read(destination.join(file)).map_err(TemplateError::Io)?;
+        let new = fs::read(staging.path().join(file)).map_err(TemplateError::Io)?;
+        if old != new {
+            modified.push(file.clone());
+        }
+    }
+
+    let backup = Builder::new()
+        .prefix(".replace-backup-")
+        .tempdir_in(parent)
+        .map_err(TemplateError::Io)?;
+    let backup_path = backup.path().join("old");
+    fs::rename(destination, &backup_path).map_err(TemplateError::Io)?;
+
+    // `keep` hands the directory over: it must survive as the new destination.
+    let staged_path = staging.keep();
+    if let Err(e) = fs::rename(&staged_path, destination) {
+        // The swap error is the one worth reporting; restoring is best effort.
+        return Err(match fs::rename(&backup_path, destination) {
+            Ok(()) => {
+                drop(fs::remove_dir_all(&staged_path));
+                TemplateError::Io(e)
+            }
+            Err(restore) => {
+                // Restoring failed: the backup holds the only copy of the old
+                // template, so it must outlive this function.
+                let kept = backup.keep().join("old");
+                TemplateError::Io(Error::other(format!(
+                    "failed to install update ({e}) and to restore the previous version ({restore}); previous files kept in {}",
+                    kept.display()
+                )))
+            }
+        });
+    }
+    fs::remove_dir_all(backup.path()).map_err(TemplateError::Io)?;
+
+    Ok(ReplaceResult {
+        destination: destination.to_path_buf(),
+        added,
+        modified,
+        removed,
+        dependencies: format_dependencies(manifest),
+    })
+}
+
+/// Relative paths (with `/` separators) of every file under `root`, sorted.
+fn list_files(root: &Path) -> Result<Vec<String>, TemplateError> {
+    let mut files = Vec::new();
+    collect_files(root, "", &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_files(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), TemplateError> {
+    for entry in fs::read_dir(dir).map_err(TemplateError::Io)? {
+        let entry = entry.map_err(TemplateError::Io)?;
+        let path = entry.path();
+        let rel = format!("{prefix}{}", entry.file_name().to_string_lossy());
+        if path.is_dir() {
+            collect_files(&path, &format!("{rel}/"), out)?;
+        } else {
+            out.push(rel);
+        }
+    }
+    Ok(())
 }
 
 /// Where `template add` installs a template when no output is given.
@@ -281,6 +441,68 @@ tokio = "1"
         let dest = default_destination(tmp.path(), "ci");
 
         assert_eq!(dest, src.join("workflows").join("ci"));
+    }
+
+    #[test]
+    fn replace_reports_added_modified_and_removed() {
+        let tmp = TempDir::new().unwrap();
+        let (manifest, template_dir) = setup_template(&tmp);
+        let dest = tmp.path().join("output");
+        fs::create_dir_all(dest.join("old_dir")).unwrap();
+        fs::write(dest.join("ci_pipeline.rs"), "// old handler").unwrap();
+        fs::write(dest.join("helpers.rs"), "// helpers").unwrap();
+        fs::write(dest.join("old_dir").join("gone.rs"), "// gone").unwrap();
+        fs::write(template_dir.join("src").join("new.rs"), "// new").unwrap();
+
+        let result = replace_template(&manifest, &template_dir, &dest).unwrap();
+
+        assert_eq!(result.added, vec!["new.rs".to_string()]);
+        assert_eq!(result.modified, vec!["ci_pipeline.rs".to_string()]);
+        assert_eq!(result.removed, vec!["old_dir/gone.rs".to_string()]);
+        assert_eq!(result.dependencies.len(), 2);
+        assert_eq!(
+            fs::read_to_string(dest.join("ci_pipeline.rs")).unwrap(),
+            "// CI pipeline handler"
+        );
+        assert!(!dest.join("old_dir").exists());
+        let leftovers = fs::read_dir(tmp.path())
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".replace-")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn replace_requires_existing_destination() {
+        let tmp = TempDir::new().unwrap();
+        let (manifest, template_dir) = setup_template(&tmp);
+        let dest = tmp.path().join("missing");
+
+        let err = replace_template(&manifest, &template_dir, &dest).unwrap_err();
+
+        assert!(err.to_string().contains("not found"));
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn replace_leaves_destination_untouched_without_src() {
+        let tmp = TempDir::new().unwrap();
+        let (manifest, template_dir) = setup_template(&tmp);
+        fs::remove_dir_all(template_dir.join("src")).unwrap();
+        let dest = tmp.path().join("output");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("keep.rs"), "// keep").unwrap();
+
+        let err = replace_template(&manifest, &template_dir, &dest).unwrap_err();
+
+        assert!(err.to_string().contains("source directory not found"));
+        assert_eq!(fs::read_to_string(dest.join("keep.rs")).unwrap(), "// keep");
     }
 
     #[test]
