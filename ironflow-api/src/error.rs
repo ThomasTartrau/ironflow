@@ -7,6 +7,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use ironflow_auth::password::PasswordPolicyError;
 use ironflow_engine::error::MONTHLY_BUDGET_EXCEEDED_CODE;
 use ironflow_store::error::StoreError;
 use ironflow_types::ErrorEnvelope;
@@ -65,6 +66,12 @@ pub enum ApiError {
     /// Username already taken (409).
     #[error("username already exists")]
     DuplicateUsername,
+
+    /// The chosen password breaks the strength policy (400).
+    ///
+    /// The message says which rule, so the user knows what to change.
+    #[error("{0}")]
+    WeakPassword(#[from] PasswordPolicyError),
 
     /// API key not found (404).
     #[error("API key not found")]
@@ -185,6 +192,7 @@ impl ApiError {
             ApiError::InvalidCredentials => "INVALID_CREDENTIALS",
             ApiError::DuplicateEmail => "DUPLICATE_EMAIL",
             ApiError::DuplicateUsername => "DUPLICATE_USERNAME",
+            ApiError::WeakPassword(_) => "WEAK_PASSWORD",
             ApiError::ApiKeyNotFound(_) => "API_KEY_NOT_FOUND",
             ApiError::UserNotFound(_) => "USER_NOT_FOUND",
             ApiError::SecretNotFound(_) => "SECRET_NOT_FOUND",
@@ -224,6 +232,7 @@ impl ApiError {
             ApiError::InvalidCredentials => StatusCode::UNAUTHORIZED,
             ApiError::DuplicateEmail => StatusCode::CONFLICT,
             ApiError::DuplicateUsername => StatusCode::CONFLICT,
+            ApiError::WeakPassword(_) => StatusCode::BAD_REQUEST,
             ApiError::ApiKeyNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::UserNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Forbidden => StatusCode::FORBIDDEN,
@@ -382,6 +391,14 @@ mod tests {
         let err = ApiError::DuplicateUsername;
         assert_eq!(err.status(), StatusCode::CONFLICT);
         assert_eq!(err.code(), "DUPLICATE_USERNAME");
+    }
+
+    #[test]
+    fn weak_password_status_carries_the_rule() {
+        let err = ApiError::from(PasswordPolicyError::TooCommon);
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(err.code(), "WEAK_PASSWORD");
+        assert_eq!(err.to_string(), PasswordPolicyError::TooCommon.to_string());
     }
 
     #[test]

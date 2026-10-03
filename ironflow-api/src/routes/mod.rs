@@ -45,7 +45,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::middleware::{WorkerToken, https_redirect, security_headers, worker_token_auth};
-use crate::rate_limit::{RateLimitContext, per_minute, rate_limit};
+use crate::rate_limit::{AccountLimit, RateLimitContext, TrustedProxies, per_minute, rate_limit};
 use crate::state::AppState;
 
 /// Maximum request body size: 2 MiB.
@@ -86,11 +86,17 @@ pub struct RouterConfig {
     /// from this directory instead of the embedded build.
     pub dashboard_dir: Option<PathBuf>,
     /// Rate limit for auth credential routes (sign-in, sign-up) in
-    /// requests per minute per IP. `None` disables the limiter.
+    /// requests per minute, applied per client IP and per targeted email.
+    /// `None` disables the limiter.
     pub rate_limit_auth: Option<u32>,
     /// Rate limit for general public API routes in requests per minute
     /// per IP. `None` disables the limiter.
     pub rate_limit_general: Option<u32>,
+    /// Reverse proxies allowed to report the client IP through
+    /// `X-Forwarded-For` / `X-Real-IP`. Empty by default: the rate limiters
+    /// key on the TCP peer, which requires serving the router with
+    /// `into_make_service_with_connect_info::<SocketAddr>()`.
+    pub trusted_proxies: TrustedProxies,
     /// When `true`, requests carrying `X-Forwarded-Proto: http` are answered
     /// with a `308` redirect to the HTTPS URL. Defaults to `false`.
     ///
@@ -104,6 +110,7 @@ impl Default for RouterConfig {
             dashboard_dir: None,
             rate_limit_auth: Some(10),
             rate_limit_general: Some(60),
+            trusted_proxies: TrustedProxies::default(),
             enforce_https: false,
         }
     }
@@ -232,6 +239,8 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             store: state.store.clone(),
             jwt_config: state.jwt_config.clone(),
             limiter: per_minute(rpm),
+            trusted_proxies: config.trusted_proxies.clone(),
+            account_limit: AccountLimit::ByEmail,
         };
         auth_credential_routes = auth_credential_routes
             .layer(axum_mw::from_fn(rate_limit))
@@ -392,6 +401,8 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
             store: state.store.clone(),
             jwt_config: state.jwt_config.clone(),
             limiter: per_minute(rpm),
+            trusted_proxies: config.trusted_proxies.clone(),
+            account_limit: AccountLimit::Off,
         };
         api_v1 = api_v1
             .layer(axum_mw::from_fn(rate_limit))

@@ -4,6 +4,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use tracing::info;
 
 use validator::Validate;
 
@@ -13,17 +14,23 @@ use ironflow_store::error::StoreError;
 
 use crate::entities::SignUpRequest;
 use crate::error::ApiError;
-use crate::routes::auth::session::issue_session;
 use crate::state::AppState;
 
 /// Register a new user with email and password.
 ///
-/// Returns access and refresh tokens on success, and sets HttpOnly cookies.
+/// The answer is the same `204` whether the email was free or already
+/// registered, and it never carries a session: the client signs in next
+/// with the same credentials. Without that, the status code or the presence
+/// of session cookies would tell anyone which emails have an account.
+///
+/// A taken username is still reported (`409`). It is checked before the
+/// email, so that answer says nothing about the email.
 ///
 /// # Errors
 ///
-/// - 400 if email/username/password is invalid
-/// - 409 if email or username is already taken
+/// - 400 if the email or username is invalid
+/// - 400 `WEAK_PASSWORD` if the password breaks the password policy
+/// - 409 if the username is already taken
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -32,9 +39,9 @@ use crate::state::AppState;
         tags = ["auth"],
         request_body(content = SignUpRequest, description = "Sign up credentials"),
         responses(
-            (status = 204, description = "User registered successfully, cookies set"),
-            (status = 400, description = "Invalid email, username, or password"),
-            (status = 409, description = "Email or username already taken")
+            (status = 204, description = "Request accepted. Same answer whether the email was free or already registered; no session is issued, sign in next"),
+            (status = 400, description = "Invalid email or username, or password breaks the strength policy (WEAK_PASSWORD)"),
+            (status = 409, description = "Username already taken")
         )
     )
 )]
@@ -44,11 +51,22 @@ pub async fn sign_up(
 ) -> Result<impl IntoResponse, ApiError> {
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    password::check_strength(&req.password, &[&req.email, &req.username])?;
 
+    if state
+        .store
+        .find_user_by_username(&req.username)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::DuplicateUsername);
+    }
+
+    // Hash on every path, so a taken email costs as much time as a free one.
     let hash =
         password::hash(&req.password).map_err(|_| ApiError::Internal("hashing failed".into()))?;
 
-    let user = state
+    let created = state
         .store
         .create_user(NewUser {
             email: req.email,
@@ -56,16 +74,18 @@ pub async fn sign_up(
             password_hash: hash,
             is_admin: None,
         })
-        .await
-        .map_err(|e| match e {
-            StoreError::DuplicateEmail(_) => ApiError::DuplicateEmail,
-            StoreError::DuplicateUsername(_) => ApiError::DuplicateUsername,
-            other => ApiError::Store(other),
-        })?;
+        .await;
 
-    let headers = issue_session(&state, &user).await?;
+    match created {
+        Ok(_) => {}
+        Err(StoreError::DuplicateEmail(_)) => {
+            info!("sign-up for an already registered email, answered as a success");
+        }
+        Err(StoreError::DuplicateUsername(_)) => return Err(ApiError::DuplicateUsername),
+        Err(other) => return Err(ApiError::Store(other)),
+    }
 
-    Ok((StatusCode::NO_CONTENT, headers))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -89,6 +109,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    const STRONG_PASSWORD: &str = "correct horse battery staple";
 
     struct TestWorkflow;
 
@@ -142,7 +164,7 @@ mod tests {
                 to_string(&json!({
                     "email": "test@example.com",
                     "username": "testuser",
-                    "password": "password123"
+                    "password": STRONG_PASSWORD
                 }))
                 .expect("failed to serialize"),
             ))
@@ -150,9 +172,8 @@ mod tests {
 
         let resp = app.oneshot(req).await.expect("request failed");
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        let set_cookie = resp.headers().get_all("set-cookie");
-        assert!(set_cookie.iter().count() > 0);
+        // No session: the client signs in next, whatever the email.
+        assert_eq!(resp.headers().get_all("set-cookie").iter().count(), 0);
     }
 
     #[tokio::test]
@@ -168,7 +189,7 @@ mod tests {
                 to_string(&json!({
                     "email": "invalid-email",
                     "username": "testuser",
-                    "password": "password123"
+                    "password": STRONG_PASSWORD
                 }))
                 .expect("failed to serialize"),
             ))
@@ -191,7 +212,7 @@ mod tests {
                 to_string(&json!({
                     "email": "test@example.com",
                     "username": "ab",
-                    "password": "password123"
+                    "password": STRONG_PASSWORD
                 }))
                 .expect("failed to serialize"),
             ))
@@ -225,7 +246,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sign_up_duplicate_email() {
+    async fn sign_up_duplicate_email_answers_like_a_new_email() {
         let state = test_state();
         let app = Router::new().route("/", post(sign_up)).with_state(state);
 
@@ -237,7 +258,7 @@ mod tests {
                 to_string(&json!({
                     "email": "test@example.com",
                     "username": "testuser1",
-                    "password": "password123"
+                    "password": STRONG_PASSWORD
                 }))
                 .expect("failed to serialize"),
             ))
@@ -258,7 +279,7 @@ mod tests {
                 to_string(&json!({
                     "email": "test@example.com",
                     "username": "testuser2",
-                    "password": "password123"
+                    "password": STRONG_PASSWORD
                 }))
                 .expect("failed to serialize"),
             ))
@@ -268,7 +289,7 @@ mod tests {
             .oneshot(second_req)
             .await
             .expect("second request failed");
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -284,7 +305,7 @@ mod tests {
                 to_string(&json!({
                     "email": "test1@example.com",
                     "username": "testuser",
-                    "password": "password123"
+                    "password": STRONG_PASSWORD
                 }))
                 .expect("failed to serialize"),
             ))
@@ -305,7 +326,7 @@ mod tests {
                 to_string(&json!({
                     "email": "test2@example.com",
                     "username": "testuser",
-                    "password": "password123"
+                    "password": STRONG_PASSWORD
                 }))
                 .expect("failed to serialize"),
             ))

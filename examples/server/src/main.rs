@@ -17,6 +17,9 @@
 //! - `PORT` (default: 3000)
 //! - `DASHBOARD_DIR` (optional: overrides the embedded dashboard with a filesystem path)
 //! - `ALLOWED_ORIGINS` (comma-separated list; omit to allow same-origin only)
+//! - `TRUSTED_PROXIES` (optional: comma-separated IPs or CIDR ranges of the
+//!   reverse proxies whose `X-Forwarded-For` the rate limiters believe; unset,
+//!   the TCP peer is the client)
 //! - `WEBHOOK_URL` (optional: outbound webhook for run events)
 //! - `ARTIFACTS_DIR` (optional: filesystem root for step artifacts; unset
 //!   leaves artifacts disabled and the artifact routes answer `501`)
@@ -34,6 +37,7 @@
 //! - `IRONFLOW_SEED` (optional: when set to any value, seeds development data
 //!   at startup -- users, runs, steps, API keys)
 
+use std::net::SocketAddr;
 use std::process;
 use std::sync::Arc;
 
@@ -214,11 +218,13 @@ async fn main() {
         dashboard_dir: config.dashboard_dir.clone(),
         rate_limit_auth: config.rate_limit_auth,
         rate_limit_general: config.rate_limit_general,
+        trusted_proxies: config.trusted_proxies.clone(),
         enforce_https: config.is_production,
     };
+    // The rate limiters key on the TCP peer address: connect info is required.
     let app = create_router(state, router_config)
         .layer(cors)
-        .into_make_service();
+        .into_make_service_with_connect_info::<SocketAddr>();
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = TcpListener::bind(&addr).await.expect("bind address");

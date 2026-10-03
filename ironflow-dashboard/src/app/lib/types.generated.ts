@@ -201,7 +201,8 @@ export interface paths {
 		 *
 		 *     # Errors
 		 *
-		 *     - 400 if old password is incorrect or new password fails validation
+		 *     - 400 if old password is incorrect, or `WEAK_PASSWORD` if the new one
+		 *       breaks the password policy
 		 *     - 401 if no valid token is provided
 		 *     - 404 if the user no longer exists in the store
 		 */
@@ -282,12 +283,19 @@ export interface paths {
 		put?: never;
 		/**
 		 * Register a new user with email and password.
-		 * @description Returns access and refresh tokens on success, and sets HttpOnly cookies.
+		 * @description The answer is the same `204` whether the email was free or already
+		 *     registered, and it never carries a session: the client signs in next
+		 *     with the same credentials. Without that, the status code or the presence
+		 *     of session cookies would tell anyone which emails have an account.
+		 *
+		 *     A taken username is still reported (`409`). It is checked before the
+		 *     email, so that answer says nothing about the email.
 		 *
 		 *     # Errors
 		 *
-		 *     - 400 if email/username/password is invalid
-		 *     - 409 if email or username is already taken
+		 *     - 400 if the email or username is invalid
+		 *     - 400 `WEAK_PASSWORD` if the password breaks the password policy
+		 *     - 409 if the username is already taken
 		 */
 		post: operations["sign_up"];
 		delete?: never;
@@ -1116,7 +1124,8 @@ export interface paths {
 		 * @description # Errors
 		 *
 		 *     - 403 if the caller is not an admin
-		 *     - 400 if input validation fails
+		 *     - 400 if input validation fails, `WEAK_PASSWORD` if the password breaks
+		 *       the password policy
 		 *     - 409 if email or username is already taken
 		 */
 		post: operations["create_user"];
@@ -1819,7 +1828,10 @@ export interface components {
 		};
 		/** @description Change password request body. */
 		ChangePasswordRequest: {
-			/** @description New password (min 8 characters). */
+			/**
+			 * @description New password: 12 to 128 characters, not a common password, not
+			 *     containing the email or username, not repetitive.
+			 */
 			new_password: string;
 			/** @description Current password. */
 			old_password: string;
@@ -2022,7 +2034,10 @@ export interface components {
 			email: string;
 			/** @description Whether the new user should be an admin. */
 			is_admin: boolean;
-			/** @description Plaintext password (min 8 characters). */
+			/**
+			 * @description Plaintext password: 12 to 128 characters, not a common password, not
+			 *     containing the email or username, not repetitive.
+			 */
 			password: string;
 			/** @description Display username. */
 			username: string;
@@ -3429,7 +3444,10 @@ export interface components {
 		SignUpRequest: {
 			/** @description Email address. */
 			email: string;
-			/** @description Plaintext password (min 8 characters). */
+			/**
+			 * @description Plaintext password: 12 to 128 characters, not a common password, not
+			 *     containing the email or username, not repetitive.
+			 */
 			password: string;
 			/** @description Display username. */
 			username: string;
@@ -4976,7 +4994,7 @@ export interface operations {
 				};
 				content?: never;
 			};
-			/** @description Invalid old password or validation error */
+			/** @description Invalid old password, or new password breaks the strength policy (WEAK_PASSWORD) */
 			400: {
 				headers: {
 					[name: string]: unknown;
@@ -5086,21 +5104,21 @@ export interface operations {
 			};
 		};
 		responses: {
-			/** @description User registered successfully, cookies set */
+			/** @description Request accepted. Same answer whether the email was free or already registered; no session is issued, sign in next */
 			204: {
 				headers: {
 					[name: string]: unknown;
 				};
 				content?: never;
 			};
-			/** @description Invalid email, username, or password */
+			/** @description Invalid email or username, or password breaks the strength policy (WEAK_PASSWORD) */
 			400: {
 				headers: {
 					[name: string]: unknown;
 				};
 				content?: never;
 			};
-			/** @description Email or username already taken */
+			/** @description Username already taken */
 			409: {
 				headers: {
 					[name: string]: unknown;

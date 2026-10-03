@@ -15,8 +15,8 @@ pub struct SignUpRequest {
     /// Display username.
     #[validate(length(min = 3, message = "username must be at least 3 characters"))]
     pub username: String,
-    /// Plaintext password (min 8 characters).
-    #[validate(length(min = 8, message = "password must be at least 8 characters"))]
+    /// Plaintext password: 12 to 128 characters, not a common password, not
+    /// containing the email or username, not repetitive.
     pub password: String,
 }
 
@@ -48,11 +48,11 @@ pub struct MeResponse {
 
 /// Change password request body.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
     /// Current password.
     pub old_password: String,
-    /// New password (min 8 characters).
-    #[validate(length(min = 8, message = "password must be at least 8 characters"))]
+    /// New password: 12 to 128 characters, not a common password, not
+    /// containing the email or username, not repetitive.
     pub new_password: String,
 }

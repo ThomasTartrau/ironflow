@@ -31,7 +31,8 @@ pub enum UserCommands {
         /// Email address.
         #[arg(long)]
         email: String,
-        /// Plaintext password (min 8 characters). Read from stdin when
+        /// Plaintext password: 12 to 128 characters, not a common password,
+        /// not containing the email or username. Read from stdin when
         /// omitted, which keeps it out of the shell history.
         #[arg(long)]
         password: Option<String>,

@@ -6,7 +6,8 @@ import {
 	InputGroupInput,
 	InputGroupButton,
 } from "@/components/ui/input-group";
-import { api } from "@/app/lib/api";
+import { api, ApiError } from "@/app/lib/api";
+import { PASSWORD_HINT, PASSWORD_MIN_LENGTH } from "@/app/lib/password";
 import { withToast } from "@/app/lib/api-toast";
 import { useAppDispatch } from "@/app/store";
 import { fetchCurrentUser } from "@/app/store/auth-slice";
@@ -38,9 +39,22 @@ export function Component() {
 		e.preventDefault();
 		setFormState({ status: "submitting" });
 
+		// Sign-up never opens a session, so an existing email cannot be told
+		// apart from a new one: sign in next with the same credentials.
 		withToast(
 			api
 				.post("/auth/sign-up", { email, username, password })
+				.then(() =>
+					api
+						.post("/auth/sign-in", { email, password })
+						.catch((err: unknown) => {
+							throw err instanceof ApiError && err.status === 401
+								? new Error(
+										"Could not sign you in. If you already have an account, sign in instead.",
+									)
+								: err;
+						}),
+				)
 				.then(() => dispatch(fetchCurrentUser())),
 			{
 				loading: "Creating account...",
@@ -184,7 +198,7 @@ export function Component() {
 										value={password}
 										onChange={(e) => setPassword(e.target.value)}
 										required
-										minLength={8}
+										minLength={PASSWORD_MIN_LENGTH}
 										autoComplete="new-password"
 										aria-describedby="password-hint"
 									/>
@@ -204,7 +218,7 @@ export function Component() {
 									</InputGroupButton>
 								</InputGroup>
 								<p id="password-hint" className="text-xs text-muted-foreground">
-									At least 8 characters
+									{PASSWORD_HINT}
 								</p>
 							</div>
 
