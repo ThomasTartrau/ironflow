@@ -394,7 +394,9 @@ impl UserStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            sqlx::query("DELETE FROM iam.refresh_tokens WHERE user_id = $1 AND expires_at <= NOW()")
+            sqlx::query(
+                "DELETE FROM iam.refresh_tokens WHERE user_id = $1 AND expires_at <= NOW()",
+            )
             .bind(token.user_id)
             .execute(&mut *tx)
             .await
