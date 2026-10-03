@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.4.50](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-auth-v2.4.49...ironflow-auth-v2.4.50) - 2026-10-03
+
+### Fixed
+
+- #153 apply HTTPS redirect and security headers to the dashboard
+
+- #153 force Secure session cookies and redirect HTTP to HTTPS in production
+
 ## [2.4.49](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-auth-v2.4.48...ironflow-auth-v2.4.49) - 2026-10-03
 
 ### Fixed
