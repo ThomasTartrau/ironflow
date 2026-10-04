@@ -591,6 +591,41 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 }
 ```
 
+Pass `WorkflowOptions::new().allow_failure()` to `ctx.workflow_with(&Child, input, options)` to
+tolerate a failed child: the step completes with a `Completed` outcome whose `status()` is `Failed` (or `Cancelled`),
+`error()` carries the message and the parent ends as `Warning`. A suspension is never
+tolerated, and catching the error of a plain `ctx.workflow` is not a substitute: the failed step
+is not completed, so a resume runs the child again.
+
+```rust
+use ironflow_engine::config::WorkflowOptions;
+use ironflow_store::entities::RunStatus;
+# use ironflow_engine::context::WorkflowContext;
+# use ironflow_engine::error::EngineError;
+# use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+# use serde::{Deserialize, Serialize};
+# #[derive(Serialize, Deserialize)]
+# struct CollectInput { scope: String }
+# struct Collect;
+# impl WorkflowHandler for Collect {
+#     fn name(&self) -> &str { "collect" }
+#     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+#         Box::pin(async move { Ok(()) })
+#     }
+# }
+# impl TypedWorkflow for Collect { type Input = CollectInput; }
+
+async fn tolerant(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let outcome = ctx
+        .workflow_with(&Collect, CollectInput { scope: "disk".to_string() }, WorkflowOptions::new().allow_failure())
+        .await?;
+    if let Some(child) = outcome.output().filter(|c| c.status() == RunStatus::Failed) {
+        println!("collect failed: {:?}", child.error());
+    }
+    Ok(())
+}
+```
+
 `child.run_id()` is a `Uuid` (nil while planning). A child never sees the parent's
 artifacts; pass what it needs in its input.
 

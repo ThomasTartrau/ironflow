@@ -15,6 +15,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tokio::time::timeout;
 use tracing::Level;
+use tracing::callsite::rebuild_interest_cache;
 use tracing::subscriber::set_default;
 use tracing_subscriber::fmt as tracing_fmt;
 use tracing_subscriber::fmt::MakeWriter;
@@ -630,6 +631,9 @@ async fn logs_never_contain_token_or_credential() {
         .with_ansi(false)
         .finish();
     let _guard = set_default(subscriber);
+    // Parallel tests without a subscriber may have cached "disabled" for a
+    // callsite before this dispatcher existed.
+    rebuild_interest_cache();
 
     within_timeout(async {
         let upstream = MockServer::start().await;

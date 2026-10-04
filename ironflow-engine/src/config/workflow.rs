@@ -1,5 +1,7 @@
 //! Configuration for workflow (sub-workflow) steps.
 
+use std::ops::Not;
+
 use ironflow_core::retry::RetryPolicy;
 use ironflow_store::entities::MAX_CONCURRENCY_KEY_LEN;
 use serde::{Deserialize, Serialize};
@@ -34,6 +36,10 @@ pub struct WorkflowStepConfig {
     /// step input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency_key: Option<String>,
+    /// Tolerate a failed child: the step completes with the child's failure
+    /// in its output instead of failing the parent.
+    #[serde(default, skip_serializing_if = "Not::not")]
+    pub allow_failure: bool,
 }
 
 impl WorkflowStepConfig {
@@ -54,6 +60,7 @@ impl WorkflowStepConfig {
             payload,
             retry: None,
             concurrency_key: None,
+            allow_failure: false,
         }
     }
 
@@ -74,37 +81,73 @@ impl WorkflowStepConfig {
         self.retry = Some(policy);
         self
     }
+
+    /// Tolerate a failed child run: the step completes with a
+    /// [`SubWorkflowOutput`](crate::executor::SubWorkflowOutput) reporting the
+    /// failure and the parent run ends as `Warning`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowStepConfig;
+    /// use serde_json::json;
+    ///
+    /// let config = WorkflowStepConfig::new("build", json!({})).allow_failure();
+    /// assert!(config.allow_failure);
+    /// ```
+    pub fn allow_failure(mut self) -> Self {
+        self.allow_failure = true;
+        self
+    }
 }
 
-/// Options of a sub-workflow started with
-/// [`WorkflowContext::workflow_with`](crate::context::WorkflowContext::workflow_with).
+/// Options of a sub-workflow step started with
+/// [`workflow_with`](crate::context::WorkflowContext::workflow_with).
 ///
 /// # Examples
 ///
 /// ```
 /// use ironflow_engine::config::WorkflowOptions;
 ///
-/// let options = WorkflowOptions::new().concurrency_key("issue:12");
-/// assert_eq!(options.concurrency_key_ref(), Some("issue:12"));
+/// let options = WorkflowOptions::new().allow_failure();
+/// assert!(options.allow_failure);
+/// assert!(!WorkflowOptions::default().allow_failure);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkflowOptions {
+    /// Tolerate a failed child run instead of failing the parent.
+    pub allow_failure: bool,
     concurrency_key: Option<String>,
 }
 
 impl WorkflowOptions {
-    /// Options with nothing set: the child run is created like with
-    /// [`WorkflowContext::workflow`](crate::context::WorkflowContext::workflow).
+    /// Create options with every flag off.
     ///
     /// # Examples
     ///
     /// ```
     /// use ironflow_engine::config::WorkflowOptions;
     ///
-    /// assert!(WorkflowOptions::new().concurrency_key_ref().is_none());
+    /// assert_eq!(WorkflowOptions::new(), WorkflowOptions::default());
     /// ```
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Tolerate a failed child run: the step completes with the failure in its
+    /// output and the parent run ends as `Warning`. A suspension is never
+    /// tolerated.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// assert!(WorkflowOptions::new().allow_failure().allow_failure);
+    /// ```
+    pub fn allow_failure(mut self) -> Self {
+        self.allow_failure = true;
+        self
     }
 
     /// Make the child run exclusive on `key`.
@@ -240,6 +283,33 @@ mod tests {
     #[should_panic(expected = "concurrency key must be at most")]
     fn options_reject_a_key_over_the_limit() {
         let _ = WorkflowOptions::new().concurrency_key("a".repeat(MAX_CONCURRENCY_KEY_LEN + 1));
+    }
+
+    #[test]
+    fn allow_failure_defaults_to_false() {
+        let config = WorkflowStepConfig::new("build", json!({}));
+        assert!(!config.allow_failure);
+    }
+
+    #[test]
+    fn allow_failure_is_omitted_from_json_when_false() {
+        let config = WorkflowStepConfig::new("build", json!({}));
+        let value = serde_json::to_value(&config).expect("serialize");
+        assert!(value.get("allow_failure").is_none());
+    }
+
+    #[test]
+    fn allow_failure_roundtrip() {
+        let config = WorkflowStepConfig::new("build", json!({})).allow_failure();
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: WorkflowStepConfig = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.allow_failure);
+    }
+
+    #[test]
+    fn options_builder_sets_allow_failure() {
+        assert!(!WorkflowOptions::new().allow_failure);
+        assert!(WorkflowOptions::new().allow_failure().allow_failure);
     }
 
     #[test]

@@ -115,6 +115,20 @@ and replayed as-is when the parent resumes, even if the key was released in betw
 branch taken by the handler stays stable. `ctx.workflow` and `ctx.workflow_dyn` set no
 key and keep returning the child output directly.
 
+To tolerate a failed child, use `ctx.workflow_with(&Collect, input, WorkflowOptions::new().allow_failure())`:
+the child run is still marked failed, but the step completes with a `Completed` outcome whose `status()` is `Failed`
+(or `Cancelled`) and `child.error()` carrying the message, and the parent ends as `Warning`.
+A suspension is never tolerated. A resume replays the step and creates no new child.
+
+```rust,ignore
+let outcome = ctx
+    .workflow_with(&Collect, CollectInput { host: "db-1".into() }, WorkflowOptions::new().allow_failure())
+    .await?;
+if let Some(child) = outcome.output().filter(|c| c.status() == RunStatus::Failed) {
+    println!("collect failed: {:?}", child.error());
+}
+```
+
 ### Suspension of a child
 
 A child may suspend like any run: an approval, a human input, a signal wait or
