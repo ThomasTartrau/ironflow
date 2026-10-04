@@ -1122,20 +1122,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replayed_key_with_a_different_concurrency_key_conflicts() -> Result<(), Infallible> {
-        let state = test_state();
-        let auth = create_user_auth_header(&state, "testuser", true).await;
-        let unkeyed = json!({"workflow": "test-workflow"});
-        let first = router(state.clone())
-            .oneshot(post_run(&auth, unkeyed, Some("github:abc-123")))
-            .await?;
-        let first_id = body_json(first).await["data"]["id"].clone();
-
+    async fn replayed_key_adding_a_concurrency_key_conflicts() -> Result<(), Infallible> {
         // The original run holds no key: replaying it would report an exclusive
         // run on "issue:12" that does not exist.
-        let keyed = keyed_body("test-workflow", "issue:12");
+        let unkeyed = json!({"workflow": "test-workflow"});
+        assert_replay_conflicts(unkeyed, keyed_body("test-workflow", "issue:12")).await
+    }
+
+    #[tokio::test]
+    async fn replayed_key_changing_the_concurrency_key_conflicts() -> Result<(), Infallible> {
+        // The original run holds "issue:12": replaying it would report an
+        // exclusive run on "issue:13" while that key is still free.
+        let original = keyed_body("test-workflow", "issue:12");
+        assert_replay_conflicts(original, keyed_body("test-workflow", "issue:13")).await
+    }
+
+    /// Creates a run from `original`, replays its idempotency key with `replay`
+    /// and asserts the replay is refused with a conflict naming the original run.
+    async fn assert_replay_conflicts(
+        original: JsonValue,
+        replay: JsonValue,
+    ) -> Result<(), Infallible> {
+        let state = test_state();
+        let auth = create_user_auth_header(&state, "testuser", true).await;
+        let first = router(state.clone())
+            .oneshot(post_run(&auth, original, Some("github:abc-123")))
+            .await?;
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let first_id = body_json(first).await["data"]["id"].clone();
+
         let second = router(state)
-            .oneshot(post_run(&auth, keyed, Some("github:abc-123")))
+            .oneshot(post_run(&auth, replay, Some("github:abc-123")))
             .await?;
         assert_eq!(second.status(), StatusCode::CONFLICT);
         let body = body_json(second).await;
