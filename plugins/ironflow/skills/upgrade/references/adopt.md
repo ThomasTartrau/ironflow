@@ -87,3 +87,28 @@ On the Claude Code CLI provider, `system_prompt(..)` replaces Claude Code's own 
 (skills, slash commands). To add project rules on top of it, use
 `append_system_prompt(..)`. Keep `system_prompt` when replacing it is the intent. Section:
 Agent.
+
+## workflow-allow-failure
+- kind: adopt
+- since: ironflow-engine 2.46.0 (#161)
+
+A parent that must go on when a child workflow fails used to catch the child error
+around `ctx.workflow(..)`. That is a replay hazard: the failed step is not completed, so a
+resume of the parent runs the child again and creates a second child run. Start the child
+with `ctx.workflow_with(.., WorkflowOptions::new().allow_failure())` instead: the child run
+is still marked failed, the step completes, `status()` is `Failed` (or `Cancelled`) and
+`error()` carries the message, and the parent ends as `Warning`. A suspension of the child
+is never tolerated. Section: Sub-workflow.
+
+```diff
+- let child = match ctx.workflow(&Collect, input).await {
+-     Ok(child) => Some(child),
+-     Err(_) => None,
+- };
++ let child = ctx
++     .workflow_with(&Collect, input, WorkflowOptions::new().allow_failure())
++     .await?;
++ if child.status() == RunStatus::Failed {
++     // child.error() holds the reason
++ }
+```

@@ -24,7 +24,7 @@ use uuid::Uuid;
 use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
-use ironflow_engine::config::{DelayConfig, HumanInputConfig, ShellConfig};
+use ironflow_engine::config::{DelayConfig, HumanInputConfig, ShellConfig, WorkflowOptions};
 use ironflow_engine::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
@@ -932,6 +932,251 @@ async fn sub_workflow_resume_stays_within_the_guard_fan_out() {
             .expect("the guard lets the chain resume");
 
         assert_eq!(result.run.status.state, RunStatus::Completed);
+        assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+// -- allow_failure on a sub-workflow step --
+
+/// A child whose handler always fails.
+struct Failer;
+
+impl WorkflowHandler for Failer {
+    fn name(&self) -> &str {
+        "failer"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.shell("boom", ShellConfig::new("exit 1")).await?;
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for Failer {
+    type Input = NoInput;
+}
+
+/// Tolerates a failing child, then runs a child that suspends, then a step.
+struct Tolerant {
+    seen: Seen,
+}
+
+impl WorkflowHandler for Tolerant {
+    fn name(&self) -> &str {
+        "tolerant"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let failed = ctx
+                .workflow_with(&Failer, NoInput {}, WorkflowOptions::new().allow_failure())
+                .await?;
+            if failed.status() != RunStatus::Failed || failed.error().is_none() {
+                return Err(EngineError::InvalidWorkflow(format!(
+                    "the failed child was not reported: {:?} {:?}",
+                    failed.status(),
+                    failed.error()
+                )));
+            }
+            ctx.workflow(
+                &Asker {
+                    seen: self.seen.clone(),
+                },
+                NoInput {},
+            )
+            .await?;
+            ctx.shell("after-child", ShellConfig::new("echo done"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for Tolerant {
+    type Input = NoInput;
+}
+
+/// Calls a failing child without `allow_failure`.
+struct Strict;
+
+impl WorkflowHandler for Strict {
+    fn name(&self) -> &str {
+        "strict"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.workflow(&Failer, NoInput {}).await?;
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for Strict {
+    type Input = NoInput;
+}
+
+/// Calls a suspending child with `allow_failure`.
+struct TolerantAsker {
+    seen: Seen,
+}
+
+impl WorkflowHandler for TolerantAsker {
+    fn name(&self) -> &str {
+        "tolerant-asker"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            ctx.workflow_with(
+                &Asker {
+                    seen: self.seen.clone(),
+                },
+                NoInput {},
+                WorkflowOptions::new().allow_failure(),
+            )
+            .await?;
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for TolerantAsker {
+    type Input = NoInput;
+}
+
+/// An engine with the children and parents of the `allow_failure` tests.
+fn allow_failure_engine(store: &Arc<InMemoryStore>) -> (Arc<Engine>, Seen) {
+    let seen = Seen::default();
+    let mut engine = new_engine(store);
+    engine.register(Failer).expect("register failer");
+    engine
+        .register(Asker { seen: seen.clone() })
+        .expect("register asker");
+    engine
+        .register(Tolerant { seen: seen.clone() })
+        .expect("register tolerant");
+    engine.register(Strict).expect("register strict");
+    engine
+        .register(TolerantAsker { seen: seen.clone() })
+        .expect("register tolerant asker");
+    (Arc::new(engine), seen)
+}
+
+/// How many runs of exactly `workflow` the store holds.
+async fn count_runs(store: &InMemoryStore, workflow: &str) -> usize {
+    let filter = RunFilter {
+        workflow_name: Some(workflow.to_string()),
+        ..RunFilter::default()
+    };
+    store
+        .list_runs(filter, 1, 50)
+        .await
+        .expect("list runs")
+        .items
+        .iter()
+        .filter(|r| r.workflow_name == workflow)
+        .count()
+}
+
+#[tokio::test]
+async fn sub_workflow_allow_failure_tolerates_a_failed_child_then_resumes_without_a_new_child() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_names) = allow_failure_engine(&store);
+
+        let parent = start_chain(&engine, "tolerant").await;
+        assert_eq!(parent.status.state, RunStatus::AwaitingApproval);
+
+        let failer_step = workflow_step(&store, parent.id, "failer").await;
+        assert_eq!(failer_step.status.state, StepStatus::Completed);
+        assert_eq!(count_runs(&store, "failer").await, 1);
+
+        let asker = run_of(&store, "asker").await;
+        answer(&store, asker.id, "Ada").await;
+        let result = engine
+            .resume_run(asker.id)
+            .await
+            .expect("the chain resumes");
+
+        assert_eq!(result.run.id, parent.id);
+        assert_eq!(result.run.status.state, RunStatus::Warning);
+        assert_eq!(
+            count_runs(&store, "failer").await,
+            1,
+            "the resume replays the step and creates no new child"
+        );
+
+        let replayed = workflow_step(&store, parent.id, "failer").await;
+        assert_eq!(replayed.id, failer_step.id);
+        assert_eq!(replayed.status.state, StepStatus::Completed);
+
+        let failer = run_of(&store, "failer").await;
+        assert_eq!(failer.status.state, RunStatus::Failed);
+        assert!(failer.error.is_some(), "the child error is recorded");
+
+        let output: Value = replayed.output.expect("the step has an output");
+        assert_eq!(output["run_id"], json!(failer.id));
+        assert_eq!(output["status"], json!("failed"));
+        assert!(output["error"].is_string());
+        assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_without_allow_failure_a_failed_child_still_fails_the_parent() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, _seen) = allow_failure_engine(&store);
+
+        let outcome = engine
+            .run_handler("strict", TriggerKind::Manual, json!({}))
+            .await;
+        drop(outcome);
+
+        let parent = run_of(&store, "strict").await;
+        assert_eq!(parent.status.state, RunStatus::Failed);
+        let step = workflow_step(&store, parent.id, "failer").await;
+        assert_eq!(step.status.state, StepStatus::Failed);
+        assert_eq!(
+            run_of(&store, "failer").await.status.state,
+            RunStatus::Failed
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_allow_failure_does_not_tolerate_a_suspension() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_names) = allow_failure_engine(&store);
+
+        let parent = start_chain(&engine, "tolerant-asker").await;
+        assert_eq!(parent.status.state, RunStatus::AwaitingApproval);
+
+        let step = workflow_step(&store, parent.id, "asker").await;
+        assert_eq!(step.status.state, StepStatus::Running);
+
+        let child = run_of(&store, "asker").await;
+        answer(&store, child.id, "Ada").await;
+        let result = engine
+            .resume_run(child.id)
+            .await
+            .expect("the chain resumes");
+
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+        assert_eq!(
+            workflow_step(&store, parent.id, "asker").await.status.state,
+            StepStatus::Completed
+        );
         assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
     })
     .await

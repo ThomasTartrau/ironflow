@@ -36,6 +36,8 @@ pub struct SubWorkflowOutput {
     status: RunStatus,
     cost_usd: Decimal,
     duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 impl SubWorkflowOutput {
@@ -65,7 +67,27 @@ impl SubWorkflowOutput {
             status,
             cost_usd,
             duration_ms,
+            error: None,
         }
+    }
+
+    /// Attach the error of a child run tolerated by `allow_failure`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::SubWorkflowOutput;
+    /// use ironflow_store::entities::RunStatus;
+    /// use rust_decimal::Decimal;
+    /// use uuid::Uuid;
+    ///
+    /// let output = SubWorkflowOutput::new(Uuid::nil(), "collect", RunStatus::Failed, Decimal::ZERO, 0)
+    ///     .with_error("boom");
+    /// assert_eq!(output.error(), Some("boom"));
+    /// ```
+    pub fn with_error(mut self, error: impl Into<String>) -> Self {
+        self.error = Some(error.into());
+        self
     }
 
     /// The child run, to read its steps from the store. [`Uuid::nil`] while
@@ -91,8 +113,9 @@ impl SubWorkflowOutput {
         &self.workflow_name
     }
 
-    /// Final status of the child run: `Completed`, or `Warning` when one of its
-    /// `allow_failure` steps failed.
+    /// Final status of the child run: `Completed`, `Warning` when one of its
+    /// `allow_failure` steps failed, or (only when the step was started with
+    /// `allow_failure`) `Failed` / `Cancelled`.
     pub fn status(&self) -> RunStatus {
         self.status
     }
@@ -105,6 +128,24 @@ impl SubWorkflowOutput {
     /// Wall-clock duration of the child run, in milliseconds.
     pub fn duration_ms(&self) -> u64 {
         self.duration_ms
+    }
+
+    /// Error of a failed or cancelled child run tolerated by `allow_failure`,
+    /// `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::executor::SubWorkflowOutput;
+    /// use ironflow_store::entities::RunStatus;
+    /// use rust_decimal::Decimal;
+    /// use uuid::Uuid;
+    ///
+    /// let output = SubWorkflowOutput::new(Uuid::nil(), "collect", RunStatus::Completed, Decimal::ZERO, 0);
+    /// assert_eq!(output.error(), None);
+    /// ```
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 }
 
@@ -154,6 +195,38 @@ mod tests {
         assert_eq!(output.status(), RunStatus::Completed);
         assert_eq!(output.cost_usd(), Decimal::ZERO);
         assert_eq!(output.duration_ms(), 7);
+    }
+
+    #[test]
+    fn an_error_roundtrips() {
+        let output = SubWorkflowOutput::new(
+            Uuid::now_v7(),
+            "collect",
+            RunStatus::Failed,
+            Decimal::ZERO,
+            3,
+        )
+        .with_error("boom");
+
+        let back: SubWorkflowOutput =
+            from_value(to_value(&output).expect("serialize")).expect("deserialize");
+
+        assert_eq!(back, output);
+        assert_eq!(back.error(), Some("boom"));
+    }
+
+    #[test]
+    fn a_legacy_output_without_error_reads_back_as_none() {
+        let output: SubWorkflowOutput = from_value(json!({
+            "run_id": Uuid::now_v7(),
+            "workflow_name": "collect",
+            "status": "completed",
+            "cost_usd": 0,
+            "duration_ms": 7,
+        }))
+        .expect("deserialize");
+
+        assert_eq!(output.error(), None);
     }
 
     #[test]
