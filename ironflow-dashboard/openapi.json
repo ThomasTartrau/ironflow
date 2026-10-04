@@ -1677,7 +1677,7 @@
           "runs"
         ],
         "summary": "Retry a failed run.",
-        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, 409 if an\nautomatic retry is already armed, and 409 if the handler version has\nchanged since the original run (pass `?force=true` to override).",
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, 409 if an\nautomatic retry is already armed, 409 if the handler version has\nchanged since the original run (pass `?force=true` to override), and 409\n`CONCURRENCY_CONFLICT` if another active run took the original's\nconcurrency key since.",
         "operationId": "retry_run",
         "parameters": [
           {
@@ -1724,7 +1724,7 @@
             "description": "Run not found"
           },
           "409": {
-            "description": "Version mismatch or automatic retry already armed"
+            "description": "Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT)"
           }
         },
         "security": [

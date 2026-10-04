@@ -178,7 +178,9 @@ impl WorkflowContext {
     ) -> Result<SubWorkflowOutput, EngineError> {
         let payload = to_value(&input)?;
         let position = self.position;
-        let outcome = self.run_sub_workflow(handler, payload, WorkflowOptions::default()).await?;
+        let outcome = self
+            .run_sub_workflow(handler, payload, WorkflowOptions::default())
+            .await?;
         expect_completed(outcome, position)
     }
 
@@ -259,8 +261,7 @@ impl WorkflowContext {
         options: WorkflowOptions,
     ) -> Result<SubWorkflowOutcome, EngineError> {
         let payload = to_value(&input)?;
-        self.run_sub_workflow(handler, payload, options)
-            .await
+        self.run_sub_workflow(handler, payload, options).await
     }
 
     /// Execute a sub-workflow step whose child is only known at run time.
@@ -296,7 +297,9 @@ impl WorkflowContext {
         payload: Value,
     ) -> Result<SubWorkflowOutput, EngineError> {
         let position = self.position;
-        let outcome = self.run_sub_workflow(handler, payload, WorkflowOptions::default()).await?;
+        let outcome = self
+            .run_sub_workflow(handler, payload, WorkflowOptions::default())
+            .await?;
         expect_completed(outcome, position)
     }
 

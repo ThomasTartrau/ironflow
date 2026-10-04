@@ -668,8 +668,10 @@ export interface paths {
 		 * Retry a failed run.
 		 * @description Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
 		 *     original. Returns 400 if the run is not in a retryable state, 409 if an
-		 *     automatic retry is already armed, and 409 if the handler version has
-		 *     changed since the original run (pass `?force=true` to override).
+		 *     automatic retry is already armed, 409 if the handler version has
+		 *     changed since the original run (pass `?force=true` to override), and 409
+		 *     `CONCURRENCY_CONFLICT` if another active run took the original's
+		 *     concurrency key since.
 		 */
 		post: operations["retry_run"];
 		delete?: never;
@@ -6076,7 +6078,7 @@ export interface operations {
 				};
 				content?: never;
 			};
-			/** @description Version mismatch or automatic retry already armed */
+			/** @description Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT) */
 			409: {
 				headers: {
 					[name: string]: unknown;

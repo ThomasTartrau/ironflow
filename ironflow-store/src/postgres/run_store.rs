@@ -13,7 +13,9 @@ use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
 
 use super::PostgresStore;
-use super::helpers::{parse_run_status, row_to_run, row_to_step, run_status_to_db_str};
+use super::helpers::{
+    parse_run_status, row_to_run, row_to_step, run_status_to_db_str, terminal_run_state_names,
+};
 
 /// Fetch the run bound to an idempotency key, restricted to the retention window.
 ///
@@ -150,10 +152,10 @@ impl RunStore for PostgresStore {
                 // Serialize every creation using this key until commit or rollback.
                 // Run status lives in lib_fsm, so no unique index can express
                 // "one non-terminal run per key".
-                sqlx::query_scalar::<_, bool>(
-                    "SELECT TRUE FROM (SELECT pg_advisory_xact_lock(hashtextextended($1, 0))) AS l",
+                sqlx::query_scalar!(
+                    r#"SELECT TRUE as "locked!" FROM (SELECT pg_advisory_xact_lock(hashtextextended($1, 0))) AS l"#,
+                    key,
                 )
-                .bind(key)
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -176,17 +178,9 @@ impl RunStore for PostgresStore {
                     }
                 }
 
-                let terminal: Vec<String> = [
-                    RunStatus::Completed,
-                    RunStatus::Failed,
-                    RunStatus::Warning,
-                    RunStatus::Cancelled,
-                ]
-                .iter()
-                .map(|status| run_status_to_db_str(status).to_string())
-                .collect();
+                let terminal = terminal_run_state_names();
 
-                let holder = sqlx::query_scalar::<_, Uuid>(
+                let holder = sqlx::query_scalar!(
                     r#"
                     SELECT r.id FROM ironflow.runs r
                     JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
@@ -194,9 +188,9 @@ impl RunStore for PostgresStore {
                     WHERE r.concurrency_key = $1 AND ast.name <> ALL($2::text[])
                     ORDER BY r.created_at LIMIT 1
                     "#,
+                    key,
+                    &terminal[..],
                 )
-                .bind(key)
-                .bind(&terminal[..])
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -226,29 +220,29 @@ impl RunStore for PostgresStore {
             let labels_json = serde_json::to_value(&req.labels).unwrap_or_default();
             let created_by_user_id = req.created_by.as_ref().map(RunActor::user_id);
             let created_by_api_key_id = req.created_by.as_ref().and_then(RunActor::api_key_id);
-            let inserted = sqlx::query(
+            let inserted = sqlx::query!(
                 r#"
                 INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
                 "#,
+                id,
+                &req.workflow_name,
+                state_machine_id,
+                &trigger_json,
+                req.payload as _,
+                req.max_retries as i32,
+                req.handler_version.as_deref(),
+                &labels_json,
+                req.scheduled_at,
+                created_by_user_id,
+                created_by_api_key_id,
+                req.idempotency_key.as_deref(),
+                req.max_cost_usd,
+                now,
+                now,
+                req.concurrency_key.as_deref(),
             )
-            .bind(id)
-            .bind(&req.workflow_name)
-            .bind(state_machine_id)
-            .bind(&trigger_json)
-            .bind(&req.payload)
-            .bind(req.max_retries as i32)
-            .bind(req.handler_version.as_deref())
-            .bind(&labels_json)
-            .bind(req.scheduled_at)
-            .bind(created_by_user_id)
-            .bind(created_by_api_key_id)
-            .bind(req.idempotency_key.as_deref())
-            .bind(req.max_cost_usd)
-            .bind(now)
-            .bind(now)
-            .bind(req.concurrency_key.as_deref())
             .execute(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -996,15 +990,7 @@ impl RunStore for PostgresStore {
         let max_age_days = policy.max_age_days;
         let max_runs_per_workflow = policy.max_runs_per_workflow;
         Box::pin(async move {
-            let terminal_states: Vec<String> = [
-                RunStatus::Completed,
-                RunStatus::Failed,
-                RunStatus::Warning,
-                RunStatus::Cancelled,
-            ]
-            .iter()
-            .map(|s| run_status_to_db_str(s).to_string())
-            .collect();
+            let terminal_states = terminal_run_state_names();
 
             let cutoff = Utc::now() - Duration::days(i64::from(max_age_days));
 

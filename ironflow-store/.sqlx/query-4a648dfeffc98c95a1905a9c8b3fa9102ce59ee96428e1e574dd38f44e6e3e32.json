@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ast.name AS \"state!\", r.error IS NOT NULL AS \"has_error!\",\n                          r.completed_at IS NOT NULL AS \"completed!\"\n                   FROM ironflow.runs r\n                   JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id\n                   JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id\n                   WHERE r.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "has_error!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "completed!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "4a648dfeffc98c95a1905a9c8b3fa9102ce59ee96428e1e574dd38f44e6e3e32"
+}

@@ -28,7 +28,7 @@ use ironflow_store::memory::InMemoryStore;
 use ironflow_store::postgres::{PoolConfig, PostgresStore};
 use ironflow_store::store::RunStore;
 use serde_json::json;
-use sqlx::{Executor, PgPool, migrate, query_scalar};
+use sqlx::{Executor, PgPool, migrate, query, query_scalar};
 use strum::IntoEnumIterator;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -491,15 +491,24 @@ async fn run_fsm_state_migrations_revert_and_reapply() {
                 "{state}"
             );
         }
+        // Read through SQL, not the store: the store maps every column of the
+        // current schema, and the undo dropped the ones added after the target.
         for id in [awaiting, sleeping] {
-            let run = store
-                .get_run(id)
-                .await
-                .expect("get run")
-                .expect("run exists");
-            assert_eq!(run.status.state, RunStatus::Failed);
-            assert!(run.error.is_some(), "a rolled-back run says why it failed");
-            assert!(run.completed_at.is_some(), "a failed run is completed");
+            let run = query!(
+                r#"SELECT ast.name AS "state!", r.error IS NOT NULL AS "has_error!",
+                          r.completed_at IS NOT NULL AS "completed!"
+                   FROM ironflow.runs r
+                   JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                   JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                   WHERE r.id = $1"#,
+                id,
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("run exists");
+            assert_eq!(run.state, "failed");
+            assert!(run.has_error, "a rolled-back run says why it failed");
+            assert!(run.completed, "a failed run is completed");
         }
 
         migrator

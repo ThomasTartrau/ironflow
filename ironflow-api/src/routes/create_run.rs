@@ -33,11 +33,18 @@ const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
 /// Whether a replayed key was used for the same request as the run it is bound to.
 ///
-/// Only the workflow and the payload are compared: labels are merged with the
-/// handler's defaults at enqueue time, so comparing them would turn a handler
-/// version bump into a spurious conflict.
-fn same_request(existing: &Run, workflow: &str, payload: &Value) -> bool {
-    existing.workflow_name == workflow && &existing.payload == payload
+/// The workflow, the payload and the concurrency key are compared: labels are
+/// merged with the handler's defaults at enqueue time, so comparing them would
+/// turn a handler version bump into a spurious conflict.
+fn same_request(
+    existing: &Run,
+    workflow: &str,
+    payload: &Value,
+    concurrency_key: Option<&str>,
+) -> bool {
+    existing.workflow_name == workflow
+        && &existing.payload == payload
+        && existing.concurrency_key.as_deref() == concurrency_key
 }
 
 #[cfg(feature = "prometheus")]
@@ -147,7 +154,7 @@ pub async fn create_run(
                 max_cost_usd: req.max_cost_usd,
                 created_by: Some(run_actor_of(&auth)),
                 idempotency_key: idempotency_key.clone(),
-                concurrency_key: req.concurrency_key,
+                concurrency_key: req.concurrency_key.clone(),
             },
         )
         .await
@@ -163,7 +170,12 @@ pub async fn create_run(
 
     match creation {
         RunCreation::Existing(existing) => {
-            if !same_request(&existing, &req.workflow, &payload) {
+            if !same_request(
+                &existing,
+                &req.workflow,
+                &payload,
+                req.concurrency_key.as_deref(),
+            ) {
                 warn!(
                     idempotency_key = idempotency_key.as_deref().unwrap_or(""),
                     run_id = %existing.id,
@@ -220,9 +232,9 @@ mod tests {
     use ironflow_engine::notify::{Event, EventSubscriber, SubscriberFuture};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{ApiKeyScope, NewApiKey, NewUser, RunFilter, RunStatus};
-    use ironflow_store::store::RunStore;
     use rust_decimal::Decimal;
     use serde_json::{Value as JsonValue, json};
+    use std::convert::Infallible;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::broadcast;
@@ -1107,5 +1119,28 @@ mod tests {
             .unwrap();
         assert_eq!(replay.status(), StatusCode::OK);
         assert_eq!(body_json(replay).await["data"]["id"], first_id);
+    }
+
+    #[tokio::test]
+    async fn replayed_key_with_a_different_concurrency_key_conflicts() -> Result<(), Infallible> {
+        let state = test_state();
+        let auth = create_user_auth_header(&state, "testuser", true).await;
+        let unkeyed = json!({"workflow": "test-workflow"});
+        let first = router(state.clone())
+            .oneshot(post_run(&auth, unkeyed, Some("github:abc-123")))
+            .await?;
+        let first_id = body_json(first).await["data"]["id"].clone();
+
+        // The original run holds no key: replaying it would report an exclusive
+        // run on "issue:12" that does not exist.
+        let keyed = keyed_body("test-workflow", "issue:12");
+        let second = router(state)
+            .oneshot(post_run(&auth, keyed, Some("github:abc-123")))
+            .await?;
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+        let body = body_json(second).await;
+        assert_eq!(body["error"]["code"], "IDEMPOTENCY_KEY_CONFLICT");
+        assert_eq!(body["error"]["details"]["run_id"], first_id);
+        Ok(())
     }
 }

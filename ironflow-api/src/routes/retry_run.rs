@@ -29,8 +29,10 @@ pub struct RetryQuery {
 ///
 /// Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
 /// original. Returns 400 if the run is not in a retryable state, 409 if an
-/// automatic retry is already armed, and 409 if the handler version has
-/// changed since the original run (pass `?force=true` to override).
+/// automatic retry is already armed, 409 if the handler version has
+/// changed since the original run (pass `?force=true` to override), and 409
+/// `CONCURRENCY_CONFLICT` if another active run took the original's
+/// concurrency key since.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -47,7 +49,7 @@ pub struct RetryQuery {
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
             (status = 404, description = "Run not found"),
-            (status = 409, description = "Version mismatch or automatic retry already armed")
+            (status = 409, description = "Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT)")
         ),
         security(("Bearer" = []))
     )
