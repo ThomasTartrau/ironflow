@@ -26,15 +26,27 @@ export function RunLabels({
 
 	return (
 		<TooltipProvider delay={200}>
-			<div className="flex items-center gap-1 flex-wrap">
+			<div className="flex items-center gap-1 flex-wrap min-w-0 max-w-full">
 				{visible.map(([key, value]) => (
-					<Badge
-						key={key}
-						variant="secondary"
-						className="font-mono text-[10px] px-1.5 py-0"
-					>
-						{key}: {value}
-					</Badge>
+					<Tooltip key={key}>
+						<TooltipTrigger
+							render={
+								<Badge
+									variant="secondary"
+									className="font-mono text-[10px] px-1.5 py-0 max-w-full min-w-0 shrink justify-start cursor-default"
+								>
+									<span className="truncate">
+										{key}: {value}
+									</span>
+								</Badge>
+							}
+						/>
+						<TooltipContent side="bottom" className="max-w-xs break-all">
+							<span className="font-mono text-xs">
+								{key}: {value}
+							</span>
+						</TooltipContent>
+					</Tooltip>
 				))}
 				{remaining > 0 && (
 					<Tooltip>
@@ -42,7 +54,7 @@ export function RunLabels({
 							render={
 								<Badge
 									variant="outline"
-									className="text-[10px] px-1.5 py-0 cursor-default"
+									className="text-[10px] px-1.5 py-0 cursor-default shrink-0"
 								>
 									+{remaining}
 								</Badge>

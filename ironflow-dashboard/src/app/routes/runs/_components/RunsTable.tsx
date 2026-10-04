@@ -53,7 +53,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 						<TableHead>Workflow</TableHead>
 						{hasVersions && <TableHead className="w-20">Version</TableHead>}
 						<TableHead className="w-40">Triggered by</TableHead>
-						<TableHead className="w-36">Labels</TableHead>
+						<TableHead className="w-48">Labels</TableHead>
 						<TableHead className="w-24">Duration</TableHead>
 						<TableHead className="w-20">Cost</TableHead>
 						<TableHead className="w-36">Started</TableHead>
@@ -94,7 +94,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 									)}
 								</div>
 							</TableCell>
-							<TableCell>
+							<TableCell className="overflow-hidden">
 								<RunLabels labels={run.labels} />
 							</TableCell>
 							<TableCell className="tabular-nums">
