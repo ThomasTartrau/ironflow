@@ -89,6 +89,7 @@ async fn spawn_server_with_artifact() -> Fixture {
             labels: std::collections::HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await

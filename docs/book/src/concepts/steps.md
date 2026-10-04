@@ -94,6 +94,27 @@ let child = ctx.workflow(&Collect, CollectInput { host: "db-1".into() }).await?;
 println!("child run {}", child.run_id());
 ```
 
+### Exclusive children
+
+`ctx.workflow_with` takes `WorkflowOptions`. With a concurrency key, the child is
+created only if no non-terminal run holds the same key; otherwise no child is
+created and the step completes with the run that holds it:
+
+```rust,ignore
+let options = WorkflowOptions::new().concurrency_key(format!("issue:{}", input.issue));
+match ctx.workflow_with(&FixIssue, FixInput { issue: input.issue }, options).await? {
+    SubWorkflowOutcome::Completed(child) => println!("fixed in run {}", child.run_id()),
+    SubWorkflowOutcome::Conflict(conflict) => {
+        println!("issue already handled by run {}", conflict.run_id());
+    }
+}
+```
+
+The conflict is recorded as the step output (`{"concurrency_conflict": {"key", "run_id"}}`)
+and replayed as-is when the parent resumes, even if the key was released in between: the
+branch taken by the handler stays stable. `ctx.workflow` and `ctx.workflow_dyn` set no
+key and keep returning the child output directly.
+
 ### Suspension of a child
 
 A child may suspend like any run: an approval, a human input, a signal wait or

@@ -304,6 +304,44 @@ ironflow run create deploy --payload '{"env":"prod"}' \
 With the `prometheus` feature, `ironflow_run_idempotency_total{outcome}` counts
 `created`, `replayed` and `conflict` outcomes.
 
+### Exclusive runs
+
+`POST /api/v1/runs` also accepts an optional `concurrency_key` in the body. While a
+run that holds the same key is not terminal (pending, running, sleeping, retrying,
+awaiting approval), a second creation is refused with `409 CONCURRENCY_CONFLICT`
+naming that run. The key is released when the holder completes, fails, ends with a
+warning or is cancelled. Use it to keep one active run per issue, branch or tenant.
+
+```bash
+curl -X POST https://ironflow.example.com/api/v1/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"workflow": "fix-issue", "payload": {"issue": 12}, "concurrency_key": "issue:12"}'
+```
+
+```json
+{
+  "error": {
+    "code": "CONCURRENCY_CONFLICT",
+    "message": "concurrency key \"issue:12\" is held by active run 0199c3f0-...",
+    "details": { "key": "issue:12", "run_id": "0199c3f0-..." }
+  }
+}
+```
+
+- A key is at most **255 bytes** and must not be empty. It is global, like an
+  idempotency key: prefix it to keep sources apart.
+- An idempotent replay (same `Idempotency-Key`, same request) is answered before the
+  exclusivity check, so it returns the original run instead of a conflict.
+- A retry (`POST /api/v1/runs/:id/retry`) inherits the key and answers `409` if an
+  active run took it since.
+- The CLI takes `--concurrency-key issue:12` and the MCP `create_run` tool a
+  `concurrency_key` argument.
+
+A sub-workflow takes the key through `ctx.workflow_with`; a conflict completes the
+step with the run holding the key instead of failing the parent (see the mdBook,
+*Steps*).
+
 ### Artifacts
 
 Steps produce text and JSON outputs by default. When a step produces *files*, declare them and
@@ -605,6 +643,7 @@ let created = client
         scheduled_at: None,
         max_retries: Some(2),
         max_cost_usd: Some(1.0),
+        concurrency_key: None,
     })
     .await?;
 

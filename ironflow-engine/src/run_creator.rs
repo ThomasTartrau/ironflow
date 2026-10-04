@@ -68,6 +68,7 @@ pub type RunCreatorFuture<'a> =
 ///     scheduled_at: None,
 ///     created_by: None,
 ///     idempotency_key: None,
+///     concurrency_key: None,
 ///     max_cost_usd: None,
 /// };
 /// let creation = creator.create_run(new_run).await?;
@@ -126,6 +127,7 @@ pub struct CreateRunOpts {
     scheduled_at: Option<DateTime<Utc>>,
     created_by: Option<RunActor>,
     idempotency_key: Option<String>,
+    concurrency_key: Option<String>,
     labels: Option<HashMap<String, String>>,
     max_cost_usd: Option<Decimal>,
 }
@@ -188,6 +190,24 @@ impl CreateRunOpts {
         self
     }
 
+    /// Set a concurrency key: the store refuses the run while another
+    /// non-terminal run holds the same key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::run_creator::CreateRunOpts;
+    ///
+    /// let new_run = CreateRunOpts::new()
+    ///     .concurrency_key("issue:12")
+    ///     .build("deploy", None, None);
+    /// assert_eq!(new_run.concurrency_key.as_deref(), Some("issue:12"));
+    /// ```
+    pub fn concurrency_key(mut self, key: impl Into<String>) -> Self {
+        self.concurrency_key = Some(key.into());
+        self
+    }
+
     /// Set user-defined labels for categorization.
     pub fn labels(mut self, labels: HashMap<String, String>) -> Self {
         self.labels = Some(labels);
@@ -240,6 +260,7 @@ impl CreateRunOpts {
             scheduled_at: self.scheduled_at,
             created_by: self.created_by,
             idempotency_key: self.idempotency_key,
+            concurrency_key: self.concurrency_key,
             max_cost_usd: self.max_cost_usd.or(default_max_cost_usd),
         }
     }
@@ -264,6 +285,7 @@ mod tests {
         assert_eq!(new_run.scheduled_at, None);
         assert_eq!(new_run.created_by, None);
         assert_eq!(new_run.idempotency_key, None);
+        assert_eq!(new_run.concurrency_key, None);
         assert_eq!(new_run.max_cost_usd, None);
     }
 
@@ -298,6 +320,16 @@ mod tests {
         assert_eq!(new_run.idempotency_key, Some("key-123".to_string()));
         assert_eq!(new_run.labels, labels);
         assert_eq!(new_run.max_cost_usd, Some(Decimal::new(500, 2)));
+    }
+
+    #[test]
+    fn create_run_opts_build_carries_the_concurrency_key() {
+        let new_run = CreateRunOpts::new()
+            .concurrency_key("issue:12")
+            .build("deploy", None, None);
+
+        assert_eq!(new_run.concurrency_key.as_deref(), Some("issue:12"));
+        assert_eq!(new_run.idempotency_key, None);
     }
 
     #[test]

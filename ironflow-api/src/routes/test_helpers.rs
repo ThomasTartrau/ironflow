@@ -89,6 +89,7 @@ pub(crate) async fn create_run(state: &AppState) -> Run {
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -108,6 +109,7 @@ pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: R
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await

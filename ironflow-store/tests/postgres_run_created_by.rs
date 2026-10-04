@@ -40,6 +40,7 @@ fn new_run(name: &str, created_by: Option<RunActor>) -> NewRun {
         scheduled_at: None,
         created_by,
         idempotency_key: None,
+        concurrency_key: None,
         max_cost_usd: None,
     }
 }

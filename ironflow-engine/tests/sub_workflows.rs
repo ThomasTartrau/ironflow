@@ -24,10 +24,11 @@ use uuid::Uuid;
 use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
-use ironflow_engine::config::{DelayConfig, HumanInputConfig, ShellConfig};
+use ironflow_engine::config::{DelayConfig, HumanInputConfig, ShellConfig, WorkflowOptions};
 use ironflow_engine::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
+use ironflow_engine::executor::SubWorkflowOutcome;
 use ironflow_engine::guard::WorkflowGuardConfig;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_engine::plan::{ConditionResult, PlanOptions};
@@ -35,7 +36,8 @@ use ironflow_engine::signal::Signal;
 use ironflow_engine::wake::RunWaker;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{
-    Run, RunFilter, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate, TriggerKind,
+    NewRun, Run, RunFilter, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
+    TriggerKind,
 };
 use ironflow_store::store::{RunStore, Store};
 
@@ -933,6 +935,225 @@ async fn sub_workflow_resume_stays_within_the_guard_fan_out() {
 
         assert_eq!(result.run.status.state, RunStatus::Completed);
         assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+/// Concurrency key [`Dispatcher`] puts on its [`Greeter`] child.
+const ISSUE_KEY: &str = "issue:12";
+
+/// What [`Dispatcher`] read from `workflow_with`, once per execution.
+type Outcomes = Arc<Mutex<Vec<String>>>;
+
+/// Calls [`Greeter`] under [`ISSUE_KEY`], then waits for a human, so a test
+/// can resume it and watch the sub-workflow step replay.
+struct Dispatcher {
+    outcomes: Outcomes,
+}
+
+impl WorkflowHandler for Dispatcher {
+    fn name(&self) -> &str {
+        "dispatcher"
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let input = GreetInput {
+                name: "Ada".to_string(),
+                shout: false,
+            };
+            let options = WorkflowOptions::new().concurrency_key(ISSUE_KEY);
+            let seen = match ctx.workflow_with(&Greeter, input, options).await? {
+                SubWorkflowOutcome::Completed(child) => format!("completed:{}", child.run_id()),
+                SubWorkflowOutcome::Conflict(c) => format!("conflict:{}:{}", c.key(), c.run_id()),
+            };
+            self.outcomes.lock().expect("outcomes lock").push(seen);
+
+            let _confirmed: NameAnswer = ctx
+                .human_input("confirm", HumanInputConfig::new("Who confirms?"))
+                .await?;
+            ctx.shell("after-confirm", ShellConfig::new("echo confirmed"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+fn dispatcher_engine(store: &Arc<InMemoryStore>) -> (Engine, Outcomes) {
+    let outcomes = Outcomes::default();
+    let mut engine = new_engine(store);
+    engine.register(Greeter).expect("register greeter");
+    engine
+        .register(Dispatcher {
+            outcomes: outcomes.clone(),
+        })
+        .expect("register dispatcher");
+    (engine, outcomes)
+}
+
+fn outcomes(outcomes: &Outcomes) -> Vec<String> {
+    outcomes.lock().expect("outcomes lock").clone()
+}
+
+/// Every run of `workflow`, matched on the exact name.
+async fn runs_of(store: &InMemoryStore, workflow: &str) -> Vec<Run> {
+    let filter = RunFilter {
+        workflow_name: Some(workflow.to_string()),
+        ..RunFilter::default()
+    };
+    let mut runs = store
+        .list_runs(filter, 1, 50)
+        .await
+        .expect("list runs")
+        .items;
+    runs.retain(|r| r.workflow_name == workflow);
+    runs
+}
+
+/// A pending run holding [`ISSUE_KEY`], standing for a fix already under way.
+async fn create_blocker(store: &InMemoryStore) -> Run {
+    store
+        .create_run(NewRun {
+            workflow_name: "blocker".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by: None,
+            idempotency_key: None,
+            concurrency_key: Some(ISSUE_KEY.to_string()),
+            max_cost_usd: None,
+        })
+        .await
+        .expect("create the blocker")
+        .into_run()
+}
+
+#[tokio::test]
+async fn sub_workflow_concurrency_conflict_completes_the_step_without_a_child() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_outcomes) = dispatcher_engine(&store);
+        let blocker = create_blocker(&store).await;
+
+        let dispatcher = engine
+            .run_handler("dispatcher", TriggerKind::Manual, json!({}))
+            .await
+            .expect("the dispatcher suspends on its human input")
+            .run;
+
+        assert_eq!(
+            dispatcher.status.state,
+            RunStatus::AwaitingApproval,
+            "a conflict does not fail the parent"
+        );
+        assert!(
+            runs_of(&store, "greeter").await.is_empty(),
+            "no child run is created on a conflict"
+        );
+        assert_eq!(
+            outcomes(&seen_outcomes),
+            vec![format!("conflict:{ISSUE_KEY}:{}", blocker.id)]
+        );
+
+        let step = workflow_step(&store, dispatcher.id, "greeter").await;
+        assert_eq!(step.status.state, StepStatus::Completed);
+        assert_eq!(
+            step.output,
+            Some(json!({
+                "concurrency_conflict": { "key": ISSUE_KEY, "run_id": blocker.id }
+            }))
+        );
+        assert_eq!(step.duration_ms, 0);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_concurrency_conflict_is_replayed_without_a_new_child() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_outcomes) = dispatcher_engine(&store);
+        let blocker = create_blocker(&store).await;
+
+        let dispatcher = engine
+            .run_handler("dispatcher", TriggerKind::Manual, json!({}))
+            .await
+            .expect("the dispatcher suspends on its human input")
+            .run;
+        assert_eq!(dispatcher.status.state, RunStatus::AwaitingApproval);
+
+        // The key is free again before the resume: the replay must still
+        // serve the recorded conflict instead of starting the child.
+        store
+            .update_run_status(blocker.id, RunStatus::Cancelled)
+            .await
+            .expect("cancel the blocker");
+        answer(&store, dispatcher.id, "Grace").await;
+
+        let result = engine
+            .resume_run(dispatcher.id)
+            .await
+            .expect("the dispatcher resumes");
+
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+        assert!(
+            runs_of(&store, "greeter").await.is_empty(),
+            "the replay does not create a child"
+        );
+        let conflict = format!("conflict:{ISSUE_KEY}:{}", blocker.id);
+        assert_eq!(outcomes(&seen_outcomes), vec![conflict.clone(), conflict]);
+
+        let steps = store.list_steps(dispatcher.id).await.expect("list steps");
+        let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["greeter", "confirm", "after-confirm"]);
+        assert_eq!(
+            steps[0].output,
+            Some(json!({
+                "concurrency_conflict": { "key": ISSUE_KEY, "run_id": blocker.id }
+            })),
+            "the recorded conflict is left as it was"
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn sub_workflow_with_concurrency_key_creates_a_child_holding_the_key() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, seen_outcomes) = dispatcher_engine(&store);
+
+        let dispatcher = engine
+            .run_handler("dispatcher", TriggerKind::Manual, json!({}))
+            .await
+            .expect("the dispatcher suspends on its human input")
+            .run;
+        assert_eq!(dispatcher.status.state, RunStatus::AwaitingApproval);
+
+        let child = run_of(&store, "greeter").await;
+        assert_eq!(child.status.state, RunStatus::Completed);
+        assert_eq!(child.concurrency_key.as_deref(), Some(ISSUE_KEY));
+        assert_eq!(
+            outcomes(&seen_outcomes),
+            vec![format!("completed:{}", child.id)]
+        );
+
+        let step = workflow_step(&store, dispatcher.id, "greeter").await;
+        assert_eq!(step.status.state, StepStatus::Completed);
+        assert_eq!(
+            step.input.expect("the step records its config")["concurrency_key"],
+            json!(ISSUE_KEY)
+        );
+
+        // The child is terminal: the key is free for the next run.
+        let next = create_blocker(&store).await;
+        assert_eq!(next.concurrency_key.as_deref(), Some(ISSUE_KEY));
     })
     .await
     .expect("test timed out");

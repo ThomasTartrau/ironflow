@@ -41,7 +41,9 @@ pub use http::HttpExecutor;
 pub use interceptor::{ApprovalOutcome, HumanInputOutcome, SignalOutcome, StepInterceptor};
 pub use shell::ShellExecutor;
 pub use step_artifacts::StepArtifacts;
-pub use workflow_output::SubWorkflowOutput;
+pub use workflow_output::{ConcurrencyConflict, SubWorkflowOutcome, SubWorkflowOutput};
+
+pub(crate) use workflow_output::RecordedWorkflowStep;
 
 /// Key under which a tolerated (`allow_failure`) step failure stores its message.
 pub(crate) const ERROR_KEY: &str = "error";

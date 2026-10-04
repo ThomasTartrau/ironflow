@@ -49,6 +49,7 @@ fn new_run(name: &str, max_retries: u32) -> NewRun {
         scheduled_at: None,
         created_by: None,
         idempotency_key: None,
+        concurrency_key: None,
         max_cost_usd: None,
     }
 }

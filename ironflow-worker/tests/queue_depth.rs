@@ -46,6 +46,7 @@ fn future_run(workflow: &str) -> NewRun {
         labels: HashMap::new(),
         scheduled_at: Some(Utc::now() + TimeDelta::hours(1)),
         idempotency_key: None,
+        concurrency_key: None,
         max_cost_usd: None,
     }
 }

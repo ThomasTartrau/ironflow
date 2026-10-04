@@ -52,8 +52,8 @@ pub use provider_account::{
     provider_account_secret_key,
 };
 pub use run::{
-    IDEMPOTENCY_WINDOW, LeaseRequest, MAX_IDEMPOTENCY_KEY_LEN, NewRun, PurgePolicy, PurgeReason,
-    PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunUpdate,
+    IDEMPOTENCY_WINDOW, LeaseRequest, MAX_CONCURRENCY_KEY_LEN, MAX_IDEMPOTENCY_KEY_LEN, NewRun,
+    PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunUpdate,
 };
 pub use run_actor::RunActor;
 pub use run_status::RunStatus;

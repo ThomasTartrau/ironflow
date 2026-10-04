@@ -269,6 +269,7 @@ async fn create_and_get_run() {
         scheduled_at: None,
         max_retries: Some(2),
         max_cost_usd: None,
+        concurrency_key: None,
     };
 
     let created = client.create_run(&request).await.unwrap();
@@ -291,6 +292,7 @@ async fn create_run_with_max_cost_usd() {
         scheduled_at: None,
         max_retries: None,
         max_cost_usd: Some(2.5),
+        concurrency_key: None,
     };
 
     let created = client.create_run(&request).await.unwrap();
@@ -309,6 +311,7 @@ async fn create_run_rejects_negative_max_cost_usd() {
         scheduled_at: None,
         max_retries: None,
         max_cost_usd: Some(-1.0),
+        concurrency_key: None,
     };
 
     let err = client.create_run(&request).await.unwrap_err();
@@ -327,6 +330,7 @@ async fn create_run_unknown_workflow() {
         scheduled_at: None,
         max_retries: None,
         max_cost_usd: None,
+        concurrency_key: None,
     };
 
     let err = client.create_run(&request).await.unwrap_err();
@@ -356,6 +360,7 @@ fn deploy_request() -> ironflow_sdk::types::CreateRunRequest {
         scheduled_at: None,
         max_retries: None,
         max_cost_usd: None,
+        concurrency_key: None,
     }
 }
 

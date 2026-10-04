@@ -594,6 +594,57 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 `child.run_id()` is a `Uuid` (nil while planning). A child never sees the parent's
 artifacts; pass what it needs in its input.
 
+### Exclusive child
+
+To start a child only when no other active run handles the same subject (an issue, a
+branch), pass a concurrency key through `ctx.workflow_with`. A conflict is not an error:
+no child is created and the step completes with the run that holds the key. The outcome
+is replayed as recorded when the parent resumes.
+
+```rust,no_run
+use ironflow_engine::config::WorkflowOptions;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+use ironflow_engine::executor::SubWorkflowOutcome;
+use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct FixInput {
+    issue: u64,
+}
+
+struct FixIssue;
+
+impl WorkflowHandler for FixIssue {
+    fn name(&self) -> &str {
+        "fix-issue"
+    }
+    fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move { Ok(()) })
+    }
+}
+
+impl TypedWorkflow for FixIssue {
+    type Input = FixInput;
+}
+
+async fn example(ctx: &mut WorkflowContext, issue: u64) -> Result<(), EngineError> {
+    let options = WorkflowOptions::new().concurrency_key(format!("issue:{issue}"));
+    match ctx.workflow_with(&FixIssue, FixInput { issue }, options).await? {
+        SubWorkflowOutcome::Completed(child) => println!("fixed in run {}", child.run_id()),
+        SubWorkflowOutcome::Conflict(conflict) => {
+            println!("issue {issue} already handled by run {}", conflict.run_id());
+        }
+    }
+    Ok(())
+}
+```
+
+The same key on `POST /api/v1/runs` (`concurrency_key` in the body) answers
+`409 CONCURRENCY_CONFLICT` instead.
+
 A child may suspend (approval, human input, signal wait, delay): the parent and every
 ancestor suspend with it, durably. Resolve the child run itself, by its id or by the
 `ironflow.io/parent-run-id` label (`PARENT_RUN_ID_LABEL` from `ironflow_engine::context`):

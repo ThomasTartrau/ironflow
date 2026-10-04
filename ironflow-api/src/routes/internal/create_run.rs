@@ -98,4 +98,49 @@ mod tests {
         assert_eq!(json_val["data"]["workflow_name"], "test-workflow");
         assert_eq!(json_val["data"]["status"]["state"], "pending");
     }
+    fn keyed_run_request(key: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/internal/runs")
+            .header("authorization", "Bearer test-worker-token")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "workflow_name": "test-workflow",
+                    "trigger": { "kind": "workflow" },
+                    "payload": {},
+                    "max_retries": 0,
+                    "concurrency_key": key
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_run_returns_409_on_concurrency_conflict() {
+        let state = test_state();
+        let app = create_router(state, RouterConfig::default());
+
+        let first = app
+            .clone()
+            .oneshot(keyed_run_request("issue:12"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let body = first.into_body().collect().await.unwrap().to_bytes();
+        let first_run: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(first_run["data"]["concurrency_key"], "issue:12");
+
+        let second = app.oneshot(keyed_run_request("issue:12")).await.unwrap();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+        let body = second.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "CONCURRENCY_CONFLICT");
+        assert_eq!(json_val["error"]["details"]["key"], "issue:12");
+        assert_eq!(
+            json_val["error"]["details"]["run_id"],
+            first_run["data"]["id"]
+        );
+    }
 }

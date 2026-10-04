@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use ironflow_store::models::MAX_IDEMPOTENCY_KEY_LEN;
+use ironflow_store::models::{MAX_CONCURRENCY_KEY_LEN, MAX_IDEMPOTENCY_KEY_LEN};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::Value;
@@ -23,6 +23,7 @@ use serde_json::Value;
 ///     scheduled_at: None,
 ///     max_retries: Some(2),
 ///     max_cost_usd: None,
+///     concurrency_key: Some("issue:12".to_string()),
 /// };
 /// assert_eq!(req.workflow, "deploy");
 /// ```
@@ -57,6 +58,14 @@ pub struct CreateRunRequest {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
     #[serde(default)]
     pub max_cost_usd: Option<Decimal>,
+    /// Optional exclusivity key, at most 255 bytes.
+    ///
+    /// While a non-terminal run (pending, running, sleeping, retrying,
+    /// awaiting approval) holds the same key, the request is refused with
+    /// `409 CONCURRENCY_CONFLICT` naming that run. The key is released when
+    /// the run completes, fails, ends with a warning or is cancelled.
+    #[serde(default)]
+    pub concurrency_key: Option<String>,
 }
 
 impl CreateRunRequest {
@@ -64,7 +73,9 @@ impl CreateRunRequest {
     ///
     /// # Errors
     ///
-    /// Returns a human-readable message when `max_cost_usd` is negative.
+    /// Returns a human-readable message when `max_cost_usd` is negative, or
+    /// when `concurrency_key` is blank or longer than
+    /// [`MAX_CONCURRENCY_KEY_LEN`] bytes.
     ///
     /// # Examples
     ///
@@ -79,14 +90,23 @@ impl CreateRunRequest {
     ///     scheduled_at: None,
     ///     max_retries: None,
     ///     max_cost_usd: Some(Decimal::new(-1, 0)),
+    ///     concurrency_key: None,
     /// };
     /// assert!(req.validate().is_err());
     /// ```
     pub fn validate(&self) -> Result<(), String> {
-        match self.max_cost_usd {
-            Some(cap) if cap < Decimal::ZERO => {
-                Err("max_cost_usd must be zero or positive".to_string())
+        if let Some(cap) = self.max_cost_usd
+            && cap < Decimal::ZERO
+        {
+            return Err("max_cost_usd must be zero or positive".to_string());
+        }
+        match self.concurrency_key.as_deref() {
+            Some(key) if key.trim().is_empty() => {
+                Err("concurrency_key must not be empty".to_string())
             }
+            Some(key) if key.len() > MAX_CONCURRENCY_KEY_LEN => Err(format!(
+                "concurrency_key must be at most {MAX_CONCURRENCY_KEY_LEN} bytes"
+            )),
             _ => Ok(()),
         }
     }
@@ -173,6 +193,8 @@ pub fn validate_idempotency_key(key: &str) -> Result<(), IdempotencyKeyError> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::from_str;
+
     use super::*;
 
     fn request(max_cost_usd: Option<Decimal>) -> CreateRunRequest {
@@ -183,6 +205,14 @@ mod tests {
             scheduled_at: None,
             max_retries: None,
             max_cost_usd,
+            concurrency_key: None,
+        }
+    }
+
+    fn keyed(concurrency_key: &str) -> CreateRunRequest {
+        CreateRunRequest {
+            concurrency_key: Some(concurrency_key.to_string()),
+            ..request(None)
         }
     }
 
@@ -214,6 +244,55 @@ mod tests {
             serde_json::from_str(r#"{"workflow":"deploy","max_cost_usd":2.5}"#)
                 .expect("deserialize");
         assert_eq!(req.max_cost_usd, Some(Decimal::new(25, 1)));
+    }
+
+    #[test]
+    fn concurrency_key_defaults_to_none_when_absent() {
+        let req: CreateRunRequest = from_str(r#"{"workflow":"deploy"}"#).expect("deserialize");
+        assert!(req.concurrency_key.is_none());
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn concurrency_key_parses_from_json() {
+        let req: CreateRunRequest =
+            from_str(r#"{"workflow":"deploy","concurrency_key":"issue:12"}"#).expect("deserialize");
+        assert_eq!(req.concurrency_key.as_deref(), Some("issue:12"));
+    }
+
+    #[test]
+    fn validate_accepts_a_concurrency_key_up_to_the_limit() {
+        assert!(keyed("issue:12").validate().is_ok());
+        assert!(keyed("cl\u{e9}:\u{e9}lodie").validate().is_ok());
+        let longest = "k".repeat(MAX_CONCURRENCY_KEY_LEN);
+        assert!(keyed(&longest).validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_or_blank_concurrency_key() {
+        for key in ["", "   ", "\t\n"] {
+            let err = keyed(key)
+                .validate()
+                .expect_err("blank key must be rejected");
+            assert_eq!(err, "concurrency_key must not be empty");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_a_concurrency_key_over_the_limit() {
+        let err = keyed(&"k".repeat(MAX_CONCURRENCY_KEY_LEN + 1))
+            .validate()
+            .expect_err("over-long key must be rejected");
+        assert_eq!(err, "concurrency_key must be at most 255 bytes");
+    }
+
+    #[test]
+    fn validate_counts_the_concurrency_key_limit_in_bytes() {
+        // 128 two-byte characters: 128 chars but 256 bytes.
+        let err = keyed(&"\u{e9}".repeat(128))
+            .validate()
+            .expect_err("the limit is in bytes, not characters");
+        assert!(err.contains("255 bytes"));
     }
 
     #[test]

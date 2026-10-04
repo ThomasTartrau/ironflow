@@ -90,6 +90,7 @@ async fn queue_depth_reflects_pending_runs() {
                 scheduled_at: None,
                 created_by: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await

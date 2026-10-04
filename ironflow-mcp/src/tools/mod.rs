@@ -247,6 +247,9 @@ mod tests {
                     if let Some(cap) = body.get("max_cost_usd") {
                         data["max_cost_usd"] = cap.clone();
                     }
+                    if let Some(key) = body.get("concurrency_key") {
+                        data["concurrency_key"] = key.clone();
+                    }
                     (StatusCode::CREATED, Json(json!({ "data": data })))
                 }),
             )
@@ -625,6 +628,7 @@ mod tests {
             max_retries: Some(2),
             idempotency_key: None,
             max_cost_usd: None,
+            concurrency_key: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -646,6 +650,7 @@ mod tests {
             max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
+            concurrency_key: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -666,6 +671,7 @@ mod tests {
             max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
+            concurrency_key: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -684,6 +690,7 @@ mod tests {
             max_retries: None,
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost_usd: None,
+            concurrency_key: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -702,6 +709,7 @@ mod tests {
             max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
+            concurrency_key: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -720,6 +728,7 @@ mod tests {
             max_retries: None,
             idempotency_key: None,
             max_cost_usd: Some(2.5),
+            concurrency_key: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -738,12 +747,51 @@ mod tests {
             max_retries: None,
             idempotency_key: None,
             max_cost_usd: None,
+            concurrency_key: None,
         };
 
         let result = tool.run(&client).await.unwrap();
         let parsed = extract_json(&result);
 
         assert!(parsed.get("max_cost_usd").is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_forwards_the_concurrency_key() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: Some("issue:12".to_string()),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["concurrency_key"], "issue:12");
+    }
+
+    #[tokio::test]
+    async fn create_run_omits_the_concurrency_key_when_absent() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed.get("concurrency_key").is_none());
     }
 
     // ---------------------------------------------------------------

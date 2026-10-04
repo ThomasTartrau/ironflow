@@ -464,6 +464,10 @@ export interface paths {
 		 *     second one. A key reused with a different workflow or payload is rejected with
 		 *     409 Conflict. Keys stay bound for 24 hours, after which they are released.
 		 *
+		 *     An optional `concurrency_key` in the body makes the run exclusive: while a
+		 *     non-terminal run holds the same key, the call is refused with 409
+		 *     `CONCURRENCY_CONFLICT` naming that run.
+		 *
 		 *     # Errors
 		 *
 		 *     Returns [`ApiError::Forbidden`] for non-admin callers.
@@ -471,6 +475,8 @@ export interface paths {
 		 *     invalid, or the `Idempotency-Key` header is malformed.
 		 *     Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
 		 *     different request.
+		 *     Returns [`ApiError::ConcurrencyConflict`] if a non-terminal run already
+		 *     holds the requested `concurrency_key`.
 		 *     Returns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota
 		 *     is exhausted.
 		 */
@@ -1978,11 +1984,21 @@ export interface components {
 		 *         scheduled_at: None,
 		 *         max_retries: Some(2),
 		 *         max_cost_usd: None,
+		 *         concurrency_key: Some("issue:12".to_string()),
 		 *     };
 		 *     assert_eq!(req.workflow, "deploy");
 		 *     ```
 		 */
 		CreateRunRequest: {
+			/**
+			 * @description Optional exclusivity key, at most 255 bytes.
+			 *
+			 *     While a non-terminal run (pending, running, sleeping, retrying,
+			 *     awaiting approval) holds the same key, the request is refused with
+			 *     `409 CONCURRENCY_CONFLICT` naming that run. The key is released when
+			 *     the run completes, fails, ends with a warning or is cancelled.
+			 */
+			concurrency_key?: string | null;
 			/** @description Optional key-value labels for categorization and filtering. */
 			labels?: {
 				[key: string]: string;
@@ -3137,6 +3153,11 @@ export interface components {
 			 * @description When execution completed.
 			 */
 			completed_at?: string | null;
+			/**
+			 * @description Exclusivity key held by this run until it reaches a terminal state,
+			 *     when one was supplied.
+			 */
+			concurrency_key?: string | null;
 			/**
 			 * Format: double
 			 * @description Aggregated cost in USD.
@@ -5655,7 +5676,7 @@ export interface operations {
 				};
 				content?: never;
 			};
-			/** @description Idempotency key already used with a different request */
+			/** @description Idempotency key already used with a different request (IDEMPOTENCY_KEY_CONFLICT), or concurrency key held by an active run (CONCURRENCY_CONFLICT) */
 			409: {
 				headers: {
 					[name: string]: unknown;

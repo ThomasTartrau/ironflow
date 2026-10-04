@@ -57,6 +57,10 @@ fn record_outcome(_outcome: &'static str) {}
 /// second one. A key reused with a different workflow or payload is rejected with
 /// 409 Conflict. Keys stay bound for 24 hours, after which they are released.
 ///
+/// An optional `concurrency_key` in the body makes the run exclusive: while a
+/// non-terminal run holds the same key, the call is refused with 409
+/// `CONCURRENCY_CONFLICT` naming that run.
+///
 /// # Errors
 ///
 /// Returns [`ApiError::Forbidden`] for non-admin callers.
@@ -64,6 +68,8 @@ fn record_outcome(_outcome: &'static str) {}
 /// invalid, or the `Idempotency-Key` header is malformed.
 /// Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
 /// different request.
+/// Returns [`ApiError::ConcurrencyConflict`] if a non-terminal run already
+/// holds the requested `concurrency_key`.
 /// Returns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota
 /// is exhausted.
 #[cfg_attr(
@@ -82,7 +88,7 @@ fn record_outcome(_outcome: &'static str) {}
             (status = 400, description = "Unknown workflow, invalid body or malformed Idempotency-Key"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
-            (status = 409, description = "Idempotency key already used with a different request"),
+            (status = 409, description = "Idempotency key already used with a different request (IDEMPOTENCY_KEY_CONFLICT), or concurrency key held by an active run (CONCURRENCY_CONFLICT)"),
             (status = 429, description = "Monthly cost quota exhausted")
         ),
         security(("Bearer" = []))
@@ -141,12 +147,16 @@ pub async fn create_run(
                 max_cost_usd: req.max_cost_usd,
                 created_by: Some(run_actor_of(&auth)),
                 idempotency_key: idempotency_key.clone(),
+                concurrency_key: req.concurrency_key,
             },
         )
         .await
         .map_err(|e| match e {
             EngineError::MonthlyBudgetExceeded { .. } => {
                 ApiError::MonthlyBudgetExceeded(e.to_string())
+            }
+            EngineError::ConcurrencyConflict { key, run_id } => {
+                ApiError::ConcurrencyConflict { key, run_id }
             }
             other => ApiError::Internal(other.to_string()),
         })?;
@@ -209,7 +219,8 @@ mod tests {
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::{Event, EventSubscriber, SubscriberFuture};
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{ApiKeyScope, NewApiKey, NewUser, RunStatus};
+    use ironflow_store::models::{ApiKeyScope, NewApiKey, NewUser, RunFilter, RunStatus};
+    use ironflow_store::store::RunStore;
     use rust_decimal::Decimal;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
@@ -944,5 +955,157 @@ mod tests {
 
         assert_eq!(created, 1);
         assert_eq!(ids.len(), 1);
+    }
+    fn keyed_body(workflow: &str, key: &str) -> JsonValue {
+        json!({"workflow": workflow, "concurrency_key": key})
+    }
+
+    #[tokio::test]
+    async fn create_run_exposes_concurrency_key() {
+        let resp = send_run(test_state(), keyed_body("test-workflow", "issue:12")).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = body_json(resp).await;
+        assert_eq!(body["data"]["concurrency_key"], "issue:12");
+    }
+
+    #[tokio::test]
+    async fn create_run_without_concurrency_key_omits_the_field() {
+        let resp = send_run(test_state(), json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = body_json(resp).await;
+        assert!(body["data"].get("concurrency_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_returns_409_on_concurrency_conflict() {
+        let state = test_state();
+        let auth = create_user_auth_header(&state, "testuser", true).await;
+
+        let first = router(state.clone())
+            .oneshot(post_run(
+                &auth,
+                keyed_body("test-workflow", "issue:12"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let first_id = body_json(first).await["data"]["id"].clone();
+
+        // The key is global: another workflow cannot take it either.
+        for workflow in ["test-workflow", "other-workflow"] {
+            let resp = router(state.clone())
+                .oneshot(post_run(&auth, keyed_body(workflow, "issue:12"), None))
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), StatusCode::CONFLICT);
+            let body = body_json(resp).await;
+            assert_eq!(body["error"]["code"], "CONCURRENCY_CONFLICT");
+            assert_eq!(body["error"]["details"]["key"], "issue:12");
+            assert_eq!(body["error"]["details"]["run_id"], first_id);
+        }
+
+        let other_key = router(state.clone())
+            .oneshot(post_run(
+                &auth,
+                keyed_body("test-workflow", "issue:13"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(other_key.status(), StatusCode::CREATED);
+
+        let runs = state
+            .store
+            .list_runs(RunFilter::default(), 1, 50)
+            .await
+            .unwrap();
+        assert_eq!(runs.items.len(), 2, "a conflict creates no run");
+    }
+
+    #[tokio::test]
+    async fn create_run_accepts_a_concurrency_key_once_its_holder_is_terminal() {
+        let state = test_state();
+        let auth = create_user_auth_header(&state, "testuser", true).await;
+
+        let first = router(state.clone())
+            .oneshot(post_run(
+                &auth,
+                keyed_body("test-workflow", "issue:12"),
+                None,
+            ))
+            .await
+            .unwrap();
+        let first_body = body_json(first).await;
+        let first_id = Uuid::parse_str(first_body["data"]["id"].as_str().unwrap()).unwrap();
+        state
+            .store
+            .update_run_status(first_id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+
+        let second = router(state)
+            .oneshot(post_run(
+                &auth,
+                keyed_body("test-workflow", "issue:12"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_empty_concurrency_key() {
+        for key in ["", "   "] {
+            let resp = send_run(test_state(), keyed_body("test-workflow", key)).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+            let body = body_json(resp).await;
+            assert_eq!(body["error"]["code"], "BAD_REQUEST");
+            assert_eq!(
+                body["error"]["message"],
+                "concurrency_key must not be empty"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_concurrency_key_over_the_limit() {
+        let key = "k".repeat(256);
+        let resp = send_run(test_state(), keyed_body("test-workflow", &key)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let body = body_json(resp).await;
+        assert_eq!(
+            body["error"]["message"],
+            "concurrency_key must be at most 255 bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn idempotent_replay_with_a_concurrency_key_returns_the_run() {
+        let state = test_state();
+        let auth = create_user_auth_header(&state, "testuser", true).await;
+        let body = keyed_body("test-workflow", "issue:12");
+
+        let first = router(state.clone())
+            .oneshot(post_run(&auth, body.clone(), Some("github:abc-123")))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let first_id = body_json(first).await["data"]["id"].clone();
+
+        // The replay is answered by the idempotency key before the
+        // concurrency key is checked: the run holding it is the same one.
+        let replay = router(state)
+            .oneshot(post_run(&auth, body, Some("github:abc-123")))
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        assert_eq!(body_json(replay).await["data"]["id"], first_id);
     }
 }

@@ -87,3 +87,26 @@ On the Claude Code CLI provider, `system_prompt(..)` replaces Claude Code's own 
 (skills, slash commands). To add project rules on top of it, use
 `append_system_prompt(..)`. Keep `system_prompt` when replacing it is the intent. Section:
 Agent.
+
+## concurrency-key
+- kind: adopt
+- since: ironflow-engine after 2.45.0 (#162)
+
+A handler or a client that lists active runs before starting one, to keep a single run per
+issue or branch, races: two callers can both see nothing and both start. Pass a
+concurrency key instead; the store refuses the second creation atomically. For a child,
+`ctx.workflow_with` completes the step with the run that holds the key; on
+`POST /api/v1/runs` (`concurrency_key` in the body, `--concurrency-key` in the CLI) the
+call answers `409 CONCURRENCY_CONFLICT`. Section: Sub-workflow.
+
+```diff
+- let active = ctx.store().list_runs(filter, 0, 1).await?;
+- if active.items.is_empty() {
+-     ctx.workflow(&FixIssue, FixInput { issue }).await?;
+- }
++ let options = WorkflowOptions::new().concurrency_key(format!("issue:{issue}"));
++ match ctx.workflow_with(&FixIssue, FixInput { issue }, options).await? {
++     SubWorkflowOutcome::Completed(child) => { /* child.run_id() */ }
++     SubWorkflowOutcome::Conflict(conflict) => { /* conflict.run_id() holds the key */ }
++ }
+```

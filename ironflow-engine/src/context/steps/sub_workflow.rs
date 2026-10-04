@@ -25,11 +25,13 @@ use ironflow_store::models::{
     step_trace_id,
 };
 
-use crate::config::WorkflowStepConfig;
+use crate::config::{WorkflowOptions, WorkflowStepConfig};
 use crate::context::lifecycle::check_replay_identity;
 use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use crate::error::EngineError;
-use crate::executor::SubWorkflowOutput;
+use crate::executor::{
+    ConcurrencyConflict, RecordedWorkflowStep, SubWorkflowOutcome, SubWorkflowOutput,
+};
 use crate::guard::WorkflowRejection;
 use crate::handler::{TypedWorkflow, WorkflowHandler};
 use crate::plan::{SharedPlanRecorder, lock_plan};
@@ -54,6 +56,33 @@ fn recorded_child_run_id(step: &Step) -> Option<Uuid> {
             );
             None
         }
+    }
+}
+
+/// How a child workflow execution ended, short of a suspension or an error.
+enum ChildOutcome {
+    /// The child run finished; the flag tells whether at least one
+    /// `allow_failure` step failed.
+    Finished(SubWorkflowOutput, bool),
+    /// No child run was created: another active run holds the concurrency key.
+    Conflict(ConcurrencyConflict),
+}
+
+/// The output of a `workflow` or `workflow_dyn` step, which records no
+/// concurrency key and so can only complete.
+///
+/// A conflict is only met on replay, when the step was recorded by
+/// `workflow_with` before the handler code changed.
+fn expect_completed(
+    outcome: SubWorkflowOutcome,
+    position: u32,
+) -> Result<SubWorkflowOutput, EngineError> {
+    match outcome {
+        SubWorkflowOutcome::Completed(output) => Ok(output),
+        SubWorkflowOutcome::Conflict(_) => Err(EngineError::StepConfig(format!(
+            "workflow step at position {position} recorded a concurrency conflict; \
+             call workflow_with to read it"
+        ))),
     }
 }
 
@@ -142,7 +171,75 @@ impl WorkflowContext {
         input: W::Input,
     ) -> Result<SubWorkflowOutput, EngineError> {
         let payload = to_value(&input)?;
-        self.run_sub_workflow(handler, payload).await
+        let position = self.position;
+        let outcome = self.run_sub_workflow(handler, payload, None).await?;
+        expect_completed(outcome, position)
+    }
+
+    /// Execute a sub-workflow step with [`WorkflowOptions`].
+    ///
+    /// Same as [`workflow`](Self::workflow), plus a concurrency key set with
+    /// [`WorkflowOptions::concurrency_key`]: the key is held by the child run
+    /// until it reaches a terminal state (Completed, Failed, Warning,
+    /// Cancelled). While another non-terminal run holds it, no child run is
+    /// created and the step completes at once with
+    /// [`SubWorkflowOutcome::Conflict`], naming the run in place. A conflict
+    /// never fails the parent, and it is replayed as-is on resume: the child
+    /// is not attempted again.
+    ///
+    /// A parent that itself holds the key gets a conflict naming its own run.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`workflow`](Self::workflow). A conflict raised while creating
+    /// the child is data, not an error.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::config::WorkflowOptions;
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_engine::executor::SubWorkflowOutcome;
+    /// use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize)]
+    /// struct FixInput {
+    ///     issue: u64,
+    /// }
+    ///
+    /// struct FixIssue;
+    ///
+    /// impl WorkflowHandler for FixIssue {
+    ///     fn name(&self) -> &str { "fix-issue" }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// impl TypedWorkflow for FixIssue {
+    ///     type Input = FixInput;
+    /// }
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let options = WorkflowOptions::new().concurrency_key("issue:12");
+    /// match ctx.workflow_with(&FixIssue, FixInput { issue: 12 }, options).await? {
+    ///     SubWorkflowOutcome::Completed(child) => println!("fixed in run {}", child.run_id()),
+    ///     SubWorkflowOutcome::Conflict(c) => println!("already handled by run {}", c.run_id()),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn workflow_with<W: TypedWorkflow>(
+        &mut self,
+        handler: &W,
+        input: W::Input,
+        options: WorkflowOptions,
+    ) -> Result<SubWorkflowOutcome, EngineError> {
+        let payload = to_value(&input)?;
+        self.run_sub_workflow(handler, payload, options.into_concurrency_key())
+            .await
     }
 
     /// Execute a sub-workflow step whose child is only known at run time.
@@ -177,7 +274,9 @@ impl WorkflowContext {
         handler: &dyn WorkflowHandler,
         payload: Value,
     ) -> Result<SubWorkflowOutput, EngineError> {
-        self.run_sub_workflow(handler, payload).await
+        let position = self.position;
+        let outcome = self.run_sub_workflow(handler, payload, None).await?;
+        expect_completed(outcome, position)
     }
 
     /// Record, then run or plan, a sub-workflow step.
@@ -189,15 +288,18 @@ impl WorkflowContext {
         &mut self,
         handler: &dyn WorkflowHandler,
         payload: Value,
-    ) -> Result<SubWorkflowOutput, EngineError> {
+        concurrency_key: Option<String>,
+    ) -> Result<SubWorkflowOutcome, EngineError> {
         // Plan mode: record the invocation, expand the child handler in the
         // same recorder, and return a synthetic output. No child run is
         // created and no step of the child is executed.
         if let Some(plan) = self.plan().cloned() {
-            return self.plan_sub_workflow(&plan, handler, payload).await;
+            let planned = self.plan_sub_workflow(&plan, handler, payload).await?;
+            return Ok(SubWorkflowOutcome::Completed(planned));
         }
 
-        let config = WorkflowStepConfig::new(handler.name(), payload);
+        let mut config = WorkflowStepConfig::new(handler.name(), payload);
+        config.concurrency_key = concurrency_key;
         let position = self.position;
 
         let existing = self.replay_steps.get(&position).cloned();
@@ -259,7 +361,37 @@ impl WorkflowContext {
         }
 
         match self.execute_child_workflow(&config, step.id, resume).await {
-            Ok((output, child_had_allowed_failure)) => {
+            // No child run was created: the step completes with the conflict
+            // as its output, so a replay serves the same outcome.
+            Ok(ChildOutcome::Conflict(conflict)) => {
+                self.store
+                    .update_step(
+                        step.id,
+                        StepUpdate {
+                            status: Some(StepStatus::Completed),
+                            output: Some(json!({ "concurrency_conflict": conflict })),
+                            duration_ms: Some(0),
+                            cost_usd: Some(Decimal::ZERO),
+                            completed_at: Some(Utc::now()),
+                            ..StepUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    run_id = %self.run_id,
+                    child_workflow = %config.workflow_name,
+                    key = %conflict.key(),
+                    holder = %conflict.run_id(),
+                    "workflow step skipped: concurrency conflict"
+                );
+
+                self.last_step_ids = vec![step.id];
+
+                self.guard_record_return();
+                Ok(SubWorkflowOutcome::Conflict(conflict))
+            }
+            Ok(ChildOutcome::Finished(output, child_had_allowed_failure)) => {
                 self.total_cost_usd += output.cost_usd();
                 self.total_duration_ms += output.duration_ms();
                 if child_had_allowed_failure {
@@ -291,7 +423,7 @@ impl WorkflowContext {
                 self.last_step_ids = vec![step.id];
 
                 self.guard_record_return();
-                Ok(output)
+                Ok(SubWorkflowOutcome::Completed(output))
             }
             // The child suspended: the step stays open, neither failed nor
             // completed, so the next replay re-enters the same child run.
@@ -325,16 +457,35 @@ impl WorkflowContext {
 
     /// Replay a `Workflow` step completed in a previous execution: the child
     /// run is not executed again and nothing is re-counted by the guard.
-    fn replay_sub_workflow(&mut self, step: &Step) -> Result<SubWorkflowOutput, EngineError> {
+    ///
+    /// A step skipped on a concurrency conflict replays the same conflict: the
+    /// child is not attempted again, even if the key has been released since.
+    fn replay_sub_workflow(&mut self, step: &Step) -> Result<SubWorkflowOutcome, EngineError> {
         let recorded = step.output.clone().ok_or_else(|| {
             EngineError::StepConfig(format!(
                 "completed workflow step {} has no recorded output",
                 step.id
             ))
         })?;
-        let output: SubWorkflowOutput = from_value(recorded)?;
+        let recorded: RecordedWorkflowStep = from_value(recorded)?;
 
         self.position += 1;
+        self.last_step_ids = vec![step.id];
+
+        let output = match SubWorkflowOutcome::from(recorded) {
+            SubWorkflowOutcome::Completed(output) => output,
+            SubWorkflowOutcome::Conflict(conflict) => {
+                info!(
+                    run_id = %self.run_id,
+                    step = %step.name,
+                    key = %conflict.key(),
+                    holder = %conflict.run_id(),
+                    "workflow step replayed: concurrency conflict"
+                );
+                return Ok(SubWorkflowOutcome::Conflict(conflict));
+            }
+        };
+
         // Cost is not added: `carry_over_run_totals` seeded `total_cost_usd`
         // from the run totals persisted before the suspension, which already
         // include this child.
@@ -342,7 +493,6 @@ impl WorkflowContext {
         if output.status() == RunStatus::Warning {
             self.has_allowed_failure = true;
         }
-        self.last_step_ids = vec![step.id];
 
         info!(
             run_id = %self.run_id,
@@ -350,7 +500,7 @@ impl WorkflowContext {
             step = %step.name,
             "workflow step replayed from previous execution"
         );
-        Ok(output)
+        Ok(SubWorkflowOutcome::Completed(output))
     }
 
     /// Record a sub-workflow invocation while planning, expanding the child
@@ -413,6 +563,9 @@ impl WorkflowContext {
     /// Execute a child workflow and return aggregated output plus whether
     /// at least one `allow_failure` step failed.
     ///
+    /// When another active run holds the step's concurrency key, no child run
+    /// is created and [`ChildOutcome::Conflict`] is returned.
+    ///
     /// `resume` is the child run recorded on an open step: that run is
     /// re-entered, with its completed steps replayed, instead of creating a
     /// new one. A child that suspends is left in its suspension status and
@@ -422,7 +575,7 @@ impl WorkflowContext {
         config: &WorkflowStepConfig,
         step_id: Uuid,
         resume: Option<Uuid>,
-    ) -> Result<(SubWorkflowOutput, bool), EngineError> {
+    ) -> Result<ChildOutcome, EngineError> {
         let resolver = self.handler_resolver.as_ref().ok_or_else(|| {
             EngineError::InvalidWorkflow(
                 "sub-workflow requires a handler resolver (use Engine to execute)".to_string(),
@@ -460,7 +613,7 @@ impl WorkflowContext {
                     // The child finished but the parent stopped before closing
                     // its step: report the recorded outcome, run nothing.
                     status @ (RunStatus::Completed | RunStatus::Warning) => {
-                        return Ok((
+                        return Ok(ChildOutcome::Finished(
                             SubWorkflowOutput::new(
                                 child_run_id,
                                 &config.workflow_name,
@@ -487,7 +640,15 @@ impl WorkflowContext {
                 (child_run_id, child_run.cost_usd, child_run.duration_ms)
             }
             None => {
-                let child_run_id = self.create_child_run(config).await?;
+                let child_run_id = match self.create_child_run(config).await {
+                    Ok(id) => id,
+                    Err(EngineError::ConcurrencyConflict { key, run_id }) => {
+                        return Ok(ChildOutcome::Conflict(ConcurrencyConflict::new(
+                            key, run_id,
+                        )));
+                    }
+                    Err(err) => return Err(err),
+                };
 
                 // Recorded before the child runs, so a suspension of the child
                 // can be resumed into this same run.
@@ -587,7 +748,7 @@ impl WorkflowContext {
                     .await?;
 
                 let child_had_allowed_failure = child_ctx.has_allowed_failure;
-                Ok((
+                Ok(ChildOutcome::Finished(
                     SubWorkflowOutput::new(
                         child_run_id,
                         &config.workflow_name,
@@ -662,6 +823,7 @@ impl WorkflowContext {
                 scheduled_at: None,
                 created_by: parent_author,
                 idempotency_key: None,
+                concurrency_key: config.concurrency_key.clone(),
                 // The child shares the parent's cap; it does not get its own budget.
                 max_cost_usd: self.max_cost_usd,
             })

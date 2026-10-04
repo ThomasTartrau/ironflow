@@ -8,7 +8,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use ironflow_auth::password::PasswordPolicyError;
-use ironflow_engine::error::MONTHLY_BUDGET_EXCEEDED_CODE;
+use ironflow_engine::error::{CONCURRENCY_CONFLICT_CODE, MONTHLY_BUDGET_EXCEEDED_CODE};
 use ironflow_store::error::StoreError;
 use ironflow_types::ErrorEnvelope;
 use serde_json::{Value, json};
@@ -98,6 +98,16 @@ pub enum ApiError {
     /// Carries the run holding the key so the client can inspect it.
     #[error("idempotency key already used with a different request")]
     IdempotencyKeyConflict(Uuid),
+    /// A non-terminal run already holds the requested concurrency key (409).
+    ///
+    /// Carries the key and the run holding it so the client can follow it.
+    #[error("concurrency key {key:?} is held by active run {run_id}")]
+    ConcurrencyConflict {
+        /// The contested key.
+        key: String,
+        /// The run holding the key.
+        run_id: Uuid,
+    },
     /// The global monthly cost quota is exhausted (429).
     ///
     /// Only blocks the creation of new runs; runs already in flight continue.
@@ -174,6 +184,9 @@ impl From<StoreError> for ApiError {
             StoreError::DuplicateProviderAccount(name) => {
                 ApiError::Conflict(format!("provider account '{name}' already exists"))
             }
+            StoreError::ConcurrencyConflict { key, run_id } => {
+                ApiError::ConcurrencyConflict { key, run_id }
+            }
             other => ApiError::Store(other),
         }
     }
@@ -199,6 +212,7 @@ impl ApiError {
             ApiError::Forbidden => "FORBIDDEN",
             ApiError::InsufficientScope => "INSUFFICIENT_SCOPE",
             ApiError::IdempotencyKeyConflict(_) => "IDEMPOTENCY_KEY_CONFLICT",
+            ApiError::ConcurrencyConflict { .. } => CONCURRENCY_CONFLICT_CODE,
             ApiError::MonthlyBudgetExceeded(_) => MONTHLY_BUDGET_EXCEEDED_CODE,
             ApiError::ArtifactNotFound(_) => "ARTIFACT_NOT_FOUND",
             ApiError::ArtifactStorageUnavailable => "ARTIFACT_STORAGE_UNAVAILABLE",
@@ -238,6 +252,7 @@ impl ApiError {
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::InsufficientScope => StatusCode::FORBIDDEN,
             ApiError::IdempotencyKeyConflict(_) => StatusCode::CONFLICT,
+            ApiError::ConcurrencyConflict { .. } => StatusCode::CONFLICT,
             ApiError::MonthlyBudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ArtifactNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::ArtifactStorageUnavailable => StatusCode::NOT_IMPLEMENTED,
@@ -265,6 +280,9 @@ impl ApiError {
     fn details(&self) -> Option<Value> {
         match self {
             ApiError::IdempotencyKeyConflict(run_id) => Some(json!({ "run_id": run_id })),
+            ApiError::ConcurrencyConflict { key, run_id } => {
+                Some(json!({ "key": key, "run_id": run_id }))
+            }
             ApiError::InvalidInput(errors) => Some(json!({ "errors": errors })),
             _ => None,
         }
@@ -465,6 +483,22 @@ mod tests {
         let err = ApiError::from(StoreError::DuplicateProviderAccount("perso".to_string()));
         assert_eq!(err.status(), StatusCode::CONFLICT);
         assert!(err.to_string().contains("perso"));
+    }
+
+    #[test]
+    fn concurrency_conflict_status_code_and_details() {
+        let run_id = Uuid::now_v7();
+        let err = ApiError::from(StoreError::ConcurrencyConflict {
+            key: "issue:12".to_string(),
+            run_id,
+        });
+        assert_eq!(err.status(), StatusCode::CONFLICT);
+        assert_eq!(err.code(), "CONCURRENCY_CONFLICT");
+        assert_eq!(
+            err.details(),
+            Some(json!({ "key": "issue:12", "run_id": run_id }))
+        );
+        assert!(err.to_string().contains(&run_id.to_string()));
     }
 
     #[test]

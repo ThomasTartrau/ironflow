@@ -128,6 +128,7 @@ async fn context_skip_creates_skipped_step() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -195,6 +196,7 @@ async fn child_run_of_parent_authored_by(created_by: Option<RunActor>) -> Run {
             scheduled_at: None,
             created_by,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -296,6 +298,7 @@ async fn context_approval_first_execution_returns_error() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -350,6 +353,7 @@ async fn context_approval_replay_returns_ok() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -440,6 +444,7 @@ async fn context_load_replay_steps_loads_completed_steps() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -533,6 +538,7 @@ async fn context_load_replay_steps_keeps_the_oldest_completed_step_on_position_c
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -644,6 +650,7 @@ async fn context_load_replay_steps_populates_replay_wave_steps() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -726,6 +733,7 @@ async fn context_load_replay_steps_includes_skipped_steps() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -791,6 +799,7 @@ async fn context_payload_returns_run_payload() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -854,6 +863,7 @@ async fn context_last_step_ids_tracks_executed_steps() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -896,6 +906,7 @@ async fn context_with_run() -> (Arc<InMemoryStore>, WorkflowContext) {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -1037,6 +1048,7 @@ async fn when_applies_the_predicate_to_the_payload() {
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -1116,6 +1128,7 @@ async fn context_with_replayed_step_at_position_zero(
             labels: Default::default(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await

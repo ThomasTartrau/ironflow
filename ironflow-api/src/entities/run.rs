@@ -63,6 +63,10 @@ pub struct RunResponse {
     /// Idempotency key that produced this run, when one was supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    /// Exclusivity key held by this run until it reaches a terminal state,
+    /// when one was supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_key: Option<String>,
     /// Cumulative cost cap for this run, in USD. `None` means no cap.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +95,7 @@ impl From<Run> for RunResponse {
             scheduled_at: run.scheduled_at,
             created_by,
             idempotency_key: run.idempotency_key,
+            concurrency_key: run.concurrency_key,
             max_cost_usd: run.max_cost_usd,
         }
     }

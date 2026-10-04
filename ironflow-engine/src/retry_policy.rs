@@ -65,6 +65,7 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::Store`] | if the store is down, persisting the retry fails too |
 /// | [`EngineError::RunBudgetExceeded`] | the cost cap is cumulative; a replay only spends more |
 /// | [`EngineError::MonthlyBudgetExceeded`] | the monthly quota is exhausted for every run |
+/// | [`EngineError::ConcurrencyConflict`] | the key is held by another active run; a replay would only conflict again |
 /// | [`EngineError::ApprovalRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::ApprovalRejected`] | a human decision, replaying cannot change it |
 /// | [`EngineError::ChildSuspended`] | not a failure; the run is suspended with its child |
@@ -98,6 +99,7 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::Store(_)
         | EngineError::RunBudgetExceeded { .. }
         | EngineError::MonthlyBudgetExceeded { .. }
+        | EngineError::ConcurrencyConflict { .. }
         | EngineError::ApprovalRequired { .. }
         | EngineError::ApprovalRejected { .. }
         | EngineError::HumanInputRequired { .. }

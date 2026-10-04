@@ -29,6 +29,11 @@ pub struct CreateRunTool {
     /// Optional maximum cumulative cost for this run, in USD. Must be zero or
     /// positive. Overrides the workflow and server defaults; omit to use them.
     pub max_cost_usd: Option<f64>,
+    /// Optional exclusivity key. While a non-terminal run holds the same key,
+    /// the call is refused with 409 CONCURRENCY_CONFLICT naming that run. The
+    /// key is released once that run completes, fails or is cancelled. At
+    /// most 255 bytes.
+    pub concurrency_key: Option<String>,
 }
 
 impl CreateRunTool {
@@ -45,6 +50,9 @@ impl CreateRunTool {
         });
         if let Some(max_cost_usd) = self.max_cost_usd {
             body["max_cost_usd"] = json!(max_cost_usd);
+        }
+        if let Some(concurrency_key) = &self.concurrency_key {
+            body["concurrency_key"] = json!(concurrency_key);
         }
 
         let run: Value = match &self.idempotency_key {
