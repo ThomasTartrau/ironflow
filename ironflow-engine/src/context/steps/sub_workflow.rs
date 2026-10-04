@@ -8,6 +8,10 @@
 //! suspension status and the parent's `Workflow` step stays open with the
 //! child run id in its output. The whole chain is suspended with it; when the
 //! root run replays, the open step re-enters the same child run.
+//!
+//! With `allow_failure` (see [`WorkflowContext::workflow_with`]) a child whose
+//! handler fails is still marked failed, but the parent's step completes with
+//! the failure in its [`SubWorkflowOutput`].
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -25,7 +29,7 @@ use ironflow_store::models::{
     step_trace_id,
 };
 
-use crate::config::WorkflowStepConfig;
+use crate::config::{WorkflowOptions, WorkflowStepConfig};
 use crate::context::lifecycle::check_replay_identity;
 use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use crate::error::EngineError;
@@ -69,6 +73,8 @@ impl WorkflowContext {
     /// parent is suspended with it and this step stays open. Resuming the
     /// child resumes the whole chain: the parent replays and re-enters the
     /// same child run, whose completed steps are replayed.
+    ///
+    /// To tolerate a failed child, see [`workflow_with`](Self::workflow_with).
     ///
     /// Requires the context to be created with
     /// `with_handler_resolver`.
@@ -142,7 +148,81 @@ impl WorkflowContext {
         input: W::Input,
     ) -> Result<SubWorkflowOutput, EngineError> {
         let payload = to_value(&input)?;
-        self.run_sub_workflow(handler, payload).await
+        self.run_sub_workflow(handler, payload, WorkflowOptions::default())
+            .await
+    }
+
+    /// Execute a sub-workflow step with [`WorkflowOptions`].
+    ///
+    /// Same as [`workflow`](Self::workflow). With
+    /// [`allow_failure`](WorkflowOptions::allow_failure), a child whose handler
+    /// fails does not fail the parent: the child run is still marked failed,
+    /// but this step completes with a [`SubWorkflowOutput`] whose
+    /// [`status`](SubWorkflowOutput::status) is `Failed` (or `Cancelled` when a
+    /// guardrail stopped it) and whose [`error`](SubWorkflowOutput::error)
+    /// carries the child error. The parent run then ends as `Warning`. A
+    /// resumed parent replays the completed step and creates no new child.
+    ///
+    /// A suspension is never tolerated: a child that suspends suspends the
+    /// parent. Errors raised outside the child (no resolver, unknown handler,
+    /// store errors, replay divergence, guard rejection of the invocation) are
+    /// not tolerated either.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`workflow`](Self::workflow), except that the failure of the
+    /// child handler is returned in the output when `allow_failure` is set.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::config::WorkflowOptions;
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    /// use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+    /// use ironflow_store::entities::RunStatus;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Serialize, Deserialize)]
+    /// struct CollectInput {
+    ///     scope: String,
+    /// }
+    ///
+    /// struct Collect;
+    ///
+    /// impl WorkflowHandler for Collect {
+    ///     fn name(&self) -> &str { "collect" }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// impl TypedWorkflow for Collect {
+    ///     type Input = CollectInput;
+    /// }
+    ///
+    /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// let child = ctx
+    ///     .workflow_with(
+    ///         &Collect,
+    ///         CollectInput { scope: "system".to_string() },
+    ///         WorkflowOptions::new().allow_failure(),
+    ///     )
+    ///     .await?;
+    /// if child.status() == RunStatus::Failed {
+    ///     println!("collect failed: {:?}", child.error());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn workflow_with<W: TypedWorkflow>(
+        &mut self,
+        handler: &W,
+        input: W::Input,
+        options: WorkflowOptions,
+    ) -> Result<SubWorkflowOutput, EngineError> {
+        let payload = to_value(&input)?;
+        self.run_sub_workflow(handler, payload, options).await
     }
 
     /// Execute a sub-workflow step whose child is only known at run time.
@@ -177,7 +257,8 @@ impl WorkflowContext {
         handler: &dyn WorkflowHandler,
         payload: Value,
     ) -> Result<SubWorkflowOutput, EngineError> {
-        self.run_sub_workflow(handler, payload).await
+        self.run_sub_workflow(handler, payload, WorkflowOptions::default())
+            .await
     }
 
     /// Record, then run or plan, a sub-workflow step.
@@ -189,6 +270,7 @@ impl WorkflowContext {
         &mut self,
         handler: &dyn WorkflowHandler,
         payload: Value,
+        options: WorkflowOptions,
     ) -> Result<SubWorkflowOutput, EngineError> {
         // Plan mode: record the invocation, expand the child handler in the
         // same recorder, and return a synthetic output. No child run is
@@ -197,7 +279,8 @@ impl WorkflowContext {
             return self.plan_sub_workflow(&plan, handler, payload).await;
         }
 
-        let config = WorkflowStepConfig::new(handler.name(), payload);
+        let mut config = WorkflowStepConfig::new(handler.name(), payload);
+        config.allow_failure = options.allow_failure;
         let position = self.position;
 
         let existing = self.replay_steps.get(&position).cloned();
@@ -339,7 +422,10 @@ impl WorkflowContext {
         // from the run totals persisted before the suspension, which already
         // include this child.
         self.total_duration_ms += output.duration_ms();
-        if output.status() == RunStatus::Warning {
+        if matches!(
+            output.status(),
+            RunStatus::Warning | RunStatus::Failed | RunStatus::Cancelled
+        ) {
             self.has_allowed_failure = true;
         }
         self.last_step_ids = vec![step.id];
@@ -459,6 +545,23 @@ impl WorkflowContext {
                     }
                     // The child finished but the parent stopped before closing
                     // its step: report the recorded outcome, run nothing.
+                    status @ (RunStatus::Failed | RunStatus::Cancelled) if config.allow_failure => {
+                        let error = child_run
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "child run failed".to_string());
+                        return Ok((
+                            SubWorkflowOutput::new(
+                                child_run_id,
+                                &config.workflow_name,
+                                status,
+                                child_run.cost_usd,
+                                child_run.duration_ms,
+                            )
+                            .with_error(error),
+                            true,
+                        ));
+                    }
                     status @ (RunStatus::Completed | RunStatus::Warning) => {
                         return Ok((
                             SubWorkflowOutput::new(
@@ -618,6 +721,7 @@ impl WorkflowContext {
                     Err(store_err) => {
                         self.fail_child_run(
                             child_run_id,
+                            RunStatus::Failed,
                             &store_err,
                             child_ctx.total_cost_usd,
                             total_duration,
@@ -628,8 +732,36 @@ impl WorkflowContext {
                 }
             }
             Err(err) => {
-                self.fail_child_run(child_run_id, &err, child_ctx.total_cost_usd, total_duration)
-                    .await;
+                // The engine cancels top-level runs stopped by a guardrail.
+                let status = if matches!(
+                    err,
+                    EngineError::RunBudgetExceeded { .. } | EngineError::WorkflowGuardRejected(_)
+                ) {
+                    RunStatus::Cancelled
+                } else {
+                    RunStatus::Failed
+                };
+                self.fail_child_run(
+                    child_run_id,
+                    status,
+                    &err,
+                    child_ctx.total_cost_usd,
+                    total_duration,
+                )
+                .await;
+                if config.allow_failure {
+                    return Ok((
+                        SubWorkflowOutput::new(
+                            child_run_id,
+                            &config.workflow_name,
+                            status,
+                            child_ctx.total_cost_usd,
+                            total_duration,
+                        )
+                        .with_error(err.to_string()),
+                        true,
+                    ));
+                }
                 Err(err)
             }
         }
@@ -734,6 +866,7 @@ impl WorkflowContext {
     async fn fail_child_run(
         &self,
         child_run_id: Uuid,
+        status: RunStatus,
         err: &EngineError,
         cost_usd: Decimal,
         duration_ms: u64,
@@ -743,7 +876,7 @@ impl WorkflowContext {
             .update_run(
                 child_run_id,
                 RunUpdate {
-                    status: Some(RunStatus::Failed),
+                    status: Some(status),
                     error: Some(err.to_string()),
                     cost_usd: Some(cost_usd),
                     duration_ms: Some(duration_ms),

@@ -94,6 +94,20 @@ let child = ctx.workflow(&Collect, CollectInput { host: "db-1".into() }).await?;
 println!("child run {}", child.run_id());
 ```
 
+To tolerate a failed child, use `ctx.workflow_with(&Collect, input, WorkflowOptions::new().allow_failure())`:
+the child run is still marked failed, but the step completes with `child.status()` set to `Failed`
+(or `Cancelled`) and `child.error()` carrying the message, and the parent ends as `Warning`.
+A suspension is never tolerated. A resume replays the step and creates no new child.
+
+```rust,ignore
+let child = ctx
+    .workflow_with(&Collect, CollectInput { host: "db-1".into() }, WorkflowOptions::new().allow_failure())
+    .await?;
+if child.status() == RunStatus::Failed {
+    println!("collect failed: {:?}", child.error());
+}
+```
+
 ### Suspension of a child
 
 A child may suspend like any run: an approval, a human input, a signal wait or

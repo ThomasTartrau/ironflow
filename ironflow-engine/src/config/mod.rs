@@ -29,7 +29,7 @@ pub use human_input::{HUMAN_INPUT_SCHEMA_KEY, HumanInputConfig};
 // requirements without depending on `ironflow-store` directly.
 pub use ironflow_store::entities::{ApprovalRequirement, Assignee};
 pub use shell::ShellConfig;
-pub use workflow::WorkflowStepConfig;
+pub use workflow::{WorkflowOptions, WorkflowStepConfig};
 
 use ironflow_core::retry::RetryPolicy;
 use ironflow_store::entities::StepKind;
