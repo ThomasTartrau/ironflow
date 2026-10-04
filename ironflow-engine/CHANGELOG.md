@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.47.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.46.0...ironflow-engine-v2.47.0) - 2026-10-04
+
+### Added
+
+- #162 add a run concurrency key enforced by the store, sub-workflows included
+
+
+### Fixed
+
+- #162 apply code review fixes (fmt, clippy, tests, openapi)
+
 ## [2.46.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.45.0...ironflow-engine-v2.46.0) - 2026-10-04
 
 ### Added
