@@ -34,7 +34,7 @@ variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
   IRONFLOW_FEATURES: "prometheus,openapi,sign-up,transport-docker,transport-k8s,transport-ssh,secret-store"
   GIT_DEPTH: 50
-  GIT_STRATEGY: clone
+  GIT_STRATEGY: fetch
   FF_USE_FASTZIP: 1
   CACHE_COMPRESSION_LEVEL: "fastest"
   RELEASE_PLZ_VERSION: "0.3.160"
@@ -42,6 +42,42 @@ variables:
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
   COREPACK_HOME: "${CI_PROJECT_DIR}/.corepack"
+  # Compiled crates are shared between jobs, branches and projects through the
+  # sccache bucket of the homelab MinIO (homelab-cluster#24), so target/ stays
+  # out of the GitLab cache. Incremental compilation is off: sccache cannot
+  # cache an incremental crate. The credentials are mapped by .sccache.
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_BUCKET: sccache
+  SCCACHE_ENDPOINT: http://minio.ci.svc.cluster.local:9000
+  SCCACHE_REGION: us-east-1
+  SCCACHE_S3_USE_SSL: "false"
+  SCCACHE_S3_KEY_PREFIX: ironflow
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+# Starts the sccache server of a Rust job. When it cannot start -- credentials
+# missing, MinIO unreachable (SaaS runner), bucket absent -- the job compiles
+# without a cache instead of failing. The masked SCCACHE_AWS_* variables are
+# mapped here rather than as global AWS_* variables, so only the Rust jobs
+# receive them. A job of the ci-rust image that compiles, or runs `cargo
+# metadata` without --no-deps, must extend .sccache: cargo runs `rustc -vV`
+# through the global wrapper, and an sccache server that cannot start fails
+# the job, SCCACHE_IGNORE_SERVER_IO_ERROR or not.
+.sccache-start: &sccache-start
+  - export AWS_ACCESS_KEY_ID="${SCCACHE_AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${SCCACHE_AWS_SECRET_ACCESS_KEY:-}"
+  - |
+    if [ -z "${AWS_ACCESS_KEY_ID}" ] || [ -z "${AWS_SECRET_ACCESS_KEY}" ]; then
+      echo "sccache: SCCACHE_AWS_* credentials missing, compiling without cache."
+      unset RUSTC_WRAPPER
+    elif ! sccache --start-server; then
+      echo "sccache: server did not start against ${SCCACHE_ENDPOINT}, compiling without cache."
+      unset RUSTC_WRAPPER
+    fi
+
+.sccache:
+  before_script: *sccache-start
+  after_script:
+    - sccache --show-stats || true
 
 .rust-debug-cache: &rust-debug-cache
   cache:
@@ -271,7 +307,7 @@ cargo-fmt:
     - cargo fmt --all -- --check
 
 cargo-clippy:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: check
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -288,7 +324,7 @@ cargo-clippy:
 # `cargo package` builds the crate in isolation (as crates.io would), so it's
 # the only way to actually catch this drift before it ships.
 sqlx-cache-check:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: check
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -326,7 +362,7 @@ mdbook-build:
     - mdbook build
 
 unit-tests:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -337,7 +373,7 @@ unit-tests:
     - cargo nextest run --profile ci --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES"
 
 doc-tests:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -354,7 +390,7 @@ doc-tests:
 # Durability is off: postgres_fsm creates databases and replays every migration,
 # and with an fsync per commit on the runner's shared disk it hit its 60s timeout.
 postgres-tests:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -375,7 +411,7 @@ postgres-tests:
 # The Claude Code plugin ships a project template (plugins/ironflow/skills/setup/assets).
 # Scaffold it against this checkout and make sure it builds and its tests pass.
 check-plugin-template:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -413,7 +449,7 @@ dashboard-build:
     expire_in: 1 hour
 
 cargo-check-dashboard:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: build
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -432,6 +468,7 @@ cargo-check-dashboard:
 # build-release runs on main (non-release commits) to verify the release build compiles.
 # Skipped on "chore: release" commits since the code is unchanged.
 build-release:
+  extends: .sccache
   stage: build
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-release-cache
@@ -442,6 +479,7 @@ build-release:
 
 # release-plz-update creates the release MR. Only on regular main commits.
 release-plz-update:
+  extends: .sccache
   stage: release
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-release-cache
@@ -450,6 +488,7 @@ release-plz-update:
   variables:
     GIT_DEPTH: 0
   before_script:
+    - *sccache-start
     - *install-release-plz
   script:
     - git config user.name "release-plz[bot]"
@@ -483,6 +522,7 @@ release-plz-update:
 # commit ("manifest path ... does not exist"). Pushing any regular commit to main
 # unblocks it: release-plz publishes from HEAD when HEAD is not a release MR merge.
 release-plz-release:
+  extends: .sccache
   stage: release
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-release-cache
@@ -493,6 +533,7 @@ release-plz-release:
   variables:
     GIT_DEPTH: 0
   before_script:
+    - *sccache-start
     - *install-release-plz
     - mkdir -p ironflow-api/dashboard
     - cp -r ironflow-dashboard/dist/. ironflow-api/dashboard/
