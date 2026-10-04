@@ -195,6 +195,7 @@ mod tests {
     use crate::commands::api_key::ApiKeyCommands;
     use crate::commands::audit_log::AuditLogCommands;
     use crate::commands::delegation::DelegationCommands;
+    use crate::commands::run::RunCommands;
     use crate::commands::secret::SecretCommands;
     use crate::commands::signal::SignalCommands;
     use crate::commands::user::UserCommands;
@@ -244,6 +245,43 @@ mod tests {
             "/tmp/payload.json",
         ]);
         assert!(matches!(cli.command, Commands::Run(_)));
+    }
+
+    #[test]
+    fn parse_run_create_with_concurrency_key() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "run",
+            "create",
+            "deploy",
+            "--concurrency-key",
+            "issue:12",
+        ]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create {
+            concurrency_key, ..
+        } = &args.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(concurrency_key.as_deref(), Some("issue:12"));
+    }
+
+    #[test]
+    fn parse_run_create_without_concurrency_key() {
+        let cli = parse(&["ironflow-cli", "run", "create", "deploy"]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create {
+            concurrency_key, ..
+        } = &args.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        assert!(concurrency_key.is_none());
     }
 
     #[test]

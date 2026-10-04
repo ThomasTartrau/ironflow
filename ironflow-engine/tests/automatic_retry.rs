@@ -62,6 +62,7 @@ async fn enqueue(store: &InMemoryStore, workflow: &str, max_retries: u32) -> uui
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await

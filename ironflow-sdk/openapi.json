@@ -831,8 +831,13 @@
         "type": "object"
       },
       "CreateRunRequest": {
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n    concurrency_key: Some(\"issue:12\".to_string()),\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "properties": {
+          "concurrency_key": {
+            "description": "Optional exclusivity key, at most 255 bytes.\n\nWhile a non-terminal run (pending, running, sleeping, retrying,\nawaiting approval) holds the same key, the request is refused with\n`409 CONCURRENCY_CONFLICT` naming that run. The key is released when\nthe run completes, fails, ends with a warning or is cancelled.",
+            "nullable": true,
+            "type": "string"
+          },
           "labels": {
             "additionalProperties": {
               "type": "string"
@@ -2595,6 +2600,11 @@
           "completed_at": {
             "description": "When execution completed.",
             "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "concurrency_key": {
+            "description": "Exclusivity key held by this run until it reaches a terminal state,\nwhen one was supplied.",
             "nullable": true,
             "type": "string"
           },
@@ -5732,7 +5742,7 @@
         ]
       },
       "post": {
-        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid, or the `Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
+        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\nAn optional `concurrency_key` in the body makes the run exclusive: while a\nnon-terminal run holds the same key, the call is refused with 409\n`CONCURRENCY_CONFLICT` naming that run.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid, or the `Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::ConcurrencyConflict`] if a non-terminal run already\nholds the requested `concurrency_key`.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
         "operationId": "create_run",
         "parameters": [
           {
@@ -5787,7 +5797,7 @@
             "description": "Forbidden"
           },
           "409": {
-            "description": "Idempotency key already used with a different request"
+            "description": "Idempotency key already used with a different request (IDEMPOTENCY_KEY_CONFLICT), or concurrency key held by an active run (CONCURRENCY_CONFLICT)"
           },
           "429": {
             "description": "Monthly cost quota exhausted"
@@ -6193,7 +6203,7 @@
     },
     "/api/v1/runs/{id}/retry": {
       "post": {
-        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, 409 if an\nautomatic retry is already armed, and 409 if the handler version has\nchanged since the original run (pass `?force=true` to override).",
+        "description": "Creates a new `Pending` run with `TriggerKind::Retry` pointing to the\noriginal. Returns 400 if the run is not in a retryable state, 409 if an\nautomatic retry is already armed, 409 if the handler version has\nchanged since the original run (pass `?force=true` to override), and 409\n`CONCURRENCY_CONFLICT` if another active run took the original's\nconcurrency key since.",
         "operationId": "retry_run",
         "parameters": [
           {
@@ -6240,7 +6250,7 @@
             "description": "Run not found"
           },
           "409": {
-            "description": "Version mismatch or automatic retry already armed"
+            "description": "Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT)"
           }
         },
         "security": [

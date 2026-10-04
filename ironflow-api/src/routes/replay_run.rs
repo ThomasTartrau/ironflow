@@ -78,6 +78,7 @@ pub async fn replay_run(
             // A replay is a new logical operation: it must not inherit the
             // original idempotency key.
             idempotency_key: None,
+            concurrency_key: None,
             // Inherit the original cost cap so budget constraints survive replays.
             max_cost_usd: original.max_cost_usd,
         })
@@ -183,6 +184,7 @@ mod tests {
                 scheduled_at: None,
                 created_by: None,
                 idempotency_key: Some(format!("key-{}", Uuid::now_v7())),
+                concurrency_key: None,
                 max_cost_usd: Some(Decimal::new(250, 2)),
             })
             .await
@@ -454,6 +456,7 @@ mod tests {
                     user_id: original_author.id,
                 }),
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await

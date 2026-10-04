@@ -3,6 +3,7 @@
 use std::ops::Not;
 
 use ironflow_core::retry::RetryPolicy;
+use ironflow_store::entities::MAX_CONCURRENCY_KEY_LEN;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,6 +30,12 @@ pub struct WorkflowStepConfig {
     /// Optional step-level retry policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryPolicy>,
+    /// Concurrency key held by the child run while it is not terminal.
+    ///
+    /// Set through [`WorkflowOptions::concurrency_key`] and recorded in the
+    /// step input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_key: Option<String>,
     /// Tolerate a failed child: the step completes with the child's failure
     /// in its output instead of failing the parent.
     #[serde(default, skip_serializing_if = "Not::not")]
@@ -52,6 +59,7 @@ impl WorkflowStepConfig {
             workflow_name: workflow_name.to_string(),
             payload,
             retry: None,
+            concurrency_key: None,
             allow_failure: false,
         }
     }
@@ -105,10 +113,11 @@ impl WorkflowStepConfig {
 /// assert!(options.allow_failure);
 /// assert!(!WorkflowOptions::default().allow_failure);
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkflowOptions {
     /// Tolerate a failed child run instead of failing the parent.
     pub allow_failure: bool,
+    concurrency_key: Option<String>,
 }
 
 impl WorkflowOptions {
@@ -140,12 +149,68 @@ impl WorkflowOptions {
         self.allow_failure = true;
         self
     }
+
+    /// Make the child run exclusive on `key`.
+    ///
+    /// While another non-terminal run (Pending, Running, Retrying, Sleeping,
+    /// AwaitingApproval) holds the same key, no child run is created and the
+    /// step completes with a
+    /// [`SubWorkflowOutcome::Conflict`](crate::executor::SubWorkflowOutcome::Conflict).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is empty or only whitespace, or longer than
+    /// [`MAX_CONCURRENCY_KEY_LEN`] bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// let options = WorkflowOptions::new().concurrency_key("issue:12");
+    /// assert_eq!(options.concurrency_key_ref(), Some("issue:12"));
+    /// ```
+    ///
+    /// ```should_panic
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// WorkflowOptions::new().concurrency_key("  ");
+    /// ```
+    pub fn concurrency_key(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        assert!(!key.trim().is_empty(), "concurrency key must not be empty");
+        assert!(
+            key.len() <= MAX_CONCURRENCY_KEY_LEN,
+            "concurrency key must be at most {MAX_CONCURRENCY_KEY_LEN} bytes"
+        );
+        self.concurrency_key = Some(key);
+        self
+    }
+
+    /// The concurrency key, if one was set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// let options = WorkflowOptions::new().concurrency_key("deploy:prod");
+    /// assert_eq!(options.concurrency_key_ref(), Some("deploy:prod"));
+    /// ```
+    pub fn concurrency_key_ref(&self) -> Option<&str> {
+        self.concurrency_key.as_deref()
+    }
+
+    /// Consume the options and return the concurrency key.
+    pub(crate) fn into_concurrency_key(self) -> Option<String> {
+        self.concurrency_key
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{from_str, json, to_string, to_value};
 
     #[test]
     fn new_sets_fields() {
@@ -169,6 +234,55 @@ mod tests {
             serde_json::from_str(r#"{"workflow_name":"build","payload":{"key":"val"}}"#)
                 .expect("deserialize");
         assert!(config.retry.is_none());
+    }
+
+    #[test]
+    fn a_config_without_concurrency_key_omits_it() {
+        let config = WorkflowStepConfig::new("build", json!({}));
+        let value = to_value(&config).expect("serialize");
+        assert!(value.get("concurrency_key").is_none());
+    }
+
+    #[test]
+    fn concurrency_key_roundtrip() {
+        let mut config = WorkflowStepConfig::new("build", json!({}));
+        config.concurrency_key = Some("issue:12".to_string());
+        let json = to_string(&config).expect("serialize");
+        let back: WorkflowStepConfig = from_str(&json).expect("deserialize");
+        assert_eq!(back.concurrency_key.as_deref(), Some("issue:12"));
+    }
+
+    #[test]
+    fn options_carry_the_concurrency_key() {
+        let options = WorkflowOptions::new().concurrency_key("issue:12");
+        assert_eq!(options.concurrency_key_ref(), Some("issue:12"));
+        assert_eq!(options.into_concurrency_key().as_deref(), Some("issue:12"));
+        assert!(WorkflowOptions::new().concurrency_key_ref().is_none());
+    }
+
+    #[test]
+    fn options_accept_a_key_at_the_length_limit() {
+        let key = "a".repeat(MAX_CONCURRENCY_KEY_LEN);
+        let options = WorkflowOptions::new().concurrency_key(key.clone());
+        assert_eq!(options.concurrency_key_ref(), Some(key.as_str()));
+    }
+
+    #[test]
+    #[should_panic(expected = "concurrency key must not be empty")]
+    fn options_reject_an_empty_key() {
+        let _ = WorkflowOptions::new().concurrency_key("");
+    }
+
+    #[test]
+    #[should_panic(expected = "concurrency key must not be empty")]
+    fn options_reject_a_blank_key() {
+        let _ = WorkflowOptions::new().concurrency_key(" \t ");
+    }
+
+    #[test]
+    #[should_panic(expected = "concurrency key must be at most")]
+    fn options_reject_a_key_over_the_limit() {
+        let _ = WorkflowOptions::new().concurrency_key("a".repeat(MAX_CONCURRENCY_KEY_LEN + 1));
     }
 
     #[test]

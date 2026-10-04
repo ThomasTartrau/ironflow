@@ -124,6 +124,7 @@ async fn create_run(store: &Arc<dyn Store>, workflow: &str) -> Uuid {
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await

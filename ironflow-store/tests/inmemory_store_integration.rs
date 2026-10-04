@@ -21,6 +21,7 @@ fn new_run(name: &str) -> NewRun {
         labels: HashMap::new(),
         scheduled_at: None,
         idempotency_key: None,
+        concurrency_key: None,
         max_cost_usd: None,
     }
 }
@@ -1000,6 +1001,7 @@ async fn large_payload_preserved_in_roundtrip() {
         labels: HashMap::new(),
         scheduled_at: None,
         idempotency_key: None,
+        concurrency_key: None,
         max_cost_usd: None,
     };
 
@@ -1664,4 +1666,194 @@ async fn list_secrets_hides_provider_account_credentials() {
     assert_eq!(page.items[0].key, "github/token");
     let hidden = store.list_secrets("accounts/", 1, 50).await.unwrap();
     assert_eq!(hidden.total, 0);
+}
+
+// ---- concurrency key ----
+
+fn new_run_holding(name: &str, key: &str) -> NewRun {
+    NewRun {
+        concurrency_key: Some(key.to_string()),
+        ..new_run(name)
+    }
+}
+
+/// Assert that creating a run with `key` conflicts with `holder`.
+async fn assert_conflicts_with(store: &InMemoryStore, key: &str, holder: Uuid) {
+    match store.create_run(new_run_holding("deploy", key)).await {
+        Err(StoreError::ConcurrencyConflict {
+            key: conflict_key,
+            run_id,
+        }) => {
+            assert_eq!(conflict_key, key);
+            assert_eq!(run_id, holder);
+        }
+        other => panic!("expected a concurrency conflict, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn concurrent_creates_with_the_same_concurrency_key_create_one_run() {
+    let store = InMemoryStore::new();
+    let mut handles = Vec::new();
+
+    for _ in 0..50 {
+        let s = store.clone();
+        handles.push(tokio::spawn(async move {
+            s.create_run(new_run_holding("deploy", "issue:12")).await
+        }));
+    }
+
+    let mut created = Vec::new();
+    let mut conflicts = Vec::new();
+    for handle in handles {
+        match handle.await.unwrap() {
+            Ok(creation) => {
+                assert!(creation.is_created());
+                created.push(creation.into_run().id);
+            }
+            Err(StoreError::ConcurrencyConflict { key, run_id }) => {
+                assert_eq!(key, "issue:12");
+                conflicts.push(run_id);
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    assert_eq!(created.len(), 1, "exactly one caller should create the run");
+    assert_eq!(conflicts.len(), 49);
+    assert!(conflicts.iter().all(|id| *id == created[0]));
+
+    let page = store.list_runs(RunFilter::default(), 1, 100).await.unwrap();
+    assert_eq!(page.total, 1);
+}
+
+#[tokio::test]
+async fn concurrency_key_is_released_when_the_run_completes() {
+    let store = InMemoryStore::new();
+
+    let first = store
+        .create_run(new_run_holding("deploy", "issue:12"))
+        .await
+        .unwrap()
+        .into_run();
+    assert_eq!(first.concurrency_key.as_deref(), Some("issue:12"));
+
+    assert_conflicts_with(&store, "issue:12", first.id).await;
+
+    store
+        .update_run_status(first.id, RunStatus::Running)
+        .await
+        .unwrap();
+    assert_conflicts_with(&store, "issue:12", first.id).await;
+    store
+        .update_run_status(first.id, RunStatus::Completed)
+        .await
+        .unwrap();
+
+    let second = store
+        .create_run(new_run_holding("deploy", "issue:12"))
+        .await
+        .unwrap();
+    assert!(second.is_created());
+    assert_ne!(second.run().id, first.id);
+}
+
+#[tokio::test]
+async fn concurrency_key_is_kept_while_the_run_sleeps_or_awaits_approval() {
+    for paused in [
+        RunStatus::AwaitingApproval,
+        RunStatus::Sleeping,
+        RunStatus::Retrying,
+    ] {
+        let store = InMemoryStore::new();
+        let holder = store
+            .create_run(new_run_holding("deploy", "issue:12"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(holder.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store.update_run_status(holder.id, paused).await.unwrap();
+
+        assert_conflicts_with(&store, "issue:12", holder.id).await;
+    }
+}
+
+#[tokio::test]
+async fn concurrency_key_released_by_cancel_and_failure() {
+    for terminal in [RunStatus::Cancelled, RunStatus::Failed, RunStatus::Warning] {
+        let store = InMemoryStore::new();
+        let holder = store
+            .create_run(new_run_holding("deploy", "issue:12"))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(holder.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store.update_run_status(holder.id, terminal).await.unwrap();
+
+        let next = store
+            .create_run(new_run_holding("deploy", "issue:12"))
+            .await
+            .unwrap();
+        assert!(next.is_created(), "{terminal} should release the key");
+    }
+
+    // A pending run cancelled before it started releases the key too.
+    let store = InMemoryStore::new();
+    let pending = store
+        .create_run(new_run_holding("deploy", "issue:12"))
+        .await
+        .unwrap()
+        .into_run();
+    store
+        .update_run_status(pending.id, RunStatus::Cancelled)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .create_run(new_run_holding("deploy", "issue:12"))
+            .await
+            .unwrap()
+            .is_created()
+    );
+}
+
+#[tokio::test]
+async fn distinct_concurrency_keys_do_not_conflict() {
+    let store = InMemoryStore::new();
+
+    let first = store
+        .create_run(new_run_holding("deploy", "issue:12"))
+        .await
+        .unwrap();
+    let second = store
+        .create_run(new_run_holding("deploy", "issue:13"))
+        .await
+        .unwrap();
+    let without_key = store.create_run(new_run("deploy")).await.unwrap();
+
+    assert!(first.is_created());
+    assert!(second.is_created());
+    assert!(without_key.is_created());
+}
+
+#[tokio::test]
+async fn idempotent_replay_with_a_concurrency_key_returns_the_existing_run() {
+    let store = InMemoryStore::new();
+    let req = NewRun {
+        idempotency_key: Some("github:abc".to_string()),
+        ..new_run_holding("deploy", "issue:12")
+    };
+
+    let first = store.create_run(req.clone()).await.unwrap();
+    let replay = store.create_run(req).await.unwrap();
+
+    assert!(first.is_created());
+    assert!(!replay.is_created());
+    assert_eq!(replay.run().id, first.run().id);
 }

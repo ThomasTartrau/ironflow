@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode};
-use serde_json::{Value, json};
+use serde_json::{Value, from_str, json};
 use uuid::Uuid;
 
+use ironflow_engine::error::CONCURRENCY_CONFLICT_CODE;
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
 use ironflow_store::artifact_store::ArtifactStore;
@@ -95,6 +96,15 @@ impl RunStore for ApiRunStore {
                 .await
                 .map_err(Self::err)?;
 
+            // 409 means another active run holds the concurrency key: the
+            // engine turns it into a recorded conflict, never a failure.
+            if resp.status() == StatusCode::CONFLICT {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(match concurrency_conflict(&body) {
+                    Some(conflict) => conflict,
+                    None => Self::status_err(&body),
+                });
+            }
             if !resp.status().is_success() {
                 let body = resp.text().await.unwrap_or_default();
                 return Err(Self::status_err(&body));
@@ -1007,6 +1017,34 @@ impl ProviderAccountStore for ApiRunStore {
     }
 }
 
+/// The [`StoreError::ConcurrencyConflict`] carried by a 409 error body, if it
+/// is one.
+///
+/// Any other 409 body yields `None`, so the caller reports it as is.
+fn concurrency_conflict(body: &str) -> Option<StoreError> {
+    #[derive(serde::Deserialize)]
+    struct Details {
+        key: String,
+        run_id: Uuid,
+    }
+    #[derive(serde::Deserialize)]
+    struct Error {
+        code: String,
+        details: Details,
+    }
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        error: Error,
+    }
+
+    let envelope: Envelope = from_str(body).ok()?;
+    if envelope.error.code != CONCURRENCY_CONFLICT_CODE {
+        return None;
+    }
+    let Details { key, run_id } = envelope.error.details;
+    Some(StoreError::ConcurrencyConflict { key, run_id })
+}
+
 /// Error for the signal methods only the API server runs.
 fn signal_method_unavailable(method: &str) -> StoreError {
     StoreError::Database(format!("SignalStore::{method} not available in worker"))
@@ -1124,10 +1162,22 @@ impl SignalStore for ApiRunStore {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use super::*;
 
+    use axum::serve;
+    use ironflow_api::routes::{RouterConfig, create_router};
+    use ironflow_api::state::AppState;
+    use ironflow_auth::jwt::JwtConfig;
+    use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::engine::Engine;
+    use ironflow_engine::notify::Event;
     use ironflow_store::entities::TriggerKind;
+    use ironflow_store::memory::InMemoryStore;
+    use tokio::net::TcpListener;
+    use tokio::spawn;
+    use tokio::sync::broadcast;
 
     use serde_json::json;
 
@@ -1144,6 +1194,7 @@ mod tests {
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         };
         let result = store.create_run(req).await;
@@ -1230,5 +1281,109 @@ mod tests {
         let store = ApiRunStore::new("http://localhost:3000", "token");
         let url = store.internal("/runs/123");
         assert_eq!(url, "http://localhost:3000/api/v1/internal/runs/123");
+    }
+    /// Serve the real API router over TCP and return its base URL.
+    async fn spawn_api() -> String {
+        let store = Arc::new(InMemoryStore::new());
+        let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+        let jwt_config = Arc::new(JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        let state = AppState::new(
+            store,
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        );
+        let config = RouterConfig {
+            rate_limit_auth: None,
+            rate_limit_general: None,
+            ..RouterConfig::default()
+        };
+        let router = create_router(state, config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        spawn(async move {
+            serve(listener, router).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    fn keyed_run(key: &str) -> NewRun {
+        NewRun {
+            created_by: None,
+            workflow_name: "child".to_string(),
+            trigger: TriggerKind::Workflow,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            idempotency_key: None,
+            concurrency_key: Some(key.to_string()),
+            max_cost_usd: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_run_maps_409_concurrency_conflict() {
+        let store = ApiRunStore::new(&spawn_api().await, "test-worker-token");
+
+        let holder = store
+            .create_run(keyed_run("issue:12"))
+            .await
+            .expect("the first run takes the key")
+            .into_run();
+        assert_eq!(holder.concurrency_key.as_deref(), Some("issue:12"));
+
+        match store.create_run(keyed_run("issue:12")).await {
+            Err(StoreError::ConcurrencyConflict { key, run_id }) => {
+                assert_eq!(key, "issue:12");
+                assert_eq!(run_id, holder.id);
+            }
+            other => panic!("expected a concurrency conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn concurrency_conflict_reads_the_api_error_envelope() {
+        let run_id = Uuid::now_v7();
+        let body = json!({
+            "error": {
+                "code": "CONCURRENCY_CONFLICT",
+                "message": "concurrency key \"issue:12\" is held by active run",
+                "details": { "key": "issue:12", "run_id": run_id }
+            }
+        })
+        .to_string();
+
+        match concurrency_conflict(&body) {
+            Some(StoreError::ConcurrencyConflict { key, run_id: held }) => {
+                assert_eq!(key, "issue:12");
+                assert_eq!(held, run_id);
+            }
+            other => panic!("expected a concurrency conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn concurrency_conflict_ignores_other_409_bodies() {
+        let other_code = json!({
+            "error": {
+                "code": "CONFLICT",
+                "message": "something else",
+                "details": { "key": "issue:12", "run_id": Uuid::now_v7() }
+            }
+        })
+        .to_string();
+        assert!(concurrency_conflict(&other_code).is_none());
+        assert!(concurrency_conflict("not json").is_none());
+        assert!(concurrency_conflict("").is_none());
     }
 }

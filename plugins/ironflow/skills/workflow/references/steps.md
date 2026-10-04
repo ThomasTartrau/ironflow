@@ -592,8 +592,8 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 ```
 
 Pass `WorkflowOptions::new().allow_failure()` to `ctx.workflow_with(&Child, input, options)` to
-tolerate a failed child: the step completes, `child.status()` is `Failed` (or `Cancelled`),
-`child.error()` carries the message and the parent ends as `Warning`. A suspension is never
+tolerate a failed child: the step completes with a `Completed` outcome whose `status()` is `Failed` (or `Cancelled`),
+`error()` carries the message and the parent ends as `Warning`. A suspension is never
 tolerated, and catching the error of a plain `ctx.workflow` is not a substitute: the failed step
 is not completed, so a resume runs the child again.
 
@@ -616,10 +616,10 @@ use ironflow_store::entities::RunStatus;
 # impl TypedWorkflow for Collect { type Input = CollectInput; }
 
 async fn tolerant(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    let child = ctx
+    let outcome = ctx
         .workflow_with(&Collect, CollectInput { scope: "disk".to_string() }, WorkflowOptions::new().allow_failure())
         .await?;
-    if child.status() == RunStatus::Failed {
+    if let Some(child) = outcome.output().filter(|c| c.status() == RunStatus::Failed) {
         println!("collect failed: {:?}", child.error());
     }
     Ok(())
@@ -628,6 +628,57 @@ async fn tolerant(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 `child.run_id()` is a `Uuid` (nil while planning). A child never sees the parent's
 artifacts; pass what it needs in its input.
+
+### Exclusive child
+
+To start a child only when no other active run handles the same subject (an issue, a
+branch), pass a concurrency key through `ctx.workflow_with`. A conflict is not an error:
+no child is created and the step completes with the run that holds the key. The outcome
+is replayed as recorded when the parent resumes.
+
+```rust,no_run
+use ironflow_engine::config::WorkflowOptions;
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+use ironflow_engine::executor::SubWorkflowOutcome;
+use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct FixInput {
+    issue: u64,
+}
+
+struct FixIssue;
+
+impl WorkflowHandler for FixIssue {
+    fn name(&self) -> &str {
+        "fix-issue"
+    }
+    fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move { Ok(()) })
+    }
+}
+
+impl TypedWorkflow for FixIssue {
+    type Input = FixInput;
+}
+
+async fn example(ctx: &mut WorkflowContext, issue: u64) -> Result<(), EngineError> {
+    let options = WorkflowOptions::new().concurrency_key(format!("issue:{issue}"));
+    match ctx.workflow_with(&FixIssue, FixInput { issue }, options).await? {
+        SubWorkflowOutcome::Completed(child) => println!("fixed in run {}", child.run_id()),
+        SubWorkflowOutcome::Conflict(conflict) => {
+            println!("issue {issue} already handled by run {}", conflict.run_id());
+        }
+    }
+    Ok(())
+}
+```
+
+The same key on `POST /api/v1/runs` (`concurrency_key` in the body) answers
+`409 CONCURRENCY_CONFLICT` instead.
 
 A child may suspend (approval, human input, signal wait, delay): the parent and every
 ancestor suspend with it, durably. Resolve the child run itself, by its id or by the

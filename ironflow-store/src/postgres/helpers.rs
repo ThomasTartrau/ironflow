@@ -5,6 +5,7 @@
 use rust_decimal::Decimal;
 use serde_json::{Value, from_value};
 use sqlx::Row;
+use strum::IntoEnumIterator;
 
 use crate::entities::{Assignee, FsmState, Run, RunActor, RunStatus, Step, StepKind, StepStatus};
 use crate::error::StoreError;
@@ -76,6 +77,14 @@ pub(crate) fn run_status_to_db_str(status: &RunStatus) -> &'static str {
         RunStatus::Warning => "warning",
         RunStatus::Sleeping => "sleeping",
     }
+}
+
+/// DB names of every terminal run state, as [`RunStatus::is_terminal`] defines them.
+pub(crate) fn terminal_run_state_names() -> Vec<String> {
+    RunStatus::iter()
+        .filter(RunStatus::is_terminal)
+        .map(|status| run_status_to_db_str(&status).to_string())
+        .collect()
 }
 
 /// Convert a `StepKind` to its DB string representation.
@@ -165,6 +174,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         created_by,
         created_by_label,
         idempotency_key: row.get("idempotency_key"),
+        concurrency_key: row.get("concurrency_key"),
         max_cost_usd: row.get("max_cost_usd"),
         worker_id: row.get("worker_id"),
         lease_expires_at: row.get("lease_expires_at"),
@@ -246,6 +256,13 @@ mod tests {
             api_key_id: Uuid::now_v7(),
             user_id: Uuid::now_v7(),
         }
+    }
+
+    #[test]
+    fn terminal_run_state_names_lists_the_terminal_states() {
+        let mut names = terminal_run_state_names();
+        names.sort();
+        assert_eq!(names, ["cancelled", "completed", "failed", "warning"]);
     }
 
     #[test]

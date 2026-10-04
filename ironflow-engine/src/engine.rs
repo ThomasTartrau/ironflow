@@ -122,6 +122,12 @@ pub struct EnqueueOptions {
     /// [`IDEMPOTENCY_WINDOW`](ironflow_store::entities::IDEMPOTENCY_WINDOW),
     /// nothing is enqueued and the original run is replayed.
     pub idempotency_key: Option<String>,
+    /// Concurrency key making the run exclusive.
+    ///
+    /// When set, the run is refused with [`EngineError::ConcurrencyConflict`]
+    /// while another non-terminal run holds the same key. The key is released
+    /// once the holder reaches a terminal state.
+    pub concurrency_key: Option<String>,
 }
 
 /// Where a run resumes once an approval, a human input or an escalation
@@ -846,6 +852,7 @@ impl Engine {
                 labels: handler.default_labels(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd,
             })
             .await?
@@ -1026,8 +1033,9 @@ impl Engine {
     ///
     /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered.
     /// Returns [`EngineError::MonthlyBudgetExceeded`] if the monthly cost quota
-    /// is exhausted. Returns [`EngineError::Store`] if the run cannot be
-    /// persisted.
+    /// is exhausted. Returns [`EngineError::ConcurrencyConflict`] if
+    /// [`EnqueueOptions::concurrency_key`] is held by another non-terminal run.
+    /// Returns [`EngineError::Store`] if the run cannot be persisted.
     ///
     /// # Examples
     ///
@@ -1071,6 +1079,7 @@ impl Engine {
             max_cost_usd,
             created_by,
             idempotency_key,
+            concurrency_key,
         } = options;
 
         let handler = self.handlers.get(handler_name).ok_or_else(|| {
@@ -1098,6 +1107,7 @@ impl Engine {
                 scheduled_at,
                 created_by,
                 idempotency_key,
+                concurrency_key,
                 max_cost_usd: resolved_cap,
             })
             .await?;
@@ -3216,6 +3226,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -3257,6 +3268,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -3298,6 +3310,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -3339,6 +3352,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -3388,6 +3402,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -3446,6 +3461,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -3471,6 +3487,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await

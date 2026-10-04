@@ -18,6 +18,17 @@ pub const RUN_BUDGET_EXCEEDED_CODE: &str = "RUN_BUDGET_EXCEEDED";
 /// Business error code carried by [`EngineError::MonthlyBudgetExceeded`].
 pub const MONTHLY_BUDGET_EXCEEDED_CODE: &str = "MONTHLY_BUDGET_EXCEEDED";
 
+/// Business error code carried by [`EngineError::ConcurrencyConflict`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::error::CONCURRENCY_CONFLICT_CODE;
+///
+/// assert_eq!(CONCURRENCY_CONFLICT_CODE, "CONCURRENCY_CONFLICT");
+/// ```
+pub const CONCURRENCY_CONFLICT_CODE: &str = "CONCURRENCY_CONFLICT";
+
 /// Business error code for handler-version mismatch on retry.
 pub const HANDLER_VERSION_MISMATCH_CODE: &str = "HANDLER_VERSION_MISMATCH";
 
@@ -30,7 +41,19 @@ pub enum EngineError {
 
     /// The backing store returned an error.
     #[error("store error: {0}")]
-    Store(#[from] StoreError),
+    Store(StoreError),
+
+    /// Another non-terminal run already holds the requested concurrency key.
+    ///
+    /// Converted from [`StoreError::ConcurrencyConflict`], so every `?` on a
+    /// store call yields this typed variant instead of [`EngineError::Store`].
+    #[error("concurrency key {key:?} is held by active run {run_id}")]
+    ConcurrencyConflict {
+        /// The contested key.
+        key: String,
+        /// The run holding it.
+        run_id: Uuid,
+    },
 
     /// The workflow definition is invalid.
     #[error("invalid workflow: {0}")]
@@ -329,6 +352,17 @@ pub enum EngineError {
     },
 }
 
+impl From<StoreError> for EngineError {
+    fn from(err: StoreError) -> Self {
+        match err {
+            StoreError::ConcurrencyConflict { key, run_id } => {
+                EngineError::ConcurrencyConflict { key, run_id }
+            }
+            other => EngineError::Store(other),
+        }
+    }
+}
+
 impl EngineError {
     /// Whether this error suspends the run instead of failing it.
     ///
@@ -401,6 +435,7 @@ impl EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::retry_policy::is_run_retryable;
 
     #[test]
     fn invalid_workflow_display() {
@@ -445,6 +480,27 @@ mod tests {
         let store_err = StoreError::RunNotFound(uuid::Uuid::nil());
         let engine_err = EngineError::from(store_err);
         assert!(engine_err.to_string().contains("store error"));
+    }
+
+    #[test]
+    fn store_concurrency_conflict_converts_to_engine_variant() {
+        let run_id = Uuid::now_v7();
+        let engine_err = EngineError::from(StoreError::ConcurrencyConflict {
+            key: "issue:12".to_string(),
+            run_id,
+        });
+        match engine_err {
+            EngineError::ConcurrencyConflict {
+                ref key,
+                run_id: holder,
+            } => {
+                assert_eq!(key, "issue:12");
+                assert_eq!(holder, run_id);
+            }
+            ref other => panic!("expected ConcurrencyConflict, got {other:?}"),
+        }
+        assert!(engine_err.to_string().contains("issue:12"));
+        assert!(!is_run_retryable(&engine_err));
     }
 
     #[test]

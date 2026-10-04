@@ -149,6 +149,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -167,6 +168,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -193,6 +195,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -219,6 +222,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -354,6 +358,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -370,6 +375,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -435,6 +441,7 @@ mod tests {
                     scheduled_at: None,
                     created_by: Some(RunActor::User { user_id }),
                     idempotency_key: None,
+                    concurrency_key: None,
                     max_cost_usd: None,
                 })
                 .await

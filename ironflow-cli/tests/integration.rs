@@ -141,6 +141,7 @@ async fn seed_awaiting_approval_run(store: &Arc<dyn Store>) -> Uuid {
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await
@@ -323,6 +324,7 @@ async fn run_create_and_get() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -357,6 +359,7 @@ async fn run_create_unknown_workflow() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -376,6 +379,7 @@ async fn run_create_invalid_payload() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -396,6 +400,7 @@ async fn run_create_non_object_payload() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -489,6 +494,7 @@ async fn run_reject_refuses_a_run_that_is_not_awaiting_approval() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     commands::run::execute(&client, &create, false, false)
@@ -567,6 +573,7 @@ async fn run_create_from_payload_file() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -587,6 +594,7 @@ async fn run_create_from_missing_file() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -609,6 +617,7 @@ async fn run_create_with_idempotency_key_creates_one_run() {
             max_retries: None,
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost: None,
+            concurrency_key: None,
         },
     };
 
@@ -639,6 +648,7 @@ async fn run_create_without_idempotency_key_creates_several_runs() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
 
@@ -665,6 +675,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             max_retries: None,
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost: None,
+            concurrency_key: None,
         },
     };
     commands::run::execute(&client, &first, false, false)
@@ -679,6 +690,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             max_retries: None,
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost: None,
+            concurrency_key: None,
         },
     };
     let result = commands::run::execute(&client, &conflicting, false, false).await;
@@ -699,6 +711,7 @@ async fn run_create_with_an_empty_idempotency_key_errors() {
             max_retries: None,
             idempotency_key: Some(String::new()),
             max_cost: None,
+            concurrency_key: None,
         },
     };
 
@@ -707,6 +720,38 @@ async fn run_create_with_an_empty_idempotency_key_errors() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn run_create_with_a_held_concurrency_key_errors() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
+            concurrency_key: Some("issue:12".to_string()),
+        },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(
+        runs.data.len(),
+        1,
+        "the held key must refuse the second call"
+    );
+    assert_eq!(runs.data[0].concurrency_key.as_deref(), Some("issue:12"));
 }
 
 // ── Cost cap ──────────────────────────────────────────────────
@@ -724,6 +769,7 @@ async fn run_create_with_max_cost_reaches_the_api() {
             max_retries: None,
             idempotency_key: None,
             max_cost: Some(2.5),
+            concurrency_key: None,
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -747,6 +793,7 @@ async fn run_create_rejects_negative_max_cost_before_calling_the_api() {
             max_retries: None,
             idempotency_key: None,
             max_cost: Some(-1.0),
+            concurrency_key: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -770,6 +817,7 @@ async fn run_create_rejects_non_finite_max_cost() {
             max_retries: None,
             idempotency_key: None,
             max_cost: Some(f64::NAN),
+            concurrency_key: None,
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -1370,6 +1418,7 @@ async fn audit_log_list_filters_by_run() {
             max_retries: None,
             idempotency_key: None,
             max_cost: None,
+            concurrency_key: None,
         },
     };
     commands::run::execute(&client, &create, false, false)
@@ -1565,6 +1614,7 @@ async fn run_create_accepts_zero_max_cost() {
             max_retries: None,
             idempotency_key: None,
             max_cost: Some(0.0),
+            concurrency_key: None,
         },
     };
     commands::run::execute(&client, &args, false, false)

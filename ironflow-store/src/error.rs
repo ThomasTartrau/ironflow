@@ -71,6 +71,15 @@ pub enum StoreError {
         name: String,
     },
 
+    /// Another non-terminal run already holds this concurrency key.
+    #[error("concurrency key {key:?} is held by active run {run_id}")]
+    ConcurrencyConflict {
+        /// The contested key.
+        key: String,
+        /// The run holding it.
+        run_id: Uuid,
+    },
+
     /// The requested schedule does not exist.
     #[error("schedule not found: {0}")]
     ScheduleNotFound(Uuid),
@@ -126,6 +135,18 @@ mod tests {
         };
         assert!(err.to_string().contains("Pending"));
         assert!(err.to_string().contains("Completed"));
+    }
+
+    #[test]
+    fn concurrency_conflict_display() {
+        let run_id = Uuid::now_v7();
+        let err = StoreError::ConcurrencyConflict {
+            key: "issue:12".to_string(),
+            run_id,
+        };
+        let message = err.to_string();
+        assert!(message.contains("issue:12"));
+        assert!(message.contains(&run_id.to_string()));
     }
 
     #[test]

@@ -1192,6 +1192,7 @@ mod tests {
             scheduled_at: None,
             created_by,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         }
     }

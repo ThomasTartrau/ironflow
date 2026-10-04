@@ -130,6 +130,22 @@ impl RunStore for InMemoryStore {
                 }
             }
 
+            if let Some(ref key) = req.concurrency_key
+                && let Some(holder) = state
+                    .runs
+                    .values()
+                    .filter(|r| {
+                        r.concurrency_key.as_deref() == Some(key.as_str())
+                            && !r.status.state.is_terminal()
+                    })
+                    .min_by_key(|r| r.created_at)
+            {
+                return Err(StoreError::ConcurrencyConflict {
+                    key: key.clone(),
+                    run_id: holder.id,
+                });
+            }
+
             let run = Run {
                 id: Uuid::now_v7(),
                 workflow_name: req.workflow_name,
@@ -151,6 +167,7 @@ impl RunStore for InMemoryStore {
                 created_by: req.created_by,
                 created_by_label: None,
                 idempotency_key: req.idempotency_key.clone(),
+                concurrency_key: req.concurrency_key,
                 max_cost_usd: req.max_cost_usd,
                 worker_id: None,
                 lease_expires_at: None,
@@ -2427,6 +2444,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -2446,6 +2464,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -2465,6 +2484,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -2482,6 +2502,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -2501,6 +2522,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await

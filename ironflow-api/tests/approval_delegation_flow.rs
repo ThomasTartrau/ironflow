@@ -110,6 +110,7 @@ async fn run_awaiting_alice(store: &Arc<InMemoryStore>, workflow_name: &str) -> 
             labels: HashMap::new(),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         })
         .await

@@ -47,6 +47,7 @@ pub(crate) fn new_run_from_schedule(schedule: &Schedule, created_by: Option<RunA
         scheduled_at: None,
         created_by,
         idempotency_key: None,
+        concurrency_key: None,
         max_cost_usd: None,
     }
 }

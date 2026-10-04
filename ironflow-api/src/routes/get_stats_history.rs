@@ -182,6 +182,7 @@ mod tests {
             labels,
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         }
     }

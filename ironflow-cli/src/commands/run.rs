@@ -56,6 +56,11 @@ pub enum RunCommands {
         /// workflow and server defaults.
         #[arg(long = "max-cost", value_name = "USD")]
         max_cost: Option<f64>,
+        /// Exclusivity key: the call is refused while a non-terminal run holds
+        /// the same key. Released once that run completes, fails or is
+        /// cancelled. At most 255 bytes.
+        #[arg(long)]
+        concurrency_key: Option<String>,
     },
     /// List runs with optional filters.
     List {
@@ -231,6 +236,7 @@ pub async fn execute(
             max_retries,
             idempotency_key,
             max_cost,
+            concurrency_key,
         } => {
             validate_max_cost(*max_cost)?;
             let payload_value = resolve_payload(payload.as_deref(), payload_file.as_ref())?;
@@ -245,6 +251,7 @@ pub async fn execute(
                 // anything negative, and clap already refuses it here.
                 .max_retries(max_retries.map(|n| n as i32))
                 .max_cost_usd(*max_cost)
+                .concurrency_key(concurrency_key.clone())
                 .try_into()
                 .context("failed to build CreateRunRequest")?;
 

@@ -81,6 +81,11 @@ pub struct Run {
     /// See [`IDEMPOTENCY_WINDOW`] for how long a key stays bound to its run.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Concurrency key held by this run while it is not terminal, if any.
+    ///
+    /// See [`NewRun::concurrency_key`] for the exclusivity rule.
+    #[serde(default)]
+    pub concurrency_key: Option<String>,
     /// Maximum cumulative cost allowed for this run, in USD.
     ///
     /// Resolved once at run creation and frozen for the lifetime of the run.
@@ -127,6 +132,17 @@ pub const IDEMPOTENCY_WINDOW: TimeDelta = TimeDelta::hours(24);
 /// ```
 pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 
+/// Maximum accepted length of a concurrency key, in bytes.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::MAX_CONCURRENCY_KEY_LEN;
+///
+/// assert_eq!(MAX_CONCURRENCY_KEY_LEN, 255);
+/// ```
+pub const MAX_CONCURRENCY_KEY_LEN: usize = 255;
+
 /// Outcome of [`RunStore::create_run`](crate::store::RunStore::create_run).
 ///
 /// A request carrying an idempotency key already bound to a live run does not
@@ -153,6 +169,7 @@ pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 ///     scheduled_at: None,
 ///     created_by: None,
 ///     idempotency_key: Some("deploy-2026-07-26".to_string()),
+///     concurrency_key: None,
 ///     max_cost_usd: None,
 /// };
 ///
@@ -312,6 +329,7 @@ pub struct ReapedRun {
 ///     scheduled_at: None,
 ///     created_by: None,
 ///     idempotency_key: None,
+///     concurrency_key: None,
 ///     max_cost_usd: None,
 /// };
 /// ```
@@ -345,6 +363,13 @@ pub struct NewRun {
     /// the store returns that run instead of inserting a new one.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional concurrency key making this run exclusive.
+    ///
+    /// At most one non-terminal run may hold a given key; creation fails with
+    /// [`StoreError::ConcurrencyConflict`](crate::error::StoreError::ConcurrencyConflict)
+    /// otherwise. The key is released when the run reaches a terminal state.
+    #[serde(default)]
+    pub concurrency_key: Option<String>,
     /// Maximum cumulative cost allowed for this run, in USD. `None` means no cap.
     #[serde(default)]
     pub max_cost_usd: Option<Decimal>,
@@ -519,6 +544,7 @@ mod tests {
             labels: HashMap::from([("env".to_string(), "prod".to_string())]),
             scheduled_at: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: Some(Decimal::new(250, 2)),
         };
 
@@ -552,6 +578,7 @@ mod tests {
             scheduled_at: None,
             created_by: Some(actor.clone()),
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         };
 
@@ -610,6 +637,7 @@ mod tests {
             }),
             created_by_label: Some("alice".to_string()),
             idempotency_key: Some("gh:abc-123".to_string()),
+            concurrency_key: Some("issue:12".to_string()),
             max_cost_usd: Some(Decimal::new(500, 2)),
             worker_id: Some("worker-1".to_string()),
             lease_expires_at: Some(now),
@@ -636,6 +664,7 @@ mod tests {
         assert_eq!(back.created_by, run.created_by);
         assert_eq!(back.created_by_label, run.created_by_label);
         assert_eq!(back.idempotency_key, run.idempotency_key);
+        assert_eq!(back.concurrency_key, run.concurrency_key);
         assert_eq!(back.max_cost_usd, run.max_cost_usd);
         assert_eq!(back.worker_id, run.worker_id);
         assert_eq!(back.lease_expires_at, run.lease_expires_at);
@@ -653,6 +682,7 @@ mod tests {
             scheduled_at: None,
             created_by: None,
             idempotency_key: None,
+            concurrency_key: None,
             max_cost_usd: None,
         };
         let mut value = serde_json::to_value(&without_cap).expect("serialize");

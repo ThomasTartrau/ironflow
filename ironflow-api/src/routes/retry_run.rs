@@ -29,8 +29,10 @@ pub struct RetryQuery {
 ///
 /// Creates a new `Pending` run with `TriggerKind::Retry` pointing to the
 /// original. Returns 400 if the run is not in a retryable state, 409 if an
-/// automatic retry is already armed, and 409 if the handler version has
-/// changed since the original run (pass `?force=true` to override).
+/// automatic retry is already armed, 409 if the handler version has
+/// changed since the original run (pass `?force=true` to override), and 409
+/// `CONCURRENCY_CONFLICT` if another active run took the original's
+/// concurrency key since.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -47,7 +49,7 @@ pub struct RetryQuery {
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
             (status = 404, description = "Run not found"),
-            (status = 409, description = "Version mismatch or automatic retry already armed")
+            (status = 409, description = "Version mismatch, automatic retry already armed, or concurrency key held by an active run (CONCURRENCY_CONFLICT)")
         ),
         security(("Bearer" = []))
     )
@@ -122,6 +124,10 @@ pub async fn retry_run(
             // A retry must not inherit the parent's idempotency key: it is a
             // new logical operation and must be eligible for its own dedup.
             idempotency_key: None,
+            // The retry continues the same work, so it stays exclusive under the
+            // same key. The original is terminal and no longer holds it; a run
+            // that took the key since then makes the retry conflict.
+            concurrency_key: original.concurrency_key,
             // Inherit the original cost cap so budget constraints survive retries.
             max_cost_usd: original.max_cost_usd,
         })
@@ -162,6 +168,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode as HttpStatusCode};
+    use axum::response::Response;
     use axum::routing::post;
     use http_body_util::BodyExt;
     use ironflow_auth::jwt::AccessToken;
@@ -219,6 +226,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -275,6 +283,7 @@ mod tests {
                 scheduled_at: None,
                 created_by: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: Some(cap),
             })
             .await
@@ -330,6 +339,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -368,6 +378,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -415,6 +426,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -458,6 +470,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -512,6 +525,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -599,6 +613,7 @@ mod tests {
                     user_id: original_author.id,
                 }),
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -658,6 +673,7 @@ mod tests {
                 scheduled_at: None,
                 created_by: None,
                 idempotency_key: Some("github:abc-123".to_string()),
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -775,6 +791,7 @@ mod tests {
                 labels: HashMap::new(),
                 scheduled_at: None,
                 idempotency_key: None,
+                concurrency_key: None,
                 max_cost_usd: None,
             })
             .await
@@ -947,5 +964,92 @@ mod tests {
         let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
         let new_run = store.get_run(new_id).await.unwrap().unwrap();
         assert_eq!(new_run.handler_version, Some("2.0.0".to_string()));
+    }
+    /// A cancelled run holding `key`, ready to be retried.
+    async fn cancelled_keyed_run(store: &InMemoryStore, key: &str) -> Uuid {
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: Some(key.to_string()),
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(run.id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+        run.id
+    }
+
+    async fn post_retry(state: AppState, run_id: Uuid) -> Response {
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{run_id}/retry"))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+        app.oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn retry_inherits_the_original_concurrency_key() {
+        let store = Arc::new(InMemoryStore::new());
+        let original = cancelled_keyed_run(&store, "issue:12").await;
+
+        let resp = post_retry(test_state(store.clone()), original).await;
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["concurrency_key"], "issue:12");
+        let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
+        let new_run = store.get_run(new_id).await.unwrap().unwrap();
+        assert_eq!(new_run.concurrency_key.as_deref(), Some("issue:12"));
+    }
+
+    #[tokio::test]
+    async fn retry_returns_409_when_the_concurrency_key_was_taken_since() {
+        let store = Arc::new(InMemoryStore::new());
+        let original = cancelled_keyed_run(&store, "issue:12").await;
+        let holder = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: Some("issue:12".to_string()),
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        let resp = post_retry(test_state(store.clone()), original).await;
+        assert_eq!(resp.status(), HttpStatusCode::CONFLICT);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["error"]["code"], "CONCURRENCY_CONFLICT");
+        assert_eq!(json_val["error"]["details"]["run_id"], json!(holder.id));
     }
 }

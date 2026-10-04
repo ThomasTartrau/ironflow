@@ -63,6 +63,7 @@ pub const LEASE_EXPIRED_ERROR: &str = "worker lease expired";
 ///     scheduled_at: None,
 ///     created_by: None,
 ///     idempotency_key: None,
+///     concurrency_key: None,
 ///     max_cost_usd: None,
 /// }).await?.into_run();
 ///
@@ -81,6 +82,17 @@ pub trait RunStore: Send + Sync {
     ///
     /// Concurrent calls sharing the same key resolve to a single run: exactly one
     /// receives [`RunCreation::Created`], the others [`RunCreation::Existing`].
+    ///
+    /// When [`NewRun::concurrency_key`] is set, the idempotency lookup runs first,
+    /// then the key is checked: concurrent calls sharing it are serialized, and
+    /// at most one non-terminal run holds it at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ConcurrencyConflict`](crate::error::StoreError::ConcurrencyConflict)
+    /// when a run that is not Completed, Failed, Warning or Cancelled already
+    /// holds [`NewRun::concurrency_key`], and a database error when the backing
+    /// store fails.
     fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation>;
 
     /// Look up the run bound to an idempotency key.
@@ -383,6 +395,7 @@ pub trait RunStore: Send + Sync {
 ///     scheduled_at: None,
 ///     created_by: None,
 ///     idempotency_key: None,
+///     concurrency_key: None,
 ///     max_cost_usd: None,
 /// }).await?.into_run();
 /// let _users = store.count_users().await?;
