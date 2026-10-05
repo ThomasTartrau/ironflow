@@ -94,6 +94,32 @@ let child = ctx.workflow(&Collect, CollectInput { host: "db-1".into() }).await?;
 println!("child run {}", child.run_id());
 ```
 
+### Reading the child output
+
+A child publishes a typed result with `ctx.set_output(&value)` (see
+[Run output](workflow-handler.md#run-output)); the parent reads it back with
+`child.output::<T>()`:
+
+```rust,ignore
+#[derive(Serialize, Deserialize)]
+struct Verdict {
+    approved: bool,
+}
+
+let child = ctx.workflow(&Review, ReviewInput { mr: input.mr }).await?;
+match child.output::<Verdict>()? {
+    Some(verdict) if verdict.approved => println!("approved"),
+    Some(_) => println!("changes requested"),
+    None => println!("the reviewer gave no verdict"),
+}
+```
+
+- `Ok(None)` when the child set no output.
+- `Err(EngineError::Serialization)` when the output does not deserialize into `T`.
+- The output is recorded in the parent's `Workflow` step: a resumed parent reads
+  the same value, without reading the child run again.
+- A child tolerated with `allow_failure` keeps the output it set before failing.
+
 ### Exclusive children
 
 `ctx.workflow_with` takes `WorkflowOptions`. With a concurrency key, the child is

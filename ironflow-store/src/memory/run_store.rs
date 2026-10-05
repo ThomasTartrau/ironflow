@@ -171,6 +171,7 @@ impl RunStore for InMemoryStore {
                 max_cost_usd: req.max_cost_usd,
                 worker_id: None,
                 lease_expires_at: None,
+                output: None,
             };
 
             if let Some(key) = req.idempotency_key {
@@ -317,6 +318,9 @@ impl RunStore for InMemoryStore {
             }
             if let Some(scheduled) = update.scheduled_at {
                 run.scheduled_at = Some(scheduled);
+            }
+            if let Some(output) = update.output {
+                run.output = Some(output);
             }
 
             run.updated_at = now;
@@ -3168,6 +3172,107 @@ mod tests {
 
         let fetched = store.get_run(run.id).await.unwrap().unwrap();
         assert_eq!(fetched.scheduled_at, Some(when));
+    }
+
+    // ---- output ----
+
+    #[tokio::test]
+    async fn new_run_has_no_output() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+
+        assert!(run.output.is_none());
+        let fetched = store.get_run(run.id).await.unwrap().unwrap();
+        assert!(fetched.output.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_run_sets_output() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    output: Some(json!({"verdict": "approved"})),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let fetched = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.output, Some(json!({"verdict": "approved"})));
+    }
+
+    #[tokio::test]
+    async fn update_run_without_output_keeps_previous_output() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    output: Some(json!({"verdict": "approved"})),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    error: Some("boom".to_string()),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let fetched = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.output, Some(json!({"verdict": "approved"})));
+        assert_eq!(fetched.error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn update_run_output_last_write_wins() {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(new_run_req("test"))
+            .await
+            .unwrap()
+            .into_run();
+
+        for verdict in ["first", "second"] {
+            store
+                .update_run(
+                    run.id,
+                    RunUpdate {
+                        output: Some(json!({ "verdict": verdict })),
+                        ..RunUpdate::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let fetched = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.output, Some(json!({"verdict": "second"})));
     }
 
     // ---- created_by ----

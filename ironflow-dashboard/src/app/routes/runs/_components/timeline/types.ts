@@ -1,10 +1,12 @@
 import type { StepResponse, StepKind, StepStatus } from "@/app/lib/types";
+import { getKindMeta as getSharedKindMeta } from "@/app/lib/step-kind";
 import {
 	Terminal,
 	Globe,
 	Bot,
 	GitBranch,
 	ShieldCheck,
+	Split,
 	type LucideIcon,
 } from "lucide-react";
 
@@ -86,6 +88,15 @@ const kindMetaMap: Record<string, KindMeta> = {
 			"bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-400/15 dark:text-rose-300 dark:border-rose-400/30",
 		label: "approval",
 	},
+	decision: {
+		icon: Split,
+		color: "text-teal-600 dark:text-teal-400",
+		barBg: "bg-teal-400/70 dark:bg-teal-400/50",
+		barBorder: "border-teal-500/30 dark:border-teal-400/30",
+		badgeCls:
+			"bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-400/15 dark:text-teal-300 dark:border-teal-400/30",
+		label: "decision",
+	},
 };
 
 const defaultKindMeta: KindMeta = {
@@ -98,7 +109,13 @@ const defaultKindMeta: KindMeta = {
 };
 
 export function getKindMeta(kind: StepKind): KindMeta {
-	return kindMetaMap[kind] ?? { ...defaultKindMeta, label: kind };
+	return (
+		kindMetaMap[kind] ?? {
+			...defaultKindMeta,
+			icon: getSharedKindMeta(kind).icon,
+			label: kind,
+		}
+	);
 }
 
 export const statusBarModifier: Partial<Record<StepStatus, string>> = {

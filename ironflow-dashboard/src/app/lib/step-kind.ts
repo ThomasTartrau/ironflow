@@ -3,6 +3,18 @@
  * workflow execution plan so both read as the same diagram.
  */
 import {
+	Archive,
+	ChartLine,
+	Container,
+	Database,
+	Gauge,
+	GitCommitHorizontal,
+	GitPullRequest,
+	Hash,
+	Package,
+	ScrollText,
+	ShipWheel,
+	Waypoints,
 	Terminal,
 	Globe,
 	Bot,
@@ -11,6 +23,7 @@ import {
 	SkipForward,
 	MessageSquare,
 	Radio,
+	Split,
 	type LucideIcon,
 } from "lucide-react";
 
@@ -19,6 +32,22 @@ export interface KindMeta {
 	color: string;
 	label: string;
 }
+
+/** Icons for the operation kinds shipped by the `ops/` crates. */
+const opsKindIcons: Record<string, LucideIcon> = {
+	git: GitCommitHorizontal,
+	gitlab: GitPullRequest,
+	docker: Container,
+	k8s: ShipWheel,
+	helm: Package,
+	postgres: Database,
+	s3: Archive,
+	slack: Hash,
+	grafana: Gauge,
+	loki: ScrollText,
+	mimir: ChartLine,
+	tempo: Waypoints,
+};
 
 export function getKindMeta(kind: string): KindMeta {
 	switch (kind) {
@@ -32,6 +61,8 @@ export function getKindMeta(kind: string): KindMeta {
 			return { icon: GitBranch, color: "indigo", label: "workflow" };
 		case "approval":
 			return { icon: ShieldCheck, color: "rose", label: "approval" };
+		case "decision":
+			return { icon: Split, color: "teal", label: "decision" };
 		case "human_input":
 			return { icon: MessageSquare, color: "blue", label: "input" };
 		case "signal":
@@ -39,7 +70,11 @@ export function getKindMeta(kind: string): KindMeta {
 		case "skip":
 			return { icon: SkipForward, color: "slate", label: "skipped" };
 		default:
-			return { icon: Terminal, color: "emerald", label: kind };
+			return {
+				icon: opsKindIcons[kind] ?? Terminal,
+				color: "emerald",
+				label: kind,
+			};
 	}
 }
 
@@ -55,6 +90,7 @@ export const nodeColors: Record<string, string> = {
 		"border-indigo-400/40 bg-indigo-400/10 text-indigo-400 dark:text-indigo-300",
 	emerald:
 		"border-emerald-400/40 bg-emerald-400/10 text-emerald-400 dark:text-emerald-300",
+	teal: "border-teal-400/40 bg-teal-400/10 text-teal-400 dark:text-teal-300",
 	rose: "border-rose-400/40 bg-rose-400/10 text-rose-400 dark:text-rose-300",
 	slate:
 		"border-slate-400/40 bg-slate-400/10 text-slate-400 dark:text-slate-300",
