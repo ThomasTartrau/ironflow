@@ -329,6 +329,91 @@ pub(crate) fn assert_environment_id_valid(environment_id: &str) {
     }
 }
 
+/// Binary unit of a [`VolumeSize`], mapped to the Kubernetes quantity suffix.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::provider::StorageUnit;
+///
+/// assert_eq!(StorageUnit::Gi.suffix(), "Gi");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageUnit {
+    /// Mebibytes (`Mi`).
+    Mi,
+    /// Gibibytes (`Gi`).
+    Gi,
+    /// Tebibytes (`Ti`).
+    Ti,
+}
+
+impl StorageUnit {
+    /// Kubernetes quantity suffix of the unit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::StorageUnit;
+    ///
+    /// assert_eq!(StorageUnit::Ti.suffix(), "Ti");
+    /// ```
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Mi => "Mi",
+            Self::Gi => "Gi",
+            Self::Ti => "Ti",
+        }
+    }
+}
+
+/// Storage size: a numeric amount and a [`StorageUnit`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::provider::{StorageUnit, VolumeSize};
+///
+/// let size = VolumeSize::new(20, StorageUnit::Gi);
+/// assert_eq!(size.to_quantity(), "20Gi");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeSize {
+    /// Numeric amount, expressed in [`unit`](Self::unit).
+    pub amount: u64,
+    /// Unit of the amount.
+    pub unit: StorageUnit,
+}
+
+impl VolumeSize {
+    /// Create a size of `amount` `unit`s.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::{StorageUnit, VolumeSize};
+    ///
+    /// let size = VolumeSize::new(512, StorageUnit::Mi);
+    /// assert_eq!(size.amount, 512);
+    /// ```
+    pub fn new(amount: u64, unit: StorageUnit) -> Self {
+        Self { amount, unit }
+    }
+
+    /// Render the size as a Kubernetes quantity, such as `20Gi`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::{StorageUnit, VolumeSize};
+    ///
+    /// assert_eq!(VolumeSize::new(1, StorageUnit::Ti).to_quantity(), "1Ti");
+    /// ```
+    pub fn to_quantity(&self) -> String {
+        format!("{}{}", self.amount, self.unit.suffix())
+    }
+}
+
 /// Persistent working volume of the K8s ephemeral provider.
 ///
 /// When a provider carries one, every agent pod gets a
@@ -346,10 +431,10 @@ pub(crate) fn assert_environment_id_valid(environment_id: &str) {
 ///
 /// ```
 /// use std::time::Duration;
-/// use ironflow_core::provider::EnvironmentVolume;
+/// use ironflow_core::provider::{EnvironmentVolume, StorageUnit, VolumeSize};
 ///
 /// let volume = EnvironmentVolume::new("/workspace")
-///     .size("20Gi")
+///     .size(VolumeSize::new(20, StorageUnit::Gi))
 ///     .storage_class("fast-ssd")
 ///     .ttl(Duration::from_secs(24 * 3600));
 /// assert!(volume.validate().is_ok());
@@ -358,8 +443,8 @@ pub(crate) fn assert_environment_id_valid(environment_id: &str) {
 pub struct EnvironmentVolume {
     /// Absolute mount path inside the agent container.
     pub mount_path: String,
-    /// Storage request of a new claim (default `10Gi`).
-    pub size: String,
+    /// Storage request of a new claim (default 10 `Gi`).
+    pub size: VolumeSize,
     /// Storage class of a new claim; the cluster default when `None`.
     pub storage_class: Option<String>,
     /// Time an unused claim is kept before the reaper deletes it (default 7 days).
@@ -376,29 +461,29 @@ impl EnvironmentVolume {
     /// use ironflow_core::provider::EnvironmentVolume;
     ///
     /// let volume = EnvironmentVolume::new("/workspace");
-    /// assert_eq!(volume.size, "10Gi");
+    /// assert_eq!(volume.size.to_quantity(), "10Gi");
     /// ```
     pub fn new(mount_path: &str) -> Self {
         Self {
             mount_path: mount_path.to_string(),
-            size: "10Gi".to_string(),
+            size: VolumeSize::new(10, StorageUnit::Gi),
             storage_class: None,
             ttl: Duration::from_secs(7 * 24 * 3600),
         }
     }
 
-    /// Set the storage request of a new claim (a Kubernetes quantity).
+    /// Set the storage request of a new claim.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ironflow_core::provider::EnvironmentVolume;
+    /// use ironflow_core::provider::{EnvironmentVolume, StorageUnit, VolumeSize};
     ///
-    /// let volume = EnvironmentVolume::new("/workspace").size("50Gi");
-    /// assert_eq!(volume.size, "50Gi");
+    /// let volume = EnvironmentVolume::new("/workspace").size(VolumeSize::new(50, StorageUnit::Gi));
+    /// assert_eq!(volume.size.to_quantity(), "50Gi");
     /// ```
-    pub fn size(mut self, size: &str) -> Self {
-        self.size = size.to_string();
+    pub fn size(mut self, size: VolumeSize) -> Self {
+        self.size = size;
         self
     }
 
@@ -434,7 +519,7 @@ impl EnvironmentVolume {
     }
 
     /// Check the settings: an absolute mount path other than `/`, a
-    /// non-empty size and storage class, a non-zero TTL.
+    /// non-zero size, a non-empty storage class, a non-zero TTL.
     ///
     /// # Errors
     ///
@@ -456,8 +541,8 @@ impl EnvironmentVolume {
                 self.mount_path
             ));
         }
-        if self.size.trim().is_empty() {
-            return Err("environment volume size must not be empty".to_string());
+        if self.size.amount == 0 {
+            return Err("environment volume size must be greater than zero".to_string());
         }
         if self
             .storage_class
@@ -610,7 +695,7 @@ mod tests {
     fn environment_volume_defaults() {
         let volume = EnvironmentVolume::new("/workspace");
         assert_eq!(volume.mount_path, "/workspace");
-        assert_eq!(volume.size, "10Gi");
+        assert_eq!(volume.size, VolumeSize::new(10, StorageUnit::Gi));
         assert_eq!(volume.storage_class, None);
         assert_eq!(volume.ttl, Duration::from_secs(7 * 24 * 3600));
         assert!(volume.validate().is_ok());
@@ -625,9 +710,20 @@ mod tests {
     }
 
     #[test]
-    fn environment_volume_validate_rejects_empty_size_class_and_ttl() {
-        assert!(EnvironmentVolume::new("/w").size("").validate().is_err());
-        assert!(EnvironmentVolume::new("/w").size("  ").validate().is_err());
+    fn volume_size_renders_kubernetes_quantity() {
+        assert_eq!(VolumeSize::new(512, StorageUnit::Mi).to_quantity(), "512Mi");
+        assert_eq!(VolumeSize::new(20, StorageUnit::Gi).to_quantity(), "20Gi");
+        assert_eq!(VolumeSize::new(2, StorageUnit::Ti).to_quantity(), "2Ti");
+    }
+
+    #[test]
+    fn environment_volume_validate_rejects_zero_size_empty_class_and_zero_ttl() {
+        assert!(
+            EnvironmentVolume::new("/w")
+                .size(VolumeSize::new(0, StorageUnit::Gi))
+                .validate()
+                .is_err()
+        );
         assert!(
             EnvironmentVolume::new("/w")
                 .storage_class(" ")

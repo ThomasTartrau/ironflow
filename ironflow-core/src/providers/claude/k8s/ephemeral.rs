@@ -204,7 +204,7 @@ fn build_environment_claim(
 ) -> Result<PersistentVolumeClaim, AgentError> {
     let mut spec = json!({
         "accessModes": ["ReadWriteOnce"],
-        "resources": { "requests": { "storage": &volume.size } }
+        "resources": { "requests": { "storage": volume.size.to_quantity() } }
     });
     if let Some(class) = &volume.storage_class {
         spec["storageClassName"] = json!(class);
@@ -1017,11 +1017,13 @@ impl K8sEphemeralProvider {
     /// # Examples
     ///
     /// ```no_run
-    /// use ironflow_core::provider::EnvironmentVolume;
+    /// use ironflow_core::provider::{EnvironmentVolume, StorageUnit, VolumeSize};
     /// use ironflow_core::providers::claude::K8sEphemeralProvider;
     ///
     /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
-    ///     .environment_volume(EnvironmentVolume::new("/workspace").size("20Gi"))
+    ///     .environment_volume(
+    ///         EnvironmentVolume::new("/workspace").size(VolumeSize::new(20, StorageUnit::Gi)),
+    ///     )
     ///     .working_dir("/workspace");
     /// ```
     pub fn environment_volume(mut self, volume: EnvironmentVolume) -> Self {
@@ -2190,6 +2192,7 @@ mod tests {
 
     use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
+    use crate::provider::{StorageUnit, VolumeSize};
 
     #[test]
     fn ephemeral_provider_defaults() {
@@ -3044,10 +3047,12 @@ mod tests {
     #[test]
     fn ephemeral_provider_environment_volume_builder() {
         let provider = K8sEphemeralProvider::new("img:v1")
-            .environment_volume(EnvironmentVolume::new("/workspace").size("20Gi"));
+            .environment_volume(
+                EnvironmentVolume::new("/workspace").size(VolumeSize::new(20, StorageUnit::Gi)),
+            );
         let volume = provider.environment.as_ref().unwrap();
         assert_eq!(volume.mount_path, "/workspace");
-        assert_eq!(volume.size, "20Gi");
+        assert_eq!(volume.size.to_quantity(), "20Gi");
         assert!(K8sEphemeralProvider::new("img:v1").environment.is_none());
     }
 
@@ -3100,7 +3105,7 @@ mod tests {
     #[test]
     fn build_environment_claim_sets_spec_labels_and_expiry() {
         let volume = EnvironmentVolume::new("/workspace")
-            .size("20Gi")
+            .size(VolumeSize::new(20, StorageUnit::Gi))
             .storage_class("fast");
         let mut pod_labels = BTreeMap::new();
         pod_labels.insert(LABEL_RUN_ID.to_string(), "run-1".to_string());

@@ -236,12 +236,12 @@ can continue in the files an earlier one left (a clone, a build cache, a
 half-written patch):
 
 ```rust,ignore
-use ironflow_core::provider::EnvironmentVolume;
+use ironflow_core::provider::{EnvironmentVolume, StorageUnit, VolumeSize};
 
 let provider = K8sEphemeralProvider::sandboxed(&image)
     .environment_volume(
         EnvironmentVolume::new("/workspace")
-            .size("20Gi")                        // 10Gi by default
+            .size(VolumeSize::new(20, StorageUnit::Gi)) // 10Gi by default
             .storage_class("fast-ssd")           // cluster default otherwise
             .ttl(Duration::from_secs(3 * 86400)), // 7 days by default
     )
