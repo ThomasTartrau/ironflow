@@ -3381,6 +3381,30 @@
         ],
         "type": "object"
       },
+      "StepAccountResponse": {
+        "description": "Readable identity of the Provider Account a step ran under.\n\nDeliberately minimal: it never carries the credential, the secret key or\nany scheduling data, since it is readable by anyone who can read the run.\n\n# Examples\n\n```\nuse ironflow_api::entities::StepAccountResponse;\nuse uuid::Uuid;\n\nlet account = StepAccountResponse {\n    id: Uuid::now_v7(),\n    name: \"perso\".to_string(),\n    display_name: \"Compte perso\".to_string(),\n};\nassert_eq!(account.name, \"perso\");\n```",
+        "properties": {
+          "display_name": {
+            "description": "Human-readable name.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Account ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "description": "Unique slug.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "display_name"
+        ],
+        "type": "object"
+      },
       "StepApproval": {
         "description": "One vote cast on an approval gate.\n\nVotes are unique per [`user_id`](StepApproval::user_id): an API key votes as\nits owner, and a user voting twice is ignored by the store.\n\n# Examples\n\n```\nuse chrono::Utc;\nuse ironflow_store::entities::StepApproval;\nuse uuid::Uuid;\n\nlet vote = StepApproval {\n    user_id: Uuid::now_v7(),\n    approved_by: \"alice\".to_string(),\n    at: Utc::now(),\n};\nassert_eq!(vote.approved_by, \"alice\");\n```",
         "properties": {
@@ -3499,19 +3523,14 @@
       "StepResponse": {
         "description": "Step response DTO — public API representation of a step.\n\n# Examples\n\n```\nuse ironflow_store::models::Step;\nuse ironflow_api::entities::StepResponse;\n```",
         "properties": {
-          "account_display_name": {
-            "description": "Display name of the Provider Account the step ran under.\n\nResolved together with `account_name`, with the same visibility.",
-            "nullable": true,
-            "type": "string"
+          "account": {
+            "$ref": "#/components/schemas/StepAccountResponse",
+            "description": "Readable identity of the Provider Account the step ran under.\n\n`None` when the step has no account or the account was deleted since\n(`account_id` is then still set). Readable by anyone who can read the\nrun; no other account data is exposed here.",
+            "nullable": true
           },
           "account_id": {
             "description": "Provider Account the agent step ran under, if any.",
             "format": "uuid",
-            "nullable": true,
-            "type": "string"
-          },
-          "account_name": {
-            "description": "Slug of the Provider Account the step ran under.\n\n`None` when the step has no account or the account was deleted since.\nReadable by anyone who can read the run; no other account data is\nexposed here.",
             "nullable": true,
             "type": "string"
           },

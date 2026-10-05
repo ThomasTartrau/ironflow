@@ -3771,6 +3771,37 @@ export interface components {
 			total_runs: number;
 		};
 		/**
+		 * @description Readable identity of the Provider Account a step ran under.
+		 *
+		 *     Deliberately minimal: it never carries the credential, the secret key or
+		 *     any scheduling data, since it is readable by anyone who can read the run.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::StepAccountResponse;
+		 *     use uuid::Uuid;
+		 *
+		 *     let account = StepAccountResponse {
+		 *         id: Uuid::now_v7(),
+		 *         name: "perso".to_string(),
+		 *         display_name: "Compte perso".to_string(),
+		 *     };
+		 *     assert_eq!(account.name, "perso");
+		 *     ```
+		 */
+		StepAccountResponse: {
+			/** @description Human-readable name. */
+			display_name: string;
+			/**
+			 * Format: uuid
+			 * @description Account ID.
+			 */
+			id: string;
+			/** @description Unique slug. */
+			name: string;
+		};
+		/**
 		 * @description One vote cast on an approval gate.
 		 *
 		 *     Votes are unique per [`user_id`](StepApproval::user_id): an API key votes as
@@ -3917,24 +3948,18 @@ export interface components {
 		 */
 		StepResponse: {
 			/**
-			 * @description Display name of the Provider Account the step ran under.
+			 * @description Readable identity of the Provider Account the step ran under.
 			 *
-			 *     Resolved together with `account_name`, with the same visibility.
+			 *     `None` when the step has no account or the account was deleted since
+			 *     (`account_id` is then still set). Readable by anyone who can read the
+			 *     run; no other account data is exposed here.
 			 */
-			account_display_name?: string | null;
+			account?: null | components["schemas"]["StepAccountResponse"];
 			/**
 			 * Format: uuid
 			 * @description Provider Account the agent step ran under, if any.
 			 */
 			account_id?: string | null;
-			/**
-			 * @description Slug of the Provider Account the step ran under.
-			 *
-			 *     `None` when the step has no account or the account was deleted since.
-			 *     Readable by anyone who can read the run; no other account data is
-			 *     exposed here.
-			 */
-			account_name?: string | null;
 			/**
 			 * @description Who the approval is currently assigned to.
 			 *

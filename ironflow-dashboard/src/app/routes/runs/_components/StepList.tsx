@@ -123,14 +123,14 @@ export function AccountBadge({ step }: { step: StepResponse }) {
 					render={
 						<span className="shrink-0">
 							<Badge variant="outline" className="text-[10px] font-medium">
-								{`account ${step.account_name ?? step.account_id.slice(0, 8)}`}
+								{`account ${step.account?.name ?? step.account_id.slice(0, 8)}`}
 							</Badge>
 						</span>
 					}
 				/>
 				<TooltipContent side="bottom">
-					{step.account_display_name ? (
-						<div>{step.account_display_name}</div>
+					{step.account ? (
+						<div>{step.account.display_name}</div>
 					) : null}
 					<div>{step.account_id}</div>
 				</TooltipContent>

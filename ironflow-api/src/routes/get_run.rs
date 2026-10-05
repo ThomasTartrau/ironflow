@@ -8,7 +8,9 @@ use ironflow_auth::extractor::Authenticated;
 use tokio::join;
 use uuid::Uuid;
 
-use crate::entities::{ArtifactResponse, RunDetailResponse, RunResponse, StepResponse};
+use crate::entities::{
+    ArtifactResponse, RunDetailResponse, RunResponse, StepAccountResponse, StepResponse,
+};
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
@@ -73,7 +75,7 @@ pub async fn get_run(
         .collect::<HashSet<Uuid>>()
         .into_iter()
         .collect();
-    let accounts_map: HashMap<Uuid, (String, String)> = if account_ids.is_empty() {
+    let accounts_map: HashMap<Uuid, StepAccountResponse> = if account_ids.is_empty() {
         HashMap::new()
     } else {
         state
@@ -81,7 +83,7 @@ pub async fn get_run(
             .list_provider_accounts_by_ids(account_ids)
             .await?
             .into_iter()
-            .map(|account| (account.id, (account.name, account.display_name)))
+            .map(|account| (account.id, StepAccountResponse::from(account)))
             .collect()
     };
 
@@ -96,7 +98,7 @@ pub async fn get_run(
             let response =
                 StepResponse::with_dependencies_and_artifacts(step, step_deps, step_artifacts);
             match account {
-                Some((name, display_name)) => response.with_account(name, display_name),
+                Some(account) => response.with_account(account),
                 None => response,
             }
         })
@@ -329,29 +331,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn step_exposes_its_account_name_and_display_name() {
+    async fn step_exposes_its_account() {
         let (app, auth_header, run_id, account_id) = run_with_account_step(true, false).await;
         let step = first_step_of(app, auth_header, run_id).await;
         assert_eq!(step["account_id"], account_id.to_string());
-        assert_eq!(step["account_name"], "perso");
-        assert_eq!(step["account_display_name"], "Compte perso");
+        assert_eq!(step["account"]["name"], "perso");
+        assert_eq!(step["account"]["display_name"], "Compte perso");
     }
 
     #[tokio::test]
-    async fn step_without_account_has_null_account_name() {
+    async fn step_without_account_has_null_account() {
         let (app, auth_header, run_id, _) = run_with_account_step(false, false).await;
         let step = first_step_of(app, auth_header, run_id).await;
         assert!(step["account_id"].is_null());
-        assert!(step["account_name"].is_null());
-        assert!(step["account_display_name"].is_null());
+        assert!(step["account"].is_null());
     }
 
     #[tokio::test]
-    async fn step_whose_account_was_deleted_has_null_account_name() {
+    async fn step_whose_account_was_deleted_has_null_account() {
         let (app, auth_header, run_id, _) = run_with_account_step(true, true).await;
         let step = first_step_of(app, auth_header, run_id).await;
-        assert!(step["account_name"].is_null());
-        assert!(step["account_display_name"].is_null());
+        assert!(step["account"].is_null());
     }
 
     #[tokio::test]

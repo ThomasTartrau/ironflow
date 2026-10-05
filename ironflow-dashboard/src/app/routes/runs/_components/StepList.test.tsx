@@ -279,8 +279,11 @@ describe("AccountBadge", () => {
 			<AccountBadge
 				step={stepFixture({
 					account_id: ACCOUNT_ID,
-					account_name: "perso",
-					account_display_name: "Compte perso",
+					account: {
+						id: ACCOUNT_ID,
+						name: "perso",
+						display_name: "Compte perso",
+					},
 				})}
 			/>,
 		);
