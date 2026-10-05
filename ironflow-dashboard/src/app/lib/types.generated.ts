@@ -3947,13 +3947,6 @@ export interface components {
 		 *     ```
 		 */
 		StepResponse: {
-			/**
-			 * @description Readable identity of the Provider Account the step ran under.
-			 *
-			 *     `None` when the step has no account or the account was deleted since
-			 *     (`account_id` is then still set). Readable by anyone who can read the
-			 *     run; no other account data is exposed here.
-			 */
 			account?: null | components["schemas"]["StepAccountResponse"];
 			/**
 			 * Format: uuid
