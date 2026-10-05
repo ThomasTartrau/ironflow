@@ -1,5 +1,6 @@
 //! `create_run` MCP tool.
 
+use ironflow_types::parse_concurrency_limit;
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::CallToolResult;
 use rust_mcp_sdk::schema::schema_utils::CallToolError;
@@ -65,7 +66,7 @@ impl CreateRunTool {
             let limits = limits
                 .iter()
                 .map(String::as_str)
-                .map(parse_concurrency_limit)
+                .map(concurrency_limit_json)
                 .collect::<Result<Vec<Value>, CallToolError>>()?;
             body["concurrency_limits"] = Value::Array(limits);
         }
@@ -83,14 +84,11 @@ impl CreateRunTool {
 
 /// Turn a `GROUP=N` entry into the `{"group", "limit"}` object the API expects,
 /// splitting on the last `=`. The API validates the group and the limit.
-fn parse_concurrency_limit(entry: &str) -> Result<Value, CallToolError> {
-    let parsed = entry
-        .rsplit_once('=')
-        .and_then(|(group, limit)| limit.parse::<u32>().ok().map(|limit| (group, limit)));
-    match parsed {
-        Some((group, limit)) => Ok(json!({ "group": group, "limit": limit })),
-        None => Err(CallToolError::new(McpError::Validation(format!(
-            "invalid concurrency limit '{entry}': expected GROUP=N with N a positive integer"
-        )))),
-    }
+fn concurrency_limit_json(entry: &str) -> Result<Value, CallToolError> {
+    let (group, limit) = parse_concurrency_limit(entry).map_err(|reason| {
+        CallToolError::new(McpError::Validation(format!(
+            "invalid concurrency limit: {reason}"
+        )))
+    })?;
+    Ok(json!({ "group": group, "limit": limit }))
 }

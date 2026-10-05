@@ -196,3 +196,74 @@ mod tests {
         assert!(envelope.details.is_none());
     }
 }
+
+/// Split a `GROUP=N` concurrency limit entry on the last `=`.
+///
+/// Only the shape is checked here: the group and the range of the limit are
+/// validated by the API. Shared by the CLI and the MCP server so both accept
+/// exactly the same syntax.
+///
+/// # Errors
+///
+/// Returns a human-readable message when the entry has no `=` or when the
+/// limit is not a non-negative integer.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_types::parse_concurrency_limit;
+///
+/// # fn example() -> Result<(), String> {
+/// let (group, limit) = parse_concurrency_limit("env=prod=2")?;
+/// assert_eq!(group, "env=prod");
+/// assert_eq!(limit, 2);
+/// assert!(parse_concurrency_limit("repo:acme").is_err());
+/// # Ok(())
+/// # }
+/// # example().unwrap();
+/// ```
+pub fn parse_concurrency_limit(entry: &str) -> Result<(String, u32), String> {
+    let (group, limit) = entry
+        .rsplit_once('=')
+        .ok_or_else(|| format!("expected GROUP=N, got '{entry}'"))?;
+    let limit = limit
+        .parse::<u32>()
+        .map_err(|e| format!("invalid limit '{limit}' in '{entry}': {e}"))?;
+    Ok((group.to_string(), limit))
+}
+
+#[cfg(test)]
+mod concurrency_limit_tests {
+    use super::parse_concurrency_limit;
+
+    #[test]
+    fn reads_group_and_limit() {
+        let (group, limit) = parse_concurrency_limit("repo:acme=2").unwrap();
+        assert_eq!(group, "repo:acme");
+        assert_eq!(limit, 2);
+    }
+
+    #[test]
+    fn splits_on_the_last_equals_sign() {
+        let (group, limit) = parse_concurrency_limit("env=prod=1").unwrap();
+        assert_eq!(group, "env=prod");
+        assert_eq!(limit, 1);
+    }
+
+    #[test]
+    fn rejects_a_missing_limit() {
+        let err = parse_concurrency_limit("repo:acme").unwrap_err();
+        assert_eq!(err, "expected GROUP=N, got 'repo:acme'");
+    }
+
+    #[test]
+    fn rejects_a_non_numeric_limit() {
+        let err = parse_concurrency_limit("repo:acme=two").unwrap_err();
+        assert!(err.starts_with("invalid limit 'two' in 'repo:acme=two'"));
+    }
+
+    #[test]
+    fn rejects_a_negative_limit() {
+        assert!(parse_concurrency_limit("repo:acme=-1").is_err());
+    }
+}

@@ -14,6 +14,7 @@ use humantime::format_duration;
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::client::ListRunsFilter;
 use ironflow_sdk::types::{ConcurrencyLimit, CreateRunRequest, PlanWorkflowRequest, RunStatus};
+use ironflow_types::parse_concurrency_limit as shared_parse_concurrency_limit;
 use serde_json::{Map, Value, from_str, json, to_string};
 use tokio::time::timeout as tokio_timeout;
 use uuid::Uuid;
@@ -193,21 +194,15 @@ fn parse_humantime(s: &str) -> Result<Duration, String> {
     humantime::parse_duration(s).map_err(|e| e.to_string())
 }
 
-/// Parse a `GROUP=N` concurrency limit, splitting on the last `=`.
+/// Parse a `GROUP=N` concurrency limit into the SDK type.
 ///
-/// The group and the limit are validated by the API; only the shape is checked
-/// here.
+/// Delegates to [`ironflow_types::parse_concurrency_limit`]; the group and the
+/// limit are validated by the API.
 fn parse_concurrency_limit(s: &str) -> Result<ConcurrencyLimit, String> {
-    let (group, limit) = s
-        .rsplit_once('=')
-        .ok_or_else(|| format!("expected GROUP=N, got '{s}'"))?;
-    let limit = limit
-        .parse::<i32>()
+    let (group, limit) = shared_parse_concurrency_limit(s)?;
+    let limit = i32::try_from(limit)
         .map_err(|e| format!("invalid limit '{limit}' in '{s}': {e}"))?;
-    Ok(ConcurrencyLimit {
-        group: group.to_string(),
-        limit,
-    })
+    Ok(ConcurrencyLimit { group, limit })
 }
 
 /// Terminal event types that signal the run is done.
@@ -549,27 +544,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_concurrency_limit_splits_on_the_last_equals_sign() {
-        let limit = parse_concurrency_limit("env=prod=1").unwrap();
-        assert_eq!(limit.group, "env=prod");
-        assert_eq!(limit.limit, 1);
+    fn parse_concurrency_limit_rejects_a_limit_above_i32() {
+        assert!(parse_concurrency_limit("repo:acme=4294967295").is_err());
     }
 
     #[test]
-    fn parse_concurrency_limit_rejects_a_missing_limit() {
-        let err = parse_concurrency_limit("repo:acme").unwrap_err();
-        assert_eq!(err, "expected GROUP=N, got 'repo:acme'");
-    }
-
-    #[test]
-    fn parse_concurrency_limit_rejects_a_non_numeric_limit() {
-        let err = parse_concurrency_limit("repo:acme=two").unwrap_err();
-        assert!(err.starts_with("invalid limit 'two' in 'repo:acme=two'"));
-    }
-
-    #[test]
-    fn parse_concurrency_limit_rejects_a_negative_limit() {
-        assert!(parse_concurrency_limit("repo:acme=-1").is_err());
+    fn parse_concurrency_limit_propagates_shape_errors() {
+        assert!(parse_concurrency_limit("repo:acme").is_err());
     }
 
     #[test]
