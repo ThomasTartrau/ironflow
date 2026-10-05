@@ -11,8 +11,7 @@ use crate::entities::{
     RunDetailResponse, RunResponse, ScheduleResponse, SecretResponse, SendSignalRequest,
     SetSecretRequest, SignInRequest, SignalDeliveryResponse, SignalResponse,
     StatsHistoryBucketResponse, StatsHistoryResponse, StatsResponse, StepAccountResponse,
-    StepResponse,
-    UpdateProviderAccountRequest, UpdateRoleRequest, UpdateScheduleRequest,
+    StepResponse, UpdateProviderAccountRequest, UpdateRoleRequest, UpdateScheduleRequest,
     UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;

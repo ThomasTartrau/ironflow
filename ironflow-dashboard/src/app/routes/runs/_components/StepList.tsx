@@ -129,9 +129,7 @@ export function AccountBadge({ step }: { step: StepResponse }) {
 					}
 				/>
 				<TooltipContent side="bottom">
-					{step.account ? (
-						<div>{step.account.display_name}</div>
-					) : null}
+					{step.account ? <div>{step.account.display_name}</div> : null}
 					<div>{step.account_id}</div>
 				</TooltipContent>
 			</Tooltip>
