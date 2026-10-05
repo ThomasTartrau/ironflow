@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::Error as SqlxError;
+use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::entities::{
@@ -26,6 +27,7 @@ fn db_err(e: SqlxError) -> StoreError {
 
 /// `provider_accounts` row. Only `max_concurrency` differs from [`ProviderAccount`]:
 /// Postgres has no unsigned integer, and sqlx decodes `INTEGER` as `i32` only.
+#[derive(FromRow)]
 struct AccountRow {
     id: Uuid,
     name: String,
@@ -126,6 +128,29 @@ impl ProviderAccountStore for PostgresStore {
                 _ => db_err(e),
             })?;
             Ok(ProviderAccount::from(row))
+        })
+    }
+
+    fn list_provider_accounts_by_ids(
+        &self,
+        ids: Vec<Uuid>,
+    ) -> StoreFuture<'_, Vec<ProviderAccount>> {
+        Box::pin(async move {
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let rows = sqlx::query_as::<_, AccountRow>(
+                "SELECT id, name, display_name, kind, secret_key, enabled, priority, tags, \
+                    max_concurrency, alert_threshold, expires_at, plan, auth_failed_at, \
+                    created_by, created_at, updated_at \
+                FROM ironflow.provider_accounts \
+                WHERE id = ANY($1)",
+            )
+            .bind(&ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+            Ok(rows.into_iter().map(ProviderAccount::from).collect())
         })
     }
 

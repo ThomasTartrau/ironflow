@@ -3917,10 +3917,24 @@ export interface components {
 		 */
 		StepResponse: {
 			/**
+			 * @description Display name of the Provider Account the step ran under.
+			 *
+			 *     Resolved together with `account_name`, with the same visibility.
+			 */
+			account_display_name?: string | null;
+			/**
 			 * Format: uuid
 			 * @description Provider Account the agent step ran under, if any.
 			 */
 			account_id?: string | null;
+			/**
+			 * @description Slug of the Provider Account the step ran under.
+			 *
+			 *     `None` when the step has no account or the account was deleted since.
+			 *     Readable by anyone who can read the run; no other account data is
+			 *     exposed here.
+			 */
+			account_name?: string | null;
 			/**
 			 * @description Who the approval is currently assigned to.
 			 *

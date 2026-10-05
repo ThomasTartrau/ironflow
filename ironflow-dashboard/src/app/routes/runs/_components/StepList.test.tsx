@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { StepResponse } from "@/app/lib/types";
 import {
+	AccountBadge,
 	ApprovalProgress,
 	describeApprovalReason,
 	StepList,
@@ -267,5 +268,36 @@ describe("StepList long step names", () => {
 		expect(
 			screen.getByText("fetch: example.com").classList.contains("truncate"),
 		).toBe(true);
+	});
+});
+
+describe("AccountBadge", () => {
+	const ACCOUNT_ID = "0192f0c1-aaaa-7000-8000-000000000001";
+
+	it("shows the account name instead of the id", () => {
+		render(
+			<AccountBadge
+				step={stepFixture({
+					account_id: ACCOUNT_ID,
+					account_name: "perso",
+					account_display_name: "Compte perso",
+				})}
+			/>,
+		);
+
+		expect(screen.getByText("account perso")).toBeInTheDocument();
+		expect(screen.queryByText(/0192f0c1/)).not.toBeInTheDocument();
+	});
+
+	it("falls back to the first 8 chars of the id without a name", () => {
+		render(<AccountBadge step={stepFixture({ account_id: ACCOUNT_ID })} />);
+
+		expect(screen.getByText("account 0192f0c1")).toBeInTheDocument();
+	});
+
+	it("renders nothing without an account id", () => {
+		const { container } = render(<AccountBadge step={stepFixture()} />);
+
+		expect(container).toBeEmptyDOMElement();
 	});
 });

@@ -3499,9 +3499,19 @@
       "StepResponse": {
         "description": "Step response DTO — public API representation of a step.\n\n# Examples\n\n```\nuse ironflow_store::models::Step;\nuse ironflow_api::entities::StepResponse;\n```",
         "properties": {
+          "account_display_name": {
+            "description": "Display name of the Provider Account the step ran under.\n\nResolved together with `account_name`, with the same visibility.",
+            "nullable": true,
+            "type": "string"
+          },
           "account_id": {
             "description": "Provider Account the agent step ran under, if any.",
             "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "account_name": {
+            "description": "Slug of the Provider Account the step ran under.\n\n`None` when the step has no account or the account was deleted since.\nReadable by anyone who can read the run; no other account data is\nexposed here.",
             "nullable": true,
             "type": "string"
           },

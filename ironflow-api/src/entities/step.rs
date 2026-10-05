@@ -108,9 +108,38 @@ pub struct StepResponse {
     /// Provider Account the agent step ran under, if any.
     #[serde(default)]
     pub account_id: Option<Uuid>,
+    /// Slug of the Provider Account the step ran under.
+    ///
+    /// `None` when the step has no account or the account was deleted since.
+    /// Readable by anyone who can read the run; no other account data is
+    /// exposed here.
+    #[serde(default)]
+    pub account_name: Option<String>,
+    /// Display name of the Provider Account the step ran under.
+    ///
+    /// Resolved together with `account_name`, with the same visibility.
+    #[serde(default)]
+    pub account_display_name: Option<String>,
 }
 
 impl StepResponse {
+    /// Attach the readable identity of the step's Provider Account.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_api::entities::StepResponse;
+    ///
+    /// # fn example(response: StepResponse) -> StepResponse {
+    /// response.with_account("perso".to_string(), "Compte perso".to_string())
+    /// # }
+    /// ```
+    pub fn with_account(mut self, name: String, display_name: String) -> Self {
+        self.account_name = Some(name);
+        self.account_display_name = Some(display_name);
+        self
+    }
+
     /// Build a response from a step entity with pre-resolved dependencies.
     ///
     /// Artifacts are left empty; use
@@ -170,6 +199,8 @@ impl StepResponse {
             approvals: step.approvals,
             approvals_required,
             account_id: step.account_id,
+            account_name: None,
+            account_display_name: None,
         }
     }
 }
@@ -252,6 +283,24 @@ mod tests {
 
         assert_eq!(response.artifacts.len(), 1);
         assert_eq!(response.artifacts[0].name, "report.html");
+    }
+
+    #[tokio::test]
+    async fn account_name_is_null_by_default() {
+        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        assert!(body["account_name"].is_null());
+        assert!(body["account_display_name"].is_null());
+    }
+
+    #[tokio::test]
+    async fn with_account_fills_both_fields() {
+        let response = StepResponse::from(step().await)
+            .with_account("perso".to_string(), "Compte perso".to_string());
+        assert_eq!(response.account_name.as_deref(), Some("perso"));
+        assert_eq!(
+            response.account_display_name.as_deref(),
+            Some("Compte perso")
+        );
     }
 
     #[tokio::test]

@@ -7212,6 +7212,13 @@
           "dependencies"
         ],
         "properties": {
+          "account_display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name of the Provider Account the step ran under.\n\nResolved together with `account_name`, with the same visibility."
+          },
           "account_id": {
             "type": [
               "string",
@@ -7219,6 +7226,13 @@
             ],
             "format": "uuid",
             "description": "Provider Account the agent step ran under, if any."
+          },
+          "account_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slug of the Provider Account the step ran under.\n\n`None` when the step has no account or the account was deleted since.\nReadable by anyone who can read the run; no other account data is\nexposed here."
           },
           "approval_assignee": {
             "type": [
