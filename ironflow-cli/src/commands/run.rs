@@ -200,8 +200,8 @@ fn parse_humantime(s: &str) -> Result<Duration, String> {
 /// limit are validated by the API.
 fn parse_concurrency_limit(s: &str) -> Result<ConcurrencyLimit, String> {
     let (group, limit) = shared_parse_concurrency_limit(s)?;
-    let limit = i32::try_from(limit)
-        .map_err(|e| format!("invalid limit '{limit}' in '{s}': {e}"))?;
+    let limit =
+        i32::try_from(limit).map_err(|e| format!("invalid limit '{limit}' in '{s}': {e}"))?;
     Ok(ConcurrencyLimit { group, limit })
 }
 
