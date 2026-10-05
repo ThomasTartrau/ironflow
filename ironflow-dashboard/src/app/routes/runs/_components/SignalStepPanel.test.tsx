@@ -76,6 +76,20 @@ describe("SignalStepPanel", () => {
 		expect(screen.getByText("2026-01-01T01:00:00Z")).toBeTruthy();
 	});
 
+	it("prefills the required properties and hides errors until edited", async () => {
+		renderPanel();
+		const payload = (await screen.findByLabelText(
+			"Signal payload",
+		)) as HTMLTextAreaElement;
+		expect(JSON.parse(payload.value)).toEqual({ status: "" });
+		expect(screen.queryByText(/missing required property/)).toBeNull();
+
+		fireEvent.change(payload, { target: { value: "{}" } });
+		expect(
+			screen.getByText('(root): missing required property "status"'),
+		).toBeTruthy();
+	});
+
 	it("disables delivery while the payload does not match the schema", async () => {
 		renderPanel();
 		const payload = await screen.findByLabelText("Signal payload");

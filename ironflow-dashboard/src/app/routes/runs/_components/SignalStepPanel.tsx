@@ -3,7 +3,10 @@ import { useRevalidator } from "react-router";
 import type { JSONSchema7 } from "json-schema";
 import type { StepResponse } from "@/app/lib/types";
 import { withToast } from "@/app/lib/api-toast";
-import { validateAgainstSchema } from "@/app/lib/json-schema";
+import {
+	buildAnswerSkeleton,
+	validateAgainstSchema,
+} from "@/app/lib/json-schema";
 import { useAppSelector } from "@/app/store";
 import { sendSignal } from "../_actions/actions";
 import { Button } from "@/components/ui/button";
@@ -55,8 +58,10 @@ function parsePayload(raw: string, schema: JSONSchema7 | null): string[] {
 
 /**
  * Show what a signal step waits for and, for an admin, deliver the signal by
- * hand. The payload is checked against the stored schema before it can be
- * sent; the server validates it again and stays authoritative.
+ * hand. The editor starts from a skeleton of the schema's required properties;
+ * the payload is checked against the stored schema before it can be sent and
+ * errors show once the admin has edited it. The server validates it again and
+ * stays authoritative.
  */
 export function SignalStepPanel({ step }: SignalStepPanelProps) {
 	const revalidator = useRevalidator();
@@ -65,10 +70,14 @@ export function SignalStepPanel({ step }: SignalStepPanelProps) {
 	const { name, key, schema, waitingSince, deadlineAt } = readStoredInput(
 		step.input,
 	);
-	const [raw, setRaw] = useState("{}");
+	const [raw, setRaw] = useState(() =>
+		JSON.stringify(buildAnswerSkeleton(schema), null, 2),
+	);
+	const [touched, setTouched] = useState(false);
 	const [sending, setSending] = useState(false);
 
 	const errors = parsePayload(raw, schema);
+	const showErrors = touched && errors.length > 0;
 	const waiting = step.status === "running";
 
 	async function handleSend() {
@@ -115,9 +124,12 @@ export function SignalStepPanel({ step }: SignalStepPanelProps) {
 						aria-label="Signal payload"
 						className="font-mono text-xs"
 						value={raw}
-						onChange={(event) => setRaw(event.target.value)}
+						onChange={(event) => {
+							setRaw(event.target.value);
+							setTouched(true);
+						}}
 					/>
-					{errors.length > 0 && (
+					{showErrors && (
 						<ul className="text-xs text-destructive">
 							{errors.map((error) => (
 								<li key={error}>{error}</li>
