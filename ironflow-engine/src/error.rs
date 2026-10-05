@@ -8,7 +8,7 @@ use uuid::Uuid;
 use ironflow_artifacts::error::ArtifactError;
 use ironflow_core::error::OperationError;
 use ironflow_store::error::StoreError;
-use ironflow_store::models::RunStatus;
+use ironflow_store::models::{ConcurrencyLimitError, RunStatus};
 
 use crate::guard::{WORKFLOW_GUARD_REJECTED_CODE, WorkflowRejection};
 
@@ -54,6 +54,15 @@ pub enum EngineError {
         /// The run holding it.
         run_id: Uuid,
     },
+
+    /// The requested concurrency limits are invalid: an empty or too long
+    /// group, a zero limit, or the same group listed twice.
+    ///
+    /// Converted from [`StoreError::InvalidConcurrencyLimit`], and returned by
+    /// [`Engine::enqueue_handler_with_options`](crate::engine::Engine::enqueue_handler_with_options)
+    /// before any other check.
+    #[error("invalid concurrency limit: {0}")]
+    InvalidConcurrencyLimit(ConcurrencyLimitError),
 
     /// The workflow definition is invalid.
     #[error("invalid workflow: {0}")]
@@ -358,6 +367,7 @@ impl From<StoreError> for EngineError {
             StoreError::ConcurrencyConflict { key, run_id } => {
                 EngineError::ConcurrencyConflict { key, run_id }
             }
+            StoreError::InvalidConcurrencyLimit(e) => EngineError::InvalidConcurrencyLimit(e),
             other => EngineError::Store(other),
         }
     }
@@ -500,6 +510,24 @@ mod tests {
             ref other => panic!("expected ConcurrencyConflict, got {other:?}"),
         }
         assert!(engine_err.to_string().contains("issue:12"));
+        assert!(!is_run_retryable(&engine_err));
+    }
+
+    #[test]
+    fn store_invalid_concurrency_limit_converts_to_engine_variant() {
+        let engine_err = EngineError::from(StoreError::InvalidConcurrencyLimit(
+            ConcurrencyLimitError::ZeroLimit {
+                group: "repo:acme".to_string(),
+            },
+        ));
+        assert!(
+            matches!(
+                engine_err,
+                EngineError::InvalidConcurrencyLimit(ConcurrencyLimitError::ZeroLimit { .. })
+            ),
+            "{engine_err:?}"
+        );
+        assert!(engine_err.to_string().contains("repo:acme"));
         assert!(!is_run_retryable(&engine_err));
     }
 

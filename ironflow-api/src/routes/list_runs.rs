@@ -18,6 +18,7 @@ use crate::state::AppState;
 /// - `status` — Filter by run status (optional)
 /// - `created_by` — Filter by author user ID (optional). Also matches runs
 ///   triggered by one of that user's API keys.
+/// - `concurrency_group` - Filter by concurrency group (optional)
 /// - `page` — Page number, 1-based (default: 1)
 /// - `per_page` — Items per page (default: 20, max: 100)
 #[cfg_attr(
@@ -52,6 +53,7 @@ pub async fn list_runs(
         has_steps: params.has_steps,
         labels,
         created_by_user_id: params.created_by,
+        concurrency_group: params.concurrency_group,
     };
 
     let page_result = state.store.list_runs(filter, page, per_page).await?;
@@ -79,8 +81,8 @@ mod tests {
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
-        ApiKeyScope, NewApiKey, NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind,
-        TriggerKind, step_trace_id,
+        ApiKeyScope, ConcurrencyLimit, NewApiKey, NewRun, NewStep, NewUser, RunActor, RunStatus,
+        StepKind, TriggerKind, step_trace_id,
     };
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
@@ -149,6 +151,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -167,6 +170,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -206,6 +210,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -232,6 +237,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -272,6 +278,7 @@ mod tests {
                     scheduled_at: None,
                     idempotency_key: None,
                     concurrency_key: None,
+                    concurrency_limits: Vec::new(),
                     max_cost_usd: None,
                 })
                 .await
@@ -411,6 +418,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -466,6 +474,7 @@ mod tests {
                 created_by,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -589,5 +598,42 @@ mod tests {
         assert_eq!(body["data"][0]["created_by"]["kind"], "system");
         assert!(body["data"][0]["created_by"]["id"].is_null());
         assert_eq!(body["data"][0]["created_by"]["label"], "api");
+    }
+
+    #[tokio::test]
+    async fn concurrency_group_filter_keeps_only_runs_of_that_group() {
+        let state = test_state();
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
+        for (workflow, group) in [("in-group", "repo:acme"), ("other-group", "repo:other")] {
+            state
+                .store
+                .create_run(NewRun {
+                    workflow_name: workflow.to_string(),
+                    trigger: TriggerKind::Api,
+                    payload: json!({}),
+                    max_retries: 0,
+                    handler_version: None,
+                    labels: HashMap::new(),
+                    scheduled_at: None,
+                    created_by: None,
+                    idempotency_key: None,
+                    concurrency_key: None,
+                    concurrency_limits: vec![ConcurrencyLimit::new(group, 2)],
+                    max_cost_usd: None,
+                })
+                .await
+                .expect("create run");
+        }
+        create_run_authored_by(&state, "no-group", None).await;
+
+        let (status, body) = list(state, auth_header, "concurrency_group=repo:acme").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["meta"]["total"], 1);
+        assert_eq!(body["data"][0]["workflow_name"], "in-group");
+        assert_eq!(
+            body["data"][0]["concurrency_limits"],
+            json!([{"group": "repo:acme", "limit": 2}])
+        );
     }
 }

@@ -1,11 +1,13 @@
 //! `create_run` MCP tool.
 
+use ironflow_types::parse_concurrency_limit;
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::CallToolResult;
 use rust_mcp_sdk::schema::schema_utils::CallToolError;
 use serde_json::{Value, json, to_string_pretty};
 
 use crate::client::ApiClient;
+use crate::error::McpError;
 
 /// Trigger a workflow execution.
 #[mcp_tool(
@@ -34,6 +36,12 @@ pub struct CreateRunTool {
     /// key is released once that run completes, fails or is cancelled. At
     /// most 255 bytes.
     pub concurrency_key: Option<String>,
+    /// Optional concurrency groups the run joins, each written "GROUP=N" (for
+    /// example "repo:acme=2"). The run is created at once, but a worker only
+    /// starts it while, for every group, fewer than N root runs of that group
+    /// are running; until then it stays pending. Each group is at most 255
+    /// bytes and listed once; N is at least 1.
+    pub concurrency_limits: Option<Vec<String>>,
 }
 
 impl CreateRunTool {
@@ -54,6 +62,14 @@ impl CreateRunTool {
         if let Some(concurrency_key) = &self.concurrency_key {
             body["concurrency_key"] = json!(concurrency_key);
         }
+        if let Some(limits) = &self.concurrency_limits {
+            let limits = limits
+                .iter()
+                .map(String::as_str)
+                .map(concurrency_limit_json)
+                .collect::<Result<Vec<Value>, CallToolError>>()?;
+            body["concurrency_limits"] = Value::Array(limits);
+        }
 
         let run: Value = match &self.idempotency_key {
             Some(key) => client.post_idempotent("/runs", &body, key).await,
@@ -64,4 +80,15 @@ impl CreateRunTool {
         let text = to_string_pretty(&run).map_err(CallToolError::new)?;
         Ok(CallToolResult::text_content(vec![text.into()]))
     }
+}
+
+/// Turn a `GROUP=N` entry into the `{"group", "limit"}` object the API expects,
+/// splitting on the last `=`. The API validates the group and the limit.
+fn concurrency_limit_json(entry: &str) -> Result<Value, CallToolError> {
+    let (group, limit) = parse_concurrency_limit(entry).map_err(|reason| {
+        CallToolError::new(McpError::Validation(format!(
+            "invalid concurrency limit: {reason}"
+        )))
+    })?;
+    Ok(json!({ "group": group, "limit": limit }))
 }

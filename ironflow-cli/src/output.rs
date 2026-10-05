@@ -12,7 +12,7 @@ use comfy_table::{Cell, CellAlignment, Color, ContentArrangement, Table};
 use ironflow_sdk::client::ApiResponse;
 use ironflow_sdk::types::{
     AccountState, AccountWindowResponse, AccountWindowStatus, ApiKeyResponse, ApiKeyScope,
-    ArtifactResponse, AuditLogEntry, CreateApiKeyResponse, ExecutionPlanResponse,
+    ArtifactResponse, AuditLogEntry, ConcurrencyLimit, CreateApiKeyResponse, ExecutionPlanResponse,
     KeyVersionsResponse, PlannedStepResponse, ProviderAccountResponse, RunDetailResponse,
     RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsHistoryResponse, StatsResponse,
     StepResponse, StepStatus, UserGroupsResponse, UserResponse, WorkflowDetailResponse,
@@ -331,6 +331,13 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
         Cell::new(format!("{}/{}", run.retry_count, run.max_retries)),
     ]);
 
+    if !run.concurrency_limits.is_empty() {
+        table.add_row(vec![
+            Cell::new("Concurrency groups"),
+            Cell::new(format_concurrency_limits(&run.concurrency_limits)),
+        ]);
+    }
+
     if let Some(ref error) = run.error {
         table.add_row(vec![Cell::new("Error"), Cell::new(error).fg(Color::Red)]);
     }
@@ -347,6 +354,15 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
     }
 
     table
+}
+
+/// List the concurrency groups of a run as `group (limit)`, comma separated.
+fn format_concurrency_limits(limits: &[ConcurrencyLimit]) -> String {
+    limits
+        .iter()
+        .map(|l| format!("{} ({})", l.group, l.limit))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Summarize a step's artifacts as a count and a total size.
@@ -1197,6 +1213,7 @@ mod tests {
             created_by,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
             output: None,
         }
@@ -1469,6 +1486,56 @@ mod tests {
         assert!(
             output.contains("/hooks/github"),
             "author missing from:\n{output}"
+        );
+    }
+
+    #[test]
+    fn format_concurrency_limits_lists_each_group_with_its_limit() {
+        let limits = [
+            ConcurrencyLimit {
+                group: "repo:acme".to_string(),
+                limit: 2,
+            },
+            ConcurrencyLimit {
+                group: "tenant:42".to_string(),
+                limit: 1,
+            },
+        ];
+        assert_eq!(
+            format_concurrency_limits(&limits),
+            "repo:acme (2), tenant:42 (1)"
+        );
+    }
+
+    #[test]
+    fn run_detail_table_shows_concurrency_groups_only_when_present() {
+        let mut detail = RunDetailResponse {
+            run: run_fixture(CreatedBy {
+                kind: CreatedByKind::System,
+                id: None,
+                label: "api".to_string(),
+            }),
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+        };
+        let output = run_detail_table(&detail).to_string();
+        assert!(
+            !output.contains("Concurrency groups"),
+            "unexpected row in:\n{output}"
+        );
+
+        detail.run.concurrency_limits = vec![ConcurrencyLimit {
+            group: "repo:acme".to_string(),
+            limit: 2,
+        }];
+        let output = run_detail_table(&detail).to_string();
+        assert!(
+            output.contains("Concurrency groups"),
+            "row missing from:\n{output}"
+        );
+        assert!(
+            output.contains("repo:acme (2)"),
+            "group missing from:\n{output}"
         );
     }
 

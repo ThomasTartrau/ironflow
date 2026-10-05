@@ -49,6 +49,7 @@ fn new_run(name: &str, key: Option<String>) -> NewRun {
         created_by: None,
         idempotency_key: key,
         concurrency_key: None,
+        concurrency_limits: Vec::new(),
         max_cost_usd: None,
     }
 }

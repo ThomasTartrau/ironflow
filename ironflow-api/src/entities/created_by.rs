@@ -137,6 +137,7 @@ mod tests {
                 created_by,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await

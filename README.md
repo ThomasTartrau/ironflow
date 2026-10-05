@@ -342,6 +342,39 @@ A sub-workflow takes the key through `ctx.workflow_with`; a conflict completes t
 step with the run holding the key instead of failing the parent (see the mdBook,
 *Steps*).
 
+### Run concurrency groups
+
+A concurrency key refuses a second run. A concurrency group queues it instead:
+`POST /api/v1/runs` accepts an optional `concurrency_limits` list, and a run that joins
+a group with a limit of `N` is only started while fewer than `N` runs of that group are
+running. The others stay `pending` and start as slots free up. Use it to cap the runs
+that hit the same repository, tenant or environment, whatever the worker count.
+
+```bash
+curl -X POST https://ironflow.example.com/api/v1/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"workflow": "fix-issue", "payload": {"issue": 12},
+       "concurrency_limits": [{"group": "repo:acme", "limit": 2}]}'
+```
+
+- A run may join several groups; it starts only once every one of them has a free slot.
+  Each run carries its own limit, read when it is picked.
+- A blocked run does not hold up the queue: a worker skips it and picks the next pending
+  run whose groups are free.
+- Only root runs take a slot. A sub-workflow runs inside its parent's slot and carries no
+  group of its own.
+- A group is at most **255 bytes** and must not be empty; a limit is at least `1`; a group
+  appears once per run. Otherwise the call answers `400`.
+- Retries and replays keep the groups of the original run.
+- `GET /api/v1/runs` and `GET /api/v1/stats` take `concurrency_group=repo:acme` to list
+  the runs of a group.
+- The CLI takes `--concurrency-limit repo:acme=2` (repeat it for several groups) and
+  `ironflow run list --concurrency-group repo:acme`; the MCP `create_run` tool takes
+  `concurrency_limits: ["repo:acme=2"]`.
+- With the `prometheus` feature, `ironflow_worker_queue_blocked_runs{group}` counts the
+  pending runs a saturated group holds back.
+
 ### Artifacts
 
 Steps produce text and JSON outputs by default. When a step produces *files*, declare them and
@@ -644,6 +677,7 @@ let created = client
         max_retries: Some(2),
         max_cost_usd: Some(1.0),
         concurrency_key: None,
+        concurrency_limits: Vec::new(),
     })
     .await?;
 

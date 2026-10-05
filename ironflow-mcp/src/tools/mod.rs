@@ -226,7 +226,8 @@ mod tests {
                             "per_page": params.get("per_page").cloned().unwrap_or("20".to_string()),
                             "workflow": params.get("workflow").cloned(),
                             "status": params.get("status").cloned(),
-                            "created_by": params.get("created_by").cloned()
+                            "created_by": params.get("created_by").cloned(),
+                            "concurrency_group": params.get("concurrency_group").cloned()
                         }
                     }))
                 })
@@ -249,6 +250,9 @@ mod tests {
                     }
                     if let Some(key) = body.get("concurrency_key") {
                         data["concurrency_key"] = key.clone();
+                    }
+                    if let Some(limits) = body.get("concurrency_limits") {
+                        data["concurrency_limits"] = limits.clone();
                     }
                     (StatusCode::CREATED, Json(json!({ "data": data })))
                 }),
@@ -629,6 +633,7 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -651,6 +656,7 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -672,6 +678,7 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -691,6 +698,7 @@ mod tests {
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost_usd: None,
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -710,6 +718,7 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -729,6 +738,7 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: Some(2.5),
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -748,6 +758,7 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -767,6 +778,7 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
             concurrency_key: Some("issue:12".to_string()),
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -786,12 +798,79 @@ mod tests {
             idempotency_key: None,
             max_cost_usd: None,
             concurrency_key: None,
+            concurrency_limits: None,
         };
 
         let result = tool.run(&client).await.unwrap();
         let parsed = extract_json(&result);
 
         assert!(parsed.get("concurrency_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_forwards_the_concurrency_limits() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: None,
+            concurrency_limits: Some(vec!["repo:acme=2".to_string(), "env=prod=1".to_string()]),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(
+            parsed["concurrency_limits"],
+            json!([
+                { "group": "repo:acme", "limit": 2 },
+                { "group": "env=prod", "limit": 1 }
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn create_run_omits_the_concurrency_limits_when_absent() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: None,
+            concurrency_limits: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed.get("concurrency_limits").is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_a_malformed_concurrency_limit() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        for entry in ["repo:acme", "repo:acme=two", "repo:acme=-1"] {
+            let tool = CreateRunTool {
+                workflow: "deploy".to_string(),
+                payload: None,
+                max_retries: None,
+                idempotency_key: None,
+                max_cost_usd: None,
+                concurrency_key: None,
+                concurrency_limits: Some(vec![entry.to_string()]),
+            };
+
+            let err = tool.run(&client).await.unwrap_err();
+            assert!(err.to_string().contains(entry), "{entry}: {err}");
+        }
     }
 
     // ---------------------------------------------------------------
@@ -806,6 +885,7 @@ mod tests {
             workflow: Some("deploy".to_string()),
             status: Some("running".to_string()),
             created_by: Some("019a3f2b-0000-7000-8000-000000000000".to_string()),
+            concurrency_group: Some("repo:acme".to_string()),
             page: Some(2),
             per_page: Some(10),
         };
@@ -821,6 +901,7 @@ mod tests {
             parsed["meta"]["created_by"],
             "019a3f2b-0000-7000-8000-000000000000"
         );
+        assert_eq!(parsed["meta"]["concurrency_group"], "repo:acme");
         assert_eq!(parsed["data"][0]["id"], "r1");
     }
 
@@ -832,6 +913,7 @@ mod tests {
             workflow: None,
             status: None,
             created_by: None,
+            concurrency_group: None,
             page: None,
             per_page: None,
         };
@@ -844,6 +926,7 @@ mod tests {
         assert!(parsed["meta"]["workflow"].is_null());
         assert!(parsed["meta"]["status"].is_null());
         assert!(parsed["meta"]["created_by"].is_null());
+        assert!(parsed["meta"]["concurrency_group"].is_null());
     }
 
     // ---------------------------------------------------------------

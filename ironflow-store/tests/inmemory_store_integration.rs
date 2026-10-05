@@ -22,6 +22,7 @@ fn new_run(name: &str) -> NewRun {
         scheduled_at: None,
         idempotency_key: None,
         concurrency_key: None,
+        concurrency_limits: Vec::new(),
         max_cost_usd: None,
     }
 }
@@ -1002,6 +1003,7 @@ async fn large_payload_preserved_in_roundtrip() {
         scheduled_at: None,
         idempotency_key: None,
         concurrency_key: None,
+        concurrency_limits: Vec::new(),
         max_cost_usd: None,
     };
 
@@ -1889,6 +1891,294 @@ async fn idempotent_replay_with_a_concurrency_key_returns_the_existing_run() {
     assert!(first.is_created());
     assert!(!replay.is_created());
     assert_eq!(replay.run().id, first.run().id);
+}
+
+// ---- concurrency groups ----
+
+fn new_run_in(name: &str, limits: &[(&str, u32)]) -> NewRun {
+    NewRun {
+        concurrency_limits: limits
+            .iter()
+            .map(|(group, limit)| ConcurrencyLimit::new(*group, *limit))
+            .collect(),
+        ..new_run(name)
+    }
+}
+
+async fn create(store: &InMemoryStore, req: NewRun) -> Run {
+    store.create_run(req).await.unwrap().into_run()
+}
+
+async fn pick_id(store: &InMemoryStore) -> Option<Uuid> {
+    store.pick_next_pending(None).await.unwrap().map(|r| r.id)
+}
+
+#[tokio::test]
+async fn pick_next_pending_holds_back_run_beyond_group_limit() {
+    let store = InMemoryStore::new();
+    let r1 = create(&store, new_run_in("deploy", &[("g", 2)])).await;
+    let r2 = create(&store, new_run_in("deploy", &[("g", 2)])).await;
+    let r3 = create(&store, new_run_in("deploy", &[("g", 2)])).await;
+
+    assert_eq!(pick_id(&store).await, Some(r1.id));
+    assert_eq!(pick_id(&store).await, Some(r2.id));
+    assert_eq!(pick_id(&store).await, None, "group g is saturated");
+
+    let still_pending = store.get_run(r3.id).await.unwrap().unwrap();
+    assert_eq!(still_pending.status.state, RunStatus::Pending);
+
+    store
+        .update_run_status(r1.id, RunStatus::Completed)
+        .await
+        .unwrap();
+
+    assert_eq!(pick_id(&store).await, Some(r3.id));
+}
+
+#[tokio::test]
+async fn pick_next_pending_skips_blocked_group_for_other_group() {
+    let store = InMemoryStore::new();
+    let a1 = create(&store, new_run_in("deploy", &[("a", 1)])).await;
+    assert_eq!(pick_id(&store).await, Some(a1.id));
+
+    let a2 = create(&store, new_run_in("deploy", &[("a", 1)])).await;
+    let b1 = create(&store, new_run_in("deploy", &[("b", 1)])).await;
+    let free = create(&store, new_run("deploy")).await;
+
+    assert_eq!(pick_id(&store).await, Some(b1.id));
+    assert_eq!(pick_id(&store).await, Some(free.id));
+    assert_eq!(pick_id(&store).await, None);
+
+    let held = store.get_run(a2.id).await.unwrap().unwrap();
+    assert_eq!(held.status.state, RunStatus::Pending);
+}
+
+#[tokio::test]
+async fn pick_next_pending_uses_each_run_own_limit() {
+    let store = InMemoryStore::new();
+    let strict = create(&store, new_run_in("deploy", &[("g", 1)])).await;
+    assert_eq!(pick_id(&store).await, Some(strict.id));
+
+    // The strict run would be held back, the lenient one is still under its
+    // own limit of 2.
+    let blocked = create(&store, new_run_in("deploy", &[("g", 1)])).await;
+    let lenient = create(&store, new_run_in("deploy", &[("g", 2)])).await;
+
+    assert_eq!(pick_id(&store).await, Some(lenient.id));
+    assert_eq!(pick_id(&store).await, None);
+    let held = store.get_run(blocked.id).await.unwrap().unwrap();
+    assert_eq!(held.status.state, RunStatus::Pending);
+}
+
+#[tokio::test]
+async fn pick_next_pending_requires_every_group_under_limit() {
+    let store = InMemoryStore::new();
+    let a = create(&store, new_run_in("deploy", &[("a", 1)])).await;
+    assert_eq!(pick_id(&store).await, Some(a.id));
+
+    let multi = create(&store, new_run_in("deploy", &[("a", 1), ("b", 5)])).await;
+    assert_eq!(pick_id(&store).await, None, "group a is saturated");
+
+    store
+        .update_run_status(a.id, RunStatus::Completed)
+        .await
+        .unwrap();
+    assert_eq!(pick_id(&store).await, Some(multi.id));
+}
+
+#[tokio::test]
+async fn pick_next_pending_does_not_count_sub_workflow_runs() {
+    let store = InMemoryStore::new();
+    let parent = create(&store, new_run_in("parent", &[("g", 2)])).await;
+    assert_eq!(pick_id(&store).await, Some(parent.id));
+
+    let child = create(
+        &store,
+        NewRun {
+            trigger: TriggerKind::Workflow,
+            ..new_run("child")
+        },
+    )
+    .await;
+    assert_eq!(pick_id(&store).await, Some(child.id));
+
+    // Only the parent counts in g: one running out of two.
+    let second = create(&store, new_run_in("parent", &[("g", 2)])).await;
+    assert_eq!(pick_id(&store).await, Some(second.id));
+
+    let third = create(&store, new_run_in("parent", &[("g", 2)])).await;
+    assert_eq!(pick_id(&store).await, None);
+    let held = store.get_run(third.id).await.unwrap().unwrap();
+    assert_eq!(held.status.state, RunStatus::Pending);
+}
+
+#[tokio::test]
+async fn pick_next_pending_sleeping_run_frees_group_slot() {
+    let store = InMemoryStore::new();
+    let a = create(&store, new_run_in("deploy", &[("g", 1)])).await;
+    let b = create(&store, new_run_in("deploy", &[("g", 1)])).await;
+    assert_eq!(pick_id(&store).await, Some(a.id));
+    assert_eq!(pick_id(&store).await, None);
+
+    store
+        .update_run_status(a.id, RunStatus::Sleeping)
+        .await
+        .unwrap();
+
+    assert_eq!(pick_id(&store).await, Some(b.id));
+}
+
+#[tokio::test]
+async fn concurrent_picks_on_single_slot_group_only_one_wins() {
+    let store = InMemoryStore::new();
+    for _ in 0..10 {
+        create(&store, new_run_in("deploy", &[("g", 1)])).await;
+    }
+
+    let mut handles = Vec::new();
+    for _ in 0..20 {
+        let s = store.clone();
+        handles.push(tokio::spawn(async move { s.pick_next_pending(None).await }));
+    }
+
+    let mut picked = 0;
+    for handle in handles {
+        if handle.await.unwrap().unwrap().is_some() {
+            picked += 1;
+        }
+    }
+    assert_eq!(picked, 1, "a single-slot group admits exactly one run");
+
+    let running = store
+        .list_runs(
+            RunFilter {
+                status: Some(RunStatus::Running),
+                ..RunFilter::default()
+            },
+            1,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(running.total, 1);
+}
+
+#[tokio::test]
+async fn create_run_rejects_invalid_concurrency_limits() {
+    let store = InMemoryStore::new();
+
+    let cases: [&[(&str, u32)]; 3] = [&[("g", 0)], &[("", 1)], &[("g", 1), ("g", 2)]];
+    for limits in cases {
+        let err = store
+            .create_run(new_run_in("deploy", limits))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::InvalidConcurrencyLimit(_)),
+            "unexpected error for {limits:?}: {err:?}"
+        );
+    }
+
+    let zero = store
+        .create_run(new_run_in("deploy", &[("g", 0)]))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        zero,
+        StoreError::InvalidConcurrencyLimit(ConcurrencyLimitError::ZeroLimit { .. })
+    ));
+
+    let page = store.list_runs(RunFilter::default(), 1, 100).await.unwrap();
+    assert_eq!(page.total, 0, "an invalid run must not be stored");
+}
+
+#[tokio::test]
+async fn create_run_stores_concurrency_limits() {
+    let store = InMemoryStore::new();
+    let limits = [("repo:acme", 2), ("tenant:42", 5)];
+    let run = create(&store, new_run_in("deploy", &limits)).await;
+
+    let fetched = store.get_run(run.id).await.unwrap().unwrap();
+    assert_eq!(
+        fetched.concurrency_limits,
+        vec![
+            ConcurrencyLimit::new("repo:acme", 2),
+            ConcurrencyLimit::new("tenant:42", 5),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn list_runs_filters_by_concurrency_group() {
+    let store = InMemoryStore::new();
+    let in_g = create(&store, new_run_in("deploy", &[("g", 1), ("h", 3)])).await;
+    create(&store, new_run_in("deploy", &[("other", 1)])).await;
+    create(&store, new_run("deploy")).await;
+
+    let page = store
+        .list_runs(
+            RunFilter {
+                concurrency_group: Some("g".to_string()),
+                ..RunFilter::default()
+            },
+            1,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].id, in_g.id);
+
+    let none = store
+        .list_runs(
+            RunFilter {
+                concurrency_group: Some("missing".to_string()),
+                ..RunFilter::default()
+            },
+            1,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(none.total, 0);
+}
+
+#[tokio::test]
+async fn count_blocked_runs_by_group_reports_saturated_groups() {
+    let store = InMemoryStore::new();
+    assert!(
+        store
+            .count_blocked_runs_by_group()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let a = create(&store, new_run_in("deploy", &[("a", 1)])).await;
+    assert_eq!(pick_id(&store).await, Some(a.id));
+
+    create(&store, new_run_in("deploy", &[("a", 1)])).await;
+    create(&store, new_run_in("deploy", &[("a", 1), ("b", 1)])).await;
+    // Still under its own limit: not counted.
+    create(&store, new_run_in("deploy", &[("a", 3)])).await;
+    // Not due yet: not counted.
+    create(
+        &store,
+        NewRun {
+            scheduled_at: Some(Utc::now() + TimeDelta::hours(1)),
+            ..new_run_in("deploy", &[("a", 1)])
+        },
+    )
+    .await;
+
+    let backlog = store.count_blocked_runs_by_group().await.unwrap();
+    assert_eq!(
+        backlog,
+        vec![ConcurrencyGroupBacklog {
+            group: "a".to_string(),
+            blocked_runs: 2,
+        }]
+    );
 }
 
 #[tokio::test]

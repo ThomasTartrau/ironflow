@@ -610,6 +610,26 @@
         ],
         "type": "object"
       },
+      "ConcurrencyLimit": {
+        "description": "Membership of a run in a concurrency group, with the limit the run accepts.\n\nA run is only moved to `Running` while fewer than `limit` root runs\ncarrying `group` are running. Each run is compared against its own limit,\nso two runs of the same group may carry different limits.\n\n# Examples\n\n```\nuse ironflow_store::entities::ConcurrencyLimit;\n\nlet limit = ConcurrencyLimit::new(\"repo:acme/api\", 2);\nassert_eq!(limit.group, \"repo:acme/api\");\nassert_eq!(limit.limit, 2);\n```",
+        "properties": {
+          "group": {
+            "description": "Name of the concurrency group (1 to 255 bytes).",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum number of root runs of this group running at once (at least 1).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group",
+          "limit"
+        ],
+        "type": "object"
+      },
       "ConditionResponse": {
         "description": "Outcome of a branch condition as recorded by the planner.",
         "properties": {
@@ -831,12 +851,19 @@
         "type": "object"
       },
       "CreateRunRequest": {
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n    concurrency_key: Some(\"issue:12\".to_string()),\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n    concurrency_key: Some(\"issue:12\".to_string()),\n    concurrency_limits: Vec::new(),\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "properties": {
           "concurrency_key": {
             "description": "Optional exclusivity key, at most 255 bytes.\n\nWhile a non-terminal run (pending, running, sleeping, retrying,\nawaiting approval) holds the same key, the request is refused with\n`409 CONCURRENCY_CONFLICT` naming that run. The key is released when\nthe run completes, fails, ends with a warning or is cancelled.",
             "nullable": true,
             "type": "string"
+          },
+          "concurrency_limits": {
+            "description": "Concurrency groups the run belongs to, each with its own limit.\n\nThe run is always created, but a worker only starts it once, for every\ngroup, fewer root runs of that group than its `limit` are running.\nUntil then it stays pending, and later runs of other groups go ahead.\nEach group is non-empty, at most 255 bytes and listed once; each limit\nis at least 1. Empty means no limit.",
+            "items": {
+              "$ref": "#/components/schemas/ConcurrencyLimit"
+            },
+            "type": "array"
           },
           "labels": {
             "additionalProperties": {
@@ -1659,6 +1686,11 @@
       "ListRunsQuery": {
         "description": "Query parameters for listing runs.",
         "properties": {
+          "concurrency_group": {
+            "description": "Filter by concurrency group: only runs that belong to this group.",
+            "nullable": true,
+            "type": "string"
+          },
           "created_by": {
             "description": "Filter by author: the user ID that triggered the run.\n\nAlso matches runs triggered by one of that user's API keys.",
             "format": "uuid",
@@ -2607,6 +2639,13 @@
             "description": "Exclusivity key held by this run until it reaches a terminal state,\nwhen one was supplied.",
             "nullable": true,
             "type": "string"
+          },
+          "concurrency_limits": {
+            "description": "Concurrency groups the run belongs to, with the limit it was created\nwith. Omitted when the run belongs to no group.",
+            "items": {
+              "$ref": "#/components/schemas/ConcurrencyLimit"
+            },
+            "type": "array"
           },
           "cost_usd": {
             "description": "Aggregated cost in USD.",
@@ -5678,7 +5717,7 @@
     },
     "/api/v1/runs": {
       "get": {
-        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
+        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `concurrency_group` - Filter by concurrency group (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
         "operationId": "list_runs",
         "parameters": [
           {
@@ -5724,6 +5763,15 @@
             "required": false,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by concurrency group: only runs that belong to this group.",
+            "in": "query",
+            "name": "concurrency_group",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           },
@@ -5779,7 +5827,7 @@
         ]
       },
       "post": {
-        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\nAn optional `concurrency_key` in the body makes the run exclusive: while a\nnon-terminal run holds the same key, the call is refused with 409\n`CONCURRENCY_CONFLICT` naming that run.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid, or the `Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::ConcurrencyConflict`] if a non-terminal run already\nholds the requested `concurrency_key`.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
+        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\nAn optional `concurrency_key` in the body makes the run exclusive: while a\nnon-terminal run holds the same key, the call is refused with 409\n`CONCURRENCY_CONFLICT` naming that run.\n\nOptional `concurrency_limits` in the body put the run in concurrency groups:\nit is created at once but a worker only starts it while, for each group,\nfewer root runs of that group than its limit are running.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid (including malformed `concurrency_limits`), or the `Idempotency-Key`\nheader is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::ConcurrencyConflict`] if a non-terminal run already\nholds the requested `concurrency_key`.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
         "operationId": "create_run",
         "parameters": [
           {
@@ -5825,7 +5873,7 @@
             "description": "Run created successfully"
           },
           "400": {
-            "description": "Unknown workflow, invalid body or malformed Idempotency-Key"
+            "description": "Unknown workflow, invalid body (including malformed concurrency_limits) or malformed Idempotency-Key"
           },
           "401": {
             "description": "Unauthorized"
@@ -7251,7 +7299,7 @@
     },
     "/api/v1/stats": {
       "get": {
-        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and\n`per_page` are ignored.",
+        "description": "Accepts the same filtering query parameters as `GET /api/v1/runs`\n(`workflow`, `status`, `has_steps`, `label`, `created_by`,\n`concurrency_group`). `page` and `per_page` are ignored.",
         "operationId": "get_stats",
         "parameters": [
           {
@@ -7297,6 +7345,15 @@
             "required": false,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by concurrency group: only runs that belong to this group.",
+            "in": "query",
+            "name": "concurrency_group",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           },

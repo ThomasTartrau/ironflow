@@ -6,7 +6,7 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::entities::RunStatus;
+use crate::entities::{ConcurrencyLimitError, RunStatus};
 
 /// Errors produced by [`RunStore`](crate::store::RunStore) operations.
 ///
@@ -80,6 +80,10 @@ pub enum StoreError {
         run_id: Uuid,
     },
 
+    /// The concurrency limits of a run are invalid.
+    #[error("invalid concurrency limit: {0}")]
+    InvalidConcurrencyLimit(#[from] ConcurrencyLimitError),
+
     /// The requested schedule does not exist.
     #[error("schedule not found: {0}")]
     ScheduleNotFound(Uuid),
@@ -147,6 +151,15 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("issue:12"));
         assert!(message.contains(&run_id.to_string()));
+    }
+
+    #[test]
+    fn invalid_concurrency_limit_display() {
+        let err = StoreError::from(ConcurrencyLimitError::EmptyGroup);
+        assert_eq!(
+            err.to_string(),
+            "invalid concurrency limit: concurrency group must not be empty"
+        );
     }
 
     #[test]

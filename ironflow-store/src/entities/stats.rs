@@ -338,6 +338,7 @@ impl StatsHistoryFilter {
             has_steps: self.has_steps,
             labels: self.labels.clone(),
             created_by_user_id: self.created_by_user_id,
+            concurrency_group: None,
         }
     }
 }

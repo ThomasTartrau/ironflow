@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use ironflow_store::models::{MAX_CONCURRENCY_KEY_LEN, MAX_IDEMPOTENCY_KEY_LEN};
+use ironflow_store::models::{
+    ConcurrencyLimit, MAX_CONCURRENCY_KEY_LEN, MAX_IDEMPOTENCY_KEY_LEN, validate_concurrency_limits,
+};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::Value;
@@ -24,6 +26,7 @@ use serde_json::Value;
 ///     max_retries: Some(2),
 ///     max_cost_usd: None,
 ///     concurrency_key: Some("issue:12".to_string()),
+///     concurrency_limits: Vec::new(),
 /// };
 /// assert_eq!(req.workflow, "deploy");
 /// ```
@@ -66,6 +69,15 @@ pub struct CreateRunRequest {
     /// the run completes, fails, ends with a warning or is cancelled.
     #[serde(default)]
     pub concurrency_key: Option<String>,
+    /// Concurrency groups the run belongs to, each with its own limit.
+    ///
+    /// The run is always created, but a worker only starts it once, for every
+    /// group, fewer root runs of that group than its `limit` are running.
+    /// Until then it stays pending, and later runs of other groups go ahead.
+    /// Each group is non-empty, at most 255 bytes and listed once; each limit
+    /// is at least 1. Empty means no limit.
+    #[serde(default)]
+    pub concurrency_limits: Vec<ConcurrencyLimit>,
 }
 
 impl CreateRunRequest {
@@ -75,7 +87,8 @@ impl CreateRunRequest {
     ///
     /// Returns a human-readable message when `max_cost_usd` is negative, or
     /// when `concurrency_key` is blank or longer than
-    /// [`MAX_CONCURRENCY_KEY_LEN`] bytes.
+    /// [`MAX_CONCURRENCY_KEY_LEN`] bytes, or when `concurrency_limits` holds an
+    /// empty or too long group, a zero limit or a group listed twice.
     ///
     /// # Examples
     ///
@@ -91,6 +104,7 @@ impl CreateRunRequest {
     ///     max_retries: None,
     ///     max_cost_usd: Some(Decimal::new(-1, 0)),
     ///     concurrency_key: None,
+    ///     concurrency_limits: Vec::new(),
     /// };
     /// assert!(req.validate().is_err());
     /// ```
@@ -102,13 +116,17 @@ impl CreateRunRequest {
         }
         match self.concurrency_key.as_deref() {
             Some(key) if key.trim().is_empty() => {
-                Err("concurrency_key must not be empty".to_string())
+                return Err("concurrency_key must not be empty".to_string());
             }
-            Some(key) if key.len() > MAX_CONCURRENCY_KEY_LEN => Err(format!(
-                "concurrency_key must be at most {MAX_CONCURRENCY_KEY_LEN} bytes"
-            )),
-            _ => Ok(()),
+            Some(key) if key.len() > MAX_CONCURRENCY_KEY_LEN => {
+                return Err(format!(
+                    "concurrency_key must be at most {MAX_CONCURRENCY_KEY_LEN} bytes"
+                ));
+            }
+            _ => {}
         }
+        validate_concurrency_limits(&self.concurrency_limits)
+            .map_err(|e| format!("concurrency_limits: {e}"))
     }
 }
 
@@ -206,6 +224,7 @@ mod tests {
             max_retries: None,
             max_cost_usd,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         }
     }
 
@@ -375,5 +394,72 @@ mod tests {
                 .message()
                 .contains("ASCII")
         );
+    }
+
+    fn limited(concurrency_limits: Vec<ConcurrencyLimit>) -> CreateRunRequest {
+        CreateRunRequest {
+            concurrency_limits,
+            ..request(None)
+        }
+    }
+
+    #[test]
+    fn concurrency_limits_default_to_empty_when_absent() {
+        let req: CreateRunRequest = from_str(r#"{"workflow":"deploy"}"#).expect("deserialize");
+        assert!(req.concurrency_limits.is_empty());
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn concurrency_limits_parse_from_json() {
+        let req: CreateRunRequest = from_str(
+            r#"{"workflow":"deploy","concurrency_limits":[{"group":"repo:acme","limit":2}]}"#,
+        )
+        .expect("deserialize");
+        assert_eq!(
+            req.concurrency_limits,
+            vec![ConcurrencyLimit::new("repo:acme", 2)]
+        );
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn concurrency_limits_reject_a_negative_limit_at_deserialization() {
+        let res: Result<CreateRunRequest, _> = from_str(
+            r#"{"workflow":"deploy","concurrency_limits":[{"group":"repo:acme","limit":-1}]}"#,
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_concurrency_limits() {
+        let cases = [
+            (
+                vec![ConcurrencyLimit::new("repo:acme", 0)],
+                "concurrency_limits: concurrency limit for group 'repo:acme' must be at least 1",
+            ),
+            (
+                vec![ConcurrencyLimit::new("  ", 1)],
+                "concurrency_limits: concurrency group must not be empty",
+            ),
+            (
+                vec![
+                    ConcurrencyLimit::new("repo:acme", 1),
+                    ConcurrencyLimit::new("repo:acme", 2),
+                ],
+                "concurrency_limits: concurrency group 'repo:acme' is listed more than once",
+            ),
+        ];
+        for (limits, expected) in cases {
+            let err = limited(limits)
+                .validate()
+                .expect_err("invalid limits must be rejected");
+            assert_eq!(err, expected);
+        }
+
+        let err = limited(vec![ConcurrencyLimit::new("g".repeat(256), 1)])
+            .validate()
+            .expect_err("over-long group must be rejected");
+        assert!(err.contains("255 bytes"), "{err}");
     }
 }

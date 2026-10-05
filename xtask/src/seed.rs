@@ -477,6 +477,7 @@ async fn seed_runs(store: &dyn Store, users: &[SeededUser]) -> anyhow::Result<Ve
                 created_by,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await?;

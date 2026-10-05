@@ -224,6 +224,25 @@ export function Component() {
 					</div>
 				)}
 
+				{run.concurrency_limits && run.concurrency_limits.length > 0 && (
+					<div className="flex items-center gap-2">
+						<span className="text-sm font-medium text-muted-foreground">
+							Concurrency groups
+						</span>
+						<div className="flex flex-wrap gap-1.5">
+							{run.concurrency_limits.map((limit) => (
+								<Badge
+									key={limit.group}
+									variant="secondary"
+									className="font-mono text-xs gap-1"
+								>
+									{limit.group} ({limit.limit})
+								</Badge>
+							))}
+						</div>
+					</div>
+				)}
+
 				{!isEmptyPayload(payload) && (
 					<CollapsibleSection storageKey="run-payload" title="Payload">
 						<pre className="text-sm font-mono bg-muted/50 rounded-[var(--radius)] p-4 overflow-x-auto">

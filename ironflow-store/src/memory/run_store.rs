@@ -1,14 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::entities::{
-    ApiKey, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page,
-    PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter,
-    RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval,
-    StepDependency, StepStatus, StepUpdate, User,
+    ApiKey, ConcurrencyGroupBacklog, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep,
+    NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor,
+    RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter,
+    Step, StepApproval, StepDependency, StepStatus, StepUpdate, TriggerKind, User,
+    validate_concurrency_limits,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -52,6 +53,33 @@ fn run_with_label(run: &Run, state: &State) -> Run {
 fn clear_lease(run: &mut Run) {
     run.worker_id = None;
     run.lease_expires_at = None;
+}
+
+/// Number of root runs in `Running` that carry `group`.
+///
+/// Sub-workflow runs execute inside their parent's slot and are never counted.
+fn running_count(runs: &HashMap<Uuid, Run>, group: &str) -> u64 {
+    runs.values()
+        .filter(|r| {
+            r.status.state == RunStatus::Running
+                && !matches!(r.trigger, TriggerKind::Workflow)
+                && r.concurrency_limits.iter().any(|l| l.group == group)
+        })
+        .count() as u64
+}
+
+/// Whether at least one of the run's concurrency groups is saturated for the
+/// run's own limit.
+fn is_blocked(run: &Run, runs: &HashMap<Uuid, Run>) -> bool {
+    run.concurrency_limits
+        .iter()
+        .any(|l| running_count(runs, &l.group) >= u64::from(l.limit))
+}
+
+/// Whether a run waits for a pick: pending or retrying, and due.
+fn is_due(run: &Run, now: DateTime<Utc>) -> bool {
+    matches!(run.status.state, RunStatus::Pending | RunStatus::Retrying)
+        && run.scheduled_at.is_none_or(|at| at <= now)
 }
 
 fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>) -> bool {
@@ -101,12 +129,18 @@ fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>
     {
         return false;
     }
+    if let Some(ref group) = filter.concurrency_group
+        && !run.concurrency_limits.iter().any(|l| &l.group == group)
+    {
+        return false;
+    }
     true
 }
 
 impl RunStore for InMemoryStore {
     fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
         Box::pin(async move {
+            validate_concurrency_limits(&req.concurrency_limits)?;
             let now = Utc::now();
 
             // Single critical section: the key lookup and the insert cannot be
@@ -168,6 +202,7 @@ impl RunStore for InMemoryStore {
                 created_by_label: None,
                 idempotency_key: req.idempotency_key.clone(),
                 concurrency_key: req.concurrency_key,
+                concurrency_limits: req.concurrency_limits,
                 max_cost_usd: req.max_cost_usd,
                 worker_id: None,
                 lease_expires_at: None,
@@ -337,14 +372,14 @@ impl RunStore for InMemoryStore {
             // Find the oldest run waiting for execution whose scheduled_at has
             // passed (or is None). `Retrying` runs are runs whose automatic retry
             // backoff has been armed: they become eligible again once
-            // `scheduled_at` has passed.
+            // `scheduled_at` has passed. Runs held back by a saturated
+            // concurrency group are skipped, so they never block younger runs.
+            // The group check and the transition below happen under the same
+            // write lock, so concurrent pickers cannot overshoot a limit.
             let oldest_id = state
                 .runs
                 .values()
-                .filter(|r| {
-                    matches!(r.status.state, RunStatus::Pending | RunStatus::Retrying)
-                        && r.scheduled_at.is_none_or(|at| at <= now)
-                })
+                .filter(|r| is_due(r, now) && !is_blocked(r, &state.runs))
                 .min_by_key(|r| r.created_at)
                 .map(|r| r.id);
 
@@ -368,6 +403,30 @@ impl RunStore for InMemoryStore {
             let run = run.clone();
 
             Ok(Some(run_with_label(&run, &state)))
+        })
+    }
+
+    fn count_blocked_runs_by_group(&self) -> StoreFuture<'_, Vec<ConcurrencyGroupBacklog>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            let now = Utc::now();
+
+            let mut blocked: BTreeMap<String, u64> = BTreeMap::new();
+            for run in state.runs.values().filter(|r| is_due(r, now)) {
+                for limit in &run.concurrency_limits {
+                    if running_count(&state.runs, &limit.group) >= u64::from(limit.limit) {
+                        *blocked.entry(limit.group.clone()).or_default() += 1;
+                    }
+                }
+            }
+
+            Ok(blocked
+                .into_iter()
+                .map(|(group, blocked_runs)| ConcurrencyGroupBacklog {
+                    group,
+                    blocked_runs,
+                })
+                .collect())
         })
     }
 
@@ -2507,6 +2566,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -2527,6 +2587,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -2547,6 +2608,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -2565,6 +2627,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -2585,6 +2648,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await

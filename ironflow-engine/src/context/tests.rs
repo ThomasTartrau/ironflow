@@ -131,6 +131,7 @@ async fn context_skip_creates_skipped_step() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -199,6 +200,7 @@ async fn child_run_of_parent_authored_by(created_by: Option<RunActor>) -> Run {
             created_by,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -301,6 +303,7 @@ async fn context_approval_first_execution_returns_error() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -356,6 +359,7 @@ async fn context_approval_replay_returns_ok() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -447,6 +451,7 @@ async fn context_load_replay_steps_loads_completed_steps() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -541,6 +546,7 @@ async fn context_load_replay_steps_keeps_the_oldest_completed_step_on_position_c
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -653,6 +659,7 @@ async fn context_load_replay_steps_populates_replay_wave_steps() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -736,6 +743,7 @@ async fn context_load_replay_steps_includes_skipped_steps() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -802,6 +810,7 @@ async fn context_payload_returns_run_payload() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -866,6 +875,7 @@ async fn context_last_step_ids_tracks_executed_steps() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -909,6 +919,7 @@ async fn context_with_run() -> (Arc<InMemoryStore>, WorkflowContext) {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -1051,6 +1062,7 @@ async fn when_applies_the_predicate_to_the_payload() {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -1131,6 +1143,7 @@ async fn context_with_replayed_step_at_position_zero(
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await

@@ -1,6 +1,6 @@
 //! [`Run`] entity and related request/update types.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 
@@ -8,6 +8,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 use uuid::Uuid;
 
 use super::{FsmState, RunActor, RunStatus, TriggerKind};
@@ -89,6 +90,12 @@ pub struct Run {
     /// See [`NewRun::concurrency_key`] for the exclusivity rule.
     #[serde(default)]
     pub concurrency_key: Option<String>,
+    /// Concurrency groups this run belongs to, each with its own limit.
+    ///
+    /// See [`NewRun::concurrency_limits`] for the gating rule. Empty means the
+    /// run is not limited by any group.
+    #[serde(default)]
+    pub concurrency_limits: Vec<ConcurrencyLimit>,
     /// Maximum cumulative cost allowed for this run, in USD.
     ///
     /// Resolved once at run creation and frozen for the lifetime of the run.
@@ -160,6 +167,171 @@ pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 /// ```
 pub const MAX_CONCURRENCY_KEY_LEN: usize = 255;
 
+/// Maximum accepted length of a concurrency group name, in bytes.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::MAX_CONCURRENCY_GROUP_LEN;
+///
+/// assert_eq!(MAX_CONCURRENCY_GROUP_LEN, 255);
+/// ```
+pub const MAX_CONCURRENCY_GROUP_LEN: usize = 255;
+
+/// Membership of a run in a concurrency group, with the limit the run accepts.
+///
+/// A run is only moved to `Running` while fewer than `limit` root runs
+/// carrying `group` are running. Each run is compared against its own limit,
+/// so two runs of the same group may carry different limits.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::ConcurrencyLimit;
+///
+/// let limit = ConcurrencyLimit::new("repo:acme/api", 2);
+/// assert_eq!(limit.group, "repo:acme/api");
+/// assert_eq!(limit.limit, 2);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ConcurrencyLimit {
+    /// Name of the concurrency group (1 to 255 bytes).
+    pub group: String,
+    /// Maximum number of root runs of this group running at once (at least 1).
+    pub limit: u32,
+}
+
+impl ConcurrencyLimit {
+    /// Build a concurrency limit. Validation happens in
+    /// [`validate_concurrency_limits`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_store::entities::ConcurrencyLimit;
+    ///
+    /// let limit = ConcurrencyLimit::new("tenant:42", 1);
+    /// assert_eq!(limit.limit, 1);
+    /// ```
+    pub fn new(group: impl Into<String>, limit: u32) -> Self {
+        Self {
+            group: group.into(),
+            limit,
+        }
+    }
+}
+
+/// Why a list of concurrency limits was refused.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::ConcurrencyLimitError;
+///
+/// let err = ConcurrencyLimitError::EmptyGroup;
+/// assert_eq!(err.to_string(), "concurrency group must not be empty");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum ConcurrencyLimitError {
+    /// A group name was empty or whitespace only.
+    #[error("concurrency group must not be empty")]
+    EmptyGroup,
+    /// A group name exceeds [`MAX_CONCURRENCY_GROUP_LEN`] bytes.
+    #[error("concurrency group '{group}' exceeds {max} bytes")]
+    GroupTooLong {
+        /// The offending group name.
+        group: String,
+        /// The maximum accepted length, in bytes.
+        max: usize,
+    },
+    /// A limit was zero, which would hold the run back forever.
+    #[error("concurrency limit for group '{group}' must be at least 1")]
+    ZeroLimit {
+        /// The group carrying the zero limit.
+        group: String,
+    },
+    /// The same group appears twice in one run.
+    #[error("concurrency group '{group}' is listed more than once")]
+    DuplicateGroup {
+        /// The duplicated group name.
+        group: String,
+    },
+}
+
+/// Validate the concurrency limits of a run before persisting it.
+///
+/// # Errors
+///
+/// Returns [`ConcurrencyLimitError::EmptyGroup`] for an empty or
+/// whitespace-only group, [`ConcurrencyLimitError::GroupTooLong`] for a group
+/// longer than [`MAX_CONCURRENCY_GROUP_LEN`] bytes,
+/// [`ConcurrencyLimitError::ZeroLimit`] for a limit of zero and
+/// [`ConcurrencyLimitError::DuplicateGroup`] when a group is listed twice.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::{ConcurrencyLimit, validate_concurrency_limits};
+///
+/// assert!(validate_concurrency_limits(&[]).is_ok());
+/// assert!(validate_concurrency_limits(&[ConcurrencyLimit::new("repo:acme", 2)]).is_ok());
+/// assert!(validate_concurrency_limits(&[ConcurrencyLimit::new("repo:acme", 0)]).is_err());
+/// ```
+pub fn validate_concurrency_limits(
+    limits: &[ConcurrencyLimit],
+) -> Result<(), ConcurrencyLimitError> {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(limits.len());
+    for limit in limits {
+        if limit.group.trim().is_empty() {
+            return Err(ConcurrencyLimitError::EmptyGroup);
+        }
+        if limit.group.len() > MAX_CONCURRENCY_GROUP_LEN {
+            return Err(ConcurrencyLimitError::GroupTooLong {
+                group: limit.group.clone(),
+                max: MAX_CONCURRENCY_GROUP_LEN,
+            });
+        }
+        if limit.limit == 0 {
+            return Err(ConcurrencyLimitError::ZeroLimit {
+                group: limit.group.clone(),
+            });
+        }
+        if !seen.insert(limit.group.as_str()) {
+            return Err(ConcurrencyLimitError::DuplicateGroup {
+                group: limit.group.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Number of due runs held back because a concurrency group is saturated.
+///
+/// Produced by
+/// [`RunStore::count_blocked_runs_by_group`](crate::store::RunStore::count_blocked_runs_by_group).
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::ConcurrencyGroupBacklog;
+///
+/// let backlog = ConcurrencyGroupBacklog {
+///     group: "repo:acme/api".to_string(),
+///     blocked_runs: 3,
+/// };
+/// assert_eq!(backlog.blocked_runs, 3);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ConcurrencyGroupBacklog {
+    /// Name of the saturated concurrency group.
+    pub group: String,
+    /// Number of due pending or retrying runs held back by this group.
+    pub blocked_runs: u64,
+}
+
 /// Outcome of [`RunStore::create_run`](crate::store::RunStore::create_run).
 ///
 /// A request carrying an idempotency key already bound to a live run does not
@@ -187,6 +359,7 @@ pub const MAX_CONCURRENCY_KEY_LEN: usize = 255;
 ///     created_by: None,
 ///     idempotency_key: Some("deploy-2026-07-26".to_string()),
 ///     concurrency_key: None,
+///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// };
 ///
@@ -347,6 +520,7 @@ pub struct ReapedRun {
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// };
 /// ```
@@ -387,6 +561,13 @@ pub struct NewRun {
     /// otherwise. The key is released when the run reaches a terminal state.
     #[serde(default)]
     pub concurrency_key: Option<String>,
+    /// Concurrency groups this run belongs to, each with its own limit.
+    ///
+    /// The run is only moved to `Running` while, for every listed group, fewer
+    /// than its `limit` root runs carrying that group are running. Sub-workflow
+    /// runs never count. Empty means no group limit.
+    #[serde(default)]
+    pub concurrency_limits: Vec<ConcurrencyLimit>,
     /// Maximum cumulative cost allowed for this run, in USD. `None` means no cap.
     #[serde(default)]
     pub max_cost_usd: Option<Decimal>,
@@ -426,6 +607,9 @@ pub struct RunFilter {
     /// Filter by author. Matches runs created by this user directly, and runs
     /// created by one of this user's API keys.
     pub created_by_user_id: Option<Uuid>,
+    /// Filter by concurrency group. Only include runs whose concurrency limits
+    /// contain this group.
+    pub concurrency_group: Option<String>,
 }
 
 /// Partial update for a run.
@@ -565,6 +749,7 @@ mod tests {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: Some(Decimal::new(250, 2)),
         };
 
@@ -599,6 +784,7 @@ mod tests {
             created_by: Some(actor.clone()),
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         };
 
@@ -658,6 +844,7 @@ mod tests {
             created_by_label: Some("alice".to_string()),
             idempotency_key: Some("gh:abc-123".to_string()),
             concurrency_key: Some("issue:12".to_string()),
+            concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 2)],
             max_cost_usd: Some(Decimal::new(500, 2)),
             worker_id: Some("worker-1".to_string()),
             lease_expires_at: Some(now),
@@ -687,6 +874,7 @@ mod tests {
         assert_eq!(back.created_by_label, run.created_by_label);
         assert_eq!(back.idempotency_key, run.idempotency_key);
         assert_eq!(back.concurrency_key, run.concurrency_key);
+        assert_eq!(back.concurrency_limits, run.concurrency_limits);
         assert_eq!(back.max_cost_usd, run.max_cost_usd);
         assert_eq!(back.worker_id, run.worker_id);
         assert_eq!(back.lease_expires_at, run.lease_expires_at);
@@ -720,6 +908,7 @@ mod tests {
             created_by_label: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
             worker_id: None,
             lease_expires_at: None,
@@ -766,6 +955,7 @@ mod tests {
             created_by: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         };
         let mut value = serde_json::to_value(&without_cap).expect("serialize");
@@ -776,6 +966,125 @@ mod tests {
 
         let parsed: NewRun = serde_json::from_value(value).expect("deserialize");
         assert!(parsed.max_cost_usd.is_none());
+    }
+
+    #[test]
+    fn newrun_concurrency_limits_default_to_empty_when_absent() {
+        let raw = json!({
+            "workflow_name": "deploy",
+            "trigger": {"kind": "manual"},
+            "payload": {},
+            "max_retries": 0,
+            "handler_version": null,
+        });
+
+        let new_run: NewRun = serde_json::from_value(raw).expect("deserialize");
+        assert!(new_run.concurrency_limits.is_empty());
+    }
+
+    #[test]
+    fn newrun_serde_roundtrip_keeps_concurrency_limits() {
+        let new_run = NewRun {
+            workflow_name: "deploy".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by: None,
+            idempotency_key: None,
+            concurrency_key: None,
+            concurrency_limits: vec![
+                ConcurrencyLimit::new("repo:acme", 2),
+                ConcurrencyLimit::new("tenant:42", 5),
+            ],
+            max_cost_usd: None,
+        };
+
+        let json = serde_json::to_string(&new_run).expect("serialize");
+        let back: NewRun = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.concurrency_limits, new_run.concurrency_limits);
+    }
+
+    #[test]
+    fn validate_concurrency_limits_accepts_empty_and_valid() {
+        assert_eq!(validate_concurrency_limits(&[]), Ok(()));
+        assert_eq!(
+            validate_concurrency_limits(&[
+                ConcurrencyLimit::new("repo:acme", 1),
+                ConcurrencyLimit::new("tenant:42", 10),
+            ]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_concurrency_limits_rejects_empty_group() {
+        assert_eq!(
+            validate_concurrency_limits(&[ConcurrencyLimit::new("", 1)]),
+            Err(ConcurrencyLimitError::EmptyGroup)
+        );
+        assert_eq!(
+            validate_concurrency_limits(&[ConcurrencyLimit::new("   ", 1)]),
+            Err(ConcurrencyLimitError::EmptyGroup)
+        );
+    }
+
+    #[test]
+    fn validate_concurrency_limits_rejects_zero_limit() {
+        assert_eq!(
+            validate_concurrency_limits(&[ConcurrencyLimit::new("repo:acme", 0)]),
+            Err(ConcurrencyLimitError::ZeroLimit {
+                group: "repo:acme".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn validate_concurrency_limits_rejects_duplicate_group() {
+        assert_eq!(
+            validate_concurrency_limits(&[
+                ConcurrencyLimit::new("repo:acme", 1),
+                ConcurrencyLimit::new("repo:acme", 3),
+            ]),
+            Err(ConcurrencyLimitError::DuplicateGroup {
+                group: "repo:acme".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn validate_concurrency_limits_rejects_too_long_group() {
+        let at_max = "g".repeat(MAX_CONCURRENCY_GROUP_LEN);
+        assert_eq!(
+            validate_concurrency_limits(&[ConcurrencyLimit::new(at_max, 1)]),
+            Ok(())
+        );
+
+        let too_long = "g".repeat(MAX_CONCURRENCY_GROUP_LEN + 1);
+        assert_eq!(
+            validate_concurrency_limits(&[ConcurrencyLimit::new(too_long.clone(), 1)]),
+            Err(ConcurrencyLimitError::GroupTooLong {
+                group: too_long,
+                max: MAX_CONCURRENCY_GROUP_LEN,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_concurrency_limits_accepts_unicode_group() {
+        let group = "d\u{e9}p\u{f4}t:caf\u{e9}-\u{2615}";
+        assert_eq!(
+            validate_concurrency_limits(&[ConcurrencyLimit::new(group, 2)]),
+            Ok(())
+        );
+        // Length is counted in bytes: 128 two-byte characters exceed 255 bytes.
+        let too_long = "\u{e9}".repeat(128);
+        assert!(matches!(
+            validate_concurrency_limits(&[ConcurrencyLimit::new(too_long, 1)]),
+            Err(ConcurrencyLimitError::GroupTooLong { .. })
+        ));
     }
 
     #[test]

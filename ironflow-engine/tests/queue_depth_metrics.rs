@@ -91,6 +91,7 @@ async fn queue_depth_reflects_pending_runs() {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await

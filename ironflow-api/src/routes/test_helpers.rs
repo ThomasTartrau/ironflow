@@ -90,6 +90,7 @@ pub(crate) async fn create_run(state: &AppState) -> Run {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -110,6 +111,7 @@ pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: R
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await

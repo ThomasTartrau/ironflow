@@ -26,8 +26,9 @@ use ironflow_core::metric_names::{
 use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter, RunStatus, RunUpdate, SignalInsert,
-    SignalStepResolution, StepStatus, StepUpdate, TriggerKind,
+    ConcurrencyLimit, NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter, RunStatus,
+    RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate, TriggerKind,
+    validate_concurrency_limits,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -128,6 +129,14 @@ pub struct EnqueueOptions {
     /// while another non-terminal run holds the same key. The key is released
     /// once the holder reaches a terminal state.
     pub concurrency_key: Option<String>,
+    /// Concurrency groups the run belongs to, each with the maximum number of
+    /// root runs of that group allowed to execute at once.
+    ///
+    /// Unlike [`concurrency_key`](Self::concurrency_key), the run is always
+    /// created: it stays pending until every group is under its limit. Empty
+    /// means no limit. Invalid limits are refused with
+    /// [`EngineError::InvalidConcurrencyLimit`].
+    pub concurrency_limits: Vec<ConcurrencyLimit>,
 }
 
 /// Where a run resumes once an approval, a human input or an escalation
@@ -853,6 +862,7 @@ impl Engine {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd,
             })
             .await?
@@ -1035,6 +1045,8 @@ impl Engine {
     /// Returns [`EngineError::MonthlyBudgetExceeded`] if the monthly cost quota
     /// is exhausted. Returns [`EngineError::ConcurrencyConflict`] if
     /// [`EnqueueOptions::concurrency_key`] is held by another non-terminal run.
+    /// Returns [`EngineError::InvalidConcurrencyLimit`] if
+    /// [`EnqueueOptions::concurrency_limits`] is invalid, before any other check.
     /// Returns [`EngineError::Store`] if the run cannot be persisted.
     ///
     /// # Examples
@@ -1080,7 +1092,13 @@ impl Engine {
             created_by,
             idempotency_key,
             concurrency_key,
+            concurrency_limits,
         } = options;
+
+        // Checked first: a malformed request is the caller's error, whatever
+        // the handler or the quota.
+        validate_concurrency_limits(&concurrency_limits)
+            .map_err(EngineError::InvalidConcurrencyLimit)?;
 
         let handler = self.handlers.get(handler_name).ok_or_else(|| {
             EngineError::InvalidWorkflow(format!("no handler registered: {handler_name}"))
@@ -1108,6 +1126,7 @@ impl Engine {
                 created_by,
                 idempotency_key,
                 concurrency_key,
+                concurrency_limits,
                 max_cost_usd: resolved_cap,
             })
             .await?;
@@ -2809,6 +2828,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enqueue_handler_with_options_stores_concurrency_limits() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        let limits = vec![
+            ConcurrencyLimit::new("repo:acme", 2),
+            ConcurrencyLimit::new("tenant:42", 5),
+        ];
+
+        let run = engine
+            .enqueue_handler_with_options(
+                "echo-workflow",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions {
+                    concurrency_limits: limits.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .into_run();
+
+        assert_eq!(run.concurrency_limits, limits);
+    }
+
+    #[tokio::test]
+    async fn enqueue_rejects_invalid_concurrency_limits() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        let invalid = [
+            vec![ConcurrencyLimit::new("repo:acme", 0)],
+            vec![ConcurrencyLimit::new("", 1)],
+            vec![
+                ConcurrencyLimit::new("repo:acme", 1),
+                ConcurrencyLimit::new("repo:acme", 2),
+            ],
+        ];
+        for concurrency_limits in invalid {
+            let err = engine
+                .enqueue_handler_with_options(
+                    "echo-workflow",
+                    TriggerKind::Api,
+                    json!({}),
+                    EnqueueOptions {
+                        concurrency_limits,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, EngineError::InvalidConcurrencyLimit(_)),
+                "{err:?}"
+            );
+        }
+
+        // Validated before the handler lookup.
+        let err = engine
+            .enqueue_handler_with_options(
+                "not-registered",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions {
+                    concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 0)],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::InvalidConcurrencyLimit(_)),
+            "{err:?}"
+        );
+
+        let page = engine
+            .store()
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 0, "no run may be created");
+    }
+
+    #[tokio::test]
     async fn run_handler_leaves_the_run_unattributed() {
         let mut engine = create_test_engine();
         engine.register(EchoWorkflow).unwrap();
@@ -3280,6 +3383,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -3322,6 +3426,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -3364,6 +3469,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -3406,6 +3512,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -3456,6 +3563,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -3515,6 +3623,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -3541,6 +3650,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await

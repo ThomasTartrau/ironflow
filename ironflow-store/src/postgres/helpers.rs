@@ -143,6 +143,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
     let cost_usd: Decimal = row.get("cost_usd");
     let state_machine_id = row.get("state_machine__id");
     let labels_json: serde_json::Value = row.get("labels");
+    let concurrency_limits_json: serde_json::Value = row.get("concurrency_limits");
     let created_by = RunActor::from_columns(
         row.get("created_by_user_id"),
         row.get("created_by_api_key_id"),
@@ -175,6 +176,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         created_by_label,
         idempotency_key: row.get("idempotency_key"),
         concurrency_key: row.get("concurrency_key"),
+        concurrency_limits: serde_json::from_value(concurrency_limits_json)?,
         max_cost_usd: row.get("max_cost_usd"),
         worker_id: row.get("worker_id"),
         lease_expires_at: row.get("lease_expires_at"),

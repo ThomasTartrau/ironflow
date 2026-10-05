@@ -71,6 +71,9 @@ pub const WORKER_ACTIVE: &str = "ironflow_worker_active";
 pub const WORKER_POLLS_TOTAL: &str = "ironflow_worker_polls_total";
 /// Gauge: number of runs waiting in the queue (`Pending` status).
 pub const WORKER_QUEUE_DEPTH: &str = "ironflow_worker_queue_depth";
+/// Gauge: pending runs held back because a concurrency group is saturated
+/// (label: group).
+pub const WORKER_QUEUE_BLOCKED_RUNS: &str = "ironflow_worker_queue_blocked_runs";
 /// Counter: runs abandoned by the worker after losing their lease.
 pub const WORKER_LEASES_LOST_TOTAL: &str = "ironflow_worker_leases_lost_total";
 

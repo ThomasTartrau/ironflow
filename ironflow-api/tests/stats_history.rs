@@ -76,6 +76,7 @@ async fn create_terminal_run(
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await

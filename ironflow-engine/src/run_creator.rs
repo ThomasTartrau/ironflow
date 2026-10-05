@@ -69,6 +69,7 @@ pub type RunCreatorFuture<'a> =
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// };
 /// let creation = creator.create_run(new_run).await?;
@@ -261,6 +262,7 @@ impl CreateRunOpts {
             created_by: self.created_by,
             idempotency_key: self.idempotency_key,
             concurrency_key: self.concurrency_key,
+            concurrency_limits: Vec::new(),
             max_cost_usd: self.max_cost_usd.or(default_max_cost_usd),
         }
     }

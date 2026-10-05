@@ -187,6 +187,7 @@ impl From<StoreError> for ApiError {
             StoreError::ConcurrencyConflict { key, run_id } => {
                 ApiError::ConcurrencyConflict { key, run_id }
             }
+            StoreError::InvalidConcurrencyLimit(e) => ApiError::BadRequest(e.to_string()),
             other => ApiError::Store(other),
         }
     }
@@ -330,6 +331,8 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
+    use ironflow_store::models::ConcurrencyLimitError;
+
     use super::*;
 
     #[test]
@@ -499,6 +502,21 @@ mod tests {
             Some(json!({ "key": "issue:12", "run_id": run_id }))
         );
         assert!(err.to_string().contains(&run_id.to_string()));
+    }
+
+    #[test]
+    fn invalid_concurrency_limit_maps_to_bad_request() {
+        let err = ApiError::from(StoreError::InvalidConcurrencyLimit(
+            ConcurrencyLimitError::ZeroLimit {
+                group: "repo:acme".to_string(),
+            },
+        ));
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(err.code(), "BAD_REQUEST");
+        assert_eq!(
+            err.to_string(),
+            "concurrency limit for group 'repo:acme' must be at least 1"
+        );
     }
 
     #[test]

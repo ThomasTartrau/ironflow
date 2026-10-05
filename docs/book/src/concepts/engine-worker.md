@@ -77,6 +77,30 @@ When [Provider Accounts](provider-accounts.md) exist, the worker picks one for
 every agent step and injects its credential; `WorkerBuilder::account_strategy`
 chooses how.
 
+## Concurrency groups
+
+Worker `concurrency` caps one process. To cap the runs that share an external
+resource across every worker (a repository, a tenant, an environment), give the
+run concurrency groups when it is created:
+
+```rust,ignore
+let options = EnqueueOptions {
+    concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 2)],
+    ..Default::default()
+};
+engine
+    .enqueue_handler_with_options("fix-issue", TriggerKind::Api, payload, options)
+    .await?;
+```
+
+`POST /api/v1/runs` takes the same list as `concurrency_limits`. When a worker
+polls, the store only hands out a run whose groups all count fewer running root
+runs than the run's limit. A blocked run stays `Pending` and the worker takes the
+next free one, so one saturated group never stalls the others. Sub-workflow runs
+execute inside their parent's slot and are not counted. The
+`ironflow_worker_queue_blocked_runs{group}` gauge reports the pending runs each
+saturated group holds back.
+
 ## Lease & Reaper
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.

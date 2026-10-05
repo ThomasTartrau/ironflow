@@ -48,6 +48,7 @@ pub(crate) fn new_run_from_schedule(schedule: &Schedule, created_by: Option<RunA
         created_by,
         idempotency_key: None,
         concurrency_key: None,
+        concurrency_limits: Vec::new(),
         max_cost_usd: None,
     }
 }

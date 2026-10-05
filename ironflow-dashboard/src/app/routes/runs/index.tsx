@@ -28,6 +28,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	const hasSteps = url.searchParams.get("has_steps") ?? "true";
 	const label = url.searchParams.get("label") ?? "";
 	const createdBy = url.searchParams.get("created_by") ?? "";
+	const concurrencyGroup = url.searchParams.get("concurrency_group") ?? "";
 
 	const params = new URLSearchParams();
 	params.set("page", page);
@@ -37,6 +38,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	if (hasSteps === "true") params.set("has_steps", "true");
 	if (label) params.set("label", label);
 	if (createdBy) params.set("created_by", createdBy);
+	if (concurrencyGroup) params.set("concurrency_group", concurrencyGroup);
 
 	const res = await api.get<RunResponse[]>(`/runs?${params}`);
 	return { runs: res.data, meta: res.meta };
@@ -87,7 +89,7 @@ export function Component() {
 			}
 		>
 			<div className="space-y-6">
-				<RunFilters />
+				<RunFilters concurrencyGroupFilter />
 				<div
 					aria-busy={isLoading}
 					aria-live="polite"
