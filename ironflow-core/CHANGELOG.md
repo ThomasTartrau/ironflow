@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.9.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.8.1...ironflow-core-v4.9.0) - 2026-10-05
+
+### Added
+
+- #175 add persistent environment id to agent steps
+
+
+### Fixed
+
+- address review on MR !470
+
+- CI on MR !470 (attempt 1)
+
+- address review on MR !470
+
 ## [4.8.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.8.0...ironflow-core-v4.8.1) - 2026-10-03
 
 ### Fixed
