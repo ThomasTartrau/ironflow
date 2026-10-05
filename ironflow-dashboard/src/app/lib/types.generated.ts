@@ -450,6 +450,7 @@ export interface paths {
 		 *     - `status` — Filter by run status (optional)
 		 *     - `created_by` — Filter by author user ID (optional). Also matches runs
 		 *       triggered by one of that user's API keys.
+		 *     - `concurrency_group` - Filter by concurrency group (optional)
 		 *     - `page` — Page number, 1-based (default: 1)
 		 *     - `per_page` — Items per page (default: 20, max: 100)
 		 */
@@ -468,11 +469,16 @@ export interface paths {
 		 *     non-terminal run holds the same key, the call is refused with 409
 		 *     `CONCURRENCY_CONFLICT` naming that run.
 		 *
+		 *     Optional `concurrency_limits` in the body put the run in concurrency groups:
+		 *     it is created at once but a worker only starts it while, for each group,
+		 *     fewer root runs of that group than its limit are running.
+		 *
 		 *     # Errors
 		 *
 		 *     Returns [`ApiError::Forbidden`] for non-admin callers.
 		 *     Returns [`ApiError::BadRequest`] if the workflow is unknown, the body is
-		 *     invalid, or the `Idempotency-Key` header is malformed.
+		 *     invalid (including malformed `concurrency_limits`), or the `Idempotency-Key`
+		 *     header is malformed.
 		 *     Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
 		 *     different request.
 		 *     Returns [`ApiError::ConcurrencyConflict`] if a non-terminal run already
@@ -1073,8 +1079,8 @@ export interface paths {
 		/**
 		 * Get aggregate statistics across runs matching the filter.
 		 * @description Accepts the same filtering query parameters as `GET /api/v1/runs`
-		 *     (`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and
-		 *     `per_page` are ignored.
+		 *     (`workflow`, `status`, `has_steps`, `label`, `created_by`,
+		 *     `concurrency_group`). `page` and `per_page` are ignored.
 		 */
 		get: operations["get_stats"];
 		put?: never;
@@ -1844,6 +1850,32 @@ export interface components {
 			/** @description Current password. */
 			old_password: string;
 		};
+		/**
+		 * @description Membership of a run in a concurrency group, with the limit the run accepts.
+		 *
+		 *     A run is only moved to `Running` while fewer than `limit` root runs
+		 *     carrying `group` are running. Each run is compared against its own limit,
+		 *     so two runs of the same group may carry different limits.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_store::entities::ConcurrencyLimit;
+		 *
+		 *     let limit = ConcurrencyLimit::new("repo:acme/api", 2);
+		 *     assert_eq!(limit.group, "repo:acme/api");
+		 *     assert_eq!(limit.limit, 2);
+		 *     ```
+		 */
+		ConcurrencyLimit: {
+			/** @description Name of the concurrency group (1 to 255 bytes). */
+			group: string;
+			/**
+			 * Format: int32
+			 * @description Maximum number of root runs of this group running at once (at least 1).
+			 */
+			limit: number;
+		};
 		/** @description Outcome of a branch condition as recorded by the planner. */
 		ConditionResponse: {
 			/** @description Expression the handler declared, when the planner knows one. */
@@ -1987,6 +2019,7 @@ export interface components {
 		 *         max_retries: Some(2),
 		 *         max_cost_usd: None,
 		 *         concurrency_key: Some("issue:12".to_string()),
+		 *         concurrency_limits: Vec::new(),
 		 *     };
 		 *     assert_eq!(req.workflow, "deploy");
 		 *     ```
@@ -2001,6 +2034,16 @@ export interface components {
 			 *     the run completes, fails, ends with a warning or is cancelled.
 			 */
 			concurrency_key?: string | null;
+			/**
+			 * @description Concurrency groups the run belongs to, each with its own limit.
+			 *
+			 *     The run is always created, but a worker only starts it once, for every
+			 *     group, fewer root runs of that group than its `limit` are running.
+			 *     Until then it stays pending, and later runs of other groups go ahead.
+			 *     Each group is non-empty, at most 255 bytes and listed once; each limit
+			 *     is at least 1. Empty means no limit.
+			 */
+			concurrency_limits?: components["schemas"]["ConcurrencyLimit"][];
 			/** @description Optional key-value labels for categorization and filtering. */
 			labels?: {
 				[key: string]: string;
@@ -2403,6 +2446,8 @@ export interface components {
 		};
 		/** @description Query parameters for listing runs. */
 		ListRunsQuery: {
+			/** @description Filter by concurrency group: only runs that belong to this group. */
+			concurrency_group?: string | null;
 			/**
 			 * Format: uuid
 			 * @description Filter by author: the user ID that triggered the run.
@@ -3160,6 +3205,11 @@ export interface components {
 			 *     when one was supplied.
 			 */
 			concurrency_key?: string | null;
+			/**
+			 * @description Concurrency groups the run belongs to, with the limit it was created
+			 *     with. Omitted when the run belongs to no group.
+			 */
+			concurrency_limits?: components["schemas"]["ConcurrencyLimit"][];
 			/**
 			 * Format: double
 			 * @description Aggregated cost in USD.
@@ -5625,6 +5675,8 @@ export interface operations {
 				 *     Also matches runs triggered by one of that user's API keys.
 				 */
 				created_by?: string | null;
+				/** @description Filter by concurrency group: only runs that belong to this group. */
+				concurrency_group?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */
@@ -5689,7 +5741,7 @@ export interface operations {
 					"application/json": components["schemas"]["RunResponse"];
 				};
 			};
-			/** @description Unknown workflow, invalid body or malformed Idempotency-Key */
+			/** @description Unknown workflow, invalid body (including malformed concurrency_limits) or malformed Idempotency-Key */
 			400: {
 				headers: {
 					[name: string]: unknown;
@@ -6941,6 +6993,8 @@ export interface operations {
 				 *     Also matches runs triggered by one of that user's API keys.
 				 */
 				created_by?: string | null;
+				/** @description Filter by concurrency group: only runs that belong to this group. */
+				concurrency_group?: string | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */

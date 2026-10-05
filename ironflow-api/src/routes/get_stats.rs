@@ -13,8 +13,8 @@ use crate::state::AppState;
 /// Get aggregate statistics across runs matching the filter.
 ///
 /// Accepts the same filtering query parameters as `GET /api/v1/runs`
-/// (`workflow`, `status`, `has_steps`, `label`, `created_by`). `page` and
-/// `per_page` are ignored.
+/// (`workflow`, `status`, `has_steps`, `label`, `created_by`,
+/// `concurrency_group`). `page` and `per_page` are ignored.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -44,6 +44,7 @@ pub async fn get_stats(
         has_steps: params.has_steps,
         labels,
         created_by_user_id: params.created_by,
+        concurrency_group: params.concurrency_group,
     };
     let stats = state.store.get_stats(filter).await?;
 
@@ -150,6 +151,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -169,6 +171,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -196,6 +199,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -223,6 +227,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -359,6 +364,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -376,6 +382,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -442,6 +449,7 @@ mod tests {
                     created_by: Some(RunActor::User { user_id }),
                     idempotency_key: None,
                     concurrency_key: None,
+                    concurrency_limits: Vec::new(),
                     max_cost_usd: None,
                 })
                 .await

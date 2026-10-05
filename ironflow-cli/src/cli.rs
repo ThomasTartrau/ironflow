@@ -285,6 +285,83 @@ mod tests {
     }
 
     #[test]
+    fn parse_run_create_with_repeated_concurrency_limits() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "run",
+            "create",
+            "deploy",
+            "--concurrency-limit",
+            "repo:acme=2",
+            "--concurrency-limit",
+            "tenant:42=1",
+        ]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create {
+            concurrency_limits, ..
+        } = &args.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        let parsed: Vec<(&str, i32)> = concurrency_limits
+            .iter()
+            .map(|l| (l.group.as_str(), l.limit))
+            .collect();
+        assert_eq!(parsed, vec![("repo:acme", 2), ("tenant:42", 1)]);
+    }
+
+    #[test]
+    fn parse_run_create_without_concurrency_limits() {
+        let cli = parse(&["ironflow-cli", "run", "create", "deploy"]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create {
+            concurrency_limits, ..
+        } = &args.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        assert!(concurrency_limits.is_empty());
+    }
+
+    #[test]
+    fn parse_run_create_rejects_a_malformed_concurrency_limit() {
+        let result = Cli::try_parse_from([
+            "ironflow-cli",
+            "run",
+            "create",
+            "deploy",
+            "--concurrency-limit",
+            "repo:acme",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_run_list_with_concurrency_group() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "run",
+            "list",
+            "--concurrency-group",
+            "repo:acme",
+        ]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::List {
+            concurrency_group, ..
+        } = &args.command
+        else {
+            panic!("expected List subcommand");
+        };
+        assert_eq!(concurrency_group.as_deref(), Some("repo:acme"));
+    }
+
+    #[test]
     fn parse_run_create_payload_and_file_conflict() {
         let result = Cli::try_parse_from([
             "ironflow-cli",

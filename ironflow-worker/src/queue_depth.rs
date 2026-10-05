@@ -1,9 +1,11 @@
-//! `ironflow_worker_queue_depth`: the number of `Pending` runs, published by
-//! the worker.
+//! `ironflow_worker_queue_depth`: the number of `Pending` runs, and
+//! `ironflow_worker_queue_blocked_runs`: the due runs held back by each
+//! saturated concurrency group, published by the worker.
 //!
-//! The worker's store is the API, which answers no stats query: the count
-//! comes from the internal `GET /runs/pending-count` route.
+//! The worker's store is the API, which answers no stats query: the
+//! counts come from the internal `GET /runs/pending-count` route.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use metrics::gauge;
@@ -11,19 +13,38 @@ use reqwest::Client;
 use serde::Deserialize;
 use tracing::debug;
 
-use ironflow_core::metric_names::WORKER_QUEUE_DEPTH;
+use ironflow_core::metric_names::{WORKER_QUEUE_BLOCKED_RUNS, WORKER_QUEUE_DEPTH};
 
 use crate::error::WorkerError;
 
 /// How often the gauge is refreshed.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Refreshes the queue depth gauge from the API server.
+/// Queue counts read from the API server.
+#[derive(Debug, Deserialize)]
+struct QueueSnapshot {
+    pending_runs: u64,
+    /// Absent when the API predates concurrency groups.
+    blocked_by_group: Option<Vec<GroupBacklog>>,
+}
+
+/// Due runs held back by one saturated concurrency group.
+#[derive(Debug, Deserialize, PartialEq)]
+struct GroupBacklog {
+    group: String,
+    blocked_runs: u64,
+}
+
+/// Refreshes the queue gauges from the API server.
 pub(crate) struct QueueDepthGauge {
     client: Client,
     url: String,
     token: String,
     last_refresh: Option<Instant>,
+    /// Groups given a non-zero value at the last refresh, so a group that
+    /// is no longer saturated drops back to zero instead of keeping a stale
+    /// value.
+    blocked_groups: HashSet<String>,
 }
 
 impl QueueDepthGauge {
@@ -46,13 +67,14 @@ impl QueueDepthGauge {
             ),
             token: token.to_string(),
             last_refresh: None,
+            blocked_groups: HashSet::new(),
         }
     }
 
-    /// Refresh the gauge on the first call, then at most once per
+    /// Refresh the gauges on the first call, then at most once per
     /// [`REFRESH_INTERVAL`].
     ///
-    /// A failure leaves the gauge as it was and is logged at `debug`: the
+    /// A failure leaves the gauges as they were and is logged at `debug`: the
     /// poll loop calls this every few seconds, and an API that predates the
     /// route would otherwise flood the logs.
     pub(crate) async fn refresh_if_due(&mut self) {
@@ -64,27 +86,42 @@ impl QueueDepthGauge {
         }
         self.last_refresh = Some(Instant::now());
 
-        match self.pending_runs().await {
-            Ok(count) => gauge!(WORKER_QUEUE_DEPTH).set(count as f64),
+        match self.snapshot().await {
+            Ok(snapshot) => {
+                gauge!(WORKER_QUEUE_DEPTH).set(snapshot.pending_runs as f64);
+                if let Some(blocked) = snapshot.blocked_by_group {
+                    self.publish_blocked(blocked);
+                }
+            }
             Err(e) => debug!(error = %e, "queue depth refresh failed"),
         }
     }
 
-    /// Number of `Pending` runs, as counted by the API server.
+    /// Set the blocked-runs gauge of every saturated group, and zero the
+    /// groups that were saturated at the previous refresh but no longer are.
+    fn publish_blocked(&mut self, blocked: Vec<GroupBacklog>) {
+        let current: HashSet<String> = blocked.iter().map(|b| b.group.clone()).collect();
+        for group in self.blocked_groups.difference(&current) {
+            gauge!(WORKER_QUEUE_BLOCKED_RUNS, "group" => group.clone()).set(0.0);
+        }
+        for backlog in blocked {
+            gauge!(WORKER_QUEUE_BLOCKED_RUNS, "group" => backlog.group)
+                .set(backlog.blocked_runs as f64);
+        }
+        self.blocked_groups = current;
+    }
+
+    /// Number of `Pending` runs and of runs blocked per group, as counted by
+    /// the API server.
     ///
     /// # Errors
     ///
     /// Returns [`WorkerError::Internal`] on a transport error, a non-2xx
     /// answer or a body that is not the expected envelope.
-    async fn pending_runs(&self) -> Result<u64, WorkerError> {
+    async fn snapshot(&self) -> Result<QueueSnapshot, WorkerError> {
         #[derive(Deserialize)]
         struct Envelope {
-            data: PendingCount,
-        }
-
-        #[derive(Deserialize)]
-        struct PendingCount {
-            pending_runs: u64,
+            data: QueueSnapshot,
         }
 
         let resp = self
@@ -109,7 +146,7 @@ impl QueueDepthGauge {
             .json()
             .await
             .map_err(|e| WorkerError::Internal(format!("queue depth response is invalid: {e}")))?;
-        Ok(envelope.data.pending_runs)
+        Ok(envelope.data)
     }
 }
 
@@ -126,36 +163,43 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, TriggerKind};
+    use ironflow_store::models::{ConcurrencyLimit, NewRun, RunStatus, TriggerKind};
     use ironflow_store::store::RunStore;
-    use serde_json::json;
+    use serde_json::{from_value, json};
     use tokio::net::TcpListener;
     use tokio::spawn;
     use tokio::sync::broadcast;
 
     use super::*;
 
+    fn new_run(concurrency_limits: Vec<ConcurrencyLimit>) -> NewRun {
+        NewRun {
+            created_by: None,
+            workflow_name: "queued".to_string(),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            idempotency_key: None,
+            concurrency_key: None,
+            concurrency_limits,
+            max_cost_usd: None,
+        }
+    }
+
     /// Serve the real API router over TCP with `pending` pending runs.
     async fn spawn_api(pending: usize) -> String {
         let store = Arc::new(InMemoryStore::new());
         for _ in 0..pending {
-            store
-                .create_run(NewRun {
-                    created_by: None,
-                    workflow_name: "queued".to_string(),
-                    trigger: TriggerKind::Manual,
-                    payload: json!({}),
-                    max_retries: 0,
-                    handler_version: None,
-                    labels: HashMap::new(),
-                    scheduled_at: None,
-                    idempotency_key: None,
-                    concurrency_key: None,
-                    max_cost_usd: None,
-                })
-                .await
-                .unwrap();
+            store.create_run(new_run(Vec::new())).await.unwrap();
         }
+        serve_store(store).await
+    }
+
+    /// Serve the real API router over TCP on top of `store`.
+    async fn serve_store(store: Arc<InMemoryStore>) -> String {
         let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
         let jwt_config = Arc::new(JwtConfig {
             secret: "test-secret".to_string(),
@@ -191,7 +235,44 @@ mod tests {
         let api_url = spawn_api(2).await;
         let gauge = QueueDepthGauge::new(&api_url, "test-worker-token");
 
-        assert_eq!(gauge.pending_runs().await.unwrap(), 2);
+        let snapshot = gauge.snapshot().await.unwrap();
+        assert_eq!(snapshot.pending_runs, 2);
+        assert_eq!(snapshot.blocked_by_group, Some(Vec::new()));
+    }
+
+    #[tokio::test]
+    async fn snapshot_reads_runs_blocked_by_group() {
+        let store = Arc::new(InMemoryStore::new());
+        let limits = || vec![ConcurrencyLimit::new("repo:acme", 1)];
+        let holder = store
+            .create_run(new_run(limits()))
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(holder.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store.create_run(new_run(limits())).await.unwrap();
+        let api_url = serve_store(store).await;
+        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token");
+
+        let snapshot = gauge.snapshot().await.unwrap();
+        assert_eq!(snapshot.pending_runs, 1);
+        assert_eq!(
+            snapshot.blocked_by_group,
+            Some(vec![GroupBacklog {
+                group: "repo:acme".to_string(),
+                blocked_runs: 1,
+            }])
+        );
+    }
+
+    #[test]
+    fn snapshot_accepts_an_api_without_concurrency_groups() {
+        let snapshot: QueueSnapshot = from_value(json!({ "pending_runs": 4 })).unwrap();
+        assert_eq!(snapshot.pending_runs, 4);
+        assert_eq!(snapshot.blocked_by_group, None);
     }
 
     #[tokio::test]
@@ -199,7 +280,7 @@ mod tests {
         let api_url = spawn_api(2).await;
         let gauge = QueueDepthGauge::new(&api_url, "wrong-token");
 
-        let err = gauge.pending_runs().await.unwrap_err().to_string();
+        let err = gauge.snapshot().await.unwrap_err().to_string();
         assert!(err.contains("401"), "{err}");
         assert!(err.contains("INVALID_WORKER_TOKEN"), "{err}");
     }
@@ -212,7 +293,7 @@ mod tests {
         drop(listener);
         let gauge = QueueDepthGauge::new(&format!("http://{addr}"), "test-worker-token");
 
-        let err = gauge.pending_runs().await.unwrap_err().to_string();
+        let err = gauge.snapshot().await.unwrap_err().to_string();
         assert!(err.contains("queue depth request failed"), "{err}");
     }
 }

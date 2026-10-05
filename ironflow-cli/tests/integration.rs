@@ -16,8 +16,8 @@ use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
-use ironflow_sdk::client::ListAuditLogsFilter;
-use ironflow_sdk::types::{ApiKeyScope, CreateApiKeyRequest, EventKind};
+use ironflow_sdk::client::{ListAuditLogsFilter, ListRunsFilter};
+use ironflow_sdk::types::{ApiKeyScope, ConcurrencyLimit, CreateApiKeyRequest, EventKind};
 use ironflow_sdk::{ClientBuilder, IronflowClient};
 use ironflow_store::crypto::MasterKey;
 use ironflow_store::entities::NewUser;
@@ -142,6 +142,7 @@ async fn seed_awaiting_approval_run(store: &Arc<dyn Store>) -> Uuid {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
@@ -262,6 +263,7 @@ async fn run_list_empty_table() {
             status: None,
             workflow: None,
             created_by: None,
+            concurrency_group: None,
             page: None,
             per_page: None,
         },
@@ -281,6 +283,7 @@ async fn run_list_empty_json() {
             status: None,
             workflow: None,
             created_by: None,
+            concurrency_group: None,
             page: None,
             per_page: None,
         },
@@ -300,6 +303,7 @@ async fn run_list_with_filters() {
             status: Some("completed".to_string()),
             workflow: Some("deploy".to_string()),
             created_by: None,
+            concurrency_group: None,
             page: Some(1),
             per_page: Some(10),
         },
@@ -325,6 +329,7 @@ async fn run_create_and_get() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -360,6 +365,7 @@ async fn run_create_unknown_workflow() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -380,6 +386,7 @@ async fn run_create_invalid_payload() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -401,6 +408,7 @@ async fn run_create_non_object_payload() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -495,6 +503,7 @@ async fn run_reject_refuses_a_run_that_is_not_awaiting_approval() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &create, false, false)
@@ -574,6 +583,7 @@ async fn run_create_from_payload_file() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -595,6 +605,7 @@ async fn run_create_from_missing_file() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -618,6 +629,7 @@ async fn run_create_with_idempotency_key_creates_one_run() {
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
 
@@ -649,6 +661,7 @@ async fn run_create_without_idempotency_key_creates_several_runs() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
 
@@ -676,6 +689,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &first, false, false)
@@ -691,6 +705,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             idempotency_key: Some("github:abc-123".to_string()),
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &conflicting, false, false).await;
@@ -712,6 +727,7 @@ async fn run_create_with_an_empty_idempotency_key_errors() {
             idempotency_key: Some(String::new()),
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
 
@@ -736,6 +752,7 @@ async fn run_create_with_a_held_concurrency_key_errors() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: Some("issue:12".to_string()),
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -754,6 +771,85 @@ async fn run_create_with_a_held_concurrency_key_errors() {
     assert_eq!(runs.data[0].concurrency_key.as_deref(), Some("issue:12"));
 }
 
+#[tokio::test]
+async fn run_create_with_concurrency_limits_joins_the_groups() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
+            concurrency_key: None,
+            concurrency_limits: vec![ConcurrencyLimit {
+                group: "repo:acme".to_string(),
+                limit: 1,
+            }],
+        },
+    };
+    // A saturated group holds runs back at pick time, never at creation.
+    for _ in 0..2 {
+        commands::run::execute(&client, &args, false, false)
+            .await
+            .unwrap();
+    }
+
+    let list_args = RunArgs {
+        command: RunCommands::List {
+            status: None,
+            workflow: None,
+            created_by: None,
+            concurrency_group: Some("repo:acme".to_string()),
+            page: None,
+            per_page: None,
+        },
+    };
+    commands::run::execute(&client, &list_args, true, false)
+        .await
+        .unwrap();
+
+    let filter = ListRunsFilter {
+        concurrency_group: Some("repo:acme"),
+        ..Default::default()
+    };
+    let runs = client.list_runs_filtered(&filter).await.unwrap();
+    assert_eq!(runs.data.len(), 2);
+    for run in &runs.data {
+        assert_eq!(run.concurrency_limits.len(), 1);
+        assert_eq!(run.concurrency_limits[0].group, "repo:acme");
+        assert_eq!(run.concurrency_limits[0].limit, 1);
+    }
+}
+
+#[tokio::test]
+async fn run_create_with_a_zero_concurrency_limit_errors() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
+            concurrency_key: None,
+            concurrency_limits: vec![ConcurrencyLimit {
+                group: "repo:acme".to_string(),
+                limit: 0,
+            }],
+        },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+    assert!(client.list_runs().await.unwrap().data.is_empty());
+}
+
 // ── Cost cap ──────────────────────────────────────────────────
 
 #[tokio::test]
@@ -770,6 +866,7 @@ async fn run_create_with_max_cost_reaches_the_api() {
             idempotency_key: None,
             max_cost: Some(2.5),
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -794,6 +891,7 @@ async fn run_create_rejects_negative_max_cost_before_calling_the_api() {
             idempotency_key: None,
             max_cost: Some(-1.0),
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -818,6 +916,7 @@ async fn run_create_rejects_non_finite_max_cost() {
             idempotency_key: None,
             max_cost: Some(f64::NAN),
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -1419,6 +1518,7 @@ async fn audit_log_list_filters_by_run() {
             idempotency_key: None,
             max_cost: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &create, false, false)
@@ -1615,6 +1715,7 @@ async fn run_create_accepts_zero_max_cost() {
             idempotency_key: None,
             max_cost: Some(0.0),
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)

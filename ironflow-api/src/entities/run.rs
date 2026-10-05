@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use ironflow_store::models::{Run, RunStatus, TriggerKind};
+use ironflow_store::models::{ConcurrencyLimit, Run, RunStatus, TriggerKind};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -67,6 +67,10 @@ pub struct RunResponse {
     /// when one was supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency_key: Option<String>,
+    /// Concurrency groups the run belongs to, with the limit it was created
+    /// with. Omitted when the run belongs to no group.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concurrency_limits: Vec<ConcurrencyLimit>,
     /// Cumulative cost cap for this run, in USD. `None` means no cap.
     #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,6 +100,7 @@ impl From<Run> for RunResponse {
             created_by,
             idempotency_key: run.idempotency_key,
             concurrency_key: run.concurrency_key,
+            concurrency_limits: run.concurrency_limits,
             max_cost_usd: run.max_cost_usd,
         }
     }
@@ -132,6 +137,8 @@ pub struct ListRunsQuery {
     ///
     /// Also matches runs triggered by one of that user's API keys.
     pub created_by: Option<Uuid>,
+    /// Filter by concurrency group: only runs that belong to this group.
+    pub concurrency_group: Option<String>,
     /// Page number (1-based).
     pub page: Option<u32>,
     /// Items per page.

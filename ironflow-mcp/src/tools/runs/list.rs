@@ -20,6 +20,8 @@ pub struct ListRunsTool {
     pub status: Option<String>,
     /// Filter by author: the UUID of the user that triggered the run. Also matches runs triggered by one of that user's API keys.
     pub created_by: Option<String>,
+    /// Filter by concurrency group: only runs that belong to this group.
+    pub concurrency_group: Option<String>,
     /// Page number (1-based, default: 1).
     pub page: Option<u32>,
     /// Items per page (default: 20, max: 100).
@@ -38,6 +40,9 @@ impl ListRunsTool {
         }
         if let Some(ref c) = self.created_by {
             query.push(("created_by", c.clone()));
+        }
+        if let Some(ref g) = self.concurrency_group {
+            query.push(("concurrency_group", g.clone()));
         }
         if let Some(p) = self.page {
             query.push(("page", p.to_string()));

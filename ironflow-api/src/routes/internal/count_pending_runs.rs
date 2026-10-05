@@ -4,7 +4,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use serde::Serialize;
 
-use ironflow_store::entities::{RunFilter, RunStatus};
+use ironflow_store::entities::{ConcurrencyGroupBacklog, RunFilter, RunStatus};
 
 use crate::error::ApiError;
 use crate::response::ok;
@@ -14,12 +14,14 @@ use crate::state::AppState;
 #[derive(Serialize)]
 struct PendingCount {
     pending_runs: u64,
+    blocked_by_group: Vec<ConcurrencyGroupBacklog>,
 }
 
-/// Count the runs in the `Pending` state.
+/// Count the runs in the `Pending` state, and the due runs held back by each
+/// saturated concurrency group.
 ///
-/// A worker has no store of its own: it reads this count to publish
-/// `ironflow_worker_queue_depth`.
+/// A worker has no store of its own: it reads these counts to publish
+/// `ironflow_worker_queue_depth` and `ironflow_worker_queue_blocked_runs`.
 pub async fn count_pending_runs(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -30,9 +32,11 @@ pub async fn count_pending_runs(
             ..RunFilter::default()
         })
         .await?;
+    let blocked_by_group = state.store.count_blocked_runs_by_group().await?;
 
     Ok(ok(PendingCount {
         pending_runs: stats.total_runs,
+        blocked_by_group,
     }))
 }
 
@@ -49,7 +53,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, RunStatus, TriggerKind};
+    use ironflow_store::models::{ConcurrencyLimit, NewRun, RunStatus, TriggerKind};
     use serde_json::{Value as JsonValue, from_slice, json};
     use tokio::sync::broadcast;
     use tower::ServiceExt;
@@ -90,6 +94,7 @@ mod tests {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         }
     }
@@ -140,6 +145,41 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json["data"]["pending_runs"], 0);
+        assert_eq!(json["data"]["blocked_by_group"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn count_pending_runs_reports_runs_blocked_by_group() {
+        let state = test_state();
+        let in_group = || NewRun {
+            concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 1)],
+            ..new_run()
+        };
+        let holder = state.store.create_run(in_group()).await.unwrap().into_run();
+        state
+            .store
+            .update_run_status(holder.id, RunStatus::Running)
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            state.store.create_run(in_group()).await.unwrap();
+        }
+        state.store.create_run(new_run()).await.unwrap();
+
+        let app = create_router(state, RouterConfig::default());
+        let resp = app
+            .oneshot(request(Some("Bearer test-worker-token")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json["data"]["pending_runs"], 3);
+        assert_eq!(
+            json["data"]["blocked_by_group"],
+            json!([{ "group": "repo:acme", "blocked_runs": 2 }])
+        );
     }
 
     #[tokio::test]

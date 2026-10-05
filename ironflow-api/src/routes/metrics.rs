@@ -65,6 +65,9 @@
 //! # Panel: Queue depth (pending runs waiting for a worker)
 //! ironflow_worker_queue_depth
 //!
+//! # Panel: Runs held back by a saturated concurrency group
+//! sum by (group) (ironflow_worker_queue_blocked_runs)
+//!
 //! # Panel: Active worker tasks
 //! ironflow_worker_active
 //!

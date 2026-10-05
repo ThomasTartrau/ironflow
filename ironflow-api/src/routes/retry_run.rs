@@ -128,6 +128,8 @@ pub async fn retry_run(
             // same key. The original is terminal and no longer holds it; a run
             // that took the key since then makes the retry conflict.
             concurrency_key: original.concurrency_key,
+            // The retry stays in the same concurrency groups under the same limits.
+            concurrency_limits: original.concurrency_limits,
             // Inherit the original cost cap so budget constraints survive retries.
             max_cost_usd: original.max_cost_usd,
         })
@@ -227,6 +229,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -284,6 +287,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: Some(cap),
             })
             .await
@@ -340,6 +344,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -379,6 +384,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -427,6 +433,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -471,6 +478,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -526,6 +534,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -614,6 +623,7 @@ mod tests {
                 }),
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -674,6 +684,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: Some("github:abc-123".to_string()),
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -792,6 +803,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -979,6 +991,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: Some(key.to_string()),
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await
@@ -1038,6 +1051,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: Some("issue:12".to_string()),
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await

@@ -41,6 +41,7 @@ fn new_run(name: &str, created_by: Option<RunActor>) -> NewRun {
         created_by,
         idempotency_key: None,
         concurrency_key: None,
+        concurrency_limits: Vec::new(),
         max_cost_usd: None,
     }
 }

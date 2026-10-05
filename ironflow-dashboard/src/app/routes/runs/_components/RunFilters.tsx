@@ -49,9 +49,18 @@ interface RunFiltersProps {
 	 * dashboard) pass `false` so no `page` param leaks into their URL.
 	 */
 	paginated?: boolean;
+	/**
+	 * Whether to offer the concurrency group filter. The dashboard
+	 * trends (`/stats/history`) do not accept it, so the dashboard leaves it
+	 * out rather than show charts that ignore it.
+	 */
+	concurrencyGroupFilter?: boolean;
 }
 
-export function RunFilters({ paginated = true }: RunFiltersProps) {
+export function RunFilters({
+	paginated = true,
+	concurrencyGroupFilter = false,
+}: RunFiltersProps) {
 	const [open, setOpen] = useState(false);
 	const [labelInput, setLabelInput] = useState("");
 	const [filters, setFilters] = useQueryStates(
@@ -71,6 +80,10 @@ export function RunFilters({ paginated = true }: RunFiltersProps) {
 			}),
 			created_by: parseAsString.withDefault("").withOptions({
 				shallow: false,
+			}),
+			concurrency_group: parseAsString.withDefault("").withOptions({
+				shallow: false,
+				limitUrlUpdates: debounce(300),
 			}),
 			page: parseAsString.withDefault("1").withOptions({
 				shallow: false,
@@ -93,6 +106,7 @@ export function RunFilters({ paginated = true }: RunFiltersProps) {
 		!filters.has_steps ? "has_steps" : "",
 		filters.label.length > 0 ? "label" : "",
 		filters.created_by,
+		concurrencyGroupFilter ? filters.concurrency_group : "",
 	].filter(Boolean).length;
 
 	const authorName =
@@ -110,6 +124,10 @@ export function RunFilters({ paginated = true }: RunFiltersProps) {
 
 	const handleHasStepsChange = (checked: boolean) => {
 		setFilters({ has_steps: checked, ...pageReset });
+	};
+
+	const handleConcurrencyGroupChange = (value: string) => {
+		setFilters({ concurrency_group: value || null, ...pageReset });
 	};
 
 	const handleAuthorChange = (value: string | null) => {
@@ -155,6 +173,7 @@ export function RunFilters({ paginated = true }: RunFiltersProps) {
 			has_steps: null,
 			label: null,
 			created_by: null,
+			concurrency_group: null,
 			page: null,
 		});
 		setLabelInput("");
@@ -193,6 +212,24 @@ export function RunFilters({ paginated = true }: RunFiltersProps) {
 								className="mt-1.5 font-mono"
 							/>
 						</div>
+
+						{concurrencyGroupFilter && (
+							<div>
+								<label
+									htmlFor="filter-concurrency-group"
+									className="text-sm font-medium"
+								>
+									Concurrency group
+								</label>
+								<Input
+									id="filter-concurrency-group"
+									placeholder="Filter by concurrency group..."
+									value={filters.concurrency_group}
+									onChange={(e) => handleConcurrencyGroupChange(e.target.value)}
+									className="mt-1.5 font-mono"
+								/>
+							</div>
+						)}
 
 						<div>
 							<label htmlFor="filter-status" className="text-sm font-medium">
@@ -361,6 +398,17 @@ export function RunFilters({ paginated = true }: RunFiltersProps) {
 						(filters.created_by === currentUserId
 							? "me"
 							: filters.created_by.slice(0, 8))}
+					<X className="h-3 w-3" aria-hidden="true" />
+				</button>
+			)}
+			{concurrencyGroupFilter && filters.concurrency_group && (
+				<button
+					type="button"
+					aria-label="Remove concurrency group filter"
+					onClick={() => setFilters({ concurrency_group: null, ...pageReset })}
+					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
+				>
+					group: {filters.concurrency_group}
 					<X className="h-3 w-3" aria-hidden="true" />
 				</button>
 			)}

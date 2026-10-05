@@ -17,12 +17,12 @@ use ironflow_store::artifact_store::ArtifactStore;
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{
     ApiKey, ApiKeyUpdate, ApprovalDelegation, Artifact, ArtifactLookup, AuditLogEntry,
-    AuditLogFilter, DelegationFilter, KeyVersionStatus, LeaseRequest, LogEntry, LogFilter,
-    NewApiKey, NewApprovalDelegation, NewArtifact, NewAuditLogEntry, NewLogEntries, NewRun,
-    NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy, PurgeableRun, ReapedRun,
-    RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
-    Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step,
-    StepApproval, StepDependency, StepUpdate, User,
+    AuditLogFilter, ConcurrencyGroupBacklog, DelegationFilter, KeyVersionStatus, LeaseRequest,
+    LogEntry, LogFilter, NewApiKey, NewApprovalDelegation, NewArtifact, NewAuditLogEntry,
+    NewLogEntries, NewRun, NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy,
+    PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
+    RunStatus, RunUpdate, Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket,
+    StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate, User,
 };
 use ironflow_store::entities::{
     NewProviderAccount, NewProviderAccountObservation, ProviderAccount, ProviderAccountCandidate,
@@ -272,6 +272,14 @@ impl RunStore for ApiRunStore {
 
             let api_resp: ApiResponse<RenewLeaseData> = resp.json().await.map_err(Self::err)?;
             Ok(api_resp.data.lease_expires_at)
+        })
+    }
+
+    fn count_blocked_runs_by_group(&self) -> StoreFuture<'_, Vec<ConcurrencyGroupBacklog>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "count_blocked_runs_by_group not supported via worker API".to_string(),
+            ))
         })
     }
 
@@ -1202,6 +1210,7 @@ mod tests {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         };
         let result = store.create_run(req).await;
@@ -1334,6 +1343,7 @@ mod tests {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: Some(key.to_string()),
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         }
     }

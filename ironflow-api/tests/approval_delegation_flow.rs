@@ -111,6 +111,7 @@ async fn run_awaiting_alice(store: &Arc<InMemoryStore>, workflow_name: &str) -> 
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await

@@ -16,9 +16,9 @@ use crate::approval_delegation_store::ApprovalDelegationStore;
 use crate::artifact_store::ArtifactStore;
 use crate::audit_log_store::AuditLogStore;
 use crate::entities::{
-    LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeableRun, ReapedRun,
-    Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
-    StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate,
+    ConcurrencyGroupBacklog, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
+    PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
+    StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate,
 };
 use crate::error::StoreError;
 use crate::log_store::LogStore;
@@ -64,6 +64,7 @@ pub const LEASE_EXPIRED_ERROR: &str = "worker lease expired";
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// }).await?.into_run();
 ///
@@ -87,11 +88,16 @@ pub trait RunStore: Send + Sync {
     /// then the key is checked: concurrent calls sharing it are serialized, and
     /// at most one non-terminal run holds it at a time.
     ///
+    /// [`NewRun::concurrency_limits`] is validated before anything is written.
+    ///
     /// # Errors
     ///
     /// Returns [`StoreError::ConcurrencyConflict`](crate::error::StoreError::ConcurrencyConflict)
     /// when a run that is not Completed, Failed, Warning or Cancelled already
-    /// holds [`NewRun::concurrency_key`], and a database error when the backing
+    /// holds [`NewRun::concurrency_key`],
+    /// [`StoreError::InvalidConcurrencyLimit`](crate::error::StoreError::InvalidConcurrencyLimit)
+    /// when [`NewRun::concurrency_limits`] holds an empty or too long group, a
+    /// zero limit or a duplicated group, and a database error when the backing
     /// store fails.
     fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation>;
 
@@ -135,6 +141,16 @@ pub trait RunStore: Send + Sync {
     /// refresh a lease (inline execution, API-side resume): those runs are never
     /// recovered by [`reap_expired_leases`](Self::reap_expired_leases).
     ///
+    /// Concurrency groups gate the pick: a run carrying
+    /// [`Run::concurrency_limits`] is skipped while, for any of its groups, the
+    /// number of root runs in state `Running` carrying that group is already at
+    /// or above the run's own limit for it. Sleeping, awaiting approval,
+    /// retrying and pending runs do not count, and sub-workflow runs
+    /// ([`TriggerKind::Workflow`](crate::entities::TriggerKind::Workflow)) are
+    /// never counted. A held-back run does not block the queue: the oldest
+    /// eligible run wins. The check is atomic across concurrent callers, so a
+    /// group never exceeds its limit.
+    ///
     /// Returns `None` if no pending runs are available.
     fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>>;
 
@@ -146,6 +162,32 @@ pub trait RunStore: Send + Sync {
     /// Returns [`StoreError::LeaseLost`] if the run is no longer `Running` or if
     /// the lease belongs to another worker — the caller must stop executing it.
     fn renew_lease(&self, id: Uuid, lease: LeaseRequest) -> StoreFuture<'_, DateTime<Utc>>;
+
+    /// Count, for each concurrency group, the due runs it currently holds back.
+    ///
+    /// A run is counted when it is pending or retrying, due (no
+    /// `scheduled_at` in the future) and not pickable because the group is
+    /// saturated for its own limit (see [`pick_next_pending`](Self::pick_next_pending)).
+    /// A run held back by two groups counts in both. Groups holding back no
+    /// run are omitted. Results are sorted by group name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the backing store fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// for backlog in store.count_blocked_runs_by_group().await? {
+    ///     println!("{}: {} runs held back", backlog.group, backlog.blocked_runs);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn count_blocked_runs_by_group(&self) -> StoreFuture<'_, Vec<ConcurrencyGroupBacklog>>;
 
     /// Recover runs whose worker lease expired, at most `limit` per call.
     ///
@@ -396,6 +438,7 @@ pub trait RunStore: Send + Sync {
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// }).await?.into_run();
 /// let _users = store.count_users().await?;

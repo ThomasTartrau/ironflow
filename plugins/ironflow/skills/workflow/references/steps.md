@@ -680,6 +680,13 @@ async fn example(ctx: &mut WorkflowContext, issue: u64) -> Result<(), EngineErro
 The same key on `POST /api/v1/runs` (`concurrency_key` in the body) answers
 `409 CONCURRENCY_CONFLICT` instead.
 
+To queue runs rather than refuse them, give a root run concurrency groups on
+`POST /api/v1/runs`: `"concurrency_limits": [{"group": "repo:acme", "limit": 2}]` (or
+`EnqueueOptions::concurrency_limits` on the engine, `--concurrency-limit repo:acme=2` in the
+CLI). The run stays pending until fewer than `limit` runs of each of its groups are
+running. A child started with `ctx.workflow` runs inside the slot of its parent and joins no
+group.
+
 A child may suspend (approval, human input, signal wait, delay): the parent and every
 ancestor suspend with it, durably. Resolve the child run itself, by its id or by the
 `ironflow.io/parent-run-id` label (`PARENT_RUN_ID_LABEL` from `ironflow_engine::context`):

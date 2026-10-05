@@ -898,6 +898,9 @@ impl WorkflowContext {
                 created_by: parent_author,
                 idempotency_key: None,
                 concurrency_key: config.concurrency_key.clone(),
+                // A child runs inside its parent's slot: it never consumes a
+                // concurrency group slot of its own.
+                concurrency_limits: Vec::new(),
                 // The child shares the parent's cap; it does not get its own budget.
                 max_cost_usd: self.max_cost_usd,
             })

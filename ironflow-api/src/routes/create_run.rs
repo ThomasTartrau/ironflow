@@ -9,7 +9,7 @@ use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::engine::EnqueueOptions;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::notify::{Event, RunCreatedEvent};
-use ironflow_store::models::{Run, RunCreation, TriggerKind};
+use ironflow_store::models::{ConcurrencyLimit, Run, RunCreation, TriggerKind};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
@@ -33,18 +33,20 @@ const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
 /// Whether a replayed key was used for the same request as the run it is bound to.
 ///
-/// The workflow, the payload and the concurrency key are compared: labels are
-/// merged with the handler's defaults at enqueue time, so comparing them would
-/// turn a handler version bump into a spurious conflict.
+/// The workflow, the payload, the concurrency key and the concurrency limits are
+/// compared: labels are merged with the handler's defaults at enqueue time, so
+/// comparing them would turn a handler version bump into a spurious conflict.
 fn same_request(
     existing: &Run,
     workflow: &str,
     payload: &Value,
     concurrency_key: Option<&str>,
+    concurrency_limits: &[ConcurrencyLimit],
 ) -> bool {
     existing.workflow_name == workflow
         && &existing.payload == payload
         && existing.concurrency_key.as_deref() == concurrency_key
+        && existing.concurrency_limits == concurrency_limits
 }
 
 #[cfg(feature = "prometheus")]
@@ -68,11 +70,16 @@ fn record_outcome(_outcome: &'static str) {}
 /// non-terminal run holds the same key, the call is refused with 409
 /// `CONCURRENCY_CONFLICT` naming that run.
 ///
+/// Optional `concurrency_limits` in the body put the run in concurrency groups:
+/// it is created at once but a worker only starts it while, for each group,
+/// fewer root runs of that group than its limit are running.
+///
 /// # Errors
 ///
 /// Returns [`ApiError::Forbidden`] for non-admin callers.
 /// Returns [`ApiError::BadRequest`] if the workflow is unknown, the body is
-/// invalid, or the `Idempotency-Key` header is malformed.
+/// invalid (including malformed `concurrency_limits`), or the `Idempotency-Key`
+/// header is malformed.
 /// Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
 /// different request.
 /// Returns [`ApiError::ConcurrencyConflict`] if a non-terminal run already
@@ -92,7 +99,7 @@ fn record_outcome(_outcome: &'static str) {}
         responses(
             (status = 201, description = "Run created successfully", body = RunResponse),
             (status = 200, description = "Idempotency key replayed: the existing run is returned", body = RunResponse),
-            (status = 400, description = "Unknown workflow, invalid body or malformed Idempotency-Key"),
+            (status = 400, description = "Unknown workflow, invalid body (including malformed concurrency_limits) or malformed Idempotency-Key"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
             (status = 409, description = "Idempotency key already used with a different request (IDEMPOTENCY_KEY_CONFLICT), or concurrency key held by an active run (CONCURRENCY_CONFLICT)"),
@@ -155,6 +162,7 @@ pub async fn create_run(
                 created_by: Some(run_actor_of(&auth)),
                 idempotency_key: idempotency_key.clone(),
                 concurrency_key: req.concurrency_key.clone(),
+                concurrency_limits: req.concurrency_limits.clone(),
             },
         )
         .await
@@ -165,6 +173,7 @@ pub async fn create_run(
             EngineError::ConcurrencyConflict { key, run_id } => {
                 ApiError::ConcurrencyConflict { key, run_id }
             }
+            EngineError::InvalidConcurrencyLimit(e) => ApiError::BadRequest(e.to_string()),
             other => ApiError::Internal(other.to_string()),
         })?;
 
@@ -175,6 +184,7 @@ pub async fn create_run(
                 &req.workflow,
                 &payload,
                 req.concurrency_key.as_deref(),
+                &req.concurrency_limits,
             ) {
                 warn!(
                     idempotency_key = idempotency_key.as_deref().unwrap_or(""),
@@ -1135,6 +1145,113 @@ mod tests {
         // exclusive run on "issue:13" while that key is still free.
         let original = keyed_body("test-workflow", "issue:12");
         assert_replay_conflicts(original, keyed_body("test-workflow", "issue:13")).await
+    }
+
+    fn limited_body(limit: u32) -> JsonValue {
+        json!({
+            "workflow": "test-workflow",
+            "concurrency_limits": [{"group": "repo:acme", "limit": limit}],
+        })
+    }
+
+    #[tokio::test]
+    async fn create_run_exposes_concurrency_limits() {
+        let resp = send_run(test_state(), limited_body(2)).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = body_json(resp).await;
+        assert_eq!(
+            body["data"]["concurrency_limits"],
+            json!([{"group": "repo:acme", "limit": 2}])
+        );
+    }
+
+    #[tokio::test]
+    async fn create_run_without_concurrency_limits_omits_the_field() {
+        let resp = send_run(test_state(), json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = body_json(resp).await;
+        assert!(body["data"].get("concurrency_limits").is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_in_a_saturated_group_is_still_created() {
+        let state = test_state();
+        let auth = create_user_auth_header(&state, "testuser", true).await;
+
+        // Unlike a concurrency key, a group never refuses a run: the second
+        // one waits in the queue until the first one frees the slot.
+        for _ in 0..2 {
+            let resp = router(state.clone())
+                .oneshot(post_run(&auth, limited_body(1), None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+            assert_eq!(body_json(resp).await["data"]["status"], "pending");
+        }
+    }
+
+    /// Sends `body`, asserts it is refused with 400 BAD_REQUEST and `expected`
+    /// as message, and that no run was created.
+    async fn assert_rejected_concurrency_limits(body: JsonValue, expected: &str) {
+        let state = test_state();
+        let resp = send_run(state.clone(), body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], "BAD_REQUEST");
+        assert_eq!(body["error"]["message"], expected);
+
+        let runs = state
+            .store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .unwrap();
+        assert_eq!(runs.total, 0, "an invalid request creates no run");
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_zero_concurrency_limit() {
+        assert_rejected_concurrency_limits(
+            limited_body(0),
+            "concurrency_limits: concurrency limit for group 'repo:acme' must be at least 1",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_empty_concurrency_group() {
+        assert_rejected_concurrency_limits(
+            json!({
+                "workflow": "test-workflow",
+                "concurrency_limits": [{"group": "", "limit": 1}],
+            }),
+            "concurrency_limits: concurrency group must not be empty",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_duplicate_concurrency_group() {
+        assert_rejected_concurrency_limits(
+            json!({
+                "workflow": "test-workflow",
+                "concurrency_limits": [
+                    {"group": "repo:acme", "limit": 1},
+                    {"group": "repo:acme", "limit": 2},
+                ],
+            }),
+            "concurrency_limits: concurrency group 'repo:acme' is listed more than once",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn replayed_key_changing_the_concurrency_limits_conflicts() -> Result<(), Infallible> {
+        // The original run allows two runs of the group: replaying it would
+        // report a run limited to one that does not exist.
+        assert_replay_conflicts(limited_body(2), limited_body(1)).await
     }
 
     /// Creates a run from `original`, replays its idempotency key with `replay`

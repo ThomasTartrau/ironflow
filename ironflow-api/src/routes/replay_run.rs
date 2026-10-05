@@ -79,6 +79,9 @@ pub async fn replay_run(
             // original idempotency key.
             idempotency_key: None,
             concurrency_key: None,
+            // The replay does the same kind of work, so it stays in the same
+            // concurrency groups under the same limits.
+            concurrency_limits: original.concurrency_limits,
             // Inherit the original cost cap so budget constraints survive replays.
             max_cost_usd: original.max_cost_usd,
         })
@@ -185,6 +188,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: Some(format!("key-{}", Uuid::now_v7())),
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: Some(Decimal::new(250, 2)),
             })
             .await
@@ -457,6 +461,7 @@ mod tests {
                 }),
                 idempotency_key: None,
                 concurrency_key: None,
+                concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
             .await

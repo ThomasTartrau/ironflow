@@ -4,10 +4,10 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::entities::{
-    IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
-    PurgeReason, PurgeableRun, ReapedRun, Run, RunActor, RunCreation, RunFilter, RunStats,
-    RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval,
-    StepDependency, StepUpdate,
+    ConcurrencyGroupBacklog, ConcurrencyLimit, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep,
+    NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor,
+    RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter,
+    Step, StepApproval, StepDependency, StepUpdate, validate_concurrency_limits,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -29,6 +29,91 @@ const RUN_BY_IDEMPOTENCY_KEY_SQL: &str = r#"
     LEFT JOIN iam.users cu ON cu.id = r.created_by_user_id
     LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
     WHERE r.idempotency_key = $1 AND r.created_at > $2
+"#;
+
+/// Prefix of the advisory lock key taken per concurrency group by
+/// `pick_next_pending`. Distinct from the raw concurrency key lock taken by
+/// `create_run`, so the two never collide.
+const CONCURRENCY_GROUP_LOCK_PREFIX: &str = "ironflow:concurrency_group:";
+
+/// Oldest due pending or retrying run that no saturated concurrency group holds
+/// back.
+///
+/// A group's running count only includes root runs in state `running`:
+/// sub-workflow runs (`trigger.kind = 'workflow'`) execute inside their
+/// parent's slot. Each candidate is compared against its own limit.
+///
+/// Binds: `$1` the ids of runs to skip (`uuid[]`).
+const PICK_CANDIDATE_SQL: &str = r#"
+    WITH running AS (
+        SELECT g->>'group' AS group_name, COUNT(*) AS n
+        FROM ironflow.runs o
+        JOIN lib_fsm.state_machine osm ON osm.state_machine__id = o.state_machine__id
+        JOIN lib_fsm.abstract_state oast ON oast.abstract_state__id = osm.abstract_state__id
+        CROSS JOIN LATERAL jsonb_array_elements(o.concurrency_limits) g
+        WHERE oast.name = 'running' AND o.trigger->>'kind' <> 'workflow'
+        GROUP BY 1
+    )
+    SELECT r.id, r.state_machine__id, ast.name AS state_name, r.concurrency_limits
+    FROM ironflow.runs r
+    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+    WHERE ast.name IN ('pending', 'retrying')
+      AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
+      AND r.id <> ALL($1::uuid[])
+      AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_to_recordset(r.concurrency_limits) AS cl("group" text, "limit" bigint)
+          JOIN running ON running.group_name = cl."group"
+          WHERE running.n >= cl."limit"
+      )
+    ORDER BY r.created_at ASC
+    LIMIT 1
+    FOR UPDATE OF r, sm SKIP LOCKED
+"#;
+
+/// Whether any of the given concurrency limits is already reached by the root
+/// runs currently in state `running`.
+///
+/// Binds: `$1` the candidate's `concurrency_limits` (`jsonb`).
+const GROUP_SATURATED_SQL: &str = r#"
+    SELECT EXISTS (
+        SELECT 1
+        FROM jsonb_to_recordset($1::jsonb) AS cl("group" text, "limit" bigint)
+        WHERE (
+            SELECT COUNT(*)
+            FROM ironflow.runs o
+            JOIN lib_fsm.state_machine osm ON osm.state_machine__id = o.state_machine__id
+            JOIN lib_fsm.abstract_state oast ON oast.abstract_state__id = osm.abstract_state__id
+            WHERE oast.name = 'running'
+              AND o.trigger->>'kind' <> 'workflow'
+              AND o.concurrency_limits @> jsonb_build_array(jsonb_build_object('group', cl."group"))
+        ) >= cl."limit"
+    )
+"#;
+
+/// Number of due pending or retrying runs held back, per saturated group.
+const BLOCKED_RUNS_BY_GROUP_SQL: &str = r#"
+    WITH running AS (
+        SELECT g->>'group' AS group_name, COUNT(*) AS n
+        FROM ironflow.runs o
+        JOIN lib_fsm.state_machine osm ON osm.state_machine__id = o.state_machine__id
+        JOIN lib_fsm.abstract_state oast ON oast.abstract_state__id = osm.abstract_state__id
+        CROSS JOIN LATERAL jsonb_array_elements(o.concurrency_limits) g
+        WHERE oast.name = 'running' AND o.trigger->>'kind' <> 'workflow'
+        GROUP BY 1
+    )
+    SELECT cl."group" AS group_name, COUNT(*) AS blocked
+    FROM ironflow.runs r
+    JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+    JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+    CROSS JOIN LATERAL jsonb_to_recordset(r.concurrency_limits) AS cl("group" text, "limit" bigint)
+    JOIN running ON running.group_name = cl."group"
+    WHERE ast.name IN ('pending', 'retrying')
+      AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
+      AND running.n >= cl."limit"
+    GROUP BY 1
+    ORDER BY 1
 "#;
 
 /// Build SQL WHERE conditions from a [`RunFilter`], returning `(where_clause, next_bind_idx)`.
@@ -58,6 +143,12 @@ pub(super) fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
     }
     if filter.created_by_user_id.is_some() {
         conditions.push(format!("r.created_by_user_id = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if filter.concurrency_group.is_some() {
+        conditions.push(format!(
+            "r.concurrency_limits @> jsonb_build_array(jsonb_build_object('group', ${bind_idx}::text))"
+        ));
         bind_idx += 1;
     }
     if let Some(has_steps) = filter.has_steps {
@@ -105,6 +196,9 @@ pub(super) fn bind_run_filter_params<'q>(
     if let Some(created_by_user_id) = filter.created_by_user_id {
         query = query.bind(created_by_user_id);
     }
+    if let Some(ref group) = filter.concurrency_group {
+        query = query.bind(group.as_str());
+    }
     if filter.has_steps.is_some() {
         query = query.bind(run_status_to_db_str(&RunStatus::Completed));
         query = query.bind(run_status_to_db_str(&RunStatus::Cancelled));
@@ -115,6 +209,8 @@ pub(super) fn bind_run_filter_params<'q>(
 impl RunStore for PostgresStore {
     fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
         Box::pin(async move {
+            validate_concurrency_limits(&req.concurrency_limits)?;
+
             let id = Uuid::now_v7();
             let now = Utc::now();
             let trigger_json = serde_json::to_value(&req.trigger)?;
@@ -220,29 +316,31 @@ impl RunStore for PostgresStore {
             let labels_json = serde_json::to_value(&req.labels).unwrap_or_default();
             let created_by_user_id = req.created_by.as_ref().map(RunActor::user_id);
             let created_by_api_key_id = req.created_by.as_ref().and_then(RunActor::api_key_id);
-            let inserted = sqlx::query!(
+            let concurrency_limits_json = to_value(&req.concurrency_limits)?;
+            let inserted = sqlx::query(
                 r#"
-                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key, concurrency_limits)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
                 "#,
-                id,
-                &req.workflow_name,
-                state_machine_id,
-                &trigger_json,
-                req.payload as _,
-                req.max_retries as i32,
-                req.handler_version.as_deref(),
-                &labels_json,
-                req.scheduled_at,
-                created_by_user_id,
-                created_by_api_key_id,
-                req.idempotency_key.as_deref(),
-                req.max_cost_usd,
-                now,
-                now,
-                req.concurrency_key.as_deref(),
             )
+            .bind(id)
+            .bind(&req.workflow_name)
+            .bind(state_machine_id)
+            .bind(&trigger_json)
+            .bind(&req.payload)
+            .bind(req.max_retries as i32)
+            .bind(req.handler_version.as_deref())
+            .bind(&labels_json)
+            .bind(req.scheduled_at)
+            .bind(created_by_user_id)
+            .bind(created_by_api_key_id)
+            .bind(req.idempotency_key.as_deref())
+            .bind(req.max_cost_usd)
+            .bind(now)
+            .bind(now)
+            .bind(req.concurrency_key.as_deref())
+            .bind(&concurrency_limits_json)
             .execute(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -545,42 +643,77 @@ impl RunStore for PostgresStore {
     fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let now = Utc::now();
+            // Candidates found saturated after taking their group locks. They are
+            // skipped for the rest of this call so the next eligible run is tried.
+            let mut excluded: Vec<Uuid> = Vec::new();
 
-            let mut tx = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            loop {
+                let mut tx = self
+                    .pool
+                    .begin()
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            // Find a run waiting for execution and transition it. `retrying` runs
-            // are runs whose automatic retry backoff has been armed: they become
-            // eligible again once `scheduled_at` has passed.
-            // Lock exactly the two per-run rows. A bare FOR UPDATE would
-            // also lock `ast`, whose 'pending' row is shared by every run,
-            // so SKIP LOCKED would make concurrent workers skip the whole
-            // queue. Locking `sm` is what makes the pick exclusive.
-            let run_row = sqlx::query!(
-                r#"
-                SELECT r.id, r.state_machine__id as "state_machine__id!", ast.name as "state_name!"
-                FROM ironflow.runs r
-                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
-                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
-                WHERE ast.name IN ('pending', 'retrying')
-                  AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
-                ORDER BY r.created_at ASC
-                LIMIT 1
-                FOR UPDATE OF r, sm SKIP LOCKED
-                "#,
-            )
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+                // Find a run waiting for execution and transition it. `retrying` runs
+                // are runs whose automatic retry backoff has been armed: they become
+                // eligible again once `scheduled_at` has passed.
+                // Lock exactly the two per-run rows. A bare FOR UPDATE would
+                // also lock `ast`, whose 'pending' row is shared by every run,
+                // so SKIP LOCKED would make concurrent workers skip the whole
+                // queue. Locking `sm` is what makes the pick exclusive.
+                let Some(run_row) = sqlx::query(PICK_CANDIDATE_SQL)
+                    .bind(&excluded)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?
+                else {
+                    tx.rollback()
+                        .await
+                        .map_err(|e| StoreError::Database(e.to_string()))?;
+                    return Ok(None);
+                };
 
-            if let Some(run_row) = run_row {
-                let run_id = run_row.id;
-                let state_machine_id = run_row.state_machine__id;
+                let run_id: Uuid = run_row.get("id");
+                let state_machine_id: Uuid = run_row.get("state_machine__id");
+                let state_name: String = run_row.get("state_name");
+                let limits_json: serde_json::Value = run_row.get("concurrency_limits");
+                let limits: Vec<ConcurrencyLimit> = serde_json::from_value(limits_json.clone())?;
+
+                if !limits.is_empty() {
+                    // The candidate query read the running counts from a snapshot
+                    // that a concurrent picker may already have outdated. Serialize
+                    // pickers per group, in sorted order so two pickers sharing
+                    // groups never deadlock, then recount: under READ COMMITTED
+                    // the new statement sees every transition committed before the
+                    // lock was granted.
+                    let mut groups: Vec<&str> = limits.iter().map(|l| l.group.as_str()).collect();
+                    groups.sort_unstable();
+                    groups.dedup();
+                    for group in groups {
+                        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                            .bind(format!("{CONCURRENCY_GROUP_LOCK_PREFIX}{group}"))
+                            .execute(&mut *tx)
+                            .await
+                            .map_err(|e| StoreError::Database(e.to_string()))?;
+                    }
+
+                    let saturated: bool = sqlx::query_scalar(GROUP_SATURATED_SQL)
+                        .bind(&limits_json)
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                    if saturated {
+                        tx.rollback()
+                            .await
+                            .map_err(|e| StoreError::Database(e.to_string()))?;
+                        excluded.push(run_id);
+                        continue;
+                    }
+                }
+
                 let event = PostgresStore::run_status_to_event(
-                    parse_run_status(&run_row.state_name)?,
+                    parse_run_status(&state_name)?,
                     RunStatus::Running,
                 )?;
 
@@ -595,7 +728,7 @@ impl RunStore for PostgresStore {
                 // Update timestamps and attach the lease in the same transaction,
                 // so a run is never Running without an owner. NOW() is the
                 // server clock: worker clock skew cannot shorten or extend a lease.
-                match lease {
+                match lease.as_ref() {
                     Some(lease) => {
                         sqlx::query!(
                             r#"
@@ -660,8 +793,23 @@ impl RunStore for PostgresStore {
 
                 return Ok(Some(run));
             }
+        })
+    }
 
-            Ok(None)
+    fn count_blocked_runs_by_group(&self) -> StoreFuture<'_, Vec<ConcurrencyGroupBacklog>> {
+        Box::pin(async move {
+            let rows = sqlx::query(BLOCKED_RUNS_BY_GROUP_SQL)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(rows
+                .iter()
+                .map(|row| ConcurrencyGroupBacklog {
+                    group: row.get("group_name"),
+                    blocked_runs: row.get::<i64, _>("blocked") as u64,
+                })
+                .collect())
         })
     }
 

@@ -111,6 +111,32 @@ call answers `409 CONCURRENCY_CONFLICT`. Section: Sub-workflow.
 + }
 ```
 
+## concurrency-limits
+- kind: adopt
+- since: ironflow-engine after 2.47.1 (#178)
+
+A worker `concurrency` caps one process, not the runs that share an external resource
+across workers. A handler that polls the running runs of a repository or tenant and sleeps
+until one finishes, or a client that holds back its `POST /api/v1/runs` for the same
+reason, races and burns a slot while it waits. Give the run concurrency groups instead: it
+is created at once and stays pending until every group counts fewer running root runs than
+its limit, while other runs go ahead. `concurrency_limits` in the body,
+`--concurrency-limit GROUP=N` in the CLI. Section: Sub-workflow.
+
+```diff
+- while running_runs_for("repo:acme").await? >= 2 {
+-     sleep(Duration::from_secs(30)).await;
+- }
+- engine.enqueue_handler("fix-issue", TriggerKind::Api, payload).await?;
++ let options = EnqueueOptions {
++     concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 2)],
++     ..Default::default()
++ };
++ engine
++     .enqueue_handler_with_options("fix-issue", TriggerKind::Api, payload, options)
++     .await?;
+```
+
 ## workflow-allow-failure
 - kind: adopt
 - since: ironflow-engine 2.46.0 (#161)

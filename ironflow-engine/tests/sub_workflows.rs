@@ -1025,6 +1025,7 @@ async fn create_blocker(store: &InMemoryStore) -> Run {
             created_by: None,
             idempotency_key: None,
             concurrency_key: Some(ISSUE_KEY.to_string()),
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })
         .await
