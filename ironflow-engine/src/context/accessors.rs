@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde_json::{Value, from_value};
+use serde::Serialize;
+use serde_json::{Value, from_value, to_value};
 use tracing::error;
 use uuid::Uuid;
 
@@ -80,6 +81,7 @@ impl WorkflowContext {
             operation_ctx: None,
             run_created_at: None,
             plan: None,
+            output: None,
         }
     }
 
@@ -128,6 +130,7 @@ impl WorkflowContext {
             operation_ctx: None,
             run_created_at: None,
             plan: None,
+            output: None,
         }
     }
 
@@ -264,6 +267,54 @@ impl WorkflowContext {
     /// ```
     pub fn is_planning(&self) -> bool {
         self.plan.is_some()
+    }
+
+    /// Set the typed output of this run.
+    ///
+    /// The value is persisted on the run when the execution ends, whether it
+    /// completes, fails or is cancelled, so a verdict set before a handler
+    /// error is kept. A parent workflow reads it back with
+    /// [`SubWorkflowOutput::output`](crate::executor::SubWorkflowOutput::output).
+    /// The last call wins. While the context is planning, the call is a no-op
+    /// and nothing is serialized.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Serialization`] if `value` cannot be serialized
+    /// to JSON.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::error::EngineError;
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Review {
+    ///     approved: bool,
+    ///     findings: Vec<String>,
+    /// }
+    ///
+    /// # fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// ctx.set_output(&Review {
+    ///     approved: true,
+    ///     findings: Vec::new(),
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_output<T: Serialize>(&mut self, value: &T) -> Result<(), EngineError> {
+        if self.plan.is_some() {
+            return Ok(());
+        }
+        self.output = Some(to_value(value)?);
+        Ok(())
+    }
+
+    /// The output set with [`set_output`](Self::set_output), if any.
+    pub(crate) fn output(&self) -> Option<&Value> {
+        self.output.as_ref()
     }
 
     /// Seed the context with the run's attempt number and the totals already

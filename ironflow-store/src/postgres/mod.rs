@@ -437,6 +437,7 @@ impl PostgresStore {
         push_set!("started_at", update.started_at);
         push_set!("completed_at", update.completed_at);
         push_set!("scheduled_at", update.scheduled_at);
+        push_set!("output", update.output);
 
         if update.increment_retry {
             sets.push("retry_count = retry_count + 1".to_string());
@@ -473,6 +474,9 @@ impl PostgresStore {
         }
         if let Some(scheduled) = update.scheduled_at {
             query = query.bind(scheduled);
+        }
+        if let Some(ref output) = update.output {
+            query = query.bind(output);
         }
 
         query = query.bind(id);

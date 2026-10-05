@@ -186,6 +186,9 @@ pub struct WorkflowContext {
     /// Set when the context is recording an execution plan instead of running.
     /// Every step method checks this first and records intent without executing.
     plan: Option<SharedPlanRecorder>,
+    /// Output set by the handler with [`set_output`](Self::set_output),
+    /// persisted on the run when the execution ends.
+    output: Option<Value>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.
