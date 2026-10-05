@@ -733,9 +733,9 @@ impl RunStore for PostgresStore {
 
             // Lock the expired runs first: SKIP LOCKED lets concurrent reapers
             // work on disjoint sets instead of blocking on each other.
-            let rows = sqlx::query!(
+            let rows = sqlx::query(
                 r#"
-                SELECT r.id, r.state_machine__id as "state_machine__id!", r.retry_count, r.max_retries
+                SELECT r.id, r.state_machine__id, r.lease_recoveries, r.max_retries
                 FROM ironflow.runs r
                 JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
                 JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
@@ -746,8 +746,8 @@ impl RunStore for PostgresStore {
                 LIMIT $1
                 FOR UPDATE OF r, sm SKIP LOCKED
                 "#,
-                limit as i64,
             )
+            .bind(limit as i64)
             .fetch_all(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -755,12 +755,12 @@ impl RunStore for PostgresStore {
             let mut reaped = Vec::with_capacity(rows.len());
 
             for row in &rows {
-                let run_id = row.id;
-                let state_machine_id = row.state_machine__id;
-                let retry_count = row.retry_count;
-                let max_retries = row.max_retries;
+                let run_id: Uuid = row.get("id");
+                let state_machine_id: Uuid = row.get("state_machine__id");
+                let lease_recoveries: i32 = row.get("lease_recoveries");
+                let max_retries: i32 = row.get("max_retries");
 
-                let exhausted = retry_count + 1 > max_retries;
+                let exhausted = lease_recoveries + 1 > max_retries;
                 let to = if exhausted {
                     RunStatus::Failed
                 } else {
@@ -778,10 +778,10 @@ impl RunStore for PostgresStore {
                 // A requeued run keeps no error: it is going to run again.
                 // Only the final give-up records why the run failed.
                 if exhausted {
-                    sqlx::query!(
+                    sqlx::query(
                         r#"
                         UPDATE ironflow.runs
-                        SET retry_count = retry_count + 1,
+                        SET lease_recoveries = lease_recoveries + 1,
                             worker_id = NULL,
                             lease_expires_at = NULL,
                             error = $1,
@@ -789,24 +789,24 @@ impl RunStore for PostgresStore {
                             updated_at = NOW()
                         WHERE id = $2
                         "#,
-                        LEASE_EXPIRED_ERROR,
-                        run_id,
                     )
+                    .bind(LEASE_EXPIRED_ERROR)
+                    .bind(run_id)
                     .execute(&mut *tx)
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;
                 } else {
-                    sqlx::query!(
+                    sqlx::query(
                         r#"
                         UPDATE ironflow.runs
-                        SET retry_count = retry_count + 1,
+                        SET lease_recoveries = lease_recoveries + 1,
                             worker_id = NULL,
                             lease_expires_at = NULL,
                             updated_at = NOW()
                         WHERE id = $1
                         "#,
-                        run_id,
                     )
+                    .bind(run_id)
                     .execute(&mut *tx)
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?;

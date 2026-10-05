@@ -35,7 +35,7 @@ use metrics::{counter, gauge, histogram};
 
 use crate::artifact::ArtifactSink;
 use crate::budget::{BudgetConfig, month_start};
-use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
+use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext, interrupt_running_steps};
 use crate::error::EngineError;
 use crate::executor::{StepInterceptor, StepResult};
 use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
@@ -1181,7 +1181,9 @@ impl Engine {
         // a human already granted must not be asked again, and a run requeued to
         // `Pending` after its approval, human input or escalation resolved
         // (`ExecutionMode::Workers`, `retry_count` unchanged) must not re-run
-        // completed steps. A brand-new run has no steps, so this is a no-op.
+        // completed steps. Neither must a run requeued by the reaper after its
+        // worker lost the lease, which stays in the same attempt too. A
+        // brand-new run has no steps, so this is a no-op.
         //
         // The handler version is checked first: replaying an incompatible
         // handler's steps risks serving one step's cached output to another
@@ -1713,6 +1715,39 @@ impl Engine {
         self.fail_orphaned_steps(run_id, error).await?;
 
         Ok(status)
+    }
+
+    /// Mark the steps of a run requeued after a lost worker lease as interrupted.
+    ///
+    /// Every `Running` step is marked `Failed` with
+    /// [`STEP_INTERRUPTED_ERROR`](ironflow_store::store::STEP_INTERRUPTED_ERROR).
+    /// The run keeps its attempt number, so when it is picked up again its
+    /// finished steps are replayed and each interrupted step is executed again
+    /// at the same position; an interrupted `Workflow` step re-enters the same
+    /// child run. `Pending` and `AwaitingApproval` steps are left as they are,
+    /// unlike [`fail_orphaned_steps`](Self::fail_orphaned_steps), which ends
+    /// the run's steps for good.
+    ///
+    /// Errors from individual step updates are logged but do not abort the cleanup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if listing steps fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example(engine: &Engine, run_id: Uuid) -> Result<(), EngineError> {
+    /// engine.interrupt_running_steps(run_id).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn interrupt_running_steps(&self, run_id: Uuid) -> Result<(), EngineError> {
+        interrupt_running_steps(self.store.as_ref(), run_id).await
     }
 
     /// Fail all non-terminal steps for a run.

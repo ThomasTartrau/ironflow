@@ -18,6 +18,7 @@ use ironflow_core::provider::{LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, sanit
 use ironflow_store::models::{
     NewStep, NewStepDependency, RunUpdate, Step, StepKind, StepStatus, StepUpdate, step_trace_id,
 };
+use ironflow_store::store::{STEP_INTERRUPTED_ERROR, Store};
 
 use crate::budget::step_budget_usd;
 use crate::config::StepConfig;
@@ -37,6 +38,7 @@ use super::failure::{
     allowed_failure_output, extract_debug_messages_from_error, extract_partial_usage_from_error,
     extract_raw_response_from_error, is_step_retryable, record_retry_metric,
 };
+use super::steps::sub_workflow::recorded_child_run_id;
 
 /// Insert a step into a replay index, keeping the oldest `Completed` step
 /// when one already exists at `key`.
@@ -90,6 +92,58 @@ pub(crate) fn check_replay_identity(
     Ok(())
 }
 
+/// Mark every `Running` step of a run `Failed` with [`STEP_INTERRUPTED_ERROR`].
+///
+/// Used when the run is resumed after its worker lost the lease: the step that
+/// was running is executed again at the same position, and the interrupted
+/// record stays in the history. `Pending` and `AwaitingApproval` steps are
+/// left as they are: a `Pending` step is never replayed, and an
+/// `AwaitingApproval` step is replayed like on a resume after approval.
+///
+/// Errors from individual step updates are logged but do not abort the cleanup.
+pub(crate) async fn interrupt_running_steps(
+    store: &dyn Store,
+    run_id: Uuid,
+) -> Result<(), EngineError> {
+    let steps = store.list_steps(run_id).await?;
+    let now = Utc::now();
+
+    for step in steps
+        .into_iter()
+        .filter(|s| s.status.state == StepStatus::Running)
+    {
+        match store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Failed),
+                    error: Some(STEP_INTERRUPTED_ERROR.to_string()),
+                    completed_at: Some(now),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+        {
+            Ok(()) => info!(
+                run_id = %run_id,
+                step_id = %step.id,
+                step_name = %step.name,
+                position = step.position,
+                "interrupted step will be executed again"
+            ),
+            Err(e) => warn!(
+                run_id = %run_id,
+                step_id = %step.id,
+                step_name = %step.name,
+                error = %e,
+                "failed to mark interrupted step"
+            ),
+        }
+    }
+
+    Ok(())
+}
+
 impl WorkflowContext {
     /// Load existing steps from the store for replay after approval.
     ///
@@ -109,6 +163,13 @@ impl WorkflowContext {
     ///
     /// A step of the current attempt left `Skipped` by [`skip`](Self::skip) is
     /// replayed as well, so a resumed run never records the same skip twice.
+    ///
+    /// A run requeued after its worker lost the lease stays in the same
+    /// attempt, so it resumes the same way: its finished steps are replayed and
+    /// the step that was running, marked `Failed` with
+    /// [`STEP_INTERRUPTED_ERROR`] by the reaper, is executed again at the same
+    /// position. An interrupted `Workflow` step records its child run, which
+    /// the step executed again re-enters instead of starting a new child.
     pub(crate) async fn load_replay_steps(&mut self) -> Result<(), EngineError> {
         let steps = self.store.list_steps(self.run_id).await?;
         for step in steps {
@@ -131,6 +192,19 @@ impl WorkflowContext {
                     }
                     continue;
                 }
+            }
+
+            if step.attempt == self.attempt
+                && step.kind == StepKind::Workflow
+                && step.status.state == StepStatus::Failed
+                && step.error.as_deref() == Some(STEP_INTERRUPTED_ERROR)
+            {
+                // Every step executed again at this position records the same
+                // child run, so repeated interruptions all point to one child.
+                if recorded_child_run_id(&step).is_some() {
+                    self.interrupted_children.insert(step.position, step);
+                }
+                continue;
             }
 
             let dominated = matches!(

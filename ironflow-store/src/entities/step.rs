@@ -81,7 +81,9 @@ pub struct Step {
     ///
     /// A run retried twice holds steps with `attempt` 1, 2 and 3. Steps from
     /// earlier attempts are kept for inspection and are never replayed.
-    /// Derived by the store from `Run::retry_count` at creation time.
+    /// Derived by the store from `Run::retry_count` at creation time. A run
+    /// recovered after a lost worker lease stays in the same attempt, so its
+    /// finished steps are replayed.
     #[serde(default = "default_attempt")]
     pub attempt: u32,
     /// Serialized operation configuration.
