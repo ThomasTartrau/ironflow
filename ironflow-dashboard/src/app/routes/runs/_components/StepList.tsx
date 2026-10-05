@@ -109,9 +109,10 @@ export function describeApprovalReason(
 }
 
 /**
- * Provider Account an agent step ran under, e.g. `account 0192f0c1`, with
- * the full id in a tooltip. Renders nothing when the step used the worker
- * environment.
+ * Provider Account an agent step ran under, e.g. `account perso`. The tooltip
+ * shows the display name, then the full id. Falls back to the first 8 chars
+ * of the id (e.g. `account 0192f0c1`) when the name is unavailable. Renders
+ * nothing when the step used the worker environment.
  */
 export function AccountBadge({ step }: { step: StepResponse }) {
 	if (!step.account_id) return null;
@@ -122,12 +123,15 @@ export function AccountBadge({ step }: { step: StepResponse }) {
 					render={
 						<span className="shrink-0">
 							<Badge variant="outline" className="text-[10px] font-medium">
-								{`account ${step.account_id.slice(0, 8)}`}
+								{`account ${step.account?.name ?? step.account_id.slice(0, 8)}`}
 							</Badge>
 						</span>
 					}
 				/>
-				<TooltipContent side="bottom">{step.account_id}</TooltipContent>
+				<TooltipContent side="bottom">
+					{step.account ? <div>{step.account.display_name}</div> : null}
+					<div>{step.account_id}</div>
+				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
 	);

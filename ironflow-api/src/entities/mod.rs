@@ -48,7 +48,7 @@ pub use signal::{
 pub use stats::{
     StatsHistoryBucketResponse, StatsHistoryQuery, StatsHistoryResponse, StatsResponse,
 };
-pub use step::StepResponse;
+pub use step::{StepAccountResponse, StepResponse};
 pub use user::{
     CreateUserRequest, UpdateRoleRequest, UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
 };

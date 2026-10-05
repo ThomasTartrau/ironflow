@@ -31,6 +31,19 @@ pub trait ProviderAccountStore: Send + Sync {
     /// Returns [`StoreError`](crate::error::StoreError) on storage failure.
     fn get_provider_account(&self, id: Uuid) -> StoreFuture<'_, Option<ProviderAccount>>;
 
+    /// Find several accounts by ID in one lookup.
+    ///
+    /// Unknown IDs are silently omitted and an empty `ids` returns an empty
+    /// list without touching storage. The order of the result is unspecified.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`](crate::error::StoreError) on storage failure.
+    fn list_provider_accounts_by_ids(
+        &self,
+        ids: Vec<Uuid>,
+    ) -> StoreFuture<'_, Vec<ProviderAccount>>;
+
     /// Find an account by name.
     ///
     /// # Errors

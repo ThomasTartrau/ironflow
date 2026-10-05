@@ -3771,6 +3771,37 @@ export interface components {
 			total_runs: number;
 		};
 		/**
+		 * @description Readable identity of the Provider Account a step ran under.
+		 *
+		 *     Deliberately minimal: it never carries the credential, the secret key or
+		 *     any scheduling data, since it is readable by anyone who can read the run.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::StepAccountResponse;
+		 *     use uuid::Uuid;
+		 *
+		 *     let account = StepAccountResponse {
+		 *         id: Uuid::now_v7(),
+		 *         name: "perso".to_string(),
+		 *         display_name: "Compte perso".to_string(),
+		 *     };
+		 *     assert_eq!(account.name, "perso");
+		 *     ```
+		 */
+		StepAccountResponse: {
+			/** @description Human-readable name. */
+			display_name: string;
+			/**
+			 * Format: uuid
+			 * @description Account ID.
+			 */
+			id: string;
+			/** @description Unique slug. */
+			name: string;
+		};
+		/**
 		 * @description One vote cast on an approval gate.
 		 *
 		 *     Votes are unique per [`user_id`](StepApproval::user_id): an API key votes as
@@ -3916,6 +3947,7 @@ export interface components {
 		 *     ```
 		 */
 		StepResponse: {
+			account?: null | components["schemas"]["StepAccountResponse"];
 			/**
 			 * Format: uuid
 			 * @description Provider Account the agent step ran under, if any.

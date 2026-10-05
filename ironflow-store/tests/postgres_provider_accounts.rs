@@ -154,6 +154,38 @@ async fn postgres_provider_account_crud_and_duplicate_name() {
 
 #[tokio::test]
 #[ignore]
+async fn postgres_list_provider_accounts_by_ids_omits_unknown() {
+    let store = get_store().await;
+    let first = store
+        .create_provider_account(new_account(&unique("by-ids-a"), "claude_subscription"))
+        .await
+        .unwrap();
+    let second = store
+        .create_provider_account(new_account(&unique("by-ids-b"), "claude_subscription"))
+        .await
+        .unwrap();
+
+    let found = store
+        .list_provider_accounts_by_ids(vec![first.id, second.id, Uuid::now_v7()])
+        .await
+        .unwrap();
+    let mut ids: Vec<Uuid> = found.iter().map(|a| a.id).collect();
+    ids.sort();
+    let mut expected = vec![first.id, second.id];
+    expected.sort();
+    assert_eq!(ids, expected);
+
+    assert!(
+        store
+            .list_provider_accounts_by_ids(Vec::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore]
 async fn postgres_provider_account_observation_guard_and_history() {
     let store = get_store().await;
     let account = store
