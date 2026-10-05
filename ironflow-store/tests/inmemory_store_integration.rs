@@ -1472,6 +1472,39 @@ async fn provider_account_auth_failure_is_set_and_cleared() {
 }
 
 #[tokio::test]
+async fn list_provider_accounts_by_ids_returns_only_existing_requested() {
+    let store = InMemoryStore::new();
+    let first = store
+        .create_provider_account(new_account("first", 10))
+        .await
+        .unwrap();
+    let second = store
+        .create_provider_account(new_account("second", 10))
+        .await
+        .unwrap();
+    store
+        .create_provider_account(new_account("third", 10))
+        .await
+        .unwrap();
+
+    let mut found = store
+        .list_provider_accounts_by_ids(vec![first.id, second.id, Uuid::now_v7()])
+        .await
+        .unwrap();
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    let names: Vec<&str> = found.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, vec!["first", "second"]);
+
+    assert!(
+        store
+            .list_provider_accounts_by_ids(Vec::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn provider_account_candidates_filter_and_count_running_steps() {
     let store = InMemoryStore::new();
     let active = store

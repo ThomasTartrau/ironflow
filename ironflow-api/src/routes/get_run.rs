@@ -1,6 +1,6 @@
 //! `GET /api/v1/runs/:id` — Get run details with steps.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -8,7 +8,9 @@ use ironflow_auth::extractor::Authenticated;
 use tokio::join;
 use uuid::Uuid;
 
-use crate::entities::{ArtifactResponse, RunDetailResponse, RunResponse, StepResponse};
+use crate::entities::{
+    ArtifactResponse, RunDetailResponse, RunResponse, StepAccountResponse, StepResponse,
+};
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
@@ -65,12 +67,40 @@ pub async fn get_run(
             .push(ArtifactResponse::from(artifact));
     }
 
+    // Accounts are resolved once for the whole run, deduplicated. A deleted
+    // account is absent from the map and the step keeps only its `account_id`.
+    let account_ids: Vec<Uuid> = steps
+        .iter()
+        .filter_map(|step| step.account_id)
+        .collect::<HashSet<Uuid>>()
+        .into_iter()
+        .collect();
+    let accounts_map: HashMap<Uuid, StepAccountResponse> = if account_ids.is_empty() {
+        HashMap::new()
+    } else {
+        state
+            .store
+            .list_provider_accounts_by_ids(account_ids)
+            .await?
+            .into_iter()
+            .map(|account| (account.id, StepAccountResponse::from(account)))
+            .collect()
+    };
+
     let step_responses: Vec<StepResponse> = steps
         .into_iter()
         .map(|step| {
             let step_deps = deps_map.remove(&step.id).unwrap_or_default();
             let step_artifacts = artifacts_map.remove(&step.id).unwrap_or_default();
-            StepResponse::with_dependencies_and_artifacts(step, step_deps, step_artifacts)
+            let account = step
+                .account_id
+                .and_then(|account_id| accounts_map.get(&account_id).cloned());
+            let response =
+                StepResponse::with_dependencies_and_artifacts(step, step_deps, step_artifacts);
+            match account {
+                Some(account) => response.with_account(account),
+                None => response,
+            }
         })
         .collect();
 
@@ -90,12 +120,17 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
+    use chrono::{TimeDelta, Utc};
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
+    use ironflow_store::entities::{NewProviderAccount, provider_account_secret_key};
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewUser, RunActor, RunUpdate, TriggerKind};
+    use ironflow_store::models::{
+        NewRun, NewStep, NewUser, RunActor, RunUpdate, StepKind, StepUpdate, TriggerKind,
+        step_trace_id,
+    };
     use ironflow_store::store::RunStore;
     use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
@@ -198,6 +233,126 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// A run with one agent step, optionally bound to a freshly created
+    /// account. Returns the app, the auth header, the run id and the account id.
+    async fn run_with_account_step(
+        bind: bool,
+        delete_account: bool,
+    ) -> (Router, String, Uuid, Uuid) {
+        let state = test_state();
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
+        let account_id = Uuid::now_v7();
+        state
+            .store
+            .create_provider_account(NewProviderAccount {
+                id: account_id,
+                name: "perso".to_string(),
+                display_name: "Compte perso".to_string(),
+                kind: "claude_subscription".to_string(),
+                secret_key: provider_account_secret_key(account_id),
+                enabled: true,
+                priority: 100,
+                tags: Vec::new(),
+                max_concurrency: None,
+                alert_threshold: 0.8,
+                expires_at: Utc::now() + TimeDelta::days(30),
+                plan: None,
+                created_by: None,
+            })
+            .await
+            .unwrap();
+        let run = state
+            .store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Api,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: Default::default(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        let step = state
+            .store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "ask", 0),
+                name: "ask".to_string(),
+                kind: StepKind::Agent,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+        if bind {
+            state
+                .store
+                .update_step(
+                    step.id,
+                    StepUpdate {
+                        account_id: Some(account_id),
+                        ..StepUpdate::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        if delete_account {
+            state
+                .store
+                .delete_provider_account(account_id)
+                .await
+                .unwrap();
+        }
+        let app = Router::new().route("/{id}", get(get_run)).with_state(state);
+        (app, auth_header, run.id, account_id)
+    }
+
+    async fn first_step_of(app: Router, auth_header: String, run_id: Uuid) -> JsonValue {
+        let req = Request::builder()
+            .uri(format!("/{run_id}"))
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
+        json_val["data"]["steps"][0].clone()
+    }
+
+    #[tokio::test]
+    async fn step_exposes_its_account() {
+        let (app, auth_header, run_id, account_id) = run_with_account_step(true, false).await;
+        let step = first_step_of(app, auth_header, run_id).await;
+        assert_eq!(step["account_id"], account_id.to_string());
+        assert_eq!(step["account"]["name"], "perso");
+        assert_eq!(step["account"]["display_name"], "Compte perso");
+    }
+
+    #[tokio::test]
+    async fn step_without_account_has_null_account() {
+        let (app, auth_header, run_id, _) = run_with_account_step(false, false).await;
+        let step = first_step_of(app, auth_header, run_id).await;
+        assert!(step["account_id"].is_null());
+        assert!(step["account"].is_null());
+    }
+
+    #[tokio::test]
+    async fn step_whose_account_was_deleted_has_null_account() {
+        let (app, auth_header, run_id, _) = run_with_account_step(true, true).await;
+        let step = first_step_of(app, auth_header, run_id).await;
+        assert!(step["account"].is_null());
     }
 
     #[tokio::test]

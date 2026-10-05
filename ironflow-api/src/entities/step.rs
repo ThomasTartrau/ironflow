@@ -1,6 +1,7 @@
 //! Step-related DTOs.
 
 use chrono::{DateTime, Utc};
+use ironflow_store::entities::ProviderAccount;
 use ironflow_store::models::{
     ApprovalRequirement, Assignee, Step, StepApproval, StepKind, StepStatus,
 };
@@ -10,6 +11,45 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::ArtifactResponse;
+
+/// Readable identity of the Provider Account a step ran under.
+///
+/// Deliberately minimal: it never carries the credential, the secret key or
+/// any scheduling data, since it is readable by anyone who can read the run.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::entities::StepAccountResponse;
+/// use uuid::Uuid;
+///
+/// let account = StepAccountResponse {
+///     id: Uuid::now_v7(),
+///     name: "perso".to_string(),
+///     display_name: "Compte perso".to_string(),
+/// };
+/// assert_eq!(account.name, "perso");
+/// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepAccountResponse {
+    /// Account ID.
+    pub id: Uuid,
+    /// Unique slug.
+    pub name: String,
+    /// Human-readable name.
+    pub display_name: String,
+}
+
+impl From<ProviderAccount> for StepAccountResponse {
+    fn from(account: ProviderAccount) -> Self {
+        Self {
+            id: account.id,
+            name: account.name,
+            display_name: account.display_name,
+        }
+    }
+}
 
 /// Step response DTO — public API representation of a step.
 ///
@@ -108,9 +148,32 @@ pub struct StepResponse {
     /// Provider Account the agent step ran under, if any.
     #[serde(default)]
     pub account_id: Option<Uuid>,
+    /// Readable identity of the Provider Account the step ran under.
+    ///
+    /// `None` when the step has no account or the account was deleted since
+    /// (`account_id` is then still set). Readable by anyone who can read the
+    /// run; no other account data is exposed here.
+    #[serde(default)]
+    pub account: Option<StepAccountResponse>,
 }
 
 impl StepResponse {
+    /// Attach the readable identity of the step's Provider Account.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_api::entities::{StepAccountResponse, StepResponse};
+    ///
+    /// # fn example(response: StepResponse, account: StepAccountResponse) -> StepResponse {
+    /// response.with_account(account)
+    /// # }
+    /// ```
+    pub fn with_account(mut self, account: StepAccountResponse) -> Self {
+        self.account = Some(account);
+        self
+    }
+
     /// Build a response from a step entity with pre-resolved dependencies.
     ///
     /// Artifacts are left empty; use
@@ -170,6 +233,7 @@ impl StepResponse {
             approvals: step.approvals,
             approvals_required,
             account_id: step.account_id,
+            account: None,
         }
     }
 }
@@ -252,6 +316,26 @@ mod tests {
 
         assert_eq!(response.artifacts.len(), 1);
         assert_eq!(response.artifacts[0].name, "report.html");
+    }
+
+    #[tokio::test]
+    async fn account_is_null_by_default() {
+        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        assert!(body["account"].is_null());
+    }
+
+    #[tokio::test]
+    async fn with_account_fills_the_nested_account() {
+        let id = Uuid::now_v7();
+        let response = StepResponse::from(step().await).with_account(StepAccountResponse {
+            id,
+            name: "perso".to_string(),
+            display_name: "Compte perso".to_string(),
+        });
+        let body = serde_json::to_value(response).expect("serialize");
+        assert_eq!(body["account"]["id"], id.to_string());
+        assert_eq!(body["account"]["name"], "perso");
+        assert_eq!(body["account"]["display_name"], "Compte perso");
     }
 
     #[tokio::test]

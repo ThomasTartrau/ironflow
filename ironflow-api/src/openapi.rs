@@ -10,8 +10,8 @@ use crate::entities::{
     RejectedRunResponse, ResumedRunResponse, RotateSecretsRequest, RotateSecretsResponse,
     RunDetailResponse, RunResponse, ScheduleResponse, SecretResponse, SendSignalRequest,
     SetSecretRequest, SignInRequest, SignalDeliveryResponse, SignalResponse,
-    StatsHistoryBucketResponse, StatsHistoryResponse, StatsResponse, StepResponse,
-    UpdateProviderAccountRequest, UpdateRoleRequest, UpdateScheduleRequest,
+    StatsHistoryBucketResponse, StatsHistoryResponse, StatsResponse, StepAccountResponse,
+    StepResponse, UpdateProviderAccountRequest, UpdateRoleRequest, UpdateScheduleRequest,
     UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
@@ -152,6 +152,7 @@ mod with_signup {
                 RunResponse,
                 RunDetailResponse,
                 StepResponse,
+                StepAccountResponse,
                 ArtifactResponse,
                 CreatedBy,
                 CreatedByKind,
@@ -354,6 +355,7 @@ mod without_signup {
                 RunResponse,
                 RunDetailResponse,
                 StepResponse,
+                StepAccountResponse,
                 ArtifactResponse,
                 CreatedBy,
                 CreatedByKind,

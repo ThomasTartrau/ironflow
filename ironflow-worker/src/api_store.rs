@@ -915,6 +915,13 @@ impl ProviderAccountStore for ApiRunStore {
         Box::pin(async { Err(account_method_unavailable("get_provider_account")) })
     }
 
+    fn list_provider_accounts_by_ids(
+        &self,
+        _ids: Vec<Uuid>,
+    ) -> StoreFuture<'_, Vec<ProviderAccount>> {
+        Box::pin(async { Err(account_method_unavailable("list_provider_accounts_by_ids")) })
+    }
+
     fn find_provider_account_by_name(
         &self,
         _name: &str,

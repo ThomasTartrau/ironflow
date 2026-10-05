@@ -1,7 +1,7 @@
 //! In-memory [`ProviderAccountStore`] implementation.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -95,6 +95,22 @@ impl ProviderAccountStore for InMemoryStore {
         Box::pin(async move {
             let state = self.state.read().await;
             Ok(state.provider_accounts.get(&id).cloned())
+        })
+    }
+
+    fn list_provider_accounts_by_ids(
+        &self,
+        ids: Vec<Uuid>,
+    ) -> StoreFuture<'_, Vec<ProviderAccount>> {
+        Box::pin(async move {
+            let wanted: HashSet<Uuid> = ids.into_iter().collect();
+            let state = self.state.read().await;
+            Ok(state
+                .provider_accounts
+                .values()
+                .filter(|a| wanted.contains(&a.id))
+                .cloned()
+                .collect())
         })
     }
 
