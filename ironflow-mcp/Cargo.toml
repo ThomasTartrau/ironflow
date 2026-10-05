@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-mcp"
-version = "0.1.27"
+version = "0.1.28"
 edition = "2024"
 rust-version = "1.94"
 description = "MCP server for Ironflow workflow orchestration"
@@ -14,7 +14,7 @@ path = "src/main.rs"
 anyhow = "1"
 base64 = "0.22"
 async-trait = "0.1"
-ironflow-types = { version = "0.2.1", path = "../ironflow-types" }
+ironflow-types = { version = "0.2.2", path = "../ironflow-types" }
 reqwest = { version = "0.12", features = ["json"] }
 rust-mcp-sdk = { version = "0.9", default-features = false, features = ["server", "macros", "stdio"] }
 serde = { version = "1", features = ["derive"] }
