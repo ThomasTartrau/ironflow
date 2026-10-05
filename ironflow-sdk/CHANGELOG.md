@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.36](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.35...ironflow-sdk-v0.1.36) - 2026-10-05
+
+### Fixed
+
+- address review on MR !466
+
+- #165 show Provider Account name instead of UUID on step badge
+
 ## [0.1.35](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.34...ironflow-sdk-v0.1.35) - 2026-10-04
 
 ### Added
