@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use strum::Display;
 
 /// Pod label carrying the id of the run that created the pod.
 ///
@@ -336,9 +337,9 @@ pub(crate) fn assert_environment_id_valid(environment_id: &str) {
 /// ```
 /// use ironflow_core::provider::StorageUnit;
 ///
-/// assert_eq!(StorageUnit::Gi.suffix(), "Gi");
+/// assert_eq!(StorageUnit::Gi.to_string(), "Gi");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum StorageUnit {
     /// Mebibytes (`Mi`).
     Mi,
@@ -346,25 +347,6 @@ pub enum StorageUnit {
     Gi,
     /// Tebibytes (`Ti`).
     Ti,
-}
-
-impl StorageUnit {
-    /// Kubernetes quantity suffix of the unit.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ironflow_core::provider::StorageUnit;
-    ///
-    /// assert_eq!(StorageUnit::Ti.suffix(), "Ti");
-    /// ```
-    pub fn suffix(self) -> &'static str {
-        match self {
-            Self::Mi => "Mi",
-            Self::Gi => "Gi",
-            Self::Ti => "Ti",
-        }
-    }
 }
 
 /// Storage size: a numeric amount and a [`StorageUnit`].
@@ -410,7 +392,7 @@ impl VolumeSize {
     /// assert_eq!(VolumeSize::new(1, StorageUnit::Ti).to_quantity(), "1Ti");
     /// ```
     pub fn to_quantity(&self) -> String {
-        format!("{}{}", self.amount, self.unit.suffix())
+        format!("{}{}", self.amount, self.unit)
     }
 }
 
