@@ -179,6 +179,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         worker_id: row.get("worker_id"),
         lease_expires_at: row.get("lease_expires_at"),
         output: row.get("output"),
+        lease_recoveries: row.get::<i32, _>("lease_recoveries") as u32,
     })
 }
 

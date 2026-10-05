@@ -16,7 +16,9 @@ use std::collections::{HashMap, HashSet};
 use std::env::var;
 use std::time::Duration;
 
-use ironflow_store::entities::{LeaseRequest, NewRun, RunStatus, TriggerKind};
+use ironflow_store::entities::{
+    LeaseRequest, NewRun, NewStep, RunStatus, StepKind, TriggerKind, step_trace_id,
+};
 use ironflow_store::error::StoreError;
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::store::{LEASE_EXPIRED_ERROR, RunStore};
@@ -51,6 +53,18 @@ fn new_run(name: &str, max_retries: u32) -> NewRun {
         idempotency_key: None,
         concurrency_key: None,
         max_cost_usd: None,
+    }
+}
+
+fn new_step(run_id: Uuid, name: &str, position: u32) -> NewStep {
+    NewStep {
+        run_id,
+        trace_id: step_trace_id(run_id, name, position),
+        name: name.to_string(),
+        kind: StepKind::Shell,
+        position,
+        input: None,
+        is_error_handler: false,
     }
 }
 
@@ -214,6 +228,10 @@ async fn expired_lease_is_requeued_and_picked_by_another_worker() {
         .await
         .unwrap()
         .unwrap();
+    let before = store
+        .create_step(new_step(picked.id, "build", 0))
+        .await
+        .unwrap();
 
     expire_lease(picked.id).await;
 
@@ -225,7 +243,8 @@ async fn expired_lease_is_requeued_and_picked_by_another_worker() {
 
     let requeued = store.get_run(picked.id).await.unwrap().unwrap();
     assert_eq!(requeued.status.state, RunStatus::Pending);
-    assert_eq!(requeued.retry_count, 1);
+    assert_eq!(requeued.retry_count, 0);
+    assert_eq!(requeued.lease_recoveries, 1);
     assert!(requeued.worker_id.is_none());
     assert!(requeued.lease_expires_at.is_none());
 
@@ -237,6 +256,14 @@ async fn expired_lease_is_requeued_and_picked_by_another_worker() {
         .unwrap();
     assert_eq!(repicked.id, picked.id);
     assert_eq!(repicked.worker_id.as_deref(), Some("worker-b"));
+
+    // The recovered run stays in the same attempt, so finished steps replay.
+    let after = store
+        .create_step(new_step(repicked.id, "build", 0))
+        .await
+        .unwrap();
+    assert_eq!(before.attempt, 1);
+    assert_eq!(after.attempt, before.attempt);
 }
 
 #[tokio::test]
@@ -284,6 +311,8 @@ async fn reaper_fails_run_once_retries_are_exhausted() {
     assert_eq!(after.status.state, RunStatus::Failed);
     assert_eq!(after.error.as_deref(), Some(LEASE_EXPIRED_ERROR));
     assert!(after.completed_at.is_some());
+    assert_eq!(after.lease_recoveries, 1);
+    assert_eq!(after.retry_count, 0);
 }
 
 #[tokio::test]
@@ -330,7 +359,8 @@ async fn concurrent_reapers_never_recover_the_same_run_twice() {
     for id in &ids {
         assert!(unique.contains(id), "run {id} was never recovered");
         let after = store.get_run(*id).await.unwrap().unwrap();
-        assert_eq!(after.retry_count, 1, "run {id} was counted twice");
+        assert_eq!(after.lease_recoveries, 1, "run {id} was counted twice");
+        assert_eq!(after.retry_count, 0);
     }
 }
 

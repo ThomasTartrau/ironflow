@@ -37,6 +37,23 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 /// than `max_retries` times.
 pub const LEASE_EXPIRED_ERROR: &str = "worker lease expired";
 
+/// Error recorded on a step that was running when its worker lost the lease.
+///
+/// Set by the reaper on the `Running` steps of a run that
+/// [`RunStore::reap_expired_leases`] requeued. The engine executes such a step
+/// again at the same position when the run is picked up, keeping the
+/// interrupted record in the step history.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::store::{LEASE_EXPIRED_ERROR, STEP_INTERRUPTED_ERROR};
+///
+/// assert_eq!(STEP_INTERRUPTED_ERROR, "interrupted: worker lease lost");
+/// assert_ne!(STEP_INTERRUPTED_ERROR, LEASE_EXPIRED_ERROR);
+/// ```
+pub const STEP_INTERRUPTED_ERROR: &str = "interrupted: worker lease lost";
+
 /// Async storage abstraction for workflow runs and steps.
 ///
 /// All methods return a [`StoreFuture`] (boxed future) to maintain object safety,
@@ -149,9 +166,14 @@ pub trait RunStore: Send + Sync {
 
     /// Recover runs whose worker lease expired, at most `limit` per call.
     ///
-    /// Each recovered run has its retry count incremented and its lease cleared,
-    /// then goes back to `Pending` — or to `Failed` with `worker lease expired`
-    /// once `max_retries` is exhausted. Runs without a lease are never touched.
+    /// Each recovered run has [`Run::lease_recoveries`] incremented and its lease
+    /// cleared, then goes back to `Pending` — or to `Failed` with
+    /// [`LEASE_EXPIRED_ERROR`] once more than `max_retries` recoveries happened.
+    /// Runs without a lease are never touched.
+    ///
+    /// [`Run::retry_count`], and so the attempt number of the steps created
+    /// afterwards, is left unchanged: a requeued run resumes in the same attempt
+    /// and replays the steps it already finished.
     ///
     /// The whole batch is atomic per run (`FOR UPDATE SKIP LOCKED` in
     /// PostgreSQL), so concurrent reapers never recover the same run twice.
