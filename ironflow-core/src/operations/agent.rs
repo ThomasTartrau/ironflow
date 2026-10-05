@@ -1034,7 +1034,7 @@ mod tests {
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
                     account_id: None,
-                    environment_id: None,
+                    environment_id: self.output.environment_id.clone(),
                 })
             })
         }

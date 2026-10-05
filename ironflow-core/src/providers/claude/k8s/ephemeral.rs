@@ -3046,10 +3046,9 @@ mod tests {
 
     #[test]
     fn ephemeral_provider_environment_volume_builder() {
-        let provider = K8sEphemeralProvider::new("img:v1")
-            .environment_volume(
-                EnvironmentVolume::new("/workspace").size(VolumeSize::new(20, StorageUnit::Gi)),
-            );
+        let provider = K8sEphemeralProvider::new("img:v1").environment_volume(
+            EnvironmentVolume::new("/workspace").size(VolumeSize::new(20, StorageUnit::Gi)),
+        );
         let volume = provider.environment.as_ref().unwrap();
         assert_eq!(volume.mount_path, "/workspace");
         assert_eq!(volume.size.to_quantity(), "20Gi");
