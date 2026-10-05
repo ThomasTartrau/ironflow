@@ -1,4 +1,5 @@
 import type { StepResponse, StepKind, StepStatus } from "@/app/lib/types";
+import { getKindMeta as getSharedKindMeta } from "@/app/lib/step-kind";
 import {
 	Terminal,
 	Globe,
@@ -108,7 +109,13 @@ const defaultKindMeta: KindMeta = {
 };
 
 export function getKindMeta(kind: StepKind): KindMeta {
-	return kindMetaMap[kind] ?? { ...defaultKindMeta, label: kind };
+	return (
+		kindMetaMap[kind] ?? {
+			...defaultKindMeta,
+			icon: getSharedKindMeta(kind).icon,
+			label: kind,
+		}
+	);
 }
 
 export const statusBarModifier: Partial<Record<StepStatus, string>> = {

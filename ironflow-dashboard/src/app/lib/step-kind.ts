@@ -3,6 +3,18 @@
  * workflow execution plan so both read as the same diagram.
  */
 import {
+	Archive,
+	ChartLine,
+	Container,
+	Database,
+	Gauge,
+	GitCommitHorizontal,
+	GitPullRequest,
+	Hash,
+	Package,
+	ScrollText,
+	ShipWheel,
+	Waypoints,
 	Terminal,
 	Globe,
 	Bot,
@@ -20,6 +32,22 @@ export interface KindMeta {
 	color: string;
 	label: string;
 }
+
+/** Icons for the operation kinds shipped by the `ops/` crates. */
+const opsKindIcons: Record<string, LucideIcon> = {
+	git: GitCommitHorizontal,
+	gitlab: GitPullRequest,
+	docker: Container,
+	k8s: ShipWheel,
+	helm: Package,
+	postgres: Database,
+	s3: Archive,
+	slack: Hash,
+	grafana: Gauge,
+	loki: ScrollText,
+	mimir: ChartLine,
+	tempo: Waypoints,
+};
 
 export function getKindMeta(kind: string): KindMeta {
 	switch (kind) {
@@ -42,7 +70,11 @@ export function getKindMeta(kind: string): KindMeta {
 		case "skip":
 			return { icon: SkipForward, color: "slate", label: "skipped" };
 		default:
-			return { icon: Terminal, color: "emerald", label: kind };
+			return {
+				icon: opsKindIcons[kind] ?? Terminal,
+				color: "emerald",
+				label: kind,
+			};
 	}
 }
 
