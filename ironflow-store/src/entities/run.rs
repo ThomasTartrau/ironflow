@@ -750,7 +750,6 @@ mod tests {
             idempotency_key: None,
             concurrency_key: None,
             concurrency_limits: Vec::new(),
-            concurrency_limits: Vec::new(),
             max_cost_usd: Some(Decimal::new(250, 2)),
         };
 
@@ -909,6 +908,7 @@ mod tests {
             created_by_label: None,
             idempotency_key: None,
             concurrency_key: None,
+            concurrency_limits: Vec::new(),
             max_cost_usd: None,
             worker_id: None,
             lease_expires_at: None,
