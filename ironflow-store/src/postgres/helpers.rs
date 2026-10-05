@@ -236,6 +236,7 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
             .and_then(|v| from_value(v).ok())
             .unwrap_or_default(),
         account_id: row.try_get("account_id").unwrap_or(None),
+        environment_id: row.try_get("environment_id").unwrap_or(None),
     })
 }
 

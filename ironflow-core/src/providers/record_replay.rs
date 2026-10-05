@@ -290,6 +290,7 @@ mod tests {
             duration_ms: 100,
             debug_messages: None,
             account_id: None,
+            environment_id: None,
         }
     }
 
@@ -554,6 +555,7 @@ mod tests {
             duration_ms: 500,
             debug_messages: None,
             account_id: None,
+            environment_id: None,
         };
 
         let provider = replay_provider(&dir);

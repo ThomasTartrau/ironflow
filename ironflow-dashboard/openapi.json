@@ -7371,6 +7371,13 @@
             "description": "Execution duration in milliseconds.",
             "minimum": 0
           },
+          "environment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Persistent environment the agent step ran in, if any. Pass it to\n`Agent::resume_environment` to continue a later step in the same\nworkspace."
+          },
           "error": {
             "type": [
               "string",

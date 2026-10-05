@@ -9,7 +9,7 @@ use uuid::Uuid;
 use serde_json::{Value, json};
 
 use ironflow_engine::notify::{ApprovalRequestedEvent, Event, StepCompletedEvent, StepFailedEvent};
-use ironflow_store::entities::{StepKind, StepStatus, StepUpdate};
+use ironflow_store::entities::{Step, StepKind, StepStatus, StepUpdate};
 
 use crate::error::ApiError;
 use crate::response::ok;
@@ -26,6 +26,14 @@ use crate::state::AppState;
 /// requirement is published here, where the audit log subscriber lives. A
 /// human input step opens the same way but is not an approval: no event is
 /// published for it.
+///
+/// `environment_id` is produced by the engine running on the worker, which
+/// persists it through this route so a replayed agent step hands the same id
+/// back. The route only takes a value the engine can have produced: the step
+/// must be an agent step, the id must be a PersistentVolumeClaim name, and an
+/// id already recorded on the step cannot be replaced by another one.
+/// Anything else is refused with `400 Bad Request` before the store is
+/// touched.
 pub async fn update_step(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -36,6 +44,15 @@ pub async fn update_step(
     let cost_usd = update.cost_usd.unwrap_or_default();
     let error_msg = update.error.clone();
     let opens_gate = update.status == Some(StepStatus::AwaitingApproval);
+
+    if let Some(environment_id) = update.environment_id.as_deref() {
+        let step = state
+            .store
+            .get_step(id)
+            .await?
+            .ok_or(ApiError::StepNotFound(id))?;
+        check_environment_id(&step, environment_id)?;
+    }
 
     state.store.update_step(id, update).await?;
 
@@ -92,6 +109,44 @@ pub async fn update_step(
     }
 
     Ok(ok(json!({ "updated": true })))
+}
+
+/// Longest name Kubernetes accepts for a PersistentVolumeClaim.
+const ENVIRONMENT_ID_MAX: usize = 253;
+
+/// Refuse an `environment_id` the engine cannot have produced for `step`.
+///
+/// # Errors
+///
+/// Returns [`ApiError::BadRequest`] when `step` is not an agent step, when
+/// `environment_id` is not a DNS-1123 name of at most 253 characters, or when
+/// `step` already records a different environment.
+fn check_environment_id(step: &Step, environment_id: &str) -> Result<(), ApiError> {
+    if step.kind != StepKind::Agent {
+        return Err(ApiError::BadRequest(format!(
+            "environment_id is only recorded on agent steps, step {} is {}",
+            step.id, step.kind
+        )));
+    }
+    let valid_name = !environment_id.is_empty()
+        && environment_id.len() <= ENVIRONMENT_ID_MAX
+        && environment_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !valid_name {
+        return Err(ApiError::BadRequest(format!(
+            "environment_id must be 1 to {ENVIRONMENT_ID_MAX} lowercase ASCII letters, digits or '-'"
+        )));
+    }
+    if let Some(recorded) = step.environment_id.as_deref()
+        && recorded != environment_id
+    {
+        return Err(ApiError::BadRequest(format!(
+            "step {} already ran in environment '{recorded}'",
+            step.id
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -216,6 +271,7 @@ mod tests {
             approval_requirement: None,
             clear_approval_deadline: false,
             account_id: None,
+            environment_id: None,
         };
 
         let req = Request::builder()
@@ -488,6 +544,7 @@ mod tests {
             approval_requirement: None,
             clear_approval_deadline: false,
             account_id: None,
+            environment_id: None,
         };
 
         let req = Request::builder()
@@ -500,5 +557,165 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// A running step of `kind` in a fresh run of `state`'s store.
+    async fn running_step(state: &AppState, kind: StepKind) -> Step {
+        let run = state
+            .store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+
+        let step = state
+            .store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "work", 0),
+                name: "work".to_string(),
+                kind,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .unwrap();
+
+        state
+            .store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    status: Some(StepStatus::Running),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        step
+    }
+
+    /// Send `update` for `step_id` the way the worker does.
+    async fn put_update(state: &AppState, step_id: Uuid, update: &StepUpdate) -> StatusCode {
+        let app = create_router(state.clone(), RouterConfig::default());
+        let req = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/v1/internal/steps/{step_id}"))
+            .header("authorization", "Bearer test-worker-token")
+            .header("content-type", "application/json")
+            .body(Body::from(to_string(update).unwrap()))
+            .unwrap();
+        app.oneshot(req).await.unwrap().status()
+    }
+
+    fn completed_in(environment_id: &str) -> StepUpdate {
+        StepUpdate {
+            status: Some(StepStatus::Completed),
+            environment_id: Some(environment_id.to_string()),
+            ..StepUpdate::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_step_records_the_environment_id_from_the_worker() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+
+        let status = put_update(&state, step.id, &completed_in("ironflow-env-0192f0c1")).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, StepStatus::Completed);
+        assert_eq!(
+            stored.environment_id.as_deref(),
+            Some("ironflow-env-0192f0c1")
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_id_on_a_non_agent_step_is_refused() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Shell).await;
+
+        let status = put_update(&state, step.id, &completed_in("ironflow-env-0192f0c1")).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, StepStatus::Running);
+        assert!(stored.environment_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn environment_id_that_is_not_a_pvc_name_is_refused() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+
+        let too_long = "a".repeat(254);
+        for bad in ["", "Env-1", "env/../other", "env id", too_long.as_str()] {
+            let status = put_update(&state, step.id, &completed_in(bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "accepted {bad:?}");
+        }
+
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, StepStatus::Running);
+        assert!(stored.environment_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn recorded_environment_id_cannot_be_replaced() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+        let first = StepUpdate {
+            environment_id: Some("ironflow-env-first".to_string()),
+            ..StepUpdate::default()
+        };
+        assert_eq!(put_update(&state, step.id, &first).await, StatusCode::OK);
+
+        let status = put_update(&state, step.id, &completed_in("ironflow-env-other")).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.environment_id.as_deref(), Some("ironflow-env-first"));
+        assert_eq!(stored.status.state, StepStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn recorded_environment_id_can_be_sent_again() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+        let first = StepUpdate {
+            environment_id: Some("ironflow-env-first".to_string()),
+            ..StepUpdate::default()
+        };
+        assert_eq!(put_update(&state, step.id, &first).await, StatusCode::OK);
+
+        let status = put_update(&state, step.id, &completed_in("ironflow-env-first")).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, StepStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn environment_id_for_an_unknown_step_is_not_found() {
+        let state = test_state();
+
+        let status = put_update(&state, Uuid::now_v7(), &completed_in("ironflow-env-x")).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

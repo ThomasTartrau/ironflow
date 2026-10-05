@@ -4034,6 +4034,12 @@ export interface components {
 			 * @description Execution duration in milliseconds.
 			 */
 			duration_ms: number;
+			/**
+			 * @description Persistent environment the agent step ran in, if any. Pass it to
+			 *     `Agent::resume_environment` to continue a later step in the same
+			 *     workspace.
+			 */
+			environment_id?: string | null;
 			/** @description Optional error message. */
 			error?: string | null;
 			/**

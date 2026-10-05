@@ -227,6 +227,68 @@ other's pod, so the engine fails such a group before creating any step.
 Deleting `JobRun` Jobs needs `list` and `delete` on `jobs`; without them, Jobs
 are skipped with a warning and the pods are still released.
 
+## Persistent environment
+
+By default an agent pod starts from an empty working directory and loses
+everything when it exits. `environment_volume` gives each agent step a
+`ReadWriteOnce` PersistentVolumeClaim that outlives the pod, so a later step
+can continue in the files an earlier one left (a clone, a build cache, a
+half-written patch):
+
+```rust,ignore
+use ironflow_core::provider::EnvironmentVolume;
+
+let provider = K8sEphemeralProvider::sandboxed(&image)
+    .environment_volume(
+        EnvironmentVolume::new("/workspace")
+            .size("20Gi")                        // 10Gi by default
+            .storage_class("fast-ssd")           // cluster default otherwise
+            .ttl(Duration::from_secs(3 * 86400)), // 7 days by default
+    )
+    .working_dir("/workspace");
+```
+
+A step without a resume id gets a new claim named `ironflow-env-...`; its name
+comes back as the environment id, in `StepOutput::environment_id` (and
+`AgentResult::environment_id` outside the engine). The id is stored with the
+step, shown by the API and replayed with the step when a run resumes. Pass it
+to the next step to mount the same claim again:
+
+```rust,ignore
+let clone = ctx
+    .agent(
+        "clone",
+        AgentStepConfig::new("Clone the repository and run the tests").allow_tool(Tool::Bash),
+    )
+    .await?;
+// `None` on a provider without persistent environments.
+if let Some(environment) = clone.environment_id.as_deref() {
+    ctx.agent(
+        "fix",
+        AgentStepConfig::new("Fix the failing test")
+            .allow_tool(Tool::Bash)
+            .resume_environment(environment),
+    )
+    .await?;
+}
+```
+
+The claim carries the ironflow labels with `app.kubernetes.io/component=environment`,
+the run and step labels of the step that created it, and the
+`ironflow.io/expires-at` annotation. Every use pushes the expiry `ttl` forward
+(never less than the pod lifetime). A resumed step fails before any pod is
+created when the claim does not exist, is not an ironflow environment, or is
+being deleted. A step that sets `resume_environment` on a provider without
+`environment_volume` fails the same way. Other providers return no environment
+id and ignore the resume id.
+
+The claim is `ReadWriteOnce`: two steps resuming the same environment at the
+same time can only run on the same node. Run them one after the other. There is
+no snapshot: a step that breaks the workspace leaves it broken for the next one.
+
+The worker needs `create`, `get`, `patch`, `list` and `delete` on
+`persistentvolumeclaims` (see `examples/k8s/sandbox/namespace-rbac.yaml`).
+
 ## The reaper
 
 Every object ironflow creates carries `app.kubernetes.io/managed-by=ironflow`,
@@ -239,7 +301,8 @@ and the pods of `PodRun` and Jobs of `JobRun` from `ironflow-ops-k8s`
 step carrying one fails.
 
 The reaper selects on `managed-by=ironflow` and deletes pods and Jobs past
-their expiry or killed with `DeadlineExceeded`, and expired prompt ConfigMaps.
+their expiry or killed with `DeadlineExceeded`, expired prompt ConfigMaps and
+expired environment claims (a claim being deleted is left alone).
 A Job goes with its pods; a pod a Job controls is left to its Job. Objects
 without a parseable annotation are never touched.
 
@@ -253,6 +316,8 @@ let report = reap_orphans(&K8sClusterConfig::Default, "ironflow-agents").await?;
 Reaping Jobs needs `list` and `delete` on `jobs` (see
 `examples/k8s/sandbox/namespace-rbac.yaml`). Without them, the Job pass is
 skipped with a warning and the rest of the pass runs.
+The same holds for `list` and `delete` on `persistentvolumeclaims` and the
+environment pass.
 
 ## gVisor (RuntimeClass)
 

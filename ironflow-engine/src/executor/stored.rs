@@ -41,6 +41,7 @@ impl From<&Step> for StepOutput {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: step.account_id,
+            environment_id: step.environment_id.clone(),
         }
     }
 }
@@ -155,5 +156,17 @@ mod tests {
         assert_eq!(output.stdout(), "");
         assert_eq!(output.exit_code(), None);
         assert!(!output.is_success());
+    }
+
+    #[tokio::test]
+    async fn a_stored_step_carries_its_environment_id() {
+        let mut step = stored_step(None).await;
+        assert_eq!(StepOutput::from(&step).environment_id, None);
+
+        step.environment_id = Some("ironflow-env-0a1b2c".to_string());
+        assert_eq!(
+            StepOutput::from(&step).environment_id.as_deref(),
+            Some("ironflow-env-0a1b2c")
+        );
     }
 }

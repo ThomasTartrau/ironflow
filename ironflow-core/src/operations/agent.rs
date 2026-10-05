@@ -38,7 +38,9 @@ use tracing::{info, warn};
 use crate::error::OperationError;
 #[cfg(feature = "prometheus")]
 use crate::metric_names;
-use crate::provider::{AgentConfig, AgentOutput, AgentProvider, DebugMessage, LogSink};
+use crate::provider::{
+    AgentConfig, AgentOutput, AgentProvider, DebugMessage, LogSink, assert_environment_id_valid,
+};
 use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
@@ -617,6 +619,50 @@ impl Agent {
         self
     }
 
+    /// Resume a persistent environment created by a previous agent step.
+    ///
+    /// Pass the ID from a previous [`AgentResult::environment_id()`]: the
+    /// agent finds the files the previous step left in its working volume.
+    /// Combine it with [`resume`](Agent::resume) to also continue the
+    /// conversation. Only the K8s ephemeral provider configured with an
+    /// environment volume honours it; other providers ignore it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// // `provider` is a `K8sEphemeralProvider` with an `environment_volume`.
+    /// # async fn example(provider: &dyn AgentProvider) -> Result<(), OperationError> {
+    /// let first = Agent::new()
+    ///     .prompt("Clone the repository and install the dependencies")
+    ///     .max_budget_usd(0.10)
+    ///     .run(provider)
+    ///     .await?;
+    ///
+    /// let environment = first.environment_id().expect("environment volume configured");
+    ///
+    /// let followup = Agent::new()
+    ///     .prompt("Run the test suite")
+    ///     .resume_environment(environment)
+    ///     .max_budget_usd(0.10)
+    ///     .run(provider)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `environment_id` is empty, longer than 253 characters, or
+    /// contains characters other than lowercase ASCII letters, digits and
+    /// hyphens.
+    pub fn resume_environment(mut self, environment_id: &str) -> Self {
+        assert_environment_id_valid(environment_id);
+        self.config.resume_environment_id = Some(environment_id.to_string());
+        self
+    }
+
     /// Execute the agent invocation using the given [`AgentProvider`].
     ///
     /// If a [`retry_policy`](Agent::retry_policy) is configured, transient
@@ -939,6 +985,27 @@ impl AgentResult {
     pub fn account_id(&self) -> Option<&str> {
         self.output.account_id.as_deref()
     }
+
+    /// Return the persistent environment the invocation ran in, if any.
+    ///
+    /// Only set by the K8s ephemeral provider configured with an environment
+    /// volume. Pass it to [`Agent::resume_environment`] in a later step.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::prelude::*;
+    ///
+    /// # async fn example() -> Result<(), OperationError> {
+    /// let provider = ClaudeCodeProvider::new();
+    /// let result = Agent::new().prompt("Summarize the README").run(&provider).await?;
+    /// assert!(result.environment_id().is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn environment_id(&self) -> Option<&str> {
+        self.output.environment_id.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -967,6 +1034,7 @@ mod tests {
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
                     account_id: None,
+                    environment_id: None,
                 })
             })
         }
@@ -992,6 +1060,7 @@ mod tests {
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
                     account_id: None,
+                    environment_id: None,
                 })
             })
         }
@@ -1010,6 +1079,7 @@ mod tests {
             duration_ms: 1500,
             debug_messages: None,
             account_id: None,
+            environment_id: None,
         }
     }
 
@@ -1223,6 +1293,7 @@ mod tests {
                 duration_ms: 2000,
                 debug_messages: None,
                 account_id: None,
+                environment_id: None,
             },
         };
         let result = Agent::new().prompt("test").run(&provider).await.unwrap();
@@ -1284,6 +1355,71 @@ mod tests {
         let _ = Agent::new().resume("sess-abc123");
         let _ = Agent::new().resume("a1b2c3d4_session");
         let _ = Agent::new().resume("abc-DEF-123_456");
+    }
+
+    // --- Environment resume ---
+
+    #[tokio::test]
+    async fn resume_environment_passes_id_in_config() {
+        let provider = ConfigCapture {
+            output: default_output(),
+        };
+        let result = Agent::new()
+            .prompt("followup")
+            .resume("sess-abc")
+            .resume_environment("ironflow-env-0192f0c1")
+            .run(&provider)
+            .await
+            .unwrap();
+
+        let config = result.value();
+        assert_eq!(
+            config["resume_environment_id"],
+            json!("ironflow-env-0192f0c1")
+        );
+        assert_eq!(config["resume_session_id"], json!("sess-abc"));
+    }
+
+    #[tokio::test]
+    async fn no_resume_environment_has_null_id() {
+        let provider = ConfigCapture {
+            output: default_output(),
+        };
+        let result = Agent::new()
+            .prompt("first call")
+            .run(&provider)
+            .await
+            .unwrap();
+
+        let config = result.value();
+        assert_eq!(config["resume_environment_id"], json!(null));
+    }
+
+    #[test]
+    #[should_panic(expected = "environment_id must not be empty")]
+    fn resume_environment_empty_panics() {
+        let _ = Agent::new().resume_environment("");
+    }
+
+    #[test]
+    #[should_panic(expected = "environment_id must only contain")]
+    fn resume_environment_invalid_chars_panics() {
+        let _ = Agent::new().resume_environment("../other_ns/claim");
+    }
+
+    #[tokio::test]
+    async fn agent_result_exposes_environment_id() {
+        let mut output = default_output();
+        output.environment_id = Some("ironflow-env-42".to_string());
+        let provider = TestProvider { output };
+        let result = Agent::new().prompt("test").run(&provider).await.unwrap();
+        assert_eq!(result.environment_id(), Some("ironflow-env-42"));
+
+        let provider = TestProvider {
+            output: default_output(),
+        };
+        let result = Agent::new().prompt("test").run(&provider).await.unwrap();
+        assert_eq!(result.environment_id(), None);
     }
 
     #[tokio::test]
@@ -1497,6 +1633,7 @@ mod tests {
                         duration_ms: self.output.duration_ms,
                         debug_messages: None,
                         account_id: None,
+                        environment_id: None,
                     })
                 }
             })
@@ -1720,6 +1857,7 @@ mod tests {
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
                     account_id: None,
+                    environment_id: None,
                 })
             })
         }

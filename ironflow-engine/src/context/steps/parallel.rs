@@ -356,6 +356,7 @@ impl WorkflowContext {
                                 completed_at: Some(completed_at),
                                 debug_messages: debug_messages_json,
                                 account_id: output.account_id,
+                                environment_id: output.environment_id.clone(),
                                 ..StepUpdate::default()
                             },
                         )

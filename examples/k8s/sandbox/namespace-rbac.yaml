@@ -30,6 +30,13 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["list", "delete"]
+  # Persistent environments (K8sEphemeralProvider::environment_volume): the
+  # worker creates a claim per new environment, reads and patches its expiry
+  # on resume, and the orphan reaper lists and deletes expired claims. Without
+  # list, the reaper skips the claims with a warning.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "get", "patch", "list", "delete"]
 ---
 # Bind the Role to the worker's service account. The worker runs in its own
 # namespace (`ironflow` here), not in `ironflow-agents`: keep the agent

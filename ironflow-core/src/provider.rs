@@ -36,13 +36,15 @@ mod system_prompt;
 mod tool;
 mod tool_profile;
 
-pub(crate) use pod::upsert_secret_env;
+#[cfg(feature = "transport-k8s")]
+pub(crate) use pod::validate_environment_id;
 pub use pod::{
-    LABEL_COMPONENT, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT, LABEL_MANAGED_BY, LABEL_ROOT_RUN_ID,
-    LABEL_RUN_ID, LABEL_STEP, MANAGED_BY_IRONFLOW, PodSettings, PodVolumeSource, PvcVolume,
-    ReadOnlyVolume, SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label,
-    sanitize_label_value, validate_pvc_sub_path,
+    COMPONENT_ENVIRONMENT, EnvironmentVolume, LABEL_COMPONENT, LABEL_EGRESS_PROFILE,
+    LABEL_EXPIRES_AT, LABEL_MANAGED_BY, LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP,
+    MANAGED_BY_IRONFLOW, PodSettings, PodVolumeSource, PvcVolume, ReadOnlyVolume, SecretEnvVar,
+    assert_pod_label_allowed, is_reserved_pod_label, sanitize_label_value, validate_pvc_sub_path,
 };
+pub(crate) use pod::{assert_environment_id_valid, upsert_secret_env};
 pub use tool::Tool;
 pub use tool_profile::ToolProfile;
 
@@ -290,6 +292,16 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// specified session rather than starting a new one.
     pub resume_session_id: Option<String>,
 
+    /// Optional persistent environment ID to resume (K8s ephemeral provider only).
+    ///
+    /// The ID is the name of a PersistentVolumeClaim previously returned in
+    /// [`AgentOutput::environment_id`]. When set, the provider mounts that
+    /// volume again instead of creating a fresh one, so the files written by
+    /// a previous step are still there. Providers without persistent
+    /// environments ignore this field.
+    #[serde(default)]
+    pub resume_environment_id: Option<String>,
+
     /// Enable verbose/debug mode to capture the full conversation trace.
     ///
     /// When `true`, the provider uses streaming output (`stream-json`) to
@@ -386,6 +398,8 @@ impl AgentConfig {
             json_schema: None,
 
             resume_session_id: None,
+
+            resume_environment_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
             pod: PodSettings::default(),
@@ -627,6 +641,35 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// Set a session ID to resume a previous conversation.
     pub fn resume(mut self, session_id: &str) -> Self {
         self.resume_session_id = Some(session_id.to_string());
+        self
+    }
+
+    /// Resume a persistent environment created by a previous agent step.
+    ///
+    /// `environment_id` is the value of [`AgentOutput::environment_id`]
+    /// (the name of a PersistentVolumeClaim). Only the K8s ephemeral
+    /// provider configured with an environment volume honours it and fails
+    /// the step when the environment does not exist anymore. Other providers
+    /// ignore it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `environment_id` is empty, longer than 253 characters, or
+    /// contains characters other than lowercase ASCII letters, digits and
+    /// `-` (a DNS-1123 name).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("run the tests again")
+    ///     .resume_environment("ironflow-env-0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d");
+    /// assert!(config.resume_environment_id.is_some());
+    /// ```
+    pub fn resume_environment(mut self, environment_id: &str) -> Self {
+        assert_environment_id_valid(environment_id);
+        self.resume_environment_id = Some(environment_id.to_string());
         self
     }
 
@@ -1008,6 +1051,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             permission_mode: self.permission_mode,
             json_schema: self.json_schema,
             resume_session_id: self.resume_session_id,
+            resume_environment_id: self.resume_environment_id,
             verbose: self.verbose,
             pod_labels: self.pod_labels,
             pod: self.pod,
@@ -1255,6 +1299,15 @@ pub struct AgentOutput {
     /// Identifier of the Provider Account the invocation ran under, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+
+    /// Persistent environment the invocation ran in, if any.
+    ///
+    /// The name of the PersistentVolumeClaim mounted in the agent pod. Only
+    /// the K8s ephemeral provider configured with an environment volume sets
+    /// it. Pass it to [`AgentConfig::resume_environment`] in a later step to
+    /// find the same files again.
+    #[serde(default)]
+    pub environment_id: Option<String>,
 }
 
 /// A single assistant turn captured during a verbose invocation.
@@ -1421,6 +1474,7 @@ impl AgentOutput {
             duration_ms: 0,
             debug_messages: None,
             account_id: None,
+            environment_id: None,
         }
     }
 }
@@ -1618,6 +1672,8 @@ mod tests {
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
 
             resume_session_id: None,
+
+            resume_environment_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
             pod: PodSettings::default(),
@@ -1668,6 +1724,8 @@ mod tests {
             json_schema: None,
 
             resume_session_id: None,
+
+            resume_environment_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
             pod: PodSettings::default(),
@@ -1705,6 +1763,7 @@ mod tests {
             duration_ms: 3000,
             debug_messages: None,
             account_id: None,
+            environment_id: None,
         };
         let json = serde_json::to_string(&output).unwrap();
         let back: AgentOutput = serde_json::from_str(&json).unwrap();
@@ -1780,6 +1839,65 @@ mod tests {
     }
 
     #[test]
+    fn agent_config_resume_environment_roundtrip() {
+        let config = AgentConfig::new("test").resume_environment("ironflow-env-1");
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.resume_environment_id,
+            Some("ironflow-env-1".to_string())
+        );
+    }
+
+    #[test]
+    fn agent_config_without_resume_environment_field_deserializes() {
+        let mut raw = serde_json::to_value(AgentConfig::new("test")).unwrap();
+        raw.as_object_mut().unwrap().remove("resume_environment_id");
+        let back: AgentConfig = serde_json::from_value(raw).unwrap();
+        assert_eq!(back.resume_environment_id, None);
+    }
+
+    #[test]
+    fn agent_config_resume_environment_survives_typestate_change() {
+        let config: AgentConfig = AgentConfig::new("test")
+            .resume_environment("ironflow-env-2")
+            .allow_tool(Tool::Read)
+            .into();
+        assert_eq!(
+            config.resume_environment_id.as_deref(),
+            Some("ironflow-env-2")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "environment_id must not be empty")]
+    fn agent_config_resume_environment_empty_panics() {
+        let _ = AgentConfig::new("test").resume_environment("");
+    }
+
+    #[test]
+    fn agent_output_environment_id_roundtrip_and_default() {
+        let mut output = AgentOutput::new(json!("ok"));
+        output.environment_id = Some("ironflow-env-3".to_string());
+        let json = serde_json::to_string(&output).unwrap();
+        let back: AgentOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.environment_id, Some("ironflow-env-3".to_string()));
+
+        let raw = json!({
+            "value": "ok",
+            "session_id": null,
+            "cost_usd": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "model": null,
+            "duration_ms": 1,
+            "debug_messages": null
+        });
+        let old: AgentOutput = serde_json::from_value(raw).unwrap();
+        assert_eq!(old.environment_id, None);
+    }
+
+    #[test]
     fn agent_output_debug_does_not_panic() {
         let output = AgentOutput {
             value: json!(null),
@@ -1793,6 +1911,7 @@ mod tests {
             duration_ms: 0,
             debug_messages: None,
             account_id: None,
+            environment_id: None,
         };
         let debug_str = format!("{:?}", output);
         assert!(!debug_str.is_empty());
@@ -2221,6 +2340,7 @@ mod tests {
                     duration_ms: self.output.duration_ms,
                     debug_messages: None,
                     account_id: None,
+                    environment_id: None,
                 })
             })
         }

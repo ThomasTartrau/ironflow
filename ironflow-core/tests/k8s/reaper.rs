@@ -7,11 +7,15 @@ use ironflow_core::provider::LABEL_RUN_ID;
 use ironflow_core::providers::claude::K8sEphemeralProvider;
 use ironflow_core::providers::claude::k8s::reap_orphans;
 
-use crate::fake_api::{FakeK8s, NS, job, now, owned_by_job, pod, prompt_configmap};
+use crate::fake_api::{
+    FakeK8s, NS, environment_claim, job, now, owned_by_job, pod, prompt_configmap,
+};
 
 const MANAGED: &str = "app.kubernetes.io/managed-by=ironflow";
 const PROMPTS: &str =
     "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=prompt-data";
+const ENVIRONMENTS: &str =
+    "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=environment";
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
@@ -30,6 +34,8 @@ async fn k8s_reaper_selects_ironflow_pods_of_any_component() {
         fake.list("pods", MANAGED, pods).await;
         fake.list("jobs", MANAGED, vec![]).await;
         fake.list("configmaps", PROMPTS, vec![]).await;
+        fake.list("persistentvolumeclaims", ENVIRONMENTS, vec![])
+            .await;
         fake.expect_delete("pods", "check-1", 1).await;
 
         let provider = K8sEphemeralProvider::new("img:v1")
@@ -92,6 +98,8 @@ async fn k8s_reaper_deletes_orphans_and_keeps_live_objects() {
         fake.list("pods", MANAGED, pods).await;
         fake.list("jobs", MANAGED, jobs).await;
         fake.list("configmaps", PROMPTS, configmaps).await;
+        fake.list("persistentvolumeclaims", ENVIRONMENTS, vec![])
+            .await;
         for name in ["check-expired", "agent-killed"] {
             fake.expect_delete("pods", name, 1).await;
         }
@@ -135,6 +143,8 @@ async fn k8s_reaper_without_job_rights_still_reaps_pods() {
         fake.list("pods", MANAGED, pods).await;
         fake.fail_list("jobs", MANAGED, 403).await;
         fake.list("configmaps", PROMPTS, vec![]).await;
+        fake.list("persistentvolumeclaims", ENVIRONMENTS, vec![])
+            .await;
         fake.expect_delete("pods", "check-1", 1).await;
 
         let report = reap_orphans(&fake.cluster_config(), NS)
@@ -181,6 +191,97 @@ async fn k8s_reaper_fails_on_a_job_listing_error_other_than_forbidden() {
 
         assert!(
             err.to_string().contains("failed to list ironflow Jobs"),
+            "{err}"
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn k8s_reaper_deletes_expired_environment_claims_only() {
+    timeout(TEST_TIMEOUT, async {
+        let fake = FakeK8s::start().await;
+        let (past, future) = (Some(now() - 30), Some(now() + 3600));
+        let claims = vec![
+            environment_claim("ironflow-env-expired", past, false),
+            environment_claim("ironflow-env-live", future, false),
+            environment_claim("ironflow-env-unannotated", None, false),
+            environment_claim("ironflow-env-deleting", past, true),
+        ];
+        fake.list("pods", MANAGED, vec![]).await;
+        fake.list("jobs", MANAGED, vec![]).await;
+        fake.list("configmaps", PROMPTS, vec![]).await;
+        fake.list("persistentvolumeclaims", ENVIRONMENTS, claims)
+            .await;
+        fake.expect_delete("persistentvolumeclaims", "ironflow-env-expired", 1)
+            .await;
+        for name in [
+            "ironflow-env-live",
+            "ironflow-env-unannotated",
+            "ironflow-env-deleting",
+        ] {
+            fake.expect_delete("persistentvolumeclaims", name, 0).await;
+        }
+
+        let report = reap_orphans(&fake.cluster_config(), NS)
+            .await
+            .expect("reaping pass");
+
+        assert_eq!(report.pvcs_deleted, 1);
+        fake.server.verify().await;
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn k8s_reaper_without_claim_rights_still_reaps_pods() {
+    timeout(TEST_TIMEOUT, async {
+        let fake = FakeK8s::start().await;
+        let pods = vec![pod(
+            "check-1",
+            "pod-run",
+            &[],
+            "Succeeded",
+            None,
+            Some(now() - 30),
+        )];
+        fake.list("pods", MANAGED, pods).await;
+        fake.list("jobs", MANAGED, vec![]).await;
+        fake.list("configmaps", PROMPTS, vec![]).await;
+        fake.fail_list("persistentvolumeclaims", ENVIRONMENTS, 403)
+            .await;
+        fake.expect_delete("pods", "check-1", 1).await;
+
+        let report = reap_orphans(&fake.cluster_config(), NS)
+            .await
+            .expect("a 403 on claims does not fail the pass");
+
+        assert_eq!(report.pods_deleted, 1);
+        assert_eq!(report.pvcs_deleted, 0);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn k8s_reaper_fails_on_a_claim_listing_error_other_than_forbidden() {
+    timeout(TEST_TIMEOUT, async {
+        let fake = FakeK8s::start().await;
+        fake.list("pods", MANAGED, vec![]).await;
+        fake.list("jobs", MANAGED, vec![]).await;
+        fake.list("configmaps", PROMPTS, vec![]).await;
+        fake.fail_list("persistentvolumeclaims", ENVIRONMENTS, 500)
+            .await;
+
+        let err = reap_orphans(&fake.cluster_config(), NS)
+            .await
+            .expect_err("only a 403 on claims is tolerated");
+
+        assert!(
+            err.to_string()
+                .contains("failed to list environment claims"),
             "{err}"
         );
     })

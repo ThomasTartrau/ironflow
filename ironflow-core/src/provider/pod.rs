@@ -6,6 +6,8 @@
 //! ignores it. The types live here without a feature gate because the engine
 //! and the workflow author set them regardless of the transport.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 /// Pod label carrying the id of the run that created the pod.
@@ -283,6 +285,194 @@ pub fn validate_pvc_sub_path(sub_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Value of [`LABEL_COMPONENT`] on the PersistentVolumeClaims backing a
+/// persistent agent environment (see [`EnvironmentVolume`]).
+pub const COMPONENT_ENVIRONMENT: &str = "environment";
+
+/// Maximum length of an environment ID (a DNS-1123 subdomain name).
+const ENVIRONMENT_ID_MAX: usize = 253;
+
+/// Check that `environment_id` can name a PersistentVolumeClaim: non-empty,
+/// at most 253 characters, only lowercase ASCII letters, digits and `-`.
+///
+/// # Errors
+///
+/// Returns the reason as a message when the ID is refused.
+pub(crate) fn validate_environment_id(environment_id: &str) -> Result<(), String> {
+    if environment_id.is_empty() {
+        return Err("environment_id must not be empty".to_string());
+    }
+    if environment_id.len() > ENVIRONMENT_ID_MAX {
+        return Err(format!(
+            "environment_id must not exceed {ENVIRONMENT_ID_MAX} characters"
+        ));
+    }
+    let valid = environment_id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !valid {
+        return Err(format!(
+            "environment_id must only contain lowercase ASCII letters, digits and '-', got: {environment_id}"
+        ));
+    }
+    Ok(())
+}
+
+/// Check that `environment_id` can name a PersistentVolumeClaim.
+///
+/// # Panics
+///
+/// Panics when [`validate_environment_id`] refuses the ID.
+pub(crate) fn assert_environment_id_valid(environment_id: &str) {
+    if let Err(reason) = validate_environment_id(environment_id) {
+        panic!("{reason}");
+    }
+}
+
+/// Persistent working volume of the K8s ephemeral provider.
+///
+/// When a provider carries one, every agent pod gets a
+/// PersistentVolumeClaim mounted at [`mount_path`](Self::mount_path): a new
+/// claim for a fresh step, the claim named by
+/// [`AgentConfig::resume_environment`](super::AgentConfig::resume_environment)
+/// for a step resuming a previous one. The claim name is handed back as
+/// [`AgentOutput::environment_id`](super::AgentOutput::environment_id).
+///
+/// The claim is `ReadWriteOnce`: only one pod mounts it at a time. Its
+/// [`LABEL_EXPIRES_AT`] annotation is pushed `ttl` forward on every use; the
+/// orphan reaper deletes it once expired.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use ironflow_core::provider::EnvironmentVolume;
+///
+/// let volume = EnvironmentVolume::new("/workspace")
+///     .size("20Gi")
+///     .storage_class("fast-ssd")
+///     .ttl(Duration::from_secs(24 * 3600));
+/// assert!(volume.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentVolume {
+    /// Absolute mount path inside the agent container.
+    pub mount_path: String,
+    /// Storage request of a new claim (default `10Gi`).
+    pub size: String,
+    /// Storage class of a new claim; the cluster default when `None`.
+    pub storage_class: Option<String>,
+    /// Time an unused claim is kept before the reaper deletes it (default 7 days).
+    pub ttl: Duration,
+}
+
+impl EnvironmentVolume {
+    /// Create an environment volume mounted at `mount_path`, with a `10Gi`
+    /// request, the default storage class and a 7 day TTL.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::EnvironmentVolume;
+    ///
+    /// let volume = EnvironmentVolume::new("/workspace");
+    /// assert_eq!(volume.size, "10Gi");
+    /// ```
+    pub fn new(mount_path: &str) -> Self {
+        Self {
+            mount_path: mount_path.to_string(),
+            size: "10Gi".to_string(),
+            storage_class: None,
+            ttl: Duration::from_secs(7 * 24 * 3600),
+        }
+    }
+
+    /// Set the storage request of a new claim (a Kubernetes quantity).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::EnvironmentVolume;
+    ///
+    /// let volume = EnvironmentVolume::new("/workspace").size("50Gi");
+    /// assert_eq!(volume.size, "50Gi");
+    /// ```
+    pub fn size(mut self, size: &str) -> Self {
+        self.size = size.to_string();
+        self
+    }
+
+    /// Set the storage class of a new claim.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::EnvironmentVolume;
+    ///
+    /// let volume = EnvironmentVolume::new("/workspace").storage_class("standard");
+    /// assert_eq!(volume.storage_class.as_deref(), Some("standard"));
+    /// ```
+    pub fn storage_class(mut self, class: &str) -> Self {
+        self.storage_class = Some(class.to_string());
+        self
+    }
+
+    /// Set the time an unused claim is kept before the reaper deletes it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use ironflow_core::provider::EnvironmentVolume;
+    ///
+    /// let volume = EnvironmentVolume::new("/workspace").ttl(Duration::from_secs(3600));
+    /// assert_eq!(volume.ttl, Duration::from_secs(3600));
+    /// ```
+    pub fn ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
+    /// Check the settings: an absolute mount path other than `/`, a
+    /// non-empty size and storage class, a non-zero TTL.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason as a message when the volume is refused.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::EnvironmentVolume;
+    ///
+    /// assert!(EnvironmentVolume::new("/workspace").validate().is_ok());
+    /// assert!(EnvironmentVolume::new("workspace").validate().is_err());
+    /// assert!(EnvironmentVolume::new("/").validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.mount_path.starts_with('/') || self.mount_path.trim_end_matches('/').is_empty() {
+            return Err(format!(
+                "environment volume mount path '{}' must be absolute and not '/'",
+                self.mount_path
+            ));
+        }
+        if self.size.trim().is_empty() {
+            return Err("environment volume size must not be empty".to_string());
+        }
+        if self
+            .storage_class
+            .as_deref()
+            .is_some_and(|c| c.trim().is_empty())
+        {
+            return Err("environment volume storage class must not be empty".to_string());
+        }
+        if self.ttl.is_zero() {
+            return Err("environment volume ttl must be greater than zero".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Pod-level settings a step asks for (K8s ephemeral provider only).
 ///
 /// Merged with the provider's own settings when the pod is built: the step
@@ -415,6 +605,66 @@ pub fn sanitize_label_value(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_volume_defaults() {
+        let volume = EnvironmentVolume::new("/workspace");
+        assert_eq!(volume.mount_path, "/workspace");
+        assert_eq!(volume.size, "10Gi");
+        assert_eq!(volume.storage_class, None);
+        assert_eq!(volume.ttl, Duration::from_secs(7 * 24 * 3600));
+        assert!(volume.validate().is_ok());
+    }
+
+    #[test]
+    fn environment_volume_validate_rejects_relative_and_root_paths() {
+        assert!(EnvironmentVolume::new("workspace").validate().is_err());
+        assert!(EnvironmentVolume::new("").validate().is_err());
+        assert!(EnvironmentVolume::new("/").validate().is_err());
+        assert!(EnvironmentVolume::new("//").validate().is_err());
+    }
+
+    #[test]
+    fn environment_volume_validate_rejects_empty_size_class_and_ttl() {
+        assert!(EnvironmentVolume::new("/w").size("").validate().is_err());
+        assert!(EnvironmentVolume::new("/w").size("  ").validate().is_err());
+        assert!(
+            EnvironmentVolume::new("/w")
+                .storage_class(" ")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            EnvironmentVolume::new("/w")
+                .ttl(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn environment_id_valid_accepts_dns_names() {
+        assert_environment_id_valid("ironflow-env-0192f0c1-7d2e");
+        assert_environment_id_valid(&"a".repeat(ENVIRONMENT_ID_MAX));
+    }
+
+    #[test]
+    #[should_panic(expected = "environment_id must not be empty")]
+    fn environment_id_empty_panics() {
+        assert_environment_id_valid("");
+    }
+
+    #[test]
+    #[should_panic(expected = "environment_id must only contain")]
+    fn environment_id_uppercase_panics() {
+        assert_environment_id_valid("Env-1");
+    }
+
+    #[test]
+    #[should_panic(expected = "environment_id must not exceed")]
+    fn environment_id_too_long_panics() {
+        assert_environment_id_valid(&"a".repeat(ENVIRONMENT_ID_MAX + 1));
+    }
 
     #[test]
     fn k8s_sanitize_label_value_keeps_valid_value() {

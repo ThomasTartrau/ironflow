@@ -697,6 +697,7 @@ pub fn parse_response(
         duration_ms: parsed.duration_ms.unwrap_or(fallback_duration_ms),
         debug_messages: None,
         account_id: None,
+        environment_id: None,
     })
 }
 
@@ -1798,6 +1799,7 @@ mod tests {
             strict_mcp_config: false,
             bare: false,
             resume_session_id: None,
+            resume_environment_id: None,
             verbose: false,
             pod_labels: std::collections::BTreeMap::new(),
             pod: PodSettings::default(),

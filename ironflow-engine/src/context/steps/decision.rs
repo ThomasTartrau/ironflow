@@ -272,6 +272,7 @@ impl WorkflowContext {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         let completed_at = Utc::now();

@@ -630,6 +630,7 @@ impl RunStore for InMemoryStore {
                 approval_requirement: None,
                 approvals: Vec::new(),
                 account_id: None,
+                environment_id: None,
             };
 
             state.steps.insert(step.id, step.clone());
@@ -690,6 +691,9 @@ impl RunStore for InMemoryStore {
             }
             if let Some(account_id) = update.account_id {
                 step.account_id = Some(account_id);
+            }
+            if let Some(environment_id) = update.environment_id {
+                step.environment_id = Some(environment_id);
             }
             if let Some(tokens) = update.output_tokens {
                 step.output_tokens = Some(tokens);

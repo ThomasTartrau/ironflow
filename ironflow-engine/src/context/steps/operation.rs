@@ -156,6 +156,7 @@ impl WorkflowContext {
                     // `put_artifact` attaches bytes to.
                     artifacts: StepArtifacts::new(name, Some(step.id), &[]),
                     account_id: None,
+                    environment_id: None,
                 })
             }
             Err(err) => {

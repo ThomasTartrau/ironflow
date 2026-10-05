@@ -135,3 +135,26 @@ is never tolerated. Section: Sub-workflow.
 +     // child.error() holds the reason
 + }
 ```
+
+## persistent-environment
+- kind: adopt
+- since: ironflow-core after 4.8.1, ironflow-engine after 2.47.1 (#175)
+
+Agent steps on `K8sEphemeralProvider` that hand files to each other through a shared,
+hand-provisioned PVC (or that redo a clone in every step) can use a persistent
+environment instead: each step gets its own claim, created and expired by ironflow, and
+a later step resumes it by id. The worker needs `create`, `get`, `patch`, `list` and
+`delete` on `persistentvolumeclaims`. Section: Agent, Persistent environment.
+
+```diff
+  let provider = K8sEphemeralProvider::sandboxed(&image)
+-     .pvc_volume("shared-workspace", "/workspace")
++     .environment_volume(EnvironmentVolume::new("/workspace"))
+      .working_dir("/workspace");
+
+- ctx.agent("fix", AgentStepConfig::new("Fix the failing test")).await?;
++ if let Some(environment) = clone.environment_id.as_deref() {
++     let config = AgentStepConfig::new("Fix the failing test").resume_environment(environment);
++     ctx.agent("fix", config).await?;
++ }
+```
