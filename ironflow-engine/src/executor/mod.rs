@@ -80,6 +80,10 @@ pub struct StepOutput {
     /// Provider Account the agent step ran under, `None` for other steps and
     /// agent steps that used the worker environment.
     pub account_id: Option<Uuid>,
+    /// Persistent environment the agent step ran in (the claim name to pass to
+    /// [`Agent::resume_environment`](ironflow_core::operations::agent::Agent::resume_environment)),
+    /// `None` for other steps and providers without persistent environments.
+    pub environment_id: Option<String>,
 }
 
 impl StepOutput {
@@ -105,6 +109,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert_eq!(output.total_tokens(), 5350);
     /// ```
@@ -152,6 +157,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert_eq!(output.exit_code(), Some(0));
     /// ```
@@ -180,6 +186,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert!(output.stdout().contains("42 tests"));
     /// ```
@@ -211,6 +218,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert_eq!(output.stderr(), "warning: unused");
     /// ```
@@ -244,6 +252,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert_eq!(output.status(), Some(204));
     /// ```
@@ -275,6 +284,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert_eq!(output.body(), "{\"ok\":true}");
     /// ```
@@ -307,6 +317,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert_eq!(answer.text(), "Looks good.");
     /// assert_eq!(StepOutput { output: json!({"stdout": "x"}), ..answer }.text(), "");
@@ -349,6 +360,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert_eq!(failed.error(), Some("timed out"));
     /// assert!(!failed.is_success());
@@ -403,6 +415,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// assert!(!shell.is_success());
     ///
@@ -453,6 +466,7 @@ impl StepOutput {
     ///     debug_messages: None,
     ///     artifacts: StepArtifacts::default(),
     ///     account_id: None,
+    ///     environment_id: None,
     /// };
     /// let review: Review = output.json()?;
     /// assert_eq!(review.score, 8);
@@ -766,6 +780,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         }
     }
 
@@ -811,6 +826,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         assert_eq!(output.debug_messages_json(), None);
@@ -830,6 +846,7 @@ mod tests {
             debug_messages: Some(Vec::new()),
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         let json_val = output.debug_messages_json();
@@ -879,6 +896,7 @@ mod tests {
             debug_messages: Some(messages),
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         let json_val = output.debug_messages_json();
@@ -906,6 +924,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         assert_eq!(output.duration_ms, 5000);
@@ -929,6 +948,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         assert!(output.input_tokens.is_none());
@@ -951,6 +971,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         let result = ParallelStepResult {
@@ -988,6 +1009,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         assert_eq!(output.output, complex_output);
@@ -1011,6 +1033,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         let result = StepResult::from_success(trace_id, "build", &output);
@@ -1056,6 +1079,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         };
 
         let result = StepResult::from_success(Uuid::nil(), "test", &output);
@@ -1133,6 +1157,7 @@ mod tests {
                     debug_messages: None,
                     artifacts: StepArtifacts::default(),
                     account_id: None,
+                    environment_id: None,
                 })),
                 _ => None,
             }
@@ -1210,6 +1235,7 @@ mod output_helper_tests {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         }
     }
 

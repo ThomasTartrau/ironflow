@@ -18,7 +18,7 @@
 //!
 //! Shared types ([`K8sResources`], [`PodHardening`], [`SandboxSettings`]) and
 //! helpers live in the [`common`] submodule; the orphan reaping decisions
-//! ([`reap_reason`], [`configmap_expired`]) in [`reaper`].
+//! ([`reap_reason`], [`configmap_expired`], [`pvc_expired`]) in [`reaper`].
 
 mod cleanup;
 pub mod common;
@@ -32,6 +32,7 @@ pub use common::{ImagePullPolicy, K8sClusterConfig, K8sResources, PodHardening, 
 pub use ephemeral::K8sEphemeralProvider;
 pub use persistent::K8sPersistentProvider;
 pub use reaper::{
-    ReapReason, ReapReport, configmap_expired, job_reap_reason, reap_orphans, reap_reason,
+    ReapReason, ReapReport, configmap_expired, job_reap_reason, pvc_expired, reap_orphans,
+    reap_reason,
 };
 pub use toleration::{K8sToleration, TolerationEffect, TolerationOperator};

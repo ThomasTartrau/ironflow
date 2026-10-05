@@ -140,6 +140,7 @@ mod tests {
             debug_messages: None,
             artifacts: StepArtifacts::new("build", None, &outputs),
             account_id: None,
+            environment_id: None,
         }
     }
 

@@ -206,6 +206,47 @@ system prompt after a blank line.
 pass a full model id string for a pinned version. `verbose(true)` records the tool
 timeline shown in the dashboard.
 
+### Persistent environment
+
+On a `K8sEphemeralProvider` built with `environment_volume(EnvironmentVolume::new("/workspace"))`,
+every agent step runs with a persistent volume and returns its id in
+`StepOutput::environment_id`. Pass it to `resume_environment` so a later step finds the
+files the earlier one left. The id is stored with the step and replayed on resume. Other
+providers return `None`.
+
+```rust,no_run
+use ironflow_engine::config::{AgentStepConfig, Tool};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let clone = ctx
+        .agent(
+            "clone",
+            AgentStepConfig::new("Clone the repository into /workspace and run the tests.")
+                .allow_tool(Tool::Bash)
+                .max_budget_usd(0.50),
+        )
+        .await?;
+    // `None` on a provider without persistent environments.
+    if let Some(environment) = clone.environment_id.as_deref() {
+        ctx.agent(
+            "fix",
+            AgentStepConfig::new("Fix the failing test in /workspace.")
+                .allow_tool(Tool::Bash)
+                .max_budget_usd(0.50)
+                .resume_environment(environment),
+        )
+        .await?;
+    }
+    Ok(())
+}
+```
+
+A resumed environment that no longer exists (expired and reaped) fails the step. A
+structured step (`.output::<T>()`) answers with `T` only: run the step that creates the
+environment without a schema to read its id.
+
 ## Approval
 
 ```rust,no_run

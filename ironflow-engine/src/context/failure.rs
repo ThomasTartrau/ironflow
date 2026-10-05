@@ -64,6 +64,7 @@ pub(super) fn allowed_failure_output(
         debug_messages: None,
         artifacts: StepArtifacts::default(),
         account_id: None,
+        environment_id: None,
     }
 }
 

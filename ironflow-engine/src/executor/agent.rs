@@ -170,6 +170,7 @@ impl StepExecutor for AgentExecutor<'_> {
             debug_messages,
             artifacts: StepArtifacts::default(),
             account_id,
+            environment_id: result.environment_id().map(String::from),
         })
     }
 }
@@ -255,6 +256,32 @@ mod tests {
                 .await
                 .expect("agent step succeeds");
             assert_eq!(step.account_id, None);
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_executor_propagates_environment_id() {
+        timeout(Duration::from_secs(10), async {
+            let mut output = AgentOutput::new(json!("ok"));
+            output.cost_usd = Some(0.02);
+            output.environment_id = Some("ironflow-env-0a1b2c".to_string());
+            let provider: Arc<dyn AgentProvider> = Arc::new(FixedUsageProvider { output });
+            let step = AgentExecutor::new(&budget_config())
+                .execute(&provider)
+                .await
+                .expect("agent step succeeds");
+            assert_eq!(step.environment_id.as_deref(), Some("ironflow-env-0a1b2c"));
+
+            let mut output = AgentOutput::new(json!("ok"));
+            output.cost_usd = Some(0.02);
+            let provider: Arc<dyn AgentProvider> = Arc::new(FixedUsageProvider { output });
+            let step = AgentExecutor::new(&budget_config())
+                .execute(&provider)
+                .await
+                .expect("agent step succeeds");
+            assert_eq!(step.environment_id, None);
         })
         .await
         .expect("test timed out");

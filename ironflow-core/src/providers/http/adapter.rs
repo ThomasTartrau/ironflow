@@ -331,6 +331,7 @@ impl LoopState {
                 None
             },
             account_id: None,
+            environment_id: None,
         }
     }
 }

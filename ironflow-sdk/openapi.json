@@ -3633,6 +3633,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "environment_id": {
+            "description": "Persistent environment the agent step ran in, if any. Pass it to\n`Agent::resume_environment` to continue a later step in the same\nworkspace.",
+            "nullable": true,
+            "type": "string"
+          },
           "error": {
             "description": "Optional error message.",
             "nullable": true,
