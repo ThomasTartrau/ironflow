@@ -206,6 +206,47 @@ system prompt after a blank line.
 pass a full model id string for a pinned version. `verbose(true)` records the tool
 timeline shown in the dashboard.
 
+### Persistent environment
+
+On a `K8sEphemeralProvider` built with `environment_volume(EnvironmentVolume::new("/workspace"))`,
+every agent step runs with a persistent volume and returns its id in
+`StepOutput::environment_id`. Pass it to `resume_environment` so a later step finds the
+files the earlier one left. The id is stored with the step and replayed on resume. Other
+providers return `None`.
+
+```rust,no_run
+use ironflow_engine::config::{AgentStepConfig, Tool};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    let clone = ctx
+        .agent(
+            "clone",
+            AgentStepConfig::new("Clone the repository into /workspace and run the tests.")
+                .allow_tool(Tool::Bash)
+                .max_budget_usd(0.50),
+        )
+        .await?;
+    // `None` on a provider without persistent environments.
+    if let Some(environment) = clone.environment_id.as_deref() {
+        ctx.agent(
+            "fix",
+            AgentStepConfig::new("Fix the failing test in /workspace.")
+                .allow_tool(Tool::Bash)
+                .max_budget_usd(0.50)
+                .resume_environment(environment),
+        )
+        .await?;
+    }
+    Ok(())
+}
+```
+
+A resumed environment that no longer exists (expired and reaped) fails the step. A
+structured step (`.output::<T>()`) answers with `T` only: run the step that creates the
+environment without a schema to read its id.
+
 ## Approval
 
 ```rust,no_run
@@ -528,7 +569,6 @@ can then only pass that type.
 ```rust,no_run
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::error::EngineError;
-use ironflow_engine::executor::StepOutput;
 use ironflow_engine::handler::{
     HandlerFuture, TypedWorkflow, WorkflowHandler, sub_workflow_names,
 };
@@ -541,6 +581,12 @@ struct CollectInput {
     scope: String,
 }
 
+/// What `Collect` hands back to its parent.
+#[derive(Serialize, Deserialize)]
+struct CollectReport {
+    disks: Vec<String>,
+}
+
 struct Collect;
 
 impl WorkflowHandler for Collect {
@@ -550,8 +596,12 @@ impl WorkflowHandler for Collect {
     fn input_schema(&self) -> Option<Value> {
         Self::typed_input_schema()
     }
-    fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
-        Box::pin(async move { Ok(()) })
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            // Persisted on the run when it ends, even if the handler fails after.
+            ctx.set_output(&CollectReport { disks: vec!["sda".to_string()] })?;
+            Ok(())
+        })
     }
 }
 
@@ -575,9 +625,9 @@ impl WorkflowHandler for Report {
             let child = ctx
                 .workflow(&Collect, CollectInput { scope: "system".to_string() })
                 .await?;
-            // Read the child's steps through the typed accessors.
-            for step in ctx.store().list_steps(child.run_id()).await? {
-                let _stdout = StepOutput::from(&step).stdout().to_string();
+            // `None` when the child set no output; an error when it is not a `CollectReport`.
+            if let Some(report) = child.output::<CollectReport>()? {
+                ctx.set_output(&report.disks)?;
             }
             Ok(())
         })
@@ -628,6 +678,12 @@ async fn tolerant(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 `child.run_id()` is a `Uuid` (nil while planning). A child never sees the parent's
 artifacts; pass what it needs in its input.
+
+`child.output::<T>()` reads what the child passed to `ctx.set_output`: `Ok(None)` when it set
+nothing, `Err(EngineError::Serialization)` when the value is not a `T`. The value is recorded
+in the parent's `Workflow` step, so a resumed parent reads the same one. A child tolerated
+with `allow_failure` keeps the output it set before failing. `set_output` does nothing while
+planning; the last call wins.
 
 ### Exclusive child
 

@@ -112,6 +112,12 @@ pub struct Run {
     /// past, the reaper may requeue the run.
     #[serde(default)]
     pub lease_expires_at: Option<DateTime<Utc>>,
+    /// Output the workflow handler set with `WorkflowContext::set_output`.
+    ///
+    /// Written when an execution ends (completed, warning, failed or
+    /// cancelled). `None` when the handler never set an output.
+    #[serde(default)]
+    pub output: Option<Value>,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -626,6 +632,9 @@ pub struct RunUpdate {
     /// When the run should next be picked up. Used to arm the retry backoff.
     #[serde(default)]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// Output set by the workflow handler. `None` leaves the stored output unchanged.
+    #[serde(default)]
+    pub output: Option<Value>,
 }
 
 /// Retention policy for purging old runs.
@@ -828,6 +837,7 @@ mod tests {
             max_cost_usd: Some(Decimal::new(500, 2)),
             worker_id: Some("worker-1".to_string()),
             lease_expires_at: Some(now),
+            output: Some(json!({"verdict": "approved", "score": 9})),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -856,6 +866,61 @@ mod tests {
         assert_eq!(back.max_cost_usd, run.max_cost_usd);
         assert_eq!(back.worker_id, run.worker_id);
         assert_eq!(back.lease_expires_at, run.lease_expires_at);
+        assert_eq!(back.output, run.output);
+    }
+
+    #[test]
+    fn run_without_output_field_deserializes_to_none_output() {
+        // A run serialized before the `output` column existed has no such key.
+        let now = Utc::now();
+        let run = Run {
+            id: Uuid::now_v7(),
+            workflow_name: "legacy".to_string(),
+            status: FsmState::new(RunStatus::Completed, Uuid::now_v7()),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            error: None,
+            retry_count: 0,
+            max_retries: 0,
+            cost_usd: Decimal::ZERO,
+            duration_ms: 0,
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            completed_at: None,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by: None,
+            created_by_label: None,
+            idempotency_key: None,
+            concurrency_key: None,
+            max_cost_usd: None,
+            worker_id: None,
+            lease_expires_at: None,
+            output: Some(json!("set")),
+        };
+        let mut raw = serde_json::to_value(&run).expect("serialize");
+        raw.as_object_mut().expect("object").remove("output");
+
+        let back: Run = serde_json::from_value(raw).expect("deserialize");
+        assert!(back.output.is_none());
+    }
+
+    #[test]
+    fn runupdate_output_round_trips_and_defaults_to_none() {
+        let update = RunUpdate {
+            output: Some(json!({"verdict": "rejected"})),
+            ..RunUpdate::default()
+        };
+        let json = serde_json::to_string(&update).expect("serialize");
+        let back: RunUpdate = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.output, update.output);
+
+        let mut legacy = serde_json::to_value(RunUpdate::default()).expect("serialize");
+        legacy.as_object_mut().expect("object").remove("output");
+        let parsed: RunUpdate = serde_json::from_value(legacy).expect("deserialize");
+        assert!(parsed.output.is_none());
     }
 
     #[test]
@@ -1014,6 +1079,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             scheduled_at: Some(Utc::now()),
+            output: None,
         };
 
         let json = serde_json::to_string(&update).expect("serialize");

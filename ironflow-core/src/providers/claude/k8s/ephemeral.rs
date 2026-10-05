@@ -34,9 +34,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::{AsyncBufReadExt, TryStreamExt};
-use k8s_openapi::api::core::v1::{ConfigMap, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod};
 use kube::Client;
-use kube::api::{Api, DeleteParams, LogParams, PostParams};
+use kube::api::{Api, DeleteParams, LogParams, Patch, PatchParams, PostParams};
 use kube::runtime::wait::await_condition;
 use serde_json::{from_value, json};
 use tokio::spawn;
@@ -52,10 +52,11 @@ use crate::auth_proxy::{
 };
 use crate::error::AgentError;
 use crate::provider::{
-    AgentConfig, AgentOutput, AgentProvider, InvokeFuture, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT,
-    LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, LogSink, PodVolumeSource, ReadOnlyVolume,
-    ReleaseFuture, SecretEnvVar, assert_pod_label_allowed, is_reserved_pod_label,
-    upsert_secret_env,
+    AgentConfig, AgentOutput, AgentProvider, COMPONENT_ENVIRONMENT, EnvironmentVolume,
+    InvokeFuture, LABEL_COMPONENT, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT, LABEL_MANAGED_BY,
+    LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, LogSink, MANAGED_BY_IRONFLOW, PodVolumeSource,
+    PvcVolume, ReadOnlyVolume, ReleaseFuture, SecretEnvVar, assert_pod_label_allowed,
+    is_reserved_pod_label, upsert_secret_env, validate_environment_id,
 };
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
@@ -122,6 +123,140 @@ async fn abort_launch_configmap(configmaps: &Api<ConfigMap>, name: Option<&str>)
     }
 }
 
+/// Prefix of the name of a new environment claim.
+const ENVIRONMENT_CLAIM_PREFIX: &str = "ironflow-env";
+
+/// The PersistentVolumeClaim backing the environment of one agent pod.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnvironmentClaim {
+    /// Claim name, handed out as the environment ID.
+    name: String,
+    /// `true` when this step creates the claim, `false` when it resumes one.
+    created: bool,
+}
+
+/// Pick the claim of an agent pod: the one to resume, else a new name.
+///
+/// # Errors
+///
+/// Returns [`AgentError::ProcessFailed`] when the ID to resume cannot name
+/// a claim.
+fn environment_claim_for(resume: Option<&str>) -> Result<EnvironmentClaim, AgentError> {
+    match resume {
+        Some(id) => {
+            validate_environment_id(id).map_err(|reason| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: reason,
+            })?;
+            Ok(EnvironmentClaim {
+                name: id.to_string(),
+                created: false,
+            })
+        }
+        None => Ok(EnvironmentClaim {
+            name: generate_pod_name(ENVIRONMENT_CLAIM_PREFIX),
+            created: true,
+        }),
+    }
+}
+
+/// The read-write mount of an environment claim, added to the step volumes.
+fn environment_mount(volume: &EnvironmentVolume, claim: &str) -> PvcVolume {
+    PvcVolume {
+        claim_name: claim.to_string(),
+        mount_path: volume.mount_path.clone(),
+        sub_path: None,
+        read_only: false,
+    }
+}
+
+/// Labels of a new environment claim: the ironflow ownership labels, plus
+/// the run and step labels of the pod when it has them.
+fn environment_claim_labels(pod_labels: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut labels = BTreeMap::new();
+    labels.insert(
+        LABEL_MANAGED_BY.to_string(),
+        MANAGED_BY_IRONFLOW.to_string(),
+    );
+    labels.insert(
+        LABEL_COMPONENT.to_string(),
+        COMPONENT_ENVIRONMENT.to_string(),
+    );
+    for key in [LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP] {
+        if let Some(value) = pod_labels.get(key) {
+            labels.insert(key.to_string(), value.clone());
+        }
+    }
+    labels
+}
+
+/// Build a new `ReadWriteOnce` environment claim.
+///
+/// # Errors
+///
+/// Returns [`AgentError::ProcessFailed`] when the claim cannot be built.
+fn build_environment_claim(
+    volume: &EnvironmentVolume,
+    name: &str,
+    namespace: &str,
+    pod_labels: &BTreeMap<String, String>,
+    expires_at: u64,
+) -> Result<PersistentVolumeClaim, AgentError> {
+    let mut spec = json!({
+        "accessModes": ["ReadWriteOnce"],
+        "resources": { "requests": { "storage": volume.size.to_quantity() } }
+    });
+    if let Some(class) = &volume.storage_class {
+        spec["storageClassName"] = json!(class);
+    }
+    from_value(json!({
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": environment_claim_labels(pod_labels),
+            "annotations": { LABEL_EXPIRES_AT: expires_at.to_string() }
+        },
+        "spec": spec
+    }))
+    .map_err(|e| AgentError::ProcessFailed {
+        exit_code: -1,
+        stderr: format!("failed to build environment claim: {e}"),
+    })
+}
+
+/// Return `true` when `pvc` is an ironflow environment claim that is not
+/// being deleted: the only kind of claim a step may resume.
+fn is_live_environment_claim(pvc: &PersistentVolumeClaim) -> bool {
+    let labels = pvc.metadata.labels.as_ref();
+    let label = |key: &str| labels.and_then(|l| l.get(key)).map(String::as_str);
+    pvc.metadata.deletion_timestamp.is_none()
+        && label(LABEL_MANAGED_BY) == Some(MANAGED_BY_IRONFLOW)
+        && label(LABEL_COMPONENT) == Some(COMPONENT_ENVIRONMENT)
+}
+
+/// Hand the environment claim of the pod out with its output.
+fn with_environment(mut output: AgentOutput, environment_id: Option<&str>) -> AgentOutput {
+    output.environment_id = environment_id.map(str::to_string);
+    output
+}
+
+/// Delete the environment claim of a pod that will not be created, when
+/// this step created it. A resumed claim is never deleted.
+async fn abort_environment_claim(claims: &Api<PersistentVolumeClaim>, claim: &EnvironmentClaim) {
+    if !claim.created {
+        return;
+    }
+    if let Err(e) = claims.delete(&claim.name, &DeleteParams::default()).await {
+        warn!(
+            environment = %claim.name,
+            error = %e,
+            "failed to delete the environment claim of an aborted pod"
+        );
+    }
+}
+
 /// Label selector matching every pod and Job created by ironflow: agent pods,
 /// `PodRun` and `JobRun` of `ironflow-ops-k8s`.
 pub(super) const MANAGED_SELECTOR: &str = "app.kubernetes.io/managed-by=ironflow";
@@ -133,6 +268,10 @@ pub(super) const RUNNER_SELECTOR: &str =
 /// Label selector matching every prompt ConfigMap created by ironflow.
 pub(super) const PROMPT_SELECTOR: &str =
     "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=prompt-data";
+
+/// Label selector matching every environment claim created by ironflow.
+pub(super) const ENVIRONMENT_SELECTOR: &str =
+    "app.kubernetes.io/managed-by=ironflow,app.kubernetes.io/component=environment";
 
 /// Current unix time in whole seconds.
 pub(super) fn now_unix() -> Result<u64, AgentError> {
@@ -222,6 +361,7 @@ pub struct K8sEphemeralProvider {
     runtime_class: Option<String>,
     auth_proxy_url: Option<String>,
     auth_proxy_admin_key: Option<String>,
+    environment: Option<EnvironmentVolume>,
 }
 
 /// Apply a Kubernetes `runtimeClassName` onto a built pod.
@@ -281,6 +421,7 @@ impl K8sEphemeralProvider {
             runtime_class: None,
             auth_proxy_url: None,
             auth_proxy_admin_key: None,
+            environment: None,
         }
     }
 
@@ -853,6 +994,46 @@ impl K8sEphemeralProvider {
         self
     }
 
+    /// Give every agent pod a persistent working volume.
+    ///
+    /// A step without [`AgentConfig::resume_environment`] gets a new
+    /// `ReadWriteOnce` PersistentVolumeClaim named `ironflow-env-...`; a step
+    /// with it mounts the claim of the previous step again, so it finds the
+    /// files that step left. The claim name is returned in
+    /// [`AgentOutput::environment_id`]. Point
+    /// [`working_dir`](Self::working_dir) at the mount path to run the agent
+    /// inside it.
+    ///
+    /// Claims outlive the pod: their expiry annotation is pushed
+    /// [`ttl`](EnvironmentVolume::ttl) forward on every use, and
+    /// [`reap_orphans`](Self::reap_orphans) deletes the expired ones. The
+    /// worker needs `create`, `get`, `patch`, `list` and `delete` on
+    /// `persistentvolumeclaims`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`EnvironmentVolume::validate`] refuses `volume`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::provider::{EnvironmentVolume, StorageUnit, VolumeSize};
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .environment_volume(
+    ///         EnvironmentVolume::new("/workspace").size(VolumeSize::new(20, StorageUnit::Gi)),
+    ///     )
+    ///     .working_dir("/workspace");
+    /// ```
+    pub fn environment_volume(mut self, volume: EnvironmentVolume) -> Self {
+        if let Err(reason) = volume.validate() {
+            panic!("invalid environment volume: {reason}");
+        }
+        self.environment = Some(volume);
+        self
+    }
+
     /// Override the image used by the input-fetch initContainer.
     ///
     /// Defaults to [`DEFAULT_INPUT_INIT_IMAGE`] (`curlimages/curl:8.10.1`).
@@ -961,6 +1142,9 @@ struct CreatedPod {
     configmaps: Option<Api<ConfigMap>>,
     /// Id of the auth proxy token issued for the pod, revoked at the end of the step.
     proxy_token_id: Option<String>,
+    /// Name of the environment claim mounted in the pod, handed out as
+    /// [`AgentOutput::environment_id`].
+    environment_id: Option<String>,
 }
 
 /// Pod inputs merged from the provider defaults and the step's [`AgentConfig`].
@@ -983,11 +1167,20 @@ impl K8sEphemeralProvider {
     ///
     /// Returns [`AgentError::ProcessFailed`] when a sandboxed provider carries
     /// a secret as plain text, when the auth proxy is set and the pod would
-    /// receive a Claude credential, or when the managed-settings preset is unknown.
+    /// receive a Claude credential, or when the managed-settings preset is unknown,
+    /// or when the step resumes an environment and the provider has no
+    /// [`environment_volume`](Self::environment_volume).
     fn merged_pod_inputs<'a>(
         &'a self,
         config: &AgentConfig,
     ) -> Result<MergedPodInputs<'a>, AgentError> {
+        if self.environment.is_none() && config.resume_environment_id.is_some() {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: "resume_environment needs K8sEphemeralProvider::environment_volume"
+                    .to_string(),
+            });
+        }
         if self.auth_proxy_url.is_some() {
             self.check_no_proxy_credential()?;
         }
@@ -1248,9 +1441,9 @@ impl K8sEphemeralProvider {
         Ok(deleted)
     }
 
-    /// Delete the orphaned ironflow pods, Jobs and prompt ConfigMaps of the
-    /// provider's namespace: [`reap_orphans`] with the provider's cluster and
-    /// namespace.
+    /// Delete the orphaned ironflow pods, Jobs, prompt ConfigMaps and expired
+    /// environment claims of the provider's namespace: [`reap_orphans`] with
+    /// the provider's cluster and namespace.
     ///
     /// # Errors
     ///
@@ -1443,6 +1636,23 @@ impl K8sEphemeralProvider {
         let env_vars = self.pod_env_vars(issued.as_ref().map(|t| t.token.as_str()));
         let proxy_token_id = issued.map(|t| t.id);
 
+        let claims: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), &self.namespace);
+        let environment = match self
+            .prepare_environment(&claims, config, &merged.labels, lifetime)
+            .await
+        {
+            Ok(environment) => environment,
+            Err(e) => {
+                self.revoke_proxy_token(proxy_token_id.as_deref()).await;
+                abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
+                return Err(e);
+            }
+        };
+        let mut step_pvc_volumes = config.pod.pvc_volumes.clone();
+        if let (Some(volume), Some(claim)) = (&self.environment, &environment) {
+            step_pvc_volumes.push(environment_mount(volume, &claim.name));
+        }
+
         let pod_spec = build_pod_spec(&PodConfig {
             name: &pod_name,
             image: &self.image,
@@ -1467,7 +1677,7 @@ impl K8sEphemeralProvider {
                 sandbox: self.sandbox.as_ref(),
                 secret_env: &merged.secret_env,
                 read_only_volumes: &merged.read_only_volumes,
-                step_pvc_volumes: &config.pod.pvc_volumes,
+                step_pvc_volumes: &step_pvc_volumes,
                 managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
                 claude_profiles: &self.claude_profiles,
                 annotations: Some(&annotations),
@@ -1493,6 +1703,9 @@ impl K8sEphemeralProvider {
             // No pod runs with the token: drop it now rather than at expiry.
             self.revoke_proxy_token(proxy_token_id.as_deref()).await;
             abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
+            if let Some(claim) = &environment {
+                abort_environment_claim(&claims, claim).await;
+            }
             return Err(e);
         }
 
@@ -1503,6 +1716,7 @@ impl K8sEphemeralProvider {
             prompt_configmap: prompt_configmap_name,
             configmaps: Some(configmaps),
             proxy_token_id,
+            environment_id: environment.map(|claim| claim.name),
         })
     }
 
@@ -1543,6 +1757,77 @@ impl K8sEphemeralProvider {
             "auth proxy token issued"
         );
         Ok(Some(issued))
+    }
+
+    /// Create or resume the environment claim of a pod, `None` when the
+    /// provider has no [`environment_volume`](Self::environment_volume).
+    ///
+    /// A new claim expires `ttl` (at least `lifetime`) from now; a resumed
+    /// claim gets its expiry pushed to the same point.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::ProcessFailed`] when the claim cannot be
+    /// created, when the claim to resume does not exist, is not an ironflow
+    /// environment or is being deleted, or when its expiry cannot be updated.
+    async fn prepare_environment(
+        &self,
+        claims: &Api<PersistentVolumeClaim>,
+        config: &AgentConfig,
+        pod_labels: &BTreeMap<String, String>,
+        lifetime: Duration,
+    ) -> Result<Option<EnvironmentClaim>, AgentError> {
+        let Some(volume) = &self.environment else {
+            return Ok(None);
+        };
+        let claim = environment_claim_for(config.resume_environment_id.as_deref())?;
+        let expires_at = now_unix()? + volume.ttl.max(lifetime).as_secs();
+
+        if claim.created {
+            let pvc = build_environment_claim(
+                volume,
+                &claim.name,
+                &self.namespace,
+                pod_labels,
+                expires_at,
+            )?;
+            claims
+                .create(&PostParams::default(), &pvc)
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to create environment claim '{}': {e}", claim.name),
+                })?;
+            info!(environment = %claim.name, "persistent environment created");
+            return Ok(Some(claim));
+        }
+
+        let existing =
+            claims
+                .get_opt(&claim.name)
+                .await
+                .map_err(|e| AgentError::ProcessFailed {
+                    exit_code: -1,
+                    stderr: format!("failed to read environment '{}': {e}", claim.name),
+                })?;
+        if !existing.as_ref().is_some_and(is_live_environment_claim) {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("environment '{}' not found or expired", claim.name),
+            });
+        }
+        let patch = json!({
+            "metadata": { "annotations": { LABEL_EXPIRES_AT: expires_at.to_string() } }
+        });
+        claims
+            .patch(&claim.name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await
+            .map_err(|e| AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!("failed to extend environment '{}': {e}", claim.name),
+            })?;
+        info!(environment = %claim.name, "persistent environment resumed");
+        Ok(Some(claim))
     }
 
     /// Read pod phase after completion, delete the pod, and parse the output.
@@ -1597,6 +1882,7 @@ impl K8sEphemeralProvider {
             start,
             prompt_configmap,
             configmaps,
+            environment_id,
             ..
         } = created;
 
@@ -1633,7 +1919,8 @@ impl K8sEphemeralProvider {
             let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
         }
 
-        self.finalize_pod(&logs, &pod_phase, timed_out, pod_name, config, *start)
+        let output = self.finalize_pod(&logs, &pod_phase, timed_out, pod_name, config, *start)?;
+        Ok(with_environment(output, environment_id.as_deref()))
     }
 
     /// Stream the logs of a created pod into `log_sink` until it completes,
@@ -1650,6 +1937,7 @@ impl K8sEphemeralProvider {
             start,
             prompt_configmap,
             configmaps,
+            environment_id,
             ..
         } = created;
 
@@ -1817,14 +2105,15 @@ impl K8sEphemeralProvider {
             let _ = cm_api.delete(cm_name, &DeleteParams::default()).await;
         }
 
-        self.finalize_pod(
+        let output = self.finalize_pod(
             &accumulated,
             &pod_phase,
             timed_out,
             pod_name,
             config,
             *start,
-        )
+        )?;
+        Ok(with_environment(output, environment_id.as_deref()))
     }
 }
 
@@ -1903,6 +2192,7 @@ mod tests {
 
     use super::super::toleration::{TolerationEffect, TolerationOperator};
     use super::*;
+    use crate::provider::{StorageUnit, VolumeSize};
 
     #[test]
     fn ephemeral_provider_defaults() {
@@ -2750,5 +3040,211 @@ mod tests {
             token["valueFrom"]["secretKeyRef"]["name"],
             Value::from("claude-oauth")
         );
+    }
+
+    // --- Persistent environment ---
+
+    #[test]
+    fn ephemeral_provider_environment_volume_builder() {
+        let provider = K8sEphemeralProvider::new("img:v1").environment_volume(
+            EnvironmentVolume::new("/workspace").size(VolumeSize::new(20, StorageUnit::Gi)),
+        );
+        let volume = provider.environment.as_ref().unwrap();
+        assert_eq!(volume.mount_path, "/workspace");
+        assert_eq!(volume.size.to_quantity(), "20Gi");
+        assert!(K8sEphemeralProvider::new("img:v1").environment.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid environment volume")]
+    fn ephemeral_provider_environment_volume_rejects_relative_path() {
+        let _ = K8sEphemeralProvider::new("img:v1")
+            .environment_volume(EnvironmentVolume::new("workspace"));
+    }
+
+    #[test]
+    fn environment_claim_for_new_and_resumed() {
+        let fresh = environment_claim_for(None).unwrap();
+        assert!(fresh.created);
+        assert!(fresh.name.starts_with("ironflow-env-"), "{}", fresh.name);
+        assert!(validate_environment_id(&fresh.name).is_ok());
+        assert_ne!(fresh.name, environment_claim_for(None).unwrap().name);
+
+        let resumed = environment_claim_for(Some("ironflow-env-abc")).unwrap();
+        assert_eq!(
+            resumed,
+            EnvironmentClaim {
+                name: "ironflow-env-abc".to_string(),
+                created: false,
+            }
+        );
+    }
+
+    #[test]
+    fn environment_claim_for_rejects_invalid_id() {
+        let err = environment_claim_for(Some("../kube-system/claim")).unwrap_err();
+        assert!(err.to_string().contains("environment_id must only contain"));
+        assert!(environment_claim_for(Some("")).is_err());
+    }
+
+    #[test]
+    fn environment_mount_is_read_write_root_of_claim() {
+        let volume = EnvironmentVolume::new("/workspace");
+        assert_eq!(
+            environment_mount(&volume, "ironflow-env-1"),
+            PvcVolume {
+                claim_name: "ironflow-env-1".to_string(),
+                mount_path: "/workspace".to_string(),
+                sub_path: None,
+                read_only: false,
+            }
+        );
+    }
+
+    #[test]
+    fn build_environment_claim_sets_spec_labels_and_expiry() {
+        let volume = EnvironmentVolume::new("/workspace")
+            .size(VolumeSize::new(20, StorageUnit::Gi))
+            .storage_class("fast");
+        let mut pod_labels = BTreeMap::new();
+        pod_labels.insert(LABEL_RUN_ID.to_string(), "run-1".to_string());
+        pod_labels.insert(LABEL_STEP.to_string(), "build".to_string());
+        pod_labels.insert("team".to_string(), "a".to_string());
+        let pvc =
+            build_environment_claim(&volume, "ironflow-env-1", "ci", &pod_labels, 42).unwrap();
+        let value = to_value(&pvc).unwrap();
+
+        assert_eq!(value["metadata"]["name"], "ironflow-env-1");
+        assert_eq!(value["metadata"]["namespace"], "ci");
+        let labels = &value["metadata"]["labels"];
+        assert_eq!(labels[LABEL_MANAGED_BY], MANAGED_BY_IRONFLOW);
+        assert_eq!(labels[LABEL_COMPONENT], COMPONENT_ENVIRONMENT);
+        assert_eq!(labels[LABEL_RUN_ID], "run-1");
+        assert_eq!(labels[LABEL_STEP], "build");
+        assert!(labels.get("team").is_none());
+        assert_eq!(value["metadata"]["annotations"][LABEL_EXPIRES_AT], "42");
+        assert_eq!(value["spec"]["accessModes"], json!(["ReadWriteOnce"]));
+        assert_eq!(value["spec"]["resources"]["requests"]["storage"], "20Gi");
+        assert_eq!(value["spec"]["storageClassName"], "fast");
+        assert!(is_live_environment_claim(&pvc));
+    }
+
+    #[test]
+    fn build_environment_claim_without_class_uses_cluster_default() {
+        let volume = EnvironmentVolume::new("/workspace");
+        let pvc =
+            build_environment_claim(&volume, "ironflow-env-1", "ci", &BTreeMap::new(), 1).unwrap();
+        let value = to_value(&pvc).unwrap();
+        assert!(value["spec"].get("storageClassName").is_none());
+        assert_eq!(value["spec"]["resources"]["requests"]["storage"], "10Gi");
+    }
+
+    #[test]
+    fn is_live_environment_claim_rejects_foreign_and_deleting_claims() {
+        let foreign: PersistentVolumeClaim = from_value(json!({
+            "metadata": { "name": "repos", "labels": { LABEL_MANAGED_BY: "helm" } }
+        }))
+        .unwrap();
+        assert!(!is_live_environment_claim(&foreign));
+
+        let other_component: PersistentVolumeClaim = from_value(json!({
+            "metadata": {
+                "name": "x",
+                "labels": { LABEL_MANAGED_BY: MANAGED_BY_IRONFLOW, LABEL_COMPONENT: "prompt-data" }
+            }
+        }))
+        .unwrap();
+        assert!(!is_live_environment_claim(&other_component));
+
+        let deleting: PersistentVolumeClaim = from_value(json!({
+            "metadata": {
+                "name": "ironflow-env-1",
+                "deletionTimestamp": "2023-11-14T22:13:20Z",
+                "labels": {
+                    LABEL_MANAGED_BY: MANAGED_BY_IRONFLOW,
+                    LABEL_COMPONENT: COMPONENT_ENVIRONMENT
+                }
+            }
+        }))
+        .unwrap();
+        assert!(!is_live_environment_claim(&deleting));
+        assert!(!is_live_environment_claim(&PersistentVolumeClaim::default()));
+    }
+
+    #[test]
+    fn merged_resume_environment_without_volume_is_an_error() {
+        let provider = K8sEphemeralProvider::new("img:v1");
+        let config = AgentConfig::new("hi").resume_environment("ironflow-env-1");
+        let err = err_text(provider.merged_pod_inputs(&config));
+        assert!(
+            err.contains("resume_environment needs K8sEphemeralProvider::environment_volume"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn merged_resume_environment_with_volume_is_accepted() {
+        let provider = K8sEphemeralProvider::new("img:v1")
+            .environment_volume(EnvironmentVolume::new("/workspace"));
+        let config = AgentConfig::new("hi").resume_environment("ironflow-env-1");
+        assert!(provider.merged_pod_inputs(&config).is_ok());
+    }
+
+    #[test]
+    fn with_environment_sets_output_environment_id() {
+        let output = with_environment(AgentOutput::new(json!("ok")), Some("ironflow-env-1"));
+        assert_eq!(output.environment_id.as_deref(), Some("ironflow-env-1"));
+        let output = with_environment(AgentOutput::new(json!("ok")), None);
+        assert_eq!(output.environment_id, None);
+    }
+
+    #[test]
+    fn pod_spec_mounts_environment_claim_read_write() {
+        let volume = EnvironmentVolume::new("/workspace");
+        let step_pvcs = [environment_mount(&volume, "ironflow-env-1")];
+        let pod = to_value(
+            build_pod_spec(&PodConfig {
+                name: "test-pod",
+                image: "img:v1",
+                command: vec!["sh".to_string()],
+                namespace: "default",
+                resources: &K8sResources::default(),
+                service_account: None,
+                restart_policy: "Never",
+                image_pull_policy: &ImagePullPolicy::default(),
+                env_vars: &[],
+                image_pull_secrets: &[],
+                extra_labels: &BTreeMap::new(),
+                node_selector: &BTreeMap::new(),
+                tolerations: &[],
+                volumes: &[],
+                pvc_volumes: &[],
+                inputs: &[],
+                input_init_image: DEFAULT_INPUT_INIT_IMAGE,
+                prompt_configmap: None,
+                prompt_mount_path: "",
+                hardening: PodHardening {
+                    step_pvc_volumes: &step_pvcs,
+                    ..PodHardening::default()
+                },
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let claims: Vec<&str> = pod["spec"]["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v["persistentVolumeClaim"]["claimName"].as_str())
+            .collect();
+        assert_eq!(claims, vec!["ironflow-env-1"]);
+        let mounts = pod["spec"]["containers"][0]["volumeMounts"]
+            .as_array()
+            .unwrap();
+        let mount = mounts
+            .iter()
+            .find(|m| m["mountPath"] == "/workspace")
+            .unwrap();
+        assert_ne!(mount["readOnly"], json!(true));
     }
 }

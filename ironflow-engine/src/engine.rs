@@ -1862,6 +1862,7 @@ impl Engine {
                             cost_usd: Some(ctx.total_cost_usd()),
                             duration_ms: Some(total_duration),
                             completed_at: Some(completed_at),
+                            output: ctx.output().cloned(),
                             ..RunUpdate::default()
                         },
                     )
@@ -2092,6 +2093,7 @@ impl Engine {
                                 cost_usd: Some(ctx.total_cost_usd()),
                                 duration_ms: Some(total_duration),
                                 completed_at: Some(completed_at),
+                                output: ctx.output().cloned(),
                                 ..RunUpdate::default()
                             },
                         )
@@ -2107,6 +2109,22 @@ impl Engine {
                     }
                     RunStatus::Cancelled
                 } else {
+                    // Written before the failure so a failed run keeps the
+                    // verdict the handler set before returning its error.
+                    if let Some(output) = ctx.output()
+                        && let Err(store_err) = self
+                            .store
+                            .update_run(
+                                run_id,
+                                RunUpdate {
+                                    output: Some(output.clone()),
+                                    ..RunUpdate::default()
+                                },
+                            )
+                            .await
+                    {
+                        error!(run_id = %run_id, store_error = %store_err, "failed to persist run output");
+                    }
                     self.fail_or_schedule_retry(
                         run_id,
                         &err.to_string(),

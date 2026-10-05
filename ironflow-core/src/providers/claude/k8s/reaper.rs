@@ -1,4 +1,5 @@
-//! Orphan reaping for the pods, Jobs and prompt ConfigMaps ironflow creates.
+//! Orphan reaping for the pods, Jobs, prompt ConfigMaps and environment claims
+//! ironflow creates.
 //!
 //! A worker that dies mid-step (OOM, eviction, hard shutdown) leaves its agent
 //! pod and prompt ConfigMap behind, and so does one running a `PodRun` or a
@@ -6,13 +7,15 @@
 //! `app.kubernetes.io/managed-by=ironflow` label and the [`LABEL_EXPIRES_AT`]
 //! annotation; the reaper deletes those whose expiry has passed, plus pods and
 //! Jobs Kubernetes already killed for exceeding their `activeDeadlineSeconds`.
+//! Persistent environment PersistentVolumeClaims carry the same annotation,
+//! pushed forward on every use: the reaper deletes them once unused for their TTL.
 //!
-//! The decision functions here are pure: [`reap_reason`], [`job_reap_reason`]
-//! and [`configmap_expired`] never delete anything on doubt (missing or
-//! unparseable annotation). [`reap_orphans`] applies them to a namespace.
+//! The decision functions here are pure: [`reap_reason`], [`job_reap_reason`],
+//! [`configmap_expired`] and [`pvc_expired`] never delete anything on doubt
+//! (missing or unparseable annotation). [`reap_orphans`] applies them to a namespace.
 
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::{ConfigMap, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::Error as KubeError;
 use kube::api::{Api, DeleteParams, ListParams};
@@ -22,7 +25,7 @@ use crate::error::AgentError;
 use crate::provider::LABEL_EXPIRES_AT;
 
 use super::common::{K8sClusterConfig, create_client};
-use super::ephemeral::{MANAGED_SELECTOR, PROMPT_SELECTOR, now_unix};
+use super::ephemeral::{ENVIRONMENT_SELECTOR, MANAGED_SELECTOR, PROMPT_SELECTOR, now_unix};
 
 /// Why the reaper deletes a pod or a Job.
 ///
@@ -59,6 +62,8 @@ pub struct ReapReport {
     pub jobs_deleted: usize,
     /// Number of prompt ConfigMaps deleted.
     pub configmaps_deleted: usize,
+    /// Number of expired environment PersistentVolumeClaims deleted.
+    pub pvcs_deleted: usize,
 }
 
 /// Read the [`LABEL_EXPIRES_AT`] annotation as unix seconds.
@@ -162,7 +167,25 @@ pub fn configmap_expired(cm: &ConfigMap, now_unix: u64) -> bool {
     expires_at(&cm.metadata).is_some_and(|expiry| expiry < now_unix)
 }
 
-/// Delete the orphaned pods, Jobs and prompt ConfigMaps ironflow left in
+/// Return `true` when an environment PersistentVolumeClaim is past its
+/// [`LABEL_EXPIRES_AT`] annotation at `now_unix` (seconds). A missing or
+/// unparseable annotation, or a claim already being deleted, returns `false`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::providers::claude::k8s::pvc_expired;
+/// use k8s_openapi::api::core::v1::PersistentVolumeClaim;
+///
+/// assert!(!pvc_expired(&PersistentVolumeClaim::default(), 1_700_000_000));
+/// ```
+pub fn pvc_expired(pvc: &PersistentVolumeClaim, now_unix: u64) -> bool {
+    pvc.metadata.deletion_timestamp.is_none()
+        && expires_at(&pvc.metadata).is_some_and(|expiry| expiry < now_unix)
+}
+
+/// Delete the orphaned pods, Jobs, prompt ConfigMaps and environment claims
+/// ironflow left in
 /// `namespace`: agent pods, `PodRun` pods and `JobRun` Jobs, whatever their
 /// component (`app.kubernetes.io/managed-by=ironflow`).
 ///
@@ -173,6 +196,8 @@ pub fn configmap_expired(cm: &ConfigMap, now_unix: u64) -> bool {
 ///
 /// Needs no provider: a worker that only runs `PodRun` calls it directly.
 /// Without the right to list Jobs, the Job pass is skipped with a warning.
+/// Expired environment claims (see [`pvc_expired`]) are deleted too; without
+/// the right to list PersistentVolumeClaims that pass is skipped with a warning.
 ///
 /// # Errors
 ///
@@ -198,10 +223,13 @@ pub async fn reap_orphans(
 ) -> Result<ReapReport, AgentError> {
     let client = create_client(cluster_config).await?;
     let now = now_unix()?;
+    let configmaps = Api::namespaced(client.clone(), namespace);
+    let claims = Api::namespaced(client.clone(), namespace);
     Ok(ReapReport {
         jobs_deleted: reap_jobs(&Api::namespaced(client.clone(), namespace), now).await?,
         pods_deleted: reap_pods(&Api::namespaced(client.clone(), namespace), now).await?,
-        configmaps_deleted: reap_configmaps(&Api::namespaced(client, namespace), now).await?,
+        configmaps_deleted: reap_configmaps(&configmaps, now).await?,
+        pvcs_deleted: reap_pvcs(&claims, now).await?,
     })
 }
 
@@ -284,6 +312,40 @@ async fn reap_configmaps(configmaps: &Api<ConfigMap>, now: u64) -> Result<usize,
             }
             Err(e) => {
                 warn!(configmap = %name, error = %e, "failed to reap orphan prompt ConfigMap");
+            }
+        }
+    }
+    Ok(deleted)
+}
+
+async fn reap_pvcs(claims: &Api<PersistentVolumeClaim>, now: u64) -> Result<usize, AgentError> {
+    let params = ListParams::default().labels(ENVIRONMENT_SELECTOR);
+    let list = match claims.list(&params).await {
+        Ok(list) => list,
+        Err(KubeError::Api(e)) if e.code == 403 => {
+            warn!(
+                error = %e,
+                "cannot list PersistentVolumeClaims: expired environments are not reaped; grant list and delete on persistentvolumeclaims"
+            );
+            return Ok(0);
+        }
+        Err(e) => return Err(list_error("environment claims", e)),
+    };
+    let mut deleted = 0;
+    for pvc in &list.items {
+        let Some(name) = pvc.metadata.name.as_deref() else {
+            continue;
+        };
+        if !pvc_expired(pvc, now) {
+            continue;
+        }
+        match claims.delete(name, &DeleteParams::default()).await {
+            Ok(_) => {
+                info!(environment = %name, "reaped expired environment claim");
+                deleted += 1;
+            }
+            Err(e) => {
+                warn!(environment = %name, error = %e, "failed to reap expired environment claim");
             }
         }
     }
@@ -447,5 +509,29 @@ mod tests {
         assert!(!configmap_expired(&configmap(Some(&future())), NOW));
         assert!(!configmap_expired(&configmap(None), NOW));
         assert!(!configmap_expired(&configmap(Some("garbage")), NOW));
+    }
+
+    fn pvc(expires: Option<&str>, deleting: bool) -> PersistentVolumeClaim {
+        let mut value: Value = json!({ "metadata": { "name": "ironflow-env-1" } });
+        if let Some(expires) = expires {
+            value["metadata"]["annotations"] = json!({ LABEL_EXPIRES_AT: expires });
+        }
+        if deleting {
+            value["metadata"]["deletionTimestamp"] = json!("2023-11-14T22:13:20Z");
+        }
+        from_value(value).expect("valid pvc")
+    }
+
+    #[test]
+    fn k8s_pvc_expired_true_and_false() {
+        assert!(pvc_expired(&pvc(Some(&past()), false), NOW));
+        assert!(!pvc_expired(&pvc(Some(&future()), false), NOW));
+        assert!(!pvc_expired(&pvc(None, false), NOW));
+        assert!(!pvc_expired(&pvc(Some("garbage"), false), NOW));
+    }
+
+    #[test]
+    fn k8s_pvc_expired_skips_claim_being_deleted() {
+        assert!(!pvc_expired(&pvc(Some(&past()), true), NOW));
     }
 }

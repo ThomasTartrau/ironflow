@@ -155,6 +155,11 @@ pub struct StepResponse {
     /// run; no other account data is exposed here.
     #[serde(default)]
     pub account: Option<StepAccountResponse>,
+    /// Persistent environment the agent step ran in, if any. Pass it to
+    /// `Agent::resume_environment` to continue a later step in the same
+    /// workspace.
+    #[serde(default)]
+    pub environment_id: Option<String>,
 }
 
 impl StepResponse {
@@ -234,6 +239,7 @@ impl StepResponse {
             approvals_required,
             account_id: step.account_id,
             account: None,
+            environment_id: step.environment_id,
         }
     }
 }
@@ -337,6 +343,22 @@ mod tests {
         assert_eq!(body["account"]["id"], id.to_string());
         assert_eq!(body["account"]["name"], "perso");
         assert_eq!(body["account"]["display_name"], "Compte perso");
+    }
+
+    #[tokio::test]
+    async fn environment_id_is_null_by_default() {
+        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        assert!(body["environment_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn environment_id_is_carried_from_the_stored_step() {
+        let mut step = step().await;
+        step.environment_id = Some("ironflow-env-0192f0c1".to_string());
+
+        let body = serde_json::to_value(StepResponse::from(step)).expect("serialize");
+
+        assert_eq!(body["environment_id"], "ironflow-env-0192f0c1");
     }
 
     #[tokio::test]

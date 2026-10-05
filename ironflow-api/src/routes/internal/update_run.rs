@@ -100,6 +100,7 @@ mod tests {
             completed_at: None,
             increment_retry: false,
             scheduled_at: None,
+            output: None,
         };
 
         let req = Request::builder()
@@ -137,6 +138,7 @@ mod tests {
             completed_at: None,
             increment_retry: false,
             scheduled_at: None,
+            output: None,
         };
 
         let req = Request::builder()

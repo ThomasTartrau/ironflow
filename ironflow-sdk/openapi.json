@@ -2709,6 +2709,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "output": {
+            "description": "Typed output the handler set with `WorkflowContext::set_output`.\n\nWritten when the run ends (completed, warning, failed or cancelled).\nOmitted when the handler set no output."
+          },
           "retry_count": {
             "description": "Number of times retried.",
             "format": "int32",
@@ -3668,6 +3671,11 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "environment_id": {
+            "description": "Persistent environment the agent step ran in, if any. Pass it to\n`Agent::resume_environment` to continue a later step in the same\nworkspace.",
+            "nullable": true,
+            "type": "string"
           },
           "error": {
             "description": "Optional error message.",

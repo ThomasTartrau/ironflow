@@ -342,6 +342,10 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
         table.add_row(vec![Cell::new("Error"), Cell::new(error).fg(Color::Red)]);
     }
 
+    if let Some(ref output) = run.output {
+        table.add_row(vec![Cell::new("Output"), Cell::new(output)]);
+    }
+
     if !detail.steps.is_empty() {
         table.add_row(vec![
             Cell::new("Steps"),
@@ -1182,7 +1186,7 @@ mod tests {
     use ironflow_sdk::types::{
         ApiKeyScope, ConditionResponse, CreatedBy, CreatedByKind, EventKind, TriggerKind,
     };
-    use serde_json::{Map, Value};
+    use serde_json::{Map, Value, json};
 
     use super::*;
 
@@ -1211,6 +1215,7 @@ mod tests {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            output: None,
         }
     }
 
@@ -1424,6 +1429,44 @@ mod tests {
             output.contains("ci-deploy (alice)"),
             "author missing from:\n{output}"
         );
+    }
+
+    #[test]
+    fn run_detail_table_renders_the_run_output() {
+        let mut run = run_fixture(CreatedBy {
+            kind: CreatedByKind::System,
+            id: None,
+            label: "cron".to_string(),
+        });
+        run.output = Some(json!({"verdict": "approved"}));
+        let detail = RunDetailResponse {
+            run,
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+        };
+
+        let output = run_detail_table(&detail).to_string();
+        assert!(
+            output.contains("Output"),
+            "output row missing from:\n{output}"
+        );
+        assert!(output.contains(r#"{"verdict":"approved"}"#), "{output}");
+    }
+
+    #[test]
+    fn run_detail_table_has_no_output_row_without_an_output() {
+        let detail = RunDetailResponse {
+            run: run_fixture(CreatedBy {
+                kind: CreatedByKind::System,
+                id: None,
+                label: "cron".to_string(),
+            }),
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+        };
+
+        let output = run_detail_table(&detail).to_string();
+        assert!(!output.contains("Output"), "{output}");
     }
 
     #[test]

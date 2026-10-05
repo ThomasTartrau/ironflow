@@ -16,8 +16,9 @@ use ironflow_store::store::RunStore;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -26,6 +27,7 @@ use crate::config::{ApprovalConfig, DecisionConfig, HumanInputConfig, ShellConfi
 use crate::decision::DecisionAnswers;
 use crate::error::EngineError;
 use crate::handler::TypedWorkflow;
+use crate::plan::PlanRecorder;
 use crate::testing::{MockInterceptor, MockShellOutput};
 
 /// Helper to create a test provider with fixtures
@@ -1255,4 +1257,66 @@ async fn context_delay_replay_divergence_on_name_mismatch() {
         result.unwrap_err(),
         EngineError::ReplayDivergence { position: 0, .. }
     ));
+}
+
+// -- set_output --
+
+/// A map with non-string keys: `serde_json` refuses to serialize it.
+fn unserializable() -> HashMap<(u8, u8), u8> {
+    HashMap::from([((1, 2), 3)])
+}
+
+#[test]
+fn set_output_is_none_on_a_new_context() {
+    let ctx = create_test_context();
+    assert!(ctx.output().is_none());
+}
+
+#[test]
+fn set_output_stores_the_serialized_value() {
+    let mut ctx = create_test_context();
+    ctx.set_output(&json!({"approved": true}))
+        .expect("serializable");
+    assert_eq!(ctx.output(), Some(&json!({"approved": true})));
+}
+
+#[test]
+fn set_output_last_call_wins_in_the_context() {
+    let mut ctx = create_test_context();
+    ctx.set_output(&"first").expect("serializable");
+    ctx.set_output(&"second").expect("serializable");
+    assert_eq!(ctx.output(), Some(&json!("second")));
+}
+
+#[test]
+fn set_output_rejects_an_unserializable_value() {
+    let mut ctx = create_test_context();
+    ctx.set_output(&"kept").expect("serializable");
+
+    let err = ctx
+        .set_output(&unserializable())
+        .expect_err("non-string map keys do not serialize");
+
+    assert!(matches!(err, EngineError::Serialization(_)), "got {err:?}");
+    assert_eq!(
+        ctx.output(),
+        Some(&json!("kept")),
+        "a failed call leaves the previous output in place"
+    );
+}
+
+#[test]
+fn set_output_is_a_noop_on_a_planning_context() {
+    let mut ctx = create_test_context();
+    ctx.set_plan(Arc::new(Mutex::new(PlanRecorder::new(
+        "test".to_string(),
+        json!({}),
+        3,
+        HashMap::new(),
+    ))));
+
+    ctx.set_output(&unserializable())
+        .expect("nothing is serialized while planning");
+    ctx.set_output(&"ignored").expect("no-op");
+    assert!(ctx.output().is_none());
 }

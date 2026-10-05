@@ -123,6 +123,7 @@ impl MockShellOutput {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         })
     }
 }
@@ -255,6 +256,7 @@ impl MockHttpResponse {
             debug_messages: None,
             artifacts: StepArtifacts::default(),
             account_id: None,
+            environment_id: None,
         }
     }
 }

@@ -2180,3 +2180,46 @@ async fn count_blocked_runs_by_group_reports_saturated_groups() {
         }]
     );
 }
+
+#[tokio::test]
+async fn update_step_records_environment_id_and_keeps_it_on_later_updates() {
+    let store = InMemoryStore::new();
+    let run = store.create_run(new_run("wf")).await.unwrap().into_run();
+    let step = store
+        .create_step(new_step(run.id, "agent", 0))
+        .await
+        .unwrap();
+    assert_eq!(step.environment_id, None);
+
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                environment_id: Some("ironflow-env-0a1b2c".to_string()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                duration_ms: Some(10),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .get_step(step.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .environment_id
+            .as_deref(),
+        Some("ironflow-env-0a1b2c")
+    );
+}

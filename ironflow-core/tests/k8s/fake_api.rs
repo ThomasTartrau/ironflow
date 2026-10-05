@@ -24,7 +24,8 @@ pub fn now() -> u64 {
         .as_secs()
 }
 
-/// Collection path of `kind` (`pods`, `configmaps`, `jobs`) in [`NS`].
+/// Collection path of `kind` (`pods`, `configmaps`, `jobs`,
+/// `persistentvolumeclaims`) in [`NS`].
 pub fn collection(kind: &str) -> String {
     match kind {
         "jobs" => format!("/apis/batch/v1/namespaces/{NS}/jobs"),
@@ -279,4 +280,21 @@ pub fn prompt_configmap(name: &str, extra: &[(&str, &str)], expires: Option<u64>
         "metadata": metadata(name, "prompt-data", extra, expires),
         "data": { "prompt": "hi" },
     })
+}
+
+/// A persistent environment claim, marked as being deleted when `deleting`.
+pub fn environment_claim(name: &str, expires: Option<u64>, deleting: bool) -> Value {
+    let mut claim = json!({
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": metadata(name, "environment", &[], expires),
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": { "requests": { "storage": "1Gi" } },
+        },
+    });
+    if deleting {
+        claim["metadata"]["deletionTimestamp"] = json!("2026-10-05T12:00:00Z");
+    }
+    claim
 }

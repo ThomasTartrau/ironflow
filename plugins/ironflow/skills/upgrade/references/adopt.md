@@ -161,3 +161,49 @@ is never tolerated. Section: Sub-workflow.
 +     // child.error() holds the reason
 + }
 ```
+
+## persistent-environment
+- kind: adopt
+- since: ironflow-core after 4.8.1, ironflow-engine after 2.47.1 (#175)
+
+Agent steps on `K8sEphemeralProvider` that hand files to each other through a shared,
+hand-provisioned PVC (or that redo a clone in every step) can use a persistent
+environment instead: each step gets its own claim, created and expired by ironflow, and
+a later step resumes it by id. The worker needs `create`, `get`, `patch`, `list` and
+`delete` on `persistentvolumeclaims`. Section: Agent, Persistent environment.
+
+```diff
+  let provider = K8sEphemeralProvider::sandboxed(&image)
+-     .pvc_volume("shared-workspace", "/workspace")
++     .environment_volume(EnvironmentVolume::new("/workspace"))
+      .working_dir("/workspace");
+
+- ctx.agent("fix", AgentStepConfig::new("Fix the failing test")).await?;
++ if let Some(environment) = clone.environment_id.as_deref() {
++     let config = AgentStepConfig::new("Fix the failing test").resume_environment(environment);
++     ctx.agent("fix", config).await?;
++ }
+```
+
+## run-output
+- kind: adopt
+- since: ironflow-engine after 2.47.0 (#164)
+
+A parent that needs a result from its child used to list the child's steps by run id and
+pick one by name, or the child wrote the result to an artifact or an external store. The
+step name becomes a contract nobody checks, and a renamed step turns the result into
+nothing. Let the child publish a typed value with `ctx.set_output(&value)` and read it in
+the parent with `child.output::<T>()`: `Ok(None)` when the child set nothing, an error
+when the value is not a `T`. The value is persisted on the run (`Run.output`, also on a
+failed run), shown by the API and the dashboard, and recorded in the parent's `Workflow`
+step so a resume reads the same value. Section: Sub-workflow.
+
+```diff
+  // In the child:
++ ctx.set_output(&Verdict { approved })?;
+  // In the parent:
+  let child = ctx.workflow(&Review, ReviewInput { mr }).await?;
+- let steps = ctx.store().list_steps(child.run_id()).await?;
+- let verdict = steps.iter().find(|s| s.name == "verdict").map(StepOutput::from);
++ let verdict: Option<Verdict> = child.output()?;
+```

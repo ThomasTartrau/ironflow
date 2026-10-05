@@ -128,10 +128,11 @@ mod tests {
     use ironflow_store::entities::{NewProviderAccount, provider_account_secret_key};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
-        NewRun, NewStep, NewUser, RunActor, StepKind, StepUpdate, TriggerKind, step_trace_id,
+        NewRun, NewStep, NewUser, RunActor, RunUpdate, StepKind, StepUpdate, TriggerKind,
+        step_trace_id,
     };
     use ironflow_store::store::RunStore;
-    use serde_json::{Value as JsonValue, json};
+    use serde_json::{Value as JsonValue, from_slice, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
@@ -410,5 +411,75 @@ mod tests {
             user.id.to_string()
         );
         assert_eq!(json_val["data"]["run"]["created_by"]["label"], "alice");
+    }
+    /// Fetch the detail of a run whose handler set `output`, or nothing.
+    async fn run_detail_with_output(output: Option<JsonValue>) -> JsonValue {
+        let state = test_state();
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
+        let run = state
+            .store
+            .create_run(NewRun {
+                workflow_name: "review".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        state
+            .store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    output,
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let app = Router::new().route("/{id}", get(get_run)).with_state(state);
+        let req = Request::builder()
+            .uri(format!("/{}", run.id))
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn detail_exposes_the_run_output() {
+        let output = json!({"verdict": "approved", "score": 9, "note": "très bien"});
+
+        let detail = run_detail_with_output(Some(output.clone())).await;
+
+        assert_eq!(detail["data"]["run"]["output"], output);
+    }
+
+    #[tokio::test]
+    async fn detail_keeps_a_falsy_output() {
+        let detail = run_detail_with_output(Some(json!(false))).await;
+
+        assert_eq!(detail["data"]["run"]["output"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn detail_omits_the_output_key_when_the_handler_set_none() {
+        let detail = run_detail_with_output(None).await;
+
+        let run = detail["data"]["run"].as_object().expect("a run object");
+        assert!(!run.contains_key("output"), "unexpected output: {run:?}");
     }
 }

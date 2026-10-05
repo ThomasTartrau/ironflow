@@ -498,6 +498,7 @@ pub(crate) fn planned_output(config: &StepConfig, estimate: Option<Duration>) ->
         debug_messages: None,
         artifacts: StepArtifacts::default(),
         account_id: None,
+        environment_id: None,
     }
 }
 
@@ -515,6 +516,7 @@ pub(crate) fn planned_custom_output(estimate: Option<Duration>) -> StepOutput {
         debug_messages: None,
         artifacts: StepArtifacts::default(),
         account_id: None,
+        environment_id: None,
     }
 }
 

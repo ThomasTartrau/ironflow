@@ -251,6 +251,15 @@ export function Component() {
 					</CollapsibleSection>
 				)}
 
+				{/* An empty object or `false` is a real output: only absence hides it. */}
+				{run.output !== undefined && run.output !== null && (
+					<CollapsibleSection storageKey="run-output" title="Output">
+						<pre className="text-sm font-mono bg-muted/50 rounded-[var(--radius)] p-4 overflow-x-auto">
+							{JSON.stringify(run.output, null, 2)}
+						</pre>
+					</CollapsibleSection>
+				)}
+
 				{run.error && (
 					<div className="p-4 rounded-[var(--radius)] border border-destructive/30 bg-destructive/10">
 						<div className="text-sm font-semibold text-destructive mb-1">

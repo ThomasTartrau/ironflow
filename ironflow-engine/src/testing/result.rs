@@ -14,7 +14,7 @@ use ironflow_store::models::{Run, RunStatus, Step, StepKind, StepStatus};
 
 use crate::executor::{StepOutput, StepResult};
 
-/// Stand-in for a step that recorded no input, and for a run with no steps.
+/// Stand-in for a step that recorded no input, and for a run with no output.
 static NULL: Value = Value::Null;
 
 /// One persisted step, with assertion-friendly accessors.
@@ -221,9 +221,25 @@ impl TestResult {
         self.steps.iter().find(|step| step.name() == name)
     }
 
-    /// Output of the last persisted step, [`Value::Null`] when the run has none.
+    /// Output the handler set with
+    /// [`set_output`](crate::context::WorkflowContext::set_output),
+    /// [`Value::Null`] when it set none.
+    ///
+    /// The output of the last step is `steps().last()`, or
+    /// [`step(name).output()`](TestStep::output) by name.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_engine::testing::TestResult;
+    /// use serde_json::json;
+    ///
+    /// # fn example(result: &TestResult) {
+    /// assert_eq!(result.output(), &json!({"approved": true}));
+    /// # }
+    /// ```
     pub fn output(&self) -> &Value {
-        self.steps.last().map_or(&NULL, TestStep::output)
+        self.run.output.as_ref().unwrap_or(&NULL)
     }
 
     /// Wall-clock duration recorded on the run.
@@ -265,7 +281,9 @@ mod tests {
     use serde_json::json;
 
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{NewRun, NewStep, StepUpdate, TriggerKind, step_trace_id};
+    use ironflow_store::models::{
+        NewRun, NewStep, RunUpdate, StepUpdate, TriggerKind, step_trace_id,
+    };
     use ironflow_store::store::RunStore;
 
     use super::*;
@@ -275,6 +293,11 @@ mod tests {
     /// `Run` and `Step` are `#[non_exhaustive]`, so they can only be obtained
     /// from a store.
     async fn persisted_run() -> (Run, Vec<Step>) {
+        persisted_run_with_output(None).await
+    }
+
+    /// Same as [`persisted_run`], with `output` recorded on the run.
+    async fn persisted_run_with_output(output: Option<Value>) -> (Run, Vec<Step>) {
         let store = Arc::new(InMemoryStore::new());
         let run = store
             .create_run(NewRun {
@@ -343,6 +366,17 @@ mod tests {
                 .expect("finish the step");
         }
 
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    output,
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .expect("record the run output");
+
         let steps = store.list_steps(run.id).await.expect("list steps");
         let run = store
             .get_run(run.id)
@@ -375,12 +409,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn output_is_the_last_step_output() {
+    async fn set_output_is_the_test_result_output() {
+        let (run, steps) = persisted_run_with_output(Some(json!({"approved": true}))).await;
+        let result = TestResult::new(run, steps, Vec::new(), None);
+
+        assert_eq!(result.output(), &json!({"approved": true}));
+        // The last step output stays reachable through the steps.
+        assert_eq!(result.step("deploy").output(), &Value::Null);
+        assert_eq!(result.steps().last().map(TestStep::name), Some("deploy"));
+    }
+
+    #[tokio::test]
+    async fn output_is_null_when_the_handler_set_none() {
         let (run, steps) = persisted_run().await;
         let result = TestResult::new(run, steps, Vec::new(), None);
 
-        // `deploy` failed without an output.
+        // `build` has an output, but the run itself has none.
         assert_eq!(result.output(), &Value::Null);
+        assert_eq!(result.step("build").output()["stdout"], "built");
+        // `deploy` failed without an output.
         assert_eq!(result.step("deploy").status(), StepStatus::Failed);
         assert_eq!(result.step("deploy").error(), Some("boom"));
     }

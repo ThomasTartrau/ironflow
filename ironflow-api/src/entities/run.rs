@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use ironflow_store::models::{ConcurrencyLimit, Run, RunStatus, TriggerKind};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use super::{CreatedBy, StepResponse};
@@ -75,6 +76,12 @@ pub struct RunResponse {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_cost_usd: Option<Decimal>,
+    /// Typed output the handler set with `WorkflowContext::set_output`.
+    ///
+    /// Written when the run ends (completed, warning, failed or cancelled).
+    /// Omitted when the handler set no output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<Value>,
 }
 
 impl From<Run> for RunResponse {
@@ -102,6 +109,7 @@ impl From<Run> for RunResponse {
             concurrency_key: run.concurrency_key,
             concurrency_limits: run.concurrency_limits,
             max_cost_usd: run.max_cost_usd,
+            output: run.output,
         }
     }
 }

@@ -180,6 +180,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         max_cost_usd: row.get("max_cost_usd"),
         worker_id: row.get("worker_id"),
         lease_expires_at: row.get("lease_expires_at"),
+        output: row.get("output"),
     })
 }
 
@@ -238,6 +239,7 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
             .and_then(|v| from_value(v).ok())
             .unwrap_or_default(),
         account_id: row.try_get("account_id").unwrap_or(None),
+        environment_id: row.try_get("environment_id").unwrap_or(None),
     })
 }
 

@@ -56,10 +56,42 @@ impl TypedWorkflow for Collect {
 
 // In the parent:
 let child = ctx.workflow(&Collect, CollectInput { host: "db-1".into() }).await?;
-let steps = ctx.store().list_steps(child.run_id()).await?;
+let report: Option<CollectReport> = child.output()?;
 ```
 
 A child without input uses `type Input = ();`.
+
+## Run output
+
+A handler publishes a typed result with `ctx.set_output(&value)`. The value is
+serialized to JSON and persisted on the run (`Run.output`) when the run ends:
+completed, warning, failed or cancelled. `WorkflowHandler::execute` does not
+change: it still returns `Result<(), EngineError>`.
+
+```rust,ignore
+#[derive(Serialize, Deserialize)]
+struct CollectReport {
+    disks: Vec<String>,
+}
+
+// In the child:
+ctx.set_output(&CollectReport { disks })?;
+```
+
+- The last call wins. A handler that sets nothing leaves the output empty.
+- A failed run keeps the output set before the error, so a verdict survives a
+  handler that returns `Err` after reaching it.
+- `set_output` fails with `EngineError::Serialization` when the value does not
+  serialize to JSON.
+- While planning (`plan_handler`, the execution plan API),
+  `set_output` does nothing.
+- A suspended run (approval, human input, signal, delay) writes no output; the
+  handler replays on resume and sets it again.
+
+The output is returned by `GET /api/v1/runs/{id}` (`run.output`, omitted when
+empty) and shown in the run page of the dashboard. A parent reads its child
+output with `child.output::<T>()`, see
+[sub-workflow steps](steps.md#reading-the-child-output).
 
 ## Registration
 
