@@ -35,6 +35,8 @@ mod steps;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use lifecycle::interrupt_running_steps;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -149,6 +151,10 @@ pub struct WorkflowContext {
     /// (attempt, answer). Like an approval, an answer is carried by the run, so
     /// a retry never asks a human to answer the same input twice.
     answered_inputs: HashMap<u32, (u32, Value)>,
+    /// `Workflow` steps of the current attempt interrupted by a lost worker
+    /// lease, keyed by position. The step executed again at that position
+    /// re-enters the child run they recorded instead of starting a new one.
+    interrupted_children: HashMap<u32, Step>,
     /// Which run attempt this context is executing (1-based).
     attempt: u32,
     /// Wall-clock duration already recorded on the run by previous attempts.

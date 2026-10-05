@@ -7,6 +7,8 @@ import {
 	GitBranch,
 	ShieldCheck,
 	Split,
+	MessageSquare,
+	Radio,
 	type LucideIcon,
 } from "lucide-react";
 
@@ -96,6 +98,24 @@ const kindMetaMap: Record<string, KindMeta> = {
 		badgeCls:
 			"bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-400/15 dark:text-teal-300 dark:border-teal-400/30",
 		label: "decision",
+	},
+	human_input: {
+		icon: MessageSquare,
+		color: "text-sky-600 dark:text-sky-400",
+		barBg: "bg-sky-400/70 dark:bg-sky-400/50",
+		barBorder: "border-sky-500/30 dark:border-sky-400/30",
+		badgeCls:
+			"bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-400/15 dark:text-sky-300 dark:border-sky-400/30",
+		label: "input",
+	},
+	signal: {
+		icon: Radio,
+		color: "text-indigo-600 dark:text-indigo-400",
+		barBg: "bg-indigo-400/70 dark:bg-indigo-400/50",
+		barBorder: "border-indigo-500/30 dark:border-indigo-400/30",
+		badgeCls:
+			"bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-400/15 dark:text-indigo-300 dark:border-indigo-400/30",
+		label: "signal",
 	},
 };
 

@@ -145,6 +145,10 @@ impl Reaper {
     }
 
     /// Apply the side effects of a recovery: clean up steps, publish the event.
+    ///
+    /// The `Running` steps of a requeued run are marked interrupted, see
+    /// [`Engine::interrupt_running_steps`]; every open step of a run that
+    /// exhausted its recoveries is failed with [`LEASE_EXPIRED_ERROR`].
     async fn finish_recovery(&self, entry: &ReapedRun) {
         let run = &entry.run;
 
@@ -153,15 +157,22 @@ impl Reaper {
             workflow = %run.workflow_name,
             worker_id = run.worker_id.as_deref().unwrap_or("unknown"),
             retry_count = run.retry_count,
+            lease_recoveries = run.lease_recoveries,
             to = %entry.to,
             "worker lease expired"
         );
 
-        if let Err(err) = self
-            .engine
-            .fail_orphaned_steps(run.id, LEASE_EXPIRED_ERROR)
-            .await
-        {
+        // A requeued run resumes in the same attempt: only the steps that were
+        // running are closed, so the next worker executes them again and replays
+        // everything else. A run out of recoveries is over: close every open step.
+        let cleanup = if entry.to == RunStatus::Pending {
+            self.engine.interrupt_running_steps(run.id).await
+        } else {
+            self.engine
+                .fail_orphaned_steps(run.id, LEASE_EXPIRED_ERROR)
+                .await
+        };
+        if let Err(err) = cleanup {
             error!(run_id = %run.id, error = %err, "failed to clean up orphaned steps");
         }
 
@@ -203,7 +214,7 @@ mod tests {
         step_trace_id,
     };
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::store::RunStore;
+    use ironflow_store::store::{RunStore, STEP_INTERRUPTED_ERROR};
     use serde_json::json;
     use tokio::task::yield_now;
     use tokio::time::sleep;
@@ -308,7 +319,9 @@ mod tests {
 
         let run = store.get_run(run_id).await.unwrap().unwrap();
         assert_eq!(run.status.state, RunStatus::Pending);
-        assert_eq!(run.retry_count, 1);
+        // A lease recovery is not a handler retry: the run stays in its attempt.
+        assert_eq!(run.retry_count, 0);
+        assert_eq!(run.lease_recoveries, 1);
         assert!(run.worker_id.is_none());
         assert!(run.lease_expires_at.is_none());
     }
@@ -345,38 +358,82 @@ mod tests {
         assert_eq!(run.error.as_deref(), Some(LEASE_EXPIRED_ERROR));
     }
 
-    #[tokio::test]
-    async fn tick_fails_orphaned_steps() {
-        let store = Arc::new(InMemoryStore::new());
-        let run_id = picked_with_expired_lease(&store, 3).await;
+    /// Create a step of `run_id` at `position` and move it to `status`.
+    async fn step_at(
+        store: &InMemoryStore,
+        run_id: Uuid,
+        position: u32,
+        status: StepStatus,
+    ) -> Uuid {
+        let name = format!("step-{position}");
         let step = store
             .create_step(NewStep {
                 run_id,
-                trace_id: step_trace_id(run_id, "step-1", 0),
-                name: "step-1".to_string(),
+                trace_id: step_trace_id(run_id, &name, position),
+                name,
                 kind: StepKind::Shell,
-                position: 0,
+                position,
                 input: None,
                 is_error_handler: false,
             })
             .await
             .unwrap();
-        store
-            .update_step(
-                step.id,
-                StepUpdate {
-                    status: Some(StepStatus::Running),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
+        if status != StepStatus::Pending {
+            store
+                .update_step(
+                    step.id,
+                    StepUpdate {
+                        status: Some(status),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        step.id
+    }
+
+    #[tokio::test]
+    async fn tick_fails_orphaned_steps() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = picked_with_expired_lease(&store, 3).await;
+        let running = step_at(&store, run_id, 0, StepStatus::Running).await;
         let (reaper, _engine) = build(store.clone());
 
         reaper.tick().await;
 
-        let steps = store.list_steps(run_id).await.unwrap();
-        assert_eq!(steps[0].status.state, StepStatus::Failed);
+        let step = store.get_step(running).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Failed);
+        // Requeued: the step is executed again by the next worker.
+        assert_eq!(step.error.as_deref(), Some(STEP_INTERRUPTED_ERROR));
+    }
+
+    #[tokio::test]
+    async fn tick_leaves_pending_steps_of_a_requeued_run_alone() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = picked_with_expired_lease(&store, 3).await;
+        let pending = step_at(&store, run_id, 0, StepStatus::Pending).await;
+        let (reaper, _engine) = build(store.clone());
+
+        reaper.tick().await;
+
+        let step = store.get_step(pending).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Pending);
+        assert!(step.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn tick_fails_orphaned_steps_with_lease_expired_once_retries_are_exhausted() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = picked_with_expired_lease(&store, 0).await;
+        let running = step_at(&store, run_id, 0, StepStatus::Running).await;
+        let (reaper, _engine) = build(store.clone());
+
+        reaper.tick().await;
+
+        let step = store.get_step(running).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Failed);
+        assert_eq!(step.error.as_deref(), Some(LEASE_EXPIRED_ERROR));
     }
 
     #[tokio::test]

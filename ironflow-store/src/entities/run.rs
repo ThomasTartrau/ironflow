@@ -41,7 +41,10 @@ pub struct Run {
     pub payload: Value,
     /// Error message if the run failed.
     pub error: Option<String>,
-    /// Number of times this run has been retried.
+    /// Number of times this run has been retried after a handler failure.
+    ///
+    /// Each retry starts a new attempt (`retry_count + 1`). A recovery after a
+    /// lost worker lease does not change it: see [`Run::lease_recoveries`].
     pub retry_count: u32,
     /// Maximum number of retries allowed.
     pub max_retries: u32,
@@ -118,6 +121,14 @@ pub struct Run {
     /// cancelled). `None` when the handler never set an output.
     #[serde(default)]
     pub output: Option<Value>,
+    /// Number of times the reaper recovered this run after its worker lease
+    /// expired.
+    ///
+    /// Bounded by [`Run::max_retries`] and counted independently of
+    /// [`Run::retry_count`]: a recovered run stays in the same attempt, so the
+    /// steps it already finished are replayed instead of executed again.
+    #[serde(default)]
+    pub lease_recoveries: u32,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -838,6 +849,7 @@ mod tests {
             worker_id: Some("worker-1".to_string()),
             lease_expires_at: Some(now),
             output: Some(json!({"verdict": "approved", "score": 9})),
+            lease_recoveries: 1,
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -867,6 +879,7 @@ mod tests {
         assert_eq!(back.worker_id, run.worker_id);
         assert_eq!(back.lease_expires_at, run.lease_expires_at);
         assert_eq!(back.output, run.output);
+        assert_eq!(back.lease_recoveries, run.lease_recoveries);
     }
 
     #[test]
@@ -899,12 +912,17 @@ mod tests {
             worker_id: None,
             lease_expires_at: None,
             output: Some(json!("set")),
+            lease_recoveries: 2,
         };
         let mut raw = serde_json::to_value(&run).expect("serialize");
         raw.as_object_mut().expect("object").remove("output");
+        raw.as_object_mut()
+            .expect("object")
+            .remove("lease_recoveries");
 
         let back: Run = serde_json::from_value(raw).expect("deserialize");
         assert!(back.output.is_none());
+        assert_eq!(back.lease_recoveries, 0);
     }
 
     #[test]

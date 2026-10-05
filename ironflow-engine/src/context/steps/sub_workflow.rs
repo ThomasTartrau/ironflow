@@ -31,7 +31,7 @@ use ironflow_store::models::{
 
 use crate::config::{WorkflowOptions, WorkflowStepConfig};
 use crate::context::lifecycle::check_replay_identity;
-use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
+use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext, interrupt_running_steps};
 use crate::error::EngineError;
 use crate::executor::{
     ConcurrencyConflict, RecordedWorkflowStep, SubWorkflowOutcome, SubWorkflowOutput,
@@ -43,11 +43,11 @@ use crate::plan::{SharedPlanRecorder, lock_plan};
 /// Key of the open `Workflow` step output that records the child run id.
 const CHILD_RUN_ID_KEY: &str = "child_run_id";
 
-/// The child run id recorded on an open `Workflow` step, if any.
+/// The child run id recorded on an open or interrupted `Workflow` step, if any.
 ///
 /// A missing or unparsable id means the parent stopped before the child run
-/// was recorded: the step is reused but a new child run is started.
-fn recorded_child_run_id(step: &Step) -> Option<Uuid> {
+/// was recorded: a new child run is started.
+pub(in crate::context) fn recorded_child_run_id(step: &Step) -> Option<Uuid> {
     let raw = step.output.as_ref()?.get(CHILD_RUN_ID_KEY)?.as_str()?;
     match Uuid::parse_str(raw) {
         Ok(id) => Some(id),
@@ -59,6 +59,25 @@ fn recorded_child_run_id(step: &Step) -> Option<Uuid> {
                 "open workflow step records an invalid child run id"
             );
             None
+        }
+    }
+}
+
+/// How a `Workflow` step reaches a child run it already started.
+#[derive(Clone, Copy)]
+enum ChildResume {
+    /// The step was left open by a child that suspended.
+    Suspended(Uuid),
+    /// The step was interrupted by a lost worker lease: the child run may
+    /// still hold the steps that were running in the dead worker.
+    Interrupted(Uuid),
+}
+
+impl ChildResume {
+    /// The child run to re-enter.
+    fn run_id(self) -> Uuid {
+        match self {
+            Self::Suspended(id) | Self::Interrupted(id) => id,
         }
     }
 }
@@ -308,6 +327,8 @@ impl WorkflowContext {
     /// A `Workflow` step completed in a previous execution is replayed without
     /// running the child again. A step left open (`Running`) by a suspended
     /// child is reused and re-enters the child run it recorded.
+    /// A step interrupted by a lost worker lease is recorded again at the same
+    /// position and re-enters the child run the interrupted step recorded.
     async fn run_sub_workflow(
         &mut self,
         handler: &dyn WorkflowHandler,
@@ -340,6 +361,18 @@ impl WorkflowContext {
             }
         }
 
+        // A step interrupted by a lost lease must be the same step the handler
+        // calls now before its child run is re-entered.
+        let interrupted = self.interrupted_children.get(&position).cloned();
+        if let Some(interrupted) = &interrupted {
+            check_replay_identity(
+                interrupted,
+                position,
+                &config.workflow_name,
+                &StepKind::Workflow,
+            )?;
+        }
+
         // Guard check: verify limits before creating the step.
         if let (Some(guard_config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
             let state = guard_state
@@ -354,7 +387,7 @@ impl WorkflowContext {
         // recording a second step at the same position.
         let (step, resume) = match existing.filter(|s| s.status.state == StepStatus::Running) {
             Some(step) => {
-                let resume = recorded_child_run_id(&step);
+                let resume = recorded_child_run_id(&step).map(ChildResume::Suspended);
                 (step, resume)
             }
             None => {
@@ -373,7 +406,13 @@ impl WorkflowContext {
                     .await?;
 
                 self.start_step(step.id, Utc::now()).await?;
-                (step, None)
+                // A step interrupted by a lost lease re-enters the child run it
+                // recorded instead of starting a new one.
+                let resume = interrupted
+                    .as_ref()
+                    .and_then(recorded_child_run_id)
+                    .map(ChildResume::Interrupted);
+                (step, resume)
             }
         };
 
@@ -594,15 +633,18 @@ impl WorkflowContext {
     /// When another active run holds the step's concurrency key, no child run
     /// is created and [`ChildOutcome::Conflict`] is returned.
     ///
-    /// `resume` is the child run recorded on an open step: that run is
-    /// re-entered, with its completed steps replayed, instead of creating a
-    /// new one. A child that suspends is left in its suspension status and
+    /// `resume` is the child run recorded on an open or interrupted step: that
+    /// run is re-entered, with its completed steps replayed, instead of
+    /// creating a new one. A child re-entered after a lost lease has its
+    /// `Running` steps marked interrupted first, like a requeued run, and the
+    /// new step records the same child run so a second interruption re-enters
+    /// it again. A child that suspends is left in its suspension status and
     /// [`EngineError::ChildSuspended`] is returned.
     async fn execute_child_workflow(
         &self,
         config: &WorkflowStepConfig,
         step_id: Uuid,
-        resume: Option<Uuid>,
+        resume: Option<ChildResume>,
     ) -> Result<ChildOutcome, EngineError> {
         let resolver = self.handler_resolver.as_ref().ok_or_else(|| {
             EngineError::InvalidWorkflow(
@@ -615,7 +657,20 @@ impl WorkflowContext {
         })?;
 
         let (child_run_id, carried_cost_usd, carried_duration_ms) = match resume {
-            Some(child_run_id) => {
+            Some(resume) => {
+                let child_run_id = resume.run_id();
+                if let ChildResume::Interrupted(_) = resume {
+                    self.store
+                        .update_step(
+                            step_id,
+                            StepUpdate {
+                                output: Some(json!({ CHILD_RUN_ID_KEY: child_run_id })),
+                                ..StepUpdate::default()
+                            },
+                        )
+                        .await?;
+                }
+
                 let child_run = self
                     .store
                     .get_run(child_run_id)
@@ -623,6 +678,11 @@ impl WorkflowContext {
                     .ok_or(EngineError::Store(StoreError::RunNotFound(child_run_id)))?;
 
                 match child_run.status.state {
+                    // Left running by the worker that lost the lease: its open
+                    // steps are executed again, like those of a requeued run.
+                    RunStatus::Running if matches!(resume, ChildResume::Interrupted(_)) => {
+                        interrupt_running_steps(self.store.as_ref(), child_run_id).await?;
+                    }
                     // Already moved to Running by the path that resumed it.
                     RunStatus::Running => {}
                     RunStatus::AwaitingApproval | RunStatus::Pending => {
@@ -739,6 +799,7 @@ impl WorkflowContext {
             replay_wave_steps: HashMap::new(),
             granted_approvals: HashMap::new(),
             answered_inputs: HashMap::new(),
+            interrupted_children: HashMap::new(),
             // A child run is never itself retried.
             attempt: 1,
             carried_duration_ms,

@@ -16,4 +16,4 @@ mod parallel;
 mod shell;
 mod signal;
 mod skip;
-mod sub_workflow;
+pub(super) mod sub_workflow;

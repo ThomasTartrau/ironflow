@@ -207,6 +207,7 @@ impl RunStore for InMemoryStore {
                 worker_id: None,
                 lease_expires_at: None,
                 output: None,
+                lease_recoveries: 0,
             };
 
             if let Some(key) = req.idempotency_key {
@@ -472,11 +473,11 @@ impl RunStore for InMemoryStore {
             let mut reaped = Vec::with_capacity(expired.len());
             for id in expired {
                 let run = state.runs.get_mut(&id).expect("run exists");
-                run.retry_count += 1;
+                run.lease_recoveries += 1;
                 clear_lease(run);
                 run.updated_at = now;
 
-                let to = if run.retry_count > run.max_retries {
+                let to = if run.lease_recoveries > run.max_retries {
                     run.status.state = RunStatus::Failed;
                     run.error = Some(LEASE_EXPIRED_ERROR.to_string());
                     run.completed_at = Some(now);
@@ -1474,7 +1475,8 @@ mod tests {
 
         let after = store.get_run(picked.id).await.unwrap().unwrap();
         assert_eq!(after.status.state, RunStatus::Pending);
-        assert_eq!(after.retry_count, 1);
+        assert_eq!(after.retry_count, 0);
+        assert_eq!(after.lease_recoveries, 1);
         assert!(after.error.is_none());
         assert!(after.worker_id.is_none());
         assert!(after.lease_expires_at.is_none());
@@ -1554,7 +1556,59 @@ mod tests {
         }
 
         let after = store.get_run(picked.id).await.unwrap().unwrap();
-        assert_eq!(after.retry_count, 3);
+        assert_eq!(after.lease_recoveries, 3);
+        assert_eq!(after.retry_count, 0);
+        assert_eq!(after.error.as_deref(), Some(LEASE_EXPIRED_ERROR));
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_keeps_the_attempt_number() {
+        let store = InMemoryStore::new();
+        let picked = pick_with_expired_lease(&store, 3).await;
+        let before = store
+            .create_step(new_step_req(picked.id, "build", 0))
+            .await
+            .unwrap();
+
+        store.reap_expired_leases(100).await.unwrap();
+        let repicked = store
+            .pick_next_pending(lease("worker-2", 90))
+            .await
+            .unwrap()
+            .unwrap();
+        let after = store
+            .create_step(new_step_req(repicked.id, "build", 0))
+            .await
+            .unwrap();
+
+        assert_eq!(before.attempt, 1);
+        assert_eq!(after.attempt, before.attempt);
+        assert_eq!(repicked.retry_count, 0);
+        assert_eq!(repicked.lease_recoveries, 1);
+    }
+
+    #[tokio::test]
+    async fn reap_expired_leases_counts_apart_from_handler_retries() {
+        let store = InMemoryStore::new();
+        let picked = pick_with_expired_lease(&store, 1).await;
+        store
+            .update_run(
+                picked.id,
+                RunUpdate {
+                    increment_retry: true,
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // One handler retry already consumed max_retries: the lease recovery
+        // budget is separate, so the first reap still requeues.
+        let reaped = store.reap_expired_leases(100).await.unwrap();
+
+        assert_eq!(reaped[0].to, RunStatus::Pending);
+        assert_eq!(reaped[0].run.retry_count, 1);
+        assert_eq!(reaped[0].run.lease_recoveries, 1);
     }
 
     #[tokio::test]

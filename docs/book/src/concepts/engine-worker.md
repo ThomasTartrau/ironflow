@@ -105,6 +105,31 @@ saturated group holds back.
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.
 
+### Resuming after a lost lease
+
+A requeued run resumes where its worker stopped, in the same attempt:
+
+- Steps that completed, were skipped, or got their approval or human input are
+  replayed from the store. They are not executed again, and nobody is asked
+  twice.
+- A step that was running when the worker died is marked `Failed` with
+  `interrupted: worker lease lost`. The next worker executes it again at the
+  same position, and the interrupted record stays in the step history.
+  `Pending` and `AwaitingApproval` steps are left as they are.
+- An interrupted `ctx.workflow` step re-enters the child run it had started
+  instead of starting a new one. The child's running steps are interrupted
+  the same way, and its finished steps are replayed.
+
+The interrupted step really runs twice, so make it idempotent: a deploy, a
+payment or a notification must tolerate a second call.
+
+Lease recoveries are counted in `lease_recoveries`, apart from `retry_count`.
+A run can be recovered `max_retries` times. One more lost lease fails the run
+with `worker lease expired`, and its open steps are failed with the same error.
+A handler failure still uses `retry_count` and starts a new attempt that
+replays nothing. A run whose handler changed to an incompatible version since
+it was created replays nothing either and fails with `HANDLER_VERSION_MISMATCH`.
+
 ## Waker
 
 Runs paused in `Sleeping` (a `ctx.delay` step, or a `ctx.wait_for_signal` step waiting for its signal) carry their wake-up time in `scheduled_at`. The Waker, a background task of the API server, claims every due run every 10 seconds and moves it back to `Pending` exactly once, even with several API instances. Under `ExecutionMode::Local` the API then resumes the run in-process; under `ExecutionMode::Workers` a worker picks it up. A delivered [signal](signals.md) wakes its runs right away, without waiting for the Waker.
