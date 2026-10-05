@@ -653,6 +653,7 @@ impl WorkflowContext {
                                 child_run.cost_usd,
                                 child_run.duration_ms,
                             )
+                            .with_output(child_run.output.clone())
                             .with_error(error),
                             true,
                         ));
@@ -665,7 +666,8 @@ impl WorkflowContext {
                                 status,
                                 child_run.cost_usd,
                                 child_run.duration_ms,
-                            ),
+                            )
+                            .with_output(child_run.output.clone()),
                             status == RunStatus::Warning,
                         ));
                     }
@@ -756,6 +758,7 @@ impl WorkflowContext {
             operation_ctx: None,
             run_created_at: None,
             plan: None,
+            output: None,
         };
 
         // A re-entered child replays its completed steps and is served the
@@ -787,6 +790,7 @@ impl WorkflowContext {
                             cost_usd: Some(child_ctx.total_cost_usd),
                             duration_ms: Some(total_duration),
                             completed_at: Some(completed_at),
+                            output: child_ctx.output().cloned(),
                             ..RunUpdate::default()
                         },
                     )
@@ -800,7 +804,8 @@ impl WorkflowContext {
                         child_status,
                         child_ctx.total_cost_usd,
                         total_duration,
-                    ),
+                    )
+                    .with_output(child_ctx.output().cloned()),
                     child_had_allowed_failure,
                 ))
             }
@@ -828,6 +833,7 @@ impl WorkflowContext {
                             &store_err,
                             child_ctx.total_cost_usd,
                             total_duration,
+                            child_ctx.output().cloned(),
                         )
                         .await;
                         Err(store_err)
@@ -850,6 +856,7 @@ impl WorkflowContext {
                     &err,
                     child_ctx.total_cost_usd,
                     total_duration,
+                    child_ctx.output().cloned(),
                 )
                 .await;
                 if config.allow_failure {
@@ -861,6 +868,7 @@ impl WorkflowContext {
                             child_ctx.total_cost_usd,
                             total_duration,
                         )
+                        .with_output(child_ctx.output().cloned())
                         .with_error(err.to_string()),
                         true,
                     ));
@@ -974,6 +982,7 @@ impl WorkflowContext {
         err: &EngineError,
         cost_usd: Decimal,
         duration_ms: u64,
+        output: Option<Value>,
     ) {
         if let Err(store_err) = self
             .store
@@ -985,6 +994,7 @@ impl WorkflowContext {
                     cost_usd: Some(cost_usd),
                     duration_ms: Some(duration_ms),
                     completed_at: Some(Utc::now()),
+                    output,
                     ..RunUpdate::default()
                 },
             )

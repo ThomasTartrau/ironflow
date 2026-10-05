@@ -255,3 +255,16 @@ of its children, or copied them into the parent to avoid a failed step, can move
 + // `Release` holds its own `ctx.approval("release", ..)`.
 + ctx.workflow(&Release, ReleaseInput { version }).await?;
 ```
+
+## test-result-output
+- kind: behavior
+- since: ironflow-engine after 2.47.0 (#164)
+
+`TestResult::output()` returns the run output the handler set with `ctx.set_output`, and
+`Value::Null` when it set none. It used to return the last step's output, so a test that
+read a step through it now sees `Null`. Read the step explicitly instead.
+
+```diff
+- assert_eq!(result.output()["stdout"], "compiled");
++ assert_eq!(result.steps().last().expect("a step").step_output().stdout(), "compiled");
+```

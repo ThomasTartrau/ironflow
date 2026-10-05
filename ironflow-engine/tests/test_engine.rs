@@ -842,7 +842,13 @@ async fn test_engine_exposes_duration_cost_and_payload() {
     assert_eq!(result.status(), RunStatus::Completed);
     // The handler read its typed payload from the run.
     assert_eq!(result.step("greet").output()["stdout"], "echo ada");
-    assert_eq!(result.output()["stdout"], "echo ada");
+    // The last step output is read from the steps; the run output is what
+    // the handler set with `set_output`, and Greet sets none.
+    assert_eq!(
+        result.steps().last().expect("a step").output()["stdout"],
+        "echo ada"
+    );
+    assert_eq!(result.output(), &Value::Null);
     // Mocked steps cost nothing and the run duration is recorded.
     assert_eq!(result.cost_usd(), Decimal::ZERO);
     assert_eq!(

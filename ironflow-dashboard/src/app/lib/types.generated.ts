@@ -3203,6 +3203,13 @@ export interface components {
 			 */
 			max_retries: number;
 			/**
+			 * @description Typed output the handler set with `WorkflowContext::set_output`.
+			 *
+			 *     Written when the run ends (completed, warning, failed or cancelled).
+			 *     Omitted when the handler set no output.
+			 */
+			output?: unknown;
+			/**
 			 * Format: int32
 			 * @description Number of times retried.
 			 */

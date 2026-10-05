@@ -91,7 +91,7 @@ sees exactly what the API and the dashboard would serve.
 | `step_names()` | Those steps' names, in the same order. |
 | `step(name)` | The first step with that name; panics when there is none. |
 | `try_step(name)` | The same, as an `Option`. |
-| `output()` | The last step's output. |
+| `output()` | The run output the handler set with `ctx.set_output`, `Null` when it set none. The last step's output is `steps().last()`. |
 | `duration()`, `cost_usd()` | The run totals. |
 | `run_id()`, `run()` | The run identity and the raw record. |
 | `step_results()` | Per-step metrics, empty when the run failed. |
