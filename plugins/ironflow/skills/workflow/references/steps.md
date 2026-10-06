@@ -138,6 +138,15 @@ Account automatically when an admin has registered accounts: the worker picks on
 injects its token and records its usage. Without accounts they fall back to the
 worker environment. Nothing changes in the workflow code.
 
+When every account is rate limited the run sleeps until the next reset and the step runs
+again from the start (a rejection mid-step fails over to the next account first). The wait
+is capped at 6 hours by default; past it the step fails with `AgentError::NoCapacity`.
+`.max_capacity_wait(Duration::ZERO)` fails fast instead, `.account("perso-max")` pins the
+step to one account (no failover; an unknown name fails with `AgentError::AccountNotFound`)
+and `.account_pool("team")` limits it to the accounts tagged `team`. `allow_failure()` does
+not turn a capacity wait into a failure. Do not wrap agent steps in a retry loop for rate
+limits.
+
 ```rust,no_run
 use ironflow_core::operations::agent::Model;
 use ironflow_engine::config::{AgentStepConfig, Tool};

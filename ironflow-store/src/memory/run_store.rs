@@ -207,6 +207,7 @@ pub(super) fn insert_run(state: &mut State, req: NewRun) -> Result<RunCreation, 
         lease_expires_at: None,
         output: None,
         lease_recoveries: 0,
+        capacity_wait_kind: None,
     };
 
     if let Some(key) = req.idempotency_key {
@@ -309,6 +310,9 @@ impl RunStore for InMemoryStore {
             if new_status != RunStatus::Running {
                 clear_lease(run);
             }
+            if new_status != RunStatus::Sleeping {
+                run.capacity_wait_kind = None;
+            }
 
             Ok(())
         })
@@ -340,6 +344,12 @@ impl RunStore for InMemoryStore {
                         clear_lease(run);
                     }
                 }
+                // The kind only means something while the run sleeps on capacity.
+                run.capacity_wait_kind = if status == RunStatus::Sleeping {
+                    update.capacity_wait_kind.clone()
+                } else {
+                    None
+                };
             }
 
             // After the status block, so `Running` + `Set` ends with a lease.
@@ -576,6 +586,7 @@ impl RunStore for InMemoryStore {
                 let run = state.runs.get_mut(&id).expect("run exists");
                 run.status.state = RunStatus::Pending;
                 run.scheduled_at = None;
+                run.capacity_wait_kind = None;
                 run.updated_at = now;
                 let run = run.clone();
                 woken.push(run_with_label(&run, &state));

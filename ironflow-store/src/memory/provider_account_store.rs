@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::entities::{
     NewProviderAccount, NewProviderAccountObservation, Page, ProviderAccount,
     ProviderAccountCandidate, ProviderAccountUpdate, ProviderAccountUsagePoint,
-    ProviderAccountWindow, StepStatus,
+    ProviderAccountWindow, RunStatus, StepStatus,
 };
 use crate::error::StoreError;
 use crate::memory::{InMemoryStore, State};
@@ -60,6 +60,20 @@ fn running_steps(state: &State, now: DateTime<Utc>) -> HashMap<Uuid, u32> {
     counts
 }
 
+/// Make every run sleeping on capacity for `kind` due now, so the run waker
+/// resumes it on its next tick: a new, re-enabled or renewed account may have
+/// the capacity it waits for.
+fn wake_capacity_sleepers(state: &mut State, kind: &str, now: DateTime<Utc>) {
+    for run in state.runs.values_mut() {
+        if run.status.state == RunStatus::Sleeping
+            && run.capacity_wait_kind.as_deref() == Some(kind)
+        {
+            run.scheduled_at = Some(now);
+            run.updated_at = now;
+        }
+    }
+}
+
 impl ProviderAccountStore for InMemoryStore {
     fn create_provider_account(&self, req: NewProviderAccount) -> StoreFuture<'_, ProviderAccount> {
         Box::pin(async move {
@@ -87,6 +101,9 @@ impl ProviderAccountStore for InMemoryStore {
                 updated_at: now,
             };
             state.provider_accounts.insert(account.id, account.clone());
+            if account.enabled {
+                wake_capacity_sleepers(&mut state, &account.kind, now);
+            }
             Ok(account)
         })
     }
@@ -198,8 +215,14 @@ impl ProviderAccountStore for InMemoryStore {
             if let Some(auth_failed_at) = update.auth_failed_at {
                 account.auth_failed_at = auth_failed_at;
             }
-            account.updated_at = Utc::now();
-            Ok(account.clone())
+            let now = Utc::now();
+            account.updated_at = now;
+            let account = account.clone();
+            let renewed = update.enabled == Some(true) || update.auth_failed_at == Some(None);
+            if renewed && account.enabled {
+                wake_capacity_sleepers(&mut state, &account.kind, now);
+            }
+            Ok(account)
         })
     }
 

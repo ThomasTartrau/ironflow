@@ -3225,6 +3225,12 @@ export interface components {
 		 */
 		RunResponse: {
 			/**
+			 * @description Provider kind the run is waiting capacity for, set only while the
+			 *     run is `sleeping` because every targeted Provider Account is rate
+			 *     limited. `scheduled_at` then holds when the run wakes.
+			 */
+			capacity_wait_kind?: string | null;
+			/**
 			 * Format: date-time
 			 * @description When execution completed.
 			 */

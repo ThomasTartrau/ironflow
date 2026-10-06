@@ -466,6 +466,21 @@ impl PostgresStore {
             }
         }
 
+        // The kind only means something while the run sleeps on capacity:
+        // any other status change clears it.
+        let capacity_wait_kind = match update.status {
+            Some(RunStatus::Sleeping) => update.capacity_wait_kind.as_deref(),
+            _ => None,
+        };
+        if update.status.is_some() {
+            if capacity_wait_kind.is_some() {
+                sets.push(format!("capacity_wait_kind = ${bind_idx}"));
+                bind_idx += 1;
+            } else {
+                sets.push("capacity_wait_kind = NULL".to_string());
+            }
+        }
+
         let sql = format!(
             "UPDATE ironflow.runs SET {} WHERE id = ${bind_idx}",
             sets.join(", ")
@@ -500,6 +515,9 @@ impl PostgresStore {
         }) = &update.lease
         {
             query = query.bind(worker_id).bind(*expires_at);
+        }
+        if let Some(kind) = capacity_wait_kind {
+            query = query.bind(kind);
         }
 
         query = query.bind(id);

@@ -336,7 +336,7 @@ impl SignalStore for PostgresStore {
                 sqlx::query(
                     r#"
                     UPDATE ironflow.runs
-                    SET scheduled_at = NULL, updated_at = NOW()
+                    SET scheduled_at = NULL, capacity_wait_kind = NULL, updated_at = NOW()
                     WHERE id = $1
                     "#,
                 )
@@ -396,6 +396,7 @@ impl SignalStore for PostgresStore {
                 SET scheduled_at = $1,
                     worker_id = NULL,
                     lease_expires_at = NULL,
+                    capacity_wait_kind = NULL,
                     updated_at = NOW()
                 WHERE id = $2
                 "#,

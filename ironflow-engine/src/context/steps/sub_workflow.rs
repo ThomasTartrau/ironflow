@@ -1043,9 +1043,10 @@ impl WorkflowContext {
     /// Persist the suspension of a child run, with no event: the root run
     /// publishes the suspension once the whole chain is suspended.
     ///
-    /// A direct suspension is persisted like a top-level run's (a delay or a
-    /// signal deadline arms `scheduled_at`). A child suspended because of its
-    /// own child gets no `scheduled_at`: only the deepest run owns the
+    /// A direct suspension is persisted like a top-level run's (a delay, a
+    /// capacity wait or a signal deadline arms `scheduled_at`; a capacity wait
+    /// also records its provider kind). A child suspended because of its own
+    /// child gets no `scheduled_at`: only the deepest run owns the
     /// wake-up, so the chain is never resumed twice.
     async fn suspend_child_run(
         &self,
@@ -1064,6 +1065,12 @@ impl WorkflowContext {
             EngineError::DelaySleeping { wake_at, .. } => RunUpdate {
                 status: Some(RunStatus::Sleeping),
                 scheduled_at: Some(*wake_at),
+                ..totals
+            },
+            EngineError::CapacitySleeping { kind, wake_at, .. } => RunUpdate {
+                status: Some(RunStatus::Sleeping),
+                scheduled_at: Some(*wake_at),
+                capacity_wait_kind: Some(kind.clone()),
                 ..totals
             },
             EngineError::SignalWaiting {

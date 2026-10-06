@@ -129,6 +129,13 @@ pub struct Run {
     /// steps it already finished are replayed instead of executed again.
     #[serde(default)]
     pub lease_recoveries: u32,
+    /// Provider kind (e.g. `"claude_subscription"`) the run is waiting for.
+    ///
+    /// Set only while the run is `Sleeping` because every targeted Provider
+    /// Account was rate limited; `None` in every other state. Adding,
+    /// re-enabling or renewing an account of that kind wakes the run early.
+    #[serde(default)]
+    pub capacity_wait_kind: Option<String>,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -725,6 +732,11 @@ pub struct RunUpdate {
     /// ```
     #[serde(default)]
     pub lease: Option<LeaseUpdate>,
+    /// Provider kind the run waits for, see [`Run::capacity_wait_kind`].
+    ///
+    /// Applied only with `status: Some(Sleeping)`; any other status clears it.
+    #[serde(default)]
+    pub capacity_wait_kind: Option<String>,
 }
 
 /// Retention policy for purging old runs.
@@ -929,6 +941,7 @@ mod tests {
             lease_expires_at: Some(now),
             output: Some(json!({"verdict": "approved", "score": 9})),
             lease_recoveries: 1,
+            capacity_wait_kind: Some("claude_subscription".to_string()),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -959,6 +972,7 @@ mod tests {
         assert_eq!(back.lease_expires_at, run.lease_expires_at);
         assert_eq!(back.output, run.output);
         assert_eq!(back.lease_recoveries, run.lease_recoveries);
+        assert_eq!(back.capacity_wait_kind, run.capacity_wait_kind);
     }
 
     #[test]
@@ -993,6 +1007,7 @@ mod tests {
             lease_expires_at: None,
             output: Some(json!("set")),
             lease_recoveries: 2,
+            capacity_wait_kind: None,
         };
         let mut raw = serde_json::to_value(&run).expect("serialize");
         raw.as_object_mut().expect("object").remove("output");

@@ -6364,6 +6364,13 @@
           "created_by"
         ],
         "properties": {
+          "capacity_wait_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Provider kind the run is waiting capacity for, set only while the\nrun is `sleeping` because every targeted Provider Account is rate\nlimited. `scheduled_at` then holds when the run wakes."
+          },
           "completed_at": {
             "type": [
               "string",

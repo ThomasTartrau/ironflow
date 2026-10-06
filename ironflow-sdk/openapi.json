@@ -2661,6 +2661,11 @@
       "RunResponse": {
         "description": "Run response DTO — public API representation of a run.\n\nMaps from the internal [`Run`] model, exposing only necessary fields.\n\n# Examples\n\n```\nuse ironflow_store::models::{Run, RunStatus, TriggerKind};\nuse ironflow_api::entities::RunResponse;\n```",
         "properties": {
+          "capacity_wait_kind": {
+            "description": "Provider kind the run is waiting capacity for, set only while the\nrun is `sleeping` because every targeted Provider Account is rate\nlimited. `scheduled_at` then holds when the run wakes.",
+            "nullable": true,
+            "type": "string"
+          },
           "completed_at": {
             "description": "When execution completed.",
             "format": "date-time",

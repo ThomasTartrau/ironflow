@@ -25,7 +25,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{Value, from_str};
 use tracing::{debug, warn};
 
-use crate::account::{AccountWindow, WindowStatus};
+use crate::account::{AccountSession, AccountWindow, WindowStatus};
 use crate::provider::AgentConfig;
 
 /// Timestamps above this value are milliseconds, not seconds.
@@ -151,9 +151,11 @@ pub fn collect_rate_limit_events(stdout: &str, now: DateTime<Utc>) -> Vec<Accoun
     windows
 }
 
-/// Push the windows found in `stdout` to the recorder of `config.account`.
+/// Push the windows found in `stdout` to the recorder of `config.account`,
+/// or to `config.rate_limits` when the invocation runs without a Provider
+/// Account (the worker environment token).
 ///
-/// Does nothing when the invocation runs without a Provider Account.
+/// Does nothing when neither recorder is set.
 ///
 /// # Examples
 ///
@@ -172,18 +174,23 @@ pub fn collect_rate_limit_events(stdout: &str, now: DateTime<Utc>) -> Vec<Accoun
 /// assert_eq!(recorder.take().len(), 1);
 /// ```
 pub fn record_rate_limits(config: &AgentConfig, stdout: &str) {
-    let Some(session) = &config.account else {
+    let Some(recorder) = config
+        .account
+        .as_ref()
+        .map(AccountSession::recorder)
+        .or(config.rate_limits.as_ref())
+    else {
         return;
     };
     for window in collect_rate_limit_events(stdout, Utc::now()) {
-        session.recorder().record(window);
+        recorder.record(window);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::{AccountCredential, AccountSession, RateLimitRecorder};
+    use crate::account::{AccountCredential, RateLimitRecorder};
     use serde_json::json;
 
     fn event(info: Value) -> Value {
@@ -347,13 +354,33 @@ mod tests {
         record_rate_limits(&without, stdout);
 
         let recorder = RateLimitRecorder::default();
-        let with = AgentConfig::new("x").account_session(AccountSession::new(
-            AccountCredential::new("CLAUDE_CODE_OAUTH_TOKEN", "t".to_string()),
-            recorder.clone(),
-        ));
+        let env_recorder = RateLimitRecorder::default();
+        let with = AgentConfig::new("x")
+            .account_session(AccountSession::new(
+                AccountCredential::new("CLAUDE_CODE_OAUTH_TOKEN", "t".to_string()),
+                recorder.clone(),
+            ))
+            .rate_limit_recorder(env_recorder.clone());
         record_rate_limits(&with, stdout);
         let windows = recorder.take();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].window, "five_hour");
+        assert!(
+            env_recorder.take().is_empty(),
+            "the account session recorder wins over the worker recorder"
+        );
+    }
+
+    #[test]
+    fn rate_limit_event_recorded_on_worker_recorder_without_account() {
+        let stdout = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","resetsAt":1767225600}}"#;
+
+        let recorder = RateLimitRecorder::default();
+        let config = AgentConfig::new("x").rate_limit_recorder(recorder.clone());
+        record_rate_limits(&config, stdout);
+        let windows = recorder.take();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].status, WindowStatus::Rejected);
+        assert_eq!(windows[0].resets_at.unwrap().timestamp(), 1_767_225_600);
     }
 }

@@ -342,6 +342,15 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
         ]);
     }
 
+    if let Some(ref kind) = run.capacity_wait_kind {
+        let resumes = format_optional_datetime(&run.scheduled_at);
+        let reason = format!("{kind}, resumes at {resumes}");
+        table.add_row(vec![
+            Cell::new("Waiting for capacity"),
+            Cell::new(reason).fg(Color::DarkCyan),
+        ]);
+    }
+
     if let Some(ref error) = run.error {
         table.add_row(vec![Cell::new("Error"), Cell::new(error).fg(Color::Red)]);
     }
@@ -1214,6 +1223,7 @@ mod tests {
             handler_version: None,
             labels: HashMap::new(),
             scheduled_at: None,
+            capacity_wait_kind: None,
             created_by,
             idempotency_key: None,
             concurrency_key: None,
@@ -1544,6 +1554,43 @@ mod tests {
         assert!(
             output.contains("repo:acme (2)"),
             "group missing from:\n{output}"
+        );
+    }
+
+    #[test]
+    fn run_detail_table_shows_the_capacity_wait_only_when_waiting() {
+        let mut detail = RunDetailResponse {
+            run: run_fixture(CreatedBy {
+                kind: CreatedByKind::System,
+                id: None,
+                label: "api".to_string(),
+            }),
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
+        };
+        let output = run_detail_table(&detail).to_string();
+        assert!(
+            !output.contains("Waiting for capacity"),
+            "unexpected row in:\n{output}"
+        );
+
+        let wake_at = Utc::now();
+        detail.run.status = RunStatus::Sleeping;
+        detail.run.scheduled_at = Some(wake_at);
+        detail.run.capacity_wait_kind = Some("claude_subscription".to_string());
+        let output = run_detail_table(&detail).to_string();
+        assert!(
+            output.contains("Waiting for capacity"),
+            "row missing from:\n{output}"
+        );
+        let expected = format!(
+            "claude_subscription, resumes at {}",
+            format_datetime(&wake_at)
+        );
+        assert!(
+            output.contains(&expected),
+            "{expected} missing from:\n{output}"
         );
     }
 

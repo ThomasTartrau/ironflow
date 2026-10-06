@@ -14,6 +14,7 @@ use tokio::time::sleep;
 use tracing::{Span, error, info, warn};
 use uuid::Uuid;
 
+use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::{LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 use ironflow_store::models::{
     NewStep, NewStepDependency, RunUpdate, Step, StepKind, StepStatus, StepUpdate, step_trace_id,
@@ -39,6 +40,12 @@ use super::failure::{
     extract_raw_response_from_error, is_step_retryable, record_retry_metric,
 };
 use super::steps::sub_workflow::recorded_child_run_id;
+
+/// Error recorded on an agent step parked by a capacity wait.
+///
+/// The step is executed again at the same position when the run wakes; the
+/// earliest parked step at that position tells how long the run has waited.
+pub(crate) const CAPACITY_WAIT_STEP_ERROR: &str = "waiting for provider capacity";
 
 /// Insert a step into a replay index, keeping the oldest `Completed` step
 /// when one already exists at `key`.
@@ -446,6 +453,9 @@ impl WorkflowContext {
         let mut config = config;
         self.scope_step_config(&mut config, name);
 
+        self.carry_capacity_wait_since(&mut config, position, name)
+            .await?;
+
         let step_log_sender = self
             .log_sender
             .as_ref()
@@ -458,6 +468,30 @@ impl WorkflowContext {
         let execution = self
             .retry_step_if_configured(name, kind_str, &config, step.id, execution)
             .await;
+
+        if let Err(EngineError::Operation(OperationError::Agent(AgentError::CapacityWait {
+            ref kind,
+            wake_at,
+        }))) = execution
+        {
+            // Not a failure: no error handler, no `StepFailed` event and no step
+            // result, even with `allow_failure`. The run sleeps and executes this
+            // step again at the same position once it wakes.
+            self.park_capacity_step(step.id).await?;
+            info!(
+                run_id = %self.run_id,
+                step = %name,
+                kind = %kind,
+                wake_at = %wake_at,
+                "no provider capacity, step parked until the run wakes"
+            );
+            return Err(EngineError::CapacitySleeping {
+                run_id: self.run_id,
+                step_id: step.id,
+                kind: kind.clone(),
+                wake_at,
+            });
+        }
 
         if let Err(err) = self
             .store_step_outputs(&config, step.id, name, execution.is_ok())
@@ -799,5 +833,52 @@ impl WorkflowContext {
                 "failed to persist step failure"
             );
         }
+    }
+
+    /// Give an agent step the time it first parked on a capacity wait in this
+    /// attempt, so the bound on the cumulative wait holds across wake-ups.
+    ///
+    /// Leaves any other step kind untouched.
+    pub(super) async fn carry_capacity_wait_since(
+        &self,
+        config: &mut StepConfig,
+        position: u32,
+        name: &str,
+    ) -> Result<(), EngineError> {
+        let StepConfig::Agent(agent_config) = config else {
+            return Ok(());
+        };
+        let steps = self.store.list_steps(self.run_id).await?;
+        agent_config.capacity_wait_since = steps
+            .iter()
+            .filter(|step| {
+                step.attempt == self.attempt
+                    && step.position == position
+                    && step.name == name
+                    && step.error.as_deref() == Some(CAPACITY_WAIT_STEP_ERROR)
+            })
+            .map(|step| step.started_at.unwrap_or(step.created_at))
+            .min();
+        Ok(())
+    }
+
+    /// Close a step parked on a capacity wait and persist the run totals.
+    ///
+    /// The step is marked `Failed` with [`CAPACITY_WAIT_STEP_ERROR`], so a
+    /// resumed run executes it again instead of replaying it.
+    pub(super) async fn park_capacity_step(&self, step_id: Uuid) -> Result<(), EngineError> {
+        self.store
+            .update_step(
+                step_id,
+                StepUpdate {
+                    status: Some(StepStatus::Failed),
+                    error: Some(CAPACITY_WAIT_STEP_ERROR.to_string()),
+                    completed_at: Some(Utc::now()),
+                    ..StepUpdate::default()
+                },
+            )
+            .await?;
+        self.persist_progress().await;
+        Ok(())
     }
 }

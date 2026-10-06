@@ -2133,6 +2133,36 @@ impl Engine {
                     "run sleeping until delay elapses"
                 );
             }
+            Err(EngineError::CapacitySleeping {
+                run_id: capacity_run_id,
+                step_id,
+                ref kind,
+                wake_at,
+            }) => {
+                final_status = RunStatus::Sleeping;
+                final_run = self
+                    .store
+                    .update_run_returning(
+                        run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::Sleeping),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            scheduled_at: Some(wake_at),
+                            capacity_wait_kind: Some(kind.clone()),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    run_id = %capacity_run_id,
+                    step_id = %step_id,
+                    kind = %kind,
+                    wake_at = %wake_at,
+                    "run sleeping until provider capacity returns"
+                );
+            }
             Err(EngineError::SignalWaiting {
                 run_id: wait_run_id,
                 step_id,

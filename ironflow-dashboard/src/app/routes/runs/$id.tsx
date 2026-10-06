@@ -27,6 +27,7 @@ import { StepFlow } from "./_components/StepFlow";
 import { StepTimeline } from "./_components/StepTimeline";
 import { AttemptSelector } from "./_components/AttemptSelector";
 import { listAttempts, resolveShownAttempt } from "./_components/attempts";
+import { capacityWaitLabel } from "./_components/capacity-wait";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { CostBudgetCard } from "./_components/CostBudgetCard";
 import { Breadcrumb } from "@/app/components/Breadcrumb";
@@ -121,6 +122,7 @@ export function Component() {
 			: undefined;
 	const signalName = waitingSignal?.input?.name;
 	const waitingSignalName = typeof signalName === "string" ? signalName : null;
+	const capacityWait = capacityWaitLabel(run);
 
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
@@ -147,6 +149,14 @@ export function Component() {
 					{waitingSignalName && (
 						<span className="text-xs text-muted-foreground">
 							waiting for signal {waitingSignalName}
+						</span>
+					)}
+					{capacityWait && (
+						<span
+							className="text-xs text-muted-foreground"
+							title={run.capacity_wait_kind ?? undefined}
+						>
+							{capacityWait}
 						</span>
 					)}
 				</div>

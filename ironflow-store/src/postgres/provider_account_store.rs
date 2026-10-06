@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::Error as SqlxError;
-use sqlx::FromRow;
+use sqlx::{FromRow, query};
 use uuid::Uuid;
 
 use crate::entities::{
@@ -72,6 +72,28 @@ impl From<AccountRow> for ProviderAccount {
 }
 
 impl PostgresStore {
+    /// Make every run sleeping on capacity for `kind` due now, so the run
+    /// waker resumes it on its next tick: a new, re-enabled or renewed account
+    /// may have the capacity it waits for.
+    async fn wake_capacity_sleepers(&self, kind: &str) -> Result<(), StoreError> {
+        query(
+            r#"
+            UPDATE ironflow.runs r
+            SET scheduled_at = NOW(), updated_at = NOW()
+            FROM lib_fsm.state_machine sm
+            JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+            WHERE sm.state_machine__id = r.state_machine__id
+              AND ast.name = 'sleeping'
+              AND r.capacity_wait_kind = $1
+            "#,
+        )
+        .bind(kind)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn fetch_windows(&self, ids: &[Uuid]) -> Result<Vec<ProviderAccountWindow>, StoreError> {
         // `model_scope = ''` is stored for "every model" because it is part of the key.
         sqlx::query_as!(
@@ -127,7 +149,11 @@ impl ProviderAccountStore for PostgresStore {
                 }
                 _ => db_err(e),
             })?;
-            Ok(ProviderAccount::from(row))
+            let account = ProviderAccount::from(row);
+            if account.enabled {
+                self.wake_capacity_sleepers(&account.kind).await?;
+            }
+            Ok(account)
         })
     }
 
@@ -258,6 +284,7 @@ impl ProviderAccountStore for PostgresStore {
                 .await?
                 .ok_or(StoreError::ProviderAccountNotFound(id))?;
 
+            let renewed = update.enabled == Some(true) || update.auth_failed_at == Some(None);
             let display_name = update.display_name.unwrap_or(existing.display_name);
             let enabled = update.enabled.unwrap_or(existing.enabled);
             let priority = update.priority.unwrap_or(existing.priority);
@@ -305,7 +332,11 @@ impl ProviderAccountStore for PostgresStore {
             .await
             .map_err(db_err)?
             .ok_or(StoreError::ProviderAccountNotFound(id))?;
-            Ok(ProviderAccount::from(row))
+            let account = ProviderAccount::from(row);
+            if renewed && account.enabled {
+                self.wake_capacity_sleepers(&account.kind).await?;
+            }
+            Ok(account)
         })
     }
 
