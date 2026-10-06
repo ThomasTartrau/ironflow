@@ -92,6 +92,7 @@ pub(crate) async fn create_run(state: &AppState) -> Run {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("create run")
@@ -113,6 +114,7 @@ pub(crate) async fn create_terminal_run(store: &dyn Store, name: &str, status: R
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .unwrap()

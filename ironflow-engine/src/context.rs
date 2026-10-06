@@ -194,6 +194,10 @@ pub struct WorkflowContext {
     /// Output set by the handler with [`set_output`](Self::set_output),
     /// persisted on the run when the execution ends.
     output: Option<Value>,
+    /// Worker tags carried by the process running this context, set by the
+    /// engine of a tagged worker. A sub-workflow requiring a tag missing from
+    /// this list is refused. `None` outside a worker: no check.
+    worker_tags: Option<Arc<Vec<String>>>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.

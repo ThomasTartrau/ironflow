@@ -23,7 +23,7 @@ use ironflow_store::entities::{
     PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
     RunStatus, RunUpdate, Schedule, ScheduleFiring, ScheduleNext, ScheduleUpdate, Secret,
     SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency,
-    StepUpdate, User,
+    StepUpdate, User, WorkerCapabilities,
 };
 use ironflow_store::entities::{
     NewProviderAccount, NewProviderAccountObservation, ProviderAccount, ProviderAccountCandidate,
@@ -224,7 +224,11 @@ impl RunStore for ApiRunStore {
         })
     }
 
-    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
+    fn pick_next_pending_for(
+        &self,
+        lease: Option<LeaseRequest>,
+        capabilities: Option<WorkerCapabilities>,
+    ) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let mut request = self
                 .client
@@ -236,6 +240,9 @@ impl RunStore for ApiRunStore {
                     ("worker_id", lease.worker_id),
                     ("lease_ttl_secs", lease.ttl.as_secs().to_string()),
                 ]);
+            }
+            if let Some(capabilities) = capabilities {
+                request = request.query(&capability_query(&capabilities));
             }
 
             let resp = request.send().await.map_err(Self::err)?;
@@ -1070,6 +1077,18 @@ impl ProviderAccountStore for ApiRunStore {
 /// is one.
 ///
 /// Any other 409 body yields `None`, so the caller reports it as is.
+/// Query parameters carrying a worker's capabilities, as comma-separated
+/// lists. `workflows` is only sent when the worker restricts them; `tags` is
+/// always sent, even empty, so the API knows the worker routes by tags.
+pub(crate) fn capability_query(capabilities: &WorkerCapabilities) -> Vec<(&'static str, String)> {
+    let mut query = Vec::with_capacity(2);
+    if let Some(ref workflows) = capabilities.workflows {
+        query.push(("workflows", workflows.join(",")));
+    }
+    query.push(("tags", capabilities.tags.join(",")));
+    query
+}
+
 fn concurrency_conflict(body: &str) -> Option<StoreError> {
     #[derive(serde::Deserialize)]
     struct Details {
@@ -1246,6 +1265,7 @@ mod tests {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         };
         let result = store.create_run(req).await;
         assert!(result.is_err());
@@ -1379,6 +1399,7 @@ mod tests {
             concurrency_key: Some(key.to_string()),
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         }
     }
 
@@ -1458,5 +1479,35 @@ mod tests {
         assert!(concurrency_conflict(&other_code).is_none());
         assert!(concurrency_conflict("not json").is_none());
         assert!(concurrency_conflict("").is_none());
+    }
+
+    #[test]
+    fn capability_query_sends_workflows_and_tags() {
+        let caps = WorkerCapabilities::new(
+            Some(vec!["build".to_string(), "deploy".to_string()]),
+            vec!["gpu".to_string(), "region:eu".to_string()],
+        );
+        assert_eq!(
+            capability_query(&caps),
+            vec![
+                ("workflows", "build,deploy".to_string()),
+                ("tags", "gpu,region:eu".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn capability_query_omits_workflows_when_unrestricted() {
+        let caps = WorkerCapabilities::new(None, vec!["gpu".to_string()]);
+        assert_eq!(capability_query(&caps), vec![("tags", "gpu".to_string())]);
+    }
+
+    #[test]
+    fn capability_query_sends_empty_tags() {
+        let caps = WorkerCapabilities::new(Some(Vec::new()), Vec::new());
+        assert_eq!(
+            capability_query(&caps),
+            vec![("workflows", String::new()), ("tags", String::new())]
+        );
     }
 }

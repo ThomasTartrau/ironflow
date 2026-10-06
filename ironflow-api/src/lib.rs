@@ -88,6 +88,7 @@ pub mod schedule_ticker;
 pub mod sse;
 pub mod state;
 pub mod waker;
+pub mod worker_registry;
 
 /// Convenience re-exports for common API usage.
 pub mod prelude {

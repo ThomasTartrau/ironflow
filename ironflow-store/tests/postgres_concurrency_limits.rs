@@ -56,6 +56,7 @@ fn new_run(limits: &[(&str, u32)]) -> NewRun {
             .map(|(group, limit)| ConcurrencyLimit::new(*group, *limit))
             .collect(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }
 

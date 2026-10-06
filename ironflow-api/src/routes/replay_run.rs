@@ -7,7 +7,7 @@ use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::notify::{Event, RunCreatedEvent};
 use ironflow_engine::replay_policy::is_run_replayable;
-use ironflow_store::models::{NewRun, TriggerKind};
+use ironflow_store::models::{NewRun, TriggerKind, normalize_worker_tags};
 use uuid::Uuid;
 
 use crate::actor::run_actor_of;
@@ -84,6 +84,14 @@ pub async fn replay_run(
             concurrency_limits: original.concurrency_limits,
             // Inherit the original cost cap so budget constraints survive replays.
             max_cost_usd: original.max_cost_usd,
+            // The replay keeps the tags the original was given, plus any the
+            // workflow requires since.
+            worker_tags: normalize_worker_tags(
+                original
+                    .worker_tags
+                    .into_iter()
+                    .chain(handler.required_worker_tags()),
+            ),
         })
         .await?
         .into_run();
@@ -146,10 +154,26 @@ mod tests {
         }
     }
 
+    const GPU_WORKFLOW: &str = "replay-gpu-wf";
+
+    struct GpuHandler;
+    impl WorkflowHandler for GpuHandler {
+        fn name(&self) -> &str {
+            GPU_WORKFLOW
+        }
+        fn required_worker_tags(&self) -> Vec<String> {
+            vec!["gpu".to_string()]
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine.register(V2Handler).unwrap();
+        engine.register(GpuHandler).unwrap();
         let jwt_config = Arc::new(JwtConfig {
             secret: "test-secret".to_string(),
             access_token_ttl_secs: 900,
@@ -190,6 +214,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: Some(Decimal::new(250, 2)),
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -375,6 +400,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replay_keeps_the_original_worker_tags_and_adds_the_workflow_ones() {
+        let store = Arc::new(InMemoryStore::new());
+        let original = store
+            .create_run(NewRun {
+                workflow_name: GPU_WORKFLOW.to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: vec!["region:eu".to_string()],
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(original.id, RunStatus::Cancelled)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
+        let resp = send_replay(state, auth_header, original.id).await;
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let new_id = new_run_id(resp).await;
+        let new_run = store.get_run(new_id).await.unwrap().unwrap();
+        assert_eq!(
+            new_run.worker_tags,
+            vec!["gpu".to_string(), "region:eu".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn replay_nonexistent_run_returns_404() {
         let store = Arc::new(InMemoryStore::new());
         let state = test_state(store);
@@ -463,6 +528,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()

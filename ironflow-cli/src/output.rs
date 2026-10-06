@@ -15,8 +15,8 @@ use ironflow_sdk::types::{
     ArtifactResponse, AuditLogEntry, ConcurrencyLimit, CreateApiKeyResponse, ExecutionPlanResponse,
     KeyVersionsResponse, PlannedStepResponse, ProviderAccountResponse, RunDetailResponse,
     RunResponse, RunStatus, ScopeEntry, SecretResponse, StatsHistoryResponse, StatsResponse,
-    StepResponse, StepStatus, UserGroupsResponse, UserResponse, WorkflowDetailResponse,
-    WorkflowSummary,
+    StepResponse, StepStatus, UserGroupsResponse, UserResponse, WorkerRouting,
+    WorkflowDetailResponse, WorkflowSummary,
 };
 use serde::Serialize;
 use serde_json::to_string_pretty;
@@ -342,6 +342,20 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
         ]);
     }
 
+    if !run.worker_tags.is_empty() {
+        table.add_row(vec![
+            Cell::new("Worker tags"),
+            Cell::new(run.worker_tags.join(", ")),
+        ]);
+    }
+
+    if let Some(warning) = detail.worker_routing.as_ref().and_then(routing_warning) {
+        table.add_row(vec![
+            Cell::new("Workers"),
+            Cell::new(warning).fg(Color::Yellow),
+        ]);
+    }
+
     if let Some(ref kind) = run.capacity_wait_kind {
         let resumes = format_optional_datetime(&run.scheduled_at);
         let reason = format!("{kind}, resumes at {resumes}");
@@ -367,6 +381,18 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
     }
 
     table
+}
+
+/// Explain why a queued run may not be picked, or `None` when an eligible
+/// worker was seen recently.
+fn routing_warning(routing: &WorkerRouting) -> Option<&'static str> {
+    if routing.seen_workers == 0 {
+        Some("No worker seen recently")
+    } else if routing.eligible_workers == 0 {
+        Some("No eligible worker seen: none registers this workflow with every required tag")
+    } else {
+        None
+    }
 }
 
 /// List the concurrency groups of a run as `group (limit)`, comma separated.
@@ -1230,6 +1256,7 @@ mod tests {
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
             output: None,
+            worker_tags: Vec::new(),
         }
     }
 
@@ -1458,6 +1485,7 @@ mod tests {
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
             active_descendant_count: 0,
+            worker_routing: None,
         };
 
         let output = run_detail_table(&detail).to_string();
@@ -1479,6 +1507,7 @@ mod tests {
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
             active_descendant_count: 0,
+            worker_routing: None,
         };
 
         let output = run_detail_table(&detail).to_string();
@@ -1496,6 +1525,7 @@ mod tests {
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
             active_descendant_count: 0,
+            worker_routing: None,
         };
 
         let output = run_detail_table(&detail).to_string();
@@ -1535,6 +1565,7 @@ mod tests {
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
             active_descendant_count: 0,
+            worker_routing: None,
         };
         let output = run_detail_table(&detail).to_string();
         assert!(
@@ -1568,6 +1599,7 @@ mod tests {
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
             active_descendant_count: 0,
+            worker_routing: None,
         };
         let output = run_detail_table(&detail).to_string();
         assert!(
@@ -1591,6 +1623,95 @@ mod tests {
         assert!(
             output.contains(&expected),
             "{expected} missing from:\n{output}"
+        );
+    }
+
+    #[test]
+    fn routing_warning_covers_each_case() {
+        let none_seen = WorkerRouting {
+            seen_workers: 0,
+            eligible_workers: 0,
+        };
+        let warning = routing_warning(&none_seen);
+        assert_eq!(warning, Some("No worker seen recently"));
+
+        let none_eligible = WorkerRouting {
+            seen_workers: 3,
+            eligible_workers: 0,
+        };
+        let warning = routing_warning(&none_eligible).expect("a warning");
+        assert!(warning.starts_with("No eligible worker seen"), "{warning}");
+
+        let eligible = WorkerRouting {
+            seen_workers: 3,
+            eligible_workers: 1,
+        };
+        assert_eq!(routing_warning(&eligible), None);
+    }
+
+    #[test]
+    fn run_detail_table_shows_worker_tags_only_when_present() {
+        let mut detail = RunDetailResponse {
+            run: run_fixture(CreatedBy {
+                kind: CreatedByKind::System,
+                id: None,
+                label: "api".to_string(),
+            }),
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
+            worker_routing: None,
+        };
+        let output = run_detail_table(&detail).to_string();
+        assert!(
+            !output.contains("Worker tags"),
+            "unexpected row in:\n{output}"
+        );
+
+        detail.run.worker_tags = vec!["gpu".to_string(), "region:eu".to_string()];
+        let output = run_detail_table(&detail).to_string();
+        assert!(
+            output.contains("Worker tags"),
+            "row missing from:\n{output}"
+        );
+        assert!(
+            output.contains("gpu, region:eu"),
+            "tags missing from:\n{output}"
+        );
+    }
+
+    #[test]
+    fn run_detail_table_warns_when_no_worker_can_take_the_run() {
+        let mut detail = RunDetailResponse {
+            run: run_fixture(CreatedBy {
+                kind: CreatedByKind::System,
+                id: None,
+                label: "api".to_string(),
+            }),
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
+            worker_routing: None,
+        };
+        let output = run_detail_table(&detail).to_string();
+        assert!(!output.contains("Workers"), "unexpected row in:\n{output}");
+
+        detail.worker_routing = Some(WorkerRouting {
+            seen_workers: 2,
+            eligible_workers: 1,
+        });
+        let output = run_detail_table(&detail).to_string();
+        assert!(!output.contains("Workers"), "unexpected row in:\n{output}");
+
+        detail.worker_routing = Some(WorkerRouting {
+            seen_workers: 2,
+            eligible_workers: 0,
+        });
+        let output = run_detail_table(&detail).to_string();
+        assert!(output.contains("Workers"), "row missing from:\n{output}");
+        assert!(
+            output.contains("No eligible worker seen"),
+            "warning missing from:\n{output}"
         );
     }
 

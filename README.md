@@ -678,6 +678,7 @@ let created = client
         max_cost_usd: Some(1.0),
         concurrency_key: None,
         concurrency_limits: Vec::new(),
+        worker_tags: Vec::new(),
     })
     .await?;
 
