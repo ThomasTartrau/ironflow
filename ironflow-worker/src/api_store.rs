@@ -21,8 +21,9 @@ use ironflow_store::entities::{
     LogEntry, LogFilter, NewApiKey, NewApprovalDelegation, NewArtifact, NewAuditLogEntry,
     NewLogEntries, NewRun, NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy,
     PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
-    RunStatus, RunUpdate, Schedule, ScheduleUpdate, Secret, SecretMetadata, StatsHistoryBucket,
-    StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate, User,
+    RunStatus, RunUpdate, Schedule, ScheduleFiring, ScheduleNext, ScheduleUpdate, Secret,
+    SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency,
+    StepUpdate, User,
 };
 use ironflow_store::entities::{
     NewProviderAccount, NewProviderAccountObservation, ProviderAccount, ProviderAccountCandidate,
@@ -868,7 +869,20 @@ impl ScheduleStore for ApiRunStore {
         })
     }
 
-    fn claim_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
+    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "ScheduleStore not available in worker".to_string(),
+            ))
+        })
+    }
+
+    fn fire_due_schedule(
+        &self,
+        _id: Uuid,
+        _occurrence: DateTime<Utc>,
+        _next: ScheduleNext,
+    ) -> StoreFuture<'_, Option<ScheduleFiring>> {
         Box::pin(async move {
             Err(StoreError::Database(
                 "ScheduleStore not available in worker".to_string(),

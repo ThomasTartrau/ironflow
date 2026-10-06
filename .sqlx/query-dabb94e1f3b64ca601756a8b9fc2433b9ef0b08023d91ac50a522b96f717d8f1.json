@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                UPDATE ironflow.schedules\n                SET cron_expression = $2,\n                    inputs = $3,\n                    disabled_at = $4,\n                    next_trigger_at = $5,\n                    last_triggered_at = $6,\n                    updated_at = $7\n                WHERE id = $1\n                RETURNING id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at,\n                    created_by_user_id, created_at, updated_at\n                ",
+  "query": "\n                INSERT INTO ironflow.schedules\n                    (id, workflow_name, cron_expression, inputs, source,\n                     next_trigger_at, created_by_user_id, created_at, updated_at)\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n                RETURNING id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at, last_error,\n                    created_by_user_id, created_at, updated_at\n                ",
   "describe": {
     "columns": [
       {
@@ -45,16 +45,21 @@
       },
       {
         "ordinal": 8,
+        "name": "last_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
         "name": "created_by_user_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -63,9 +68,11 @@
       "Left": [
         "Uuid",
         "Text",
+        "Text",
         "Jsonb",
+        "Text",
         "Timestamptz",
-        "Timestamptz",
+        "Uuid",
         "Timestamptz",
         "Timestamptz"
       ]
@@ -80,9 +87,10 @@
       true,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "52ed5a47fc3df1251d894978c244fb510fe01d75b6e897b0500c80ca00c358c2"
+  "hash": "dabb94e1f3b64ca601756a8b9fc2433b9ef0b08023d91ac50a522b96f717d8f1"
 }

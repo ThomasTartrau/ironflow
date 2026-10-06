@@ -27,7 +27,7 @@ use ironflow_store::store::Store;
 use crate::error::ApiError;
 use crate::escalator::Escalator;
 use crate::reaper::Reaper;
-use crate::schedule_sync::sync_handler_schedules;
+use crate::schedule_sync::{repair_unscheduled_schedules, sync_handler_schedules};
 use crate::schedule_ticker::ScheduleTicker;
 use crate::waker::Waker;
 
@@ -279,6 +279,9 @@ impl AppState {
     pub async fn spawn_background_tasks(&self) -> CancellationToken {
         if let Err(err) = sync_handler_schedules(&self.engine, self.store.as_ref()).await {
             warn!(error = %err, "failed to sync handler-declared schedules");
+        }
+        if let Err(err) = repair_unscheduled_schedules(self.store.as_ref()).await {
+            warn!(error = %err, "failed to repair schedules without next trigger");
         }
 
         let shutdown = CancellationToken::new();

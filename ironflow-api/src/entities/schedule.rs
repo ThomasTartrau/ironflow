@@ -26,8 +26,11 @@ pub struct ScheduleResponse {
     pub disabled_at: Option<DateTime<Utc>>,
     /// When the schedule last created a run.
     pub last_triggered_at: Option<DateTime<Utc>>,
-    /// When the schedule will next fire.
+    /// When the schedule will next fire. Always set on an active schedule.
     pub next_trigger_at: Option<DateTime<Utc>>,
+    /// Why Ironflow disabled the schedule on its own (e.g. its next trigger
+    /// cannot be computed). `None` when paused by a user or never disabled.
+    pub last_error: Option<String>,
     /// User who created the schedule. `None` for handler-declared schedules.
     pub created_by_user_id: Option<Uuid>,
     /// When the schedule was created.
@@ -47,6 +50,7 @@ impl From<Schedule> for ScheduleResponse {
             disabled_at: s.disabled_at,
             last_triggered_at: s.last_triggered_at,
             next_trigger_at: s.next_trigger_at,
+            last_error: s.last_error,
             created_by_user_id: s.created_by_user_id,
             created_at: s.created_at,
             updated_at: s.updated_at,

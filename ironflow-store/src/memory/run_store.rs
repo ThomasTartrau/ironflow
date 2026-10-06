@@ -138,84 +138,91 @@ fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>
     true
 }
 
+/// Insert a run into the locked state, honouring its idempotency and
+/// concurrency keys. Writes nothing when it returns an error.
+///
+/// Shared by [`RunStore::create_run`] and the schedule firing, which must
+/// create the run under the same lock as the schedule update.
+pub(super) fn insert_run(state: &mut State, req: NewRun) -> Result<RunCreation, StoreError> {
+    validate_concurrency_limits(&req.concurrency_limits)?;
+    let now = Utc::now();
+
+    if let Some(ref key) = req.idempotency_key
+        && let Some(existing) = state
+            .idempotency_keys
+            .get(key)
+            .and_then(|id| state.runs.get(id))
+    {
+        if now - existing.created_at < IDEMPOTENCY_WINDOW {
+            return Ok(RunCreation::Existing(run_with_label(existing, state)));
+        }
+        // The key outlived its window: release it from the stale run.
+        let stale_id = existing.id;
+        state.idempotency_keys.remove(key);
+        if let Some(stale) = state.runs.get_mut(&stale_id) {
+            stale.idempotency_key = None;
+        }
+    }
+
+    if let Some(ref key) = req.concurrency_key
+        && let Some(holder) = state
+            .runs
+            .values()
+            .filter(|r| {
+                r.concurrency_key.as_deref() == Some(key.as_str()) && !r.status.state.is_terminal()
+            })
+            .min_by_key(|r| r.created_at)
+    {
+        return Err(StoreError::ConcurrencyConflict {
+            key: key.clone(),
+            run_id: holder.id,
+        });
+    }
+
+    let run = Run {
+        id: Uuid::now_v7(),
+        workflow_name: req.workflow_name,
+        status: crate::entities::FsmState::new(RunStatus::Pending, Uuid::now_v7()),
+        trigger: req.trigger,
+        payload: req.payload,
+        error: None,
+        retry_count: 0,
+        max_retries: req.max_retries,
+        cost_usd: Decimal::ZERO,
+        duration_ms: 0,
+        created_at: now,
+        updated_at: now,
+        started_at: None,
+        completed_at: None,
+        handler_version: req.handler_version,
+        labels: req.labels,
+        scheduled_at: req.scheduled_at,
+        created_by: req.created_by,
+        created_by_label: None,
+        idempotency_key: req.idempotency_key.clone(),
+        concurrency_key: req.concurrency_key,
+        concurrency_limits: req.concurrency_limits,
+        max_cost_usd: req.max_cost_usd,
+        worker_id: None,
+        lease_expires_at: None,
+        output: None,
+        lease_recoveries: 0,
+    };
+
+    if let Some(key) = req.idempotency_key {
+        state.idempotency_keys.insert(key, run.id);
+    }
+    state.runs.insert(run.id, run.clone());
+    Ok(RunCreation::Created(run_with_label(&run, state)))
+}
+
 impl RunStore for InMemoryStore {
     fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
         Box::pin(async move {
-            validate_concurrency_limits(&req.concurrency_limits)?;
-            let now = Utc::now();
-
             // Single critical section: the key lookup and the insert cannot be
             // interleaved by a concurrent call sharing the same key.
             let mut state = self.state.write().await;
-
-            if let Some(ref key) = req.idempotency_key
-                && let Some(existing) = state
-                    .idempotency_keys
-                    .get(key)
-                    .and_then(|id| state.runs.get(id))
-            {
-                if now - existing.created_at < IDEMPOTENCY_WINDOW {
-                    return Ok(RunCreation::Existing(run_with_label(existing, &state)));
-                }
-                // The key outlived its window: release it from the stale run.
-                let stale_id = existing.id;
-                state.idempotency_keys.remove(key);
-                if let Some(stale) = state.runs.get_mut(&stale_id) {
-                    stale.idempotency_key = None;
-                }
-            }
-
-            if let Some(ref key) = req.concurrency_key
-                && let Some(holder) = state
-                    .runs
-                    .values()
-                    .filter(|r| {
-                        r.concurrency_key.as_deref() == Some(key.as_str())
-                            && !r.status.state.is_terminal()
-                    })
-                    .min_by_key(|r| r.created_at)
-            {
-                return Err(StoreError::ConcurrencyConflict {
-                    key: key.clone(),
-                    run_id: holder.id,
-                });
-            }
-
-            let run = Run {
-                id: Uuid::now_v7(),
-                workflow_name: req.workflow_name,
-                status: crate::entities::FsmState::new(RunStatus::Pending, Uuid::now_v7()),
-                trigger: req.trigger,
-                payload: req.payload,
-                error: None,
-                retry_count: 0,
-                max_retries: req.max_retries,
-                cost_usd: Decimal::ZERO,
-                duration_ms: 0,
-                created_at: now,
-                updated_at: now,
-                started_at: None,
-                completed_at: None,
-                handler_version: req.handler_version,
-                labels: req.labels,
-                scheduled_at: req.scheduled_at,
-                created_by: req.created_by,
-                created_by_label: None,
-                idempotency_key: req.idempotency_key.clone(),
-                concurrency_key: req.concurrency_key,
-                concurrency_limits: req.concurrency_limits,
-                max_cost_usd: req.max_cost_usd,
-                worker_id: None,
-                lease_expires_at: None,
-                output: None,
-                lease_recoveries: 0,
-            };
-
-            if let Some(key) = req.idempotency_key {
-                state.idempotency_keys.insert(key, run.id);
-            }
-            state.runs.insert(run.id, run.clone());
-            Ok(RunCreation::Created(run_with_label(&run, &state)))
+            insert_run(&mut state, req)
         })
     }
 

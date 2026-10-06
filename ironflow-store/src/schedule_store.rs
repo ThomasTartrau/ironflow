@@ -1,8 +1,9 @@
 //! The [`ScheduleStore`] trait -- async storage abstraction for schedules.
 
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::entities::{NewSchedule, Page, Schedule, ScheduleUpdate};
+use crate::entities::{NewSchedule, Page, Schedule, ScheduleFiring, ScheduleNext, ScheduleUpdate};
 use crate::store::StoreFuture;
 
 /// Async storage abstraction for workflow schedules.
@@ -39,12 +40,32 @@ pub trait ScheduleStore: Send + Sync {
     /// the schedule does not exist.
     fn delete_schedule(&self, id: Uuid) -> StoreFuture<'_, ()>;
 
-    /// Atomically claim enabled schedules whose `next_trigger_at` is in the
-    /// past, setting `last_triggered_at = now` and `next_trigger_at = None`.
+    /// List active schedules whose `next_trigger_at` is in the past, oldest
+    /// first. Changes nothing: fire each one with
+    /// [`fire_due_schedule`](Self::fire_due_schedule).
+    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>>;
+
+    /// Fire one due occurrence of a schedule, atomically.
     ///
-    /// In a multi-instance deployment each schedule is claimed by exactly one
-    /// instance (the Postgres implementation uses `FOR UPDATE SKIP LOCKED`).
-    /// The caller is responsible for creating a run and recomputing
-    /// `next_trigger_at` for each returned schedule.
-    fn claim_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>>;
+    /// In a single transaction: lock the schedule if it is still active and
+    /// its `next_trigger_at` still equals `occurrence`, create its run (built
+    /// by [`Schedule::new_run`](crate::entities::Schedule::new_run), with the
+    /// idempotency key [`Schedule::occurrence_key`](crate::entities::Schedule::occurrence_key)),
+    /// set `last_triggered_at` and apply `next`. Either all of it is written,
+    /// or nothing is and the schedule stays due.
+    ///
+    /// Returns `None` when the occurrence is no longer due: another instance
+    /// fired it (or holds its lock), or the schedule was paused, rescheduled
+    /// or deleted since it was listed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`](crate::error::StoreError) when the run or the
+    /// schedule cannot be written. Nothing is written in that case.
+    fn fire_due_schedule(
+        &self,
+        id: Uuid,
+        occurrence: DateTime<Utc>,
+        next: ScheduleNext,
+    ) -> StoreFuture<'_, Option<ScheduleFiring>>;
 }

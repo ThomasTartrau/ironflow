@@ -53,7 +53,9 @@ pub async fn pause_schedule(
     Ok(ok(ScheduleResponse::from(schedule)))
 }
 
-/// Resume a schedule (clear disabled_at).
+/// Resume a schedule (clear `disabled_at` and `last_error`).
+///
+/// The next trigger time is recomputed from the cron expression.
 ///
 /// # Errors
 ///
@@ -94,6 +96,7 @@ pub async fn resume_schedule(
             ScheduleUpdate {
                 disabled_at: Some(None),
                 next_trigger_at: Some(next),
+                last_error: Some(None),
                 ..Default::default()
             },
         )

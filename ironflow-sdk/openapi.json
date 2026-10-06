@@ -2905,6 +2905,11 @@
           "inputs": {
             "description": "JSON payload passed to the workflow."
           },
+          "last_error": {
+            "description": "Why Ironflow disabled the schedule on its own (e.g. its next trigger\ncannot be computed). `None` when paused by a user or never disabled.",
+            "nullable": true,
+            "type": "string"
+          },
           "last_triggered_at": {
             "description": "When the schedule last created a run.",
             "format": "date-time",
@@ -2912,7 +2917,7 @@
             "type": "string"
           },
           "next_trigger_at": {
-            "description": "When the schedule will next fire.",
+            "description": "When the schedule will next fire. Always set on an active schedule.",
             "format": "date-time",
             "nullable": true,
             "type": "string"
@@ -6825,7 +6830,7 @@
     },
     "/api/v1/schedules/{id}/resume": {
       "post": {
-        "description": "# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "description": "The next trigger time is recomputed from the cron expression.\n\n# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
         "operationId": "resume_schedule",
         "parameters": [
           {
@@ -6862,7 +6867,7 @@
             "Bearer": []
           }
         ],
-        "summary": "Resume a schedule (clear disabled_at).",
+        "summary": "Resume a schedule (clear `disabled_at` and `last_error`).",
         "tags": [
           "schedules"
         ]

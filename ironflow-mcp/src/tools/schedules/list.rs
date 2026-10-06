@@ -10,7 +10,7 @@ use crate::client::ApiClient;
 /// List all workflow schedules.
 #[mcp_tool(
     name = "list_schedules",
-    description = "List all workflow schedules with their cron expressions, status, and next trigger times."
+    description = "List all workflow schedules with their cron expressions, status, next trigger times, and last_error: why Ironflow disabled a schedule on its own (null when paused by a user)."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct ListSchedulesTool {}

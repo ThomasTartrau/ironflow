@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at,\n                    created_by_user_id, created_at, updated_at,\n                    COUNT(*) OVER () as \"total_count!: i64\"\n                FROM ironflow.schedules\n                ORDER BY created_at DESC\n                LIMIT $1 OFFSET $2\n                ",
+  "query": "\n                SELECT id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at, last_error,\n                    created_by_user_id, created_at, updated_at\n                FROM ironflow.schedules\n                WHERE id = $1\n                  AND disabled_at IS NULL\n                  AND next_trigger_at = $2\n                FOR UPDATE SKIP LOCKED\n                ",
   "describe": {
     "columns": [
       {
@@ -45,29 +45,29 @@
       },
       {
         "ordinal": 8,
+        "name": "last_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
         "name": "created_by_user_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "updated_at",
         "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 11,
-        "name": "total_count!: i64",
-        "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Int8"
+        "Uuid",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -80,10 +80,10 @@
       true,
       true,
       true,
+      true,
       false,
-      false,
-      null
+      false
     ]
   },
-  "hash": "a90af68798bc8140e6b6af6e47f9ea151bbff8a1a459d92af1f36b1e7524ddf3"
+  "hash": "2aa24d0a5816548beba5c48163fe87460a92380ef90b17c15280014bb4447b1b"
 }

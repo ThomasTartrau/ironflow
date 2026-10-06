@@ -1,10 +1,14 @@
 //! Schedule entity for periodic workflow execution.
 
-use chrono::{DateTime, Utc};
+use std::collections::HashMap;
+
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use strum::{Display, EnumString, IntoStaticStr};
 use uuid::Uuid;
+
+use super::{NewRun, RunActor, RunCreation, TriggerKind};
 
 /// Where a schedule was created.
 ///
@@ -65,6 +69,7 @@ impl ScheduleSource {
 ///     disabled_at: None,
 ///     last_triggered_at: None,
 ///     next_trigger_at: Some(Utc::now()),
+///     last_error: None,
 ///     created_by_user_id: Some(Uuid::now_v7()),
 ///     created_at: Utc::now(),
 ///     updated_at: Utc::now(),
@@ -88,8 +93,13 @@ pub struct Schedule {
     pub disabled_at: Option<DateTime<Utc>>,
     /// When the schedule last created a run.
     pub last_triggered_at: Option<DateTime<Utc>>,
-    /// When the schedule will next fire.
+    /// When the schedule will next fire. Always set on an active schedule.
     pub next_trigger_at: Option<DateTime<Utc>>,
+    /// Why Ironflow disabled the schedule on its own, e.g. a cron expression
+    /// whose next occurrence cannot be computed. `None` for a schedule paused
+    /// by a user or never disabled.
+    #[serde(default)]
+    pub last_error: Option<String>,
     /// User who created the schedule. `None` for handler-declared schedules,
     /// which have no human author.
     pub created_by_user_id: Option<Uuid>,
@@ -104,6 +114,146 @@ impl Schedule {
     pub fn is_active(&self) -> bool {
         self.disabled_at.is_none()
     }
+
+    /// Idempotency key of the run created for one occurrence of this schedule:
+    /// `schedule:<id>:<occurrence in RFC 3339>`.
+    ///
+    /// Two firings of the same occurrence (several servers, a retry after a
+    /// crash) share the key, so they never create two runs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use ironflow_store::entities::Schedule;
+    /// use uuid::Uuid;
+    ///
+    /// let id = Uuid::nil();
+    /// let at = Utc.with_ymd_and_hms(2026, 10, 6, 8, 0, 0).unwrap();
+    /// assert_eq!(
+    ///     Schedule::occurrence_key(id, at),
+    ///     "schedule:00000000-0000-0000-0000-000000000000:2026-10-06T08:00:00Z",
+    /// );
+    /// ```
+    pub fn occurrence_key(id: Uuid, occurrence: DateTime<Utc>) -> String {
+        format!(
+            "schedule:{id}:{}",
+            occurrence.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+        )
+    }
+
+    /// Build the run this schedule creates: its workflow, its inputs as
+    /// payload, and a [`TriggerKind::Cron`] trigger.
+    ///
+    /// The run carries no idempotency key: the store sets one when it fires
+    /// an occurrence (see [`Schedule::occurrence_key`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use ironflow_store::entities::{Schedule, ScheduleSource, TriggerKind};
+    /// use serde_json::json;
+    /// use uuid::Uuid;
+    ///
+    /// let schedule = Schedule {
+    ///     id: Uuid::now_v7(),
+    ///     workflow_name: "deploy".to_string(),
+    ///     cron_expression: "0 0 * * * *".to_string(),
+    ///     inputs: json!({"env": "prod"}),
+    ///     source: ScheduleSource::Api,
+    ///     disabled_at: None,
+    ///     last_triggered_at: None,
+    ///     next_trigger_at: Some(Utc::now()),
+    ///     last_error: None,
+    ///     created_by_user_id: None,
+    ///     created_at: Utc::now(),
+    ///     updated_at: Utc::now(),
+    /// };
+    /// let run = schedule.new_run(None);
+    /// assert_eq!(run.workflow_name, "deploy");
+    /// assert_eq!(run.payload, json!({"env": "prod"}));
+    /// assert!(matches!(run.trigger, TriggerKind::Cron { .. }));
+    /// ```
+    pub fn new_run(&self, created_by: Option<RunActor>) -> NewRun {
+        NewRun {
+            workflow_name: self.workflow_name.clone(),
+            trigger: TriggerKind::Cron {
+                schedule: self.cron_expression.clone(),
+            },
+            payload: self.inputs.clone(),
+            max_retries: 0,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by,
+            idempotency_key: None,
+            concurrency_key: None,
+            concurrency_limits: Vec::new(),
+            max_cost_usd: None,
+        }
+    }
+}
+
+/// What happens to a schedule after it fires an occurrence.
+///
+/// Computed by the caller from the cron expression, applied by
+/// [`ScheduleStore::fire_due_schedule`](crate::schedule_store::ScheduleStore::fire_due_schedule)
+/// in the same transaction as the run creation.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_store::entities::ScheduleNext;
+///
+/// let next = ScheduleNext::At(Utc::now());
+/// assert!(matches!(next, ScheduleNext::At(_)));
+///
+/// let stop = ScheduleNext::Disable { error: "no next occurrence".to_string() };
+/// assert!(matches!(stop, ScheduleNext::Disable { .. }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleNext {
+    /// Fire again at this time.
+    At(DateTime<Utc>),
+    /// Disable the schedule: its next occurrence cannot be computed. The
+    /// error is stored in [`Schedule::last_error`].
+    Disable {
+        /// Why the next occurrence cannot be computed.
+        error: String,
+    },
+}
+
+/// Result of firing one occurrence of a schedule.
+///
+/// # Examples
+///
+/// ```no_run
+/// use chrono::Utc;
+/// use ironflow_store::entities::ScheduleNext;
+/// use ironflow_store::memory::InMemoryStore;
+/// use ironflow_store::schedule_store::ScheduleStore;
+/// use uuid::Uuid;
+///
+/// # async fn example(id: Uuid, occurrence: chrono::DateTime<Utc>) -> Result<(), ironflow_store::error::StoreError> {
+/// let store = InMemoryStore::new();
+/// if let Some(firing) = store
+///     .fire_due_schedule(id, occurrence, ScheduleNext::At(Utc::now()))
+///     .await?
+/// {
+///     println!("run {} created", firing.run.run().id);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ScheduleFiring {
+    /// The schedule after the firing: next occurrence set, or disabled.
+    pub schedule: Schedule,
+    /// The run of the occurrence. [`RunCreation::Existing`] when a run with
+    /// the same occurrence key already existed.
+    pub run: RunCreation,
 }
 
 /// Parameters for creating a new schedule.
@@ -159,6 +309,7 @@ pub struct NewSchedule {
 ///     disabled_at: None,
 ///     next_trigger_at: None,
 ///     last_triggered_at: None,
+///     last_error: None,
 /// };
 /// assert!(update.disabled_at.is_none());
 /// ```
@@ -174,6 +325,8 @@ pub struct ScheduleUpdate {
     pub next_trigger_at: Option<Option<DateTime<Utc>>>,
     /// Updated last triggered time.
     pub last_triggered_at: Option<Option<DateTime<Utc>>>,
+    /// Set or clear [`Schedule::last_error`]. `Some(None)` clears it.
+    pub last_error: Option<Option<String>>,
 }
 
 #[cfg(test)]
@@ -192,6 +345,7 @@ mod tests {
             disabled_at: None,
             last_triggered_at: None,
             next_trigger_at: Some(Utc::now()),
+            last_error: None,
             created_by_user_id: Some(Uuid::now_v7()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -214,6 +368,7 @@ mod tests {
             disabled_at: Some(Utc::now()),
             last_triggered_at: None,
             next_trigger_at: None,
+            last_error: None,
             created_by_user_id: Some(Uuid::now_v7()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -243,5 +398,6 @@ mod tests {
         assert!(update.disabled_at.is_none());
         assert!(update.next_trigger_at.is_none());
         assert!(update.last_triggered_at.is_none());
+        assert!(update.last_error.is_none());
     }
 }
