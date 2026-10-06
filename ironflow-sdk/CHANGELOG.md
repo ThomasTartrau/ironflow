@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.45](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.44...ironflow-sdk-v0.1.45) - 2026-10-06
+
+### Added
+
+- #171 add run priority to the worker queue
+
+
+### Fixed
+
+- #171 regenerate the OpenAPI specs and dashboard types
+
 ## [0.1.44](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.43...ironflow-sdk-v0.1.44) - 2026-10-06
 ## [0.1.43](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-sdk-v0.1.42...ironflow-sdk-v0.1.43) - 2026-10-06
 
