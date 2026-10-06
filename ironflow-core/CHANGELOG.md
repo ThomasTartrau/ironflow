@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.11.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.10.0...ironflow-core-v4.11.0) - 2026-10-06
+
+### Added
+
+- #168 resume an interrupted agent step from its Claude Code session
+
+
+### Fixed
+
+- address review on MR !486
+
 ## [4.10.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.9.2...ironflow-core-v4.10.0) - 2026-10-06
 
 ### Added
