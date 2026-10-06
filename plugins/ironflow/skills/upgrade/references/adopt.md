@@ -210,7 +210,7 @@ step so a resume reads the same value. Section: Sub-workflow.
 
 ## agent-with-meta
 - kind: adopt
-- since: ironflow-engine 2.49.0 (#180)
+- since: ironflow-engine after 2.49.0 (#180)
 
 A step that needs a typed answer and the `environment_id` of the same step used to run
 without `.output::<T>()` to read the id from the raw `StepOutput`, then parse the text by
@@ -218,10 +218,10 @@ hand. `ctx.agent_with_meta` returns the typed `answer` with `environment_id` and
 `account_id`. Section: Agent, Persistent environment.
 
 ```diff
-- let clone = ctx.agent("clone", AgentStepConfig::new("Clone the repository")).await?;
-- let environment = clone.environment_id.clone();
+- let triage = ctx.agent("triage", AgentStepConfig::new("Name the failing test")).await?;
+- let environment = triage.environment_id.clone();
 + let reply = ctx
-+     .agent_with_meta("clone", AgentStepConfig::new("Clone the repository").output::<Cloned>())
++     .agent_with_meta("triage", AgentStepConfig::new("Name the failing test").output::<Triage>())
 +     .await?;
-+ let environment = reply.environment_id.clone();   // reply.answer is the Cloned
++ let environment = reply.environment_id.clone();   // reply.answer is the Triage
 ```

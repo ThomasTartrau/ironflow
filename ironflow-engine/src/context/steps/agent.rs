@@ -117,31 +117,31 @@ impl WorkflowContext {
     /// use serde::Deserialize;
     ///
     /// #[derive(Deserialize, JsonSchema)]
-    /// struct Cloned {
-    ///     head: String,
+    /// struct Triage {
+    ///     test: String,
     /// }
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    /// // A structured step cannot use tools: it only reads its prompt.
     /// let reply = ctx
     ///     .agent_with_meta(
-    ///         "clone",
-    ///         AgentStepConfig::new("Clone the repository into /workspace")
-    ///             .allow_tool(Tool::Bash)
+    ///         "triage",
+    ///         AgentStepConfig::new("Name the failing test in this CI log: ...")
     ///             .max_budget_usd(0.50)
-    ///             .output::<Cloned>(),
+    ///             .output::<Triage>(),
     ///     )
     ///     .await?;
     /// if let Some(environment) = reply.environment_id.as_deref() {
+    ///     let prompt = format!("Fix the test {} in /workspace", reply.answer.test);
     ///     ctx.agent(
     ///         "fix",
-    ///         AgentStepConfig::new("Fix the failing test in /workspace")
+    ///         AgentStepConfig::new(&prompt)
     ///             .allow_tool(Tool::Bash)
     ///             .max_budget_usd(0.50)
     ///             .resume_environment(environment),
     ///     )
     ///     .await?;
     /// }
-    /// println!("{}", reply.answer.head);
     /// # Ok(())
     /// # }
     /// ```
