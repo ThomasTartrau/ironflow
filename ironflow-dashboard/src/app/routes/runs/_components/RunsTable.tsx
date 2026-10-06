@@ -6,7 +6,7 @@ import { CreatedByBadge } from "@/app/components/CreatedByBadge";
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { RunLabels } from "@/app/components/RunLabels";
 import { formatRunDuration, formatCost } from "@/app/lib/format";
-import { Workflow } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Workflow } from "lucide-react";
 import {
 	Table,
 	TableBody,
@@ -15,12 +15,42 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import {
+	type PrioritySort,
+	nextPrioritySort,
+	runPriority,
+	sortRunsByPriority,
+} from "./priority";
 
 interface RunsTableProps {
 	runs: RunResponse[];
+	/**
+	 * Current priority sort. The API pages runs by creation date, so the sort
+	 * reorders the runs of the current page only.
+	 */
+	prioritySort?: PrioritySort | null;
+	/**
+	 * Called with the next sort when the Priority header is clicked. Without
+	 * it, the Priority column is shown but not sortable.
+	 */
+	onPrioritySortChange?: (sort: PrioritySort | null) => void;
 }
 
-export function RunsTable({ runs }: RunsTableProps) {
+const PRIORITY_ARIA_SORT = {
+	desc: "descending",
+	asc: "ascending",
+} as const;
+
+const PRIORITY_SORT_ICON = {
+	desc: ArrowDown,
+	asc: ArrowUp,
+} as const;
+
+export function RunsTable({
+	runs,
+	prioritySort = null,
+	onPrioritySortChange,
+}: RunsTableProps) {
 	const navigate = useNavigate();
 
 	const handleRowClick = (runId: string) => {
@@ -43,6 +73,10 @@ export function RunsTable({ runs }: RunsTableProps) {
 	}
 
 	const hasVersions = runs.some((r) => r.handler_version);
+	const sortedRuns = sortRunsByPriority(runs, prioritySort);
+	const PriorityIcon = prioritySort
+		? PRIORITY_SORT_ICON[prioritySort]
+		: ArrowUpDown;
 
 	return (
 		<div className="rounded-[var(--radius)] border overflow-hidden">
@@ -50,6 +84,27 @@ export function RunsTable({ runs }: RunsTableProps) {
 				<TableHeader>
 					<TableRow>
 						<TableHead className="w-40">Status</TableHead>
+						<TableHead
+							className="w-24"
+							aria-sort={
+								prioritySort ? PRIORITY_ARIA_SORT[prioritySort] : undefined
+							}
+						>
+							{onPrioritySortChange ? (
+								<button
+									type="button"
+									onClick={() =>
+										onPrioritySortChange(nextPrioritySort(prioritySort))
+									}
+									className="inline-flex items-center gap-1 cursor-pointer hover:text-foreground"
+								>
+									Priority
+									<PriorityIcon className="h-3.5 w-3.5" aria-hidden="true" />
+								</button>
+							) : (
+								"Priority"
+							)}
+						</TableHead>
 						<TableHead>Workflow</TableHead>
 						{hasVersions && <TableHead className="w-20">Version</TableHead>}
 						<TableHead className="w-40">Triggered by</TableHead>
@@ -60,7 +115,7 @@ export function RunsTable({ runs }: RunsTableProps) {
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{runs.map((run) => (
+					{sortedRuns.map((run) => (
 						<TableRow
 							key={run.id}
 							onClick={() => handleRowClick(run.id)}
@@ -77,6 +132,9 @@ export function RunsTable({ runs }: RunsTableProps) {
 						>
 							<TableCell className="overflow-hidden">
 								<StatusBadge status={run.status} />
+							</TableCell>
+							<TableCell className="font-mono tabular-nums">
+								{runPriority(run)}
 							</TableCell>
 							<TableCell className="font-mono font-medium truncate max-w-[220px]">
 								{run.workflow_name}

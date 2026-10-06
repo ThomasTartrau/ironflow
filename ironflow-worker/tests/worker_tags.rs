@@ -79,6 +79,7 @@ fn new_run(workflow: &str, worker_tags: &[&str]) -> NewRun {
         scheduled_at: None,
         idempotency_key: None,
         concurrency_key: None,
+        priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
         worker_tags: worker_tags.iter().map(|tag| (*tag).to_string()).collect(),

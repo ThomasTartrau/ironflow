@@ -131,6 +131,7 @@ async fn startup_repairs_active_schedules_without_next_trigger() {
                 cron_expression: cron.to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
+                priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
             })
@@ -188,7 +189,10 @@ async fn create_schedule_with_none_persists_null() {
             workflow_name: wf_name,
             cron_expression: "0 0 * * *".to_string(),
             inputs: json!({}),
-            source: ScheduleSource::Handler,
+            // Not `Handler`: a sync running in a parallel test deletes every
+            // handler schedule whose workflow its engine does not register.
+            source: ScheduleSource::Api,
+            priority: 0,
             created_by_user_id: None,
             next_trigger_at: None,
         })
@@ -221,6 +225,7 @@ async fn create_schedule_with_some_round_trips_the_author() {
             cron_expression: "0 0 * * *".to_string(),
             inputs: json!({}),
             source: ScheduleSource::Api,
+            priority: 0,
             created_by_user_id: Some(user_id),
             next_trigger_at: None,
         })
@@ -250,6 +255,7 @@ async fn create_schedule_with_unknown_author_is_rejected() {
             cron_expression: "0 0 * * *".to_string(),
             inputs: json!({}),
             source: ScheduleSource::Api,
+            priority: 0,
             created_by_user_id: Some(Uuid::now_v7()),
             next_trigger_at: None,
         })

@@ -264,6 +264,7 @@ pub fn runs_table(runs: &[RunResponse]) -> Table {
         "ID",
         "Workflow",
         "Status",
+        "Priority",
         "Triggered by",
         "Duration",
         "Cost",
@@ -280,6 +281,7 @@ pub fn runs_table(runs: &[RunResponse]) -> Table {
             Cell::new(run.id.to_string().split('-').next().unwrap_or("")),
             Cell::new(&run.workflow_name),
             status_cell,
+            Cell::new(format_priority(run.priority)).set_alignment(CellAlignment::Right),
             Cell::new(&run.created_by.label),
             Cell::new(format_duration_ms(run.duration_ms)),
             cost_cell(run.cost_usd, run.max_cost_usd),
@@ -302,6 +304,10 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
     table.add_row(vec![Cell::new("ID"), Cell::new(run.id)]);
     table.add_row(vec![Cell::new("Workflow"), Cell::new(&run.workflow_name)]);
     table.add_row(vec![Cell::new("Status"), status_cell]);
+    table.add_row(vec![
+        Cell::new("Priority"),
+        Cell::new(format_priority(run.priority)),
+    ]);
     table.add_row(vec![
         Cell::new("Trigger"),
         Cell::new(format!("{:?}", run.trigger)),
@@ -381,6 +387,11 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
     }
 
     table
+}
+
+/// Render a run priority, or `-` when the server did not send one.
+fn format_priority(priority: Option<i32>) -> String {
+    priority.map_or_else(|| "-".to_string(), |p| p.to_string())
 }
 
 /// Explain why a queued run may not be picked, or `None` when an eligible
@@ -1253,6 +1264,7 @@ mod tests {
             created_by,
             idempotency_key: None,
             concurrency_key: None,
+            priority: Some(0),
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
             output: None,
@@ -1455,6 +1467,7 @@ mod tests {
         assert!(output.contains("Workflow"));
         assert!(output.contains("Status"));
         assert!(output.contains("Triggered by"));
+        assert!(output.contains("Priority"));
     }
 
     #[test]
@@ -1470,6 +1483,47 @@ mod tests {
             output.contains("ci-deploy (alice)"),
             "author missing from:\n{output}"
         );
+    }
+
+    #[test]
+    fn format_priority_renders_the_value_or_a_dash() {
+        assert_eq!(format_priority(Some(-40)), "-40");
+        assert_eq!(format_priority(Some(0)), "0");
+        assert_eq!(format_priority(None), "-");
+    }
+
+    #[test]
+    fn runs_table_renders_the_priority() {
+        let mut run = run_fixture(CreatedBy {
+            kind: CreatedByKind::System,
+            id: None,
+            label: "api".to_string(),
+        });
+        run.priority = Some(-73);
+
+        let output = runs_table(slice::from_ref(&run)).to_string();
+        assert!(output.contains("-73"), "priority missing from:\n{output}");
+    }
+
+    #[test]
+    fn run_detail_table_shows_the_priority() {
+        let mut run = run_fixture(CreatedBy {
+            kind: CreatedByKind::System,
+            id: None,
+            label: "api".to_string(),
+        });
+        run.priority = Some(64);
+        let detail = RunDetailResponse {
+            run,
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
+            worker_routing: None,
+        };
+
+        let output = run_detail_table(&detail).to_string();
+        assert!(output.contains("Priority"), "row missing from:\n{output}");
+        assert!(output.contains("64"), "priority missing from:\n{output}");
     }
 
     #[test]

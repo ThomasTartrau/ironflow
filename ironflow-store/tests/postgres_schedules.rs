@@ -56,6 +56,7 @@ async fn due_schedule(store: &PostgresStore, workflow: &str) -> (Schedule, DateT
             cron_expression: "0 * * * *".to_string(),
             inputs: json!({"env": "prod"}),
             source: ScheduleSource::Api,
+            priority: 0,
             created_by_user_id: None,
             next_trigger_at: Some(Utc::now() - TimeDelta::seconds(60)),
         })

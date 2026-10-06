@@ -28,7 +28,8 @@ use ironflow_store::error::StoreError;
 use ironflow_store::models::{
     ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, ProviderKind, Run, RunActor, RunCreation,
     RunFilter, RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate,
-    TriggerKind, normalize_worker_tags, validate_concurrency_limits, validate_worker_tags,
+    TriggerKind, normalize_worker_tags, validate_concurrency_limits, validate_priority,
+    validate_worker_tags,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -40,7 +41,7 @@ use crate::context::{PARENT_RUN_ID_LABEL, WorkflowContext, interrupt_running_ste
 use crate::error::EngineError;
 use crate::executor::{StepInterceptor, StepResult};
 use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
-use crate::handler::{WorkflowHandler, WorkflowInfo};
+use crate::handler::{WorkflowHandler, WorkflowInfo, clamp_priority};
 use crate::log_sender::LogSender;
 use crate::notify::{
     ApprovalRequestedEvent, Event, EventPublisher, EventSubscriber, RunBudgetExceededEvent,
@@ -137,6 +138,15 @@ pub struct EnqueueOptions {
     /// means no limit. Invalid limits are refused with
     /// [`EngineError::InvalidConcurrencyLimit`].
     pub concurrency_limits: Vec<ConcurrencyLimit>,
+    /// Queue priority of the run, overriding
+    /// [`WorkflowHandler::priority`](crate::handler::WorkflowHandler::priority).
+    ///
+    /// Workers pick the pending run with the highest priority first, then the
+    /// oldest among equal priorities. `None` falls back to the handler's
+    /// priority, clamped to the accepted range. An explicit value outside
+    /// [`MIN_PRIORITY`](ironflow_store::entities::MIN_PRIORITY)`..=`[`MAX_PRIORITY`](ironflow_store::entities::MAX_PRIORITY)
+    /// is refused with [`EngineError::InvalidPriority`].
+    pub priority: Option<i16>,
     /// Worker tags the run requires, merged with the handler's
     /// [`required_worker_tags`](WorkflowHandler::required_worker_tags).
     ///
@@ -935,6 +945,7 @@ impl Engine {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: clamp_priority(handler.priority()),
                 concurrency_limits: Vec::new(),
                 max_cost_usd,
                 worker_tags: normalize_worker_tags(handler.required_worker_tags()),
@@ -1121,6 +1132,8 @@ impl Engine {
     /// [`EnqueueOptions::concurrency_key`] is held by another non-terminal run.
     /// Returns [`EngineError::InvalidConcurrencyLimit`] if
     /// [`EnqueueOptions::concurrency_limits`] is invalid, before any other check.
+    /// Returns [`EngineError::InvalidPriority`] if [`EnqueueOptions::priority`]
+    /// is out of range, before any other check.
     /// Returns [`EngineError::InvalidWorkerTag`] if [`EnqueueOptions::worker_tags`]
     /// holds an invalid tag, checked right after the concurrency limits.
     /// Returns [`EngineError::Store`] if the run cannot be persisted.
@@ -1169,6 +1182,7 @@ impl Engine {
             idempotency_key,
             concurrency_key,
             concurrency_limits,
+            priority,
             worker_tags,
         } = options;
 
@@ -1176,6 +1190,9 @@ impl Engine {
         // the handler or the quota.
         validate_concurrency_limits(&concurrency_limits)
             .map_err(EngineError::InvalidConcurrencyLimit)?;
+        if let Some(priority) = priority {
+            validate_priority(priority).map_err(EngineError::InvalidPriority)?;
+        }
         validate_worker_tags(&worker_tags).map_err(EngineError::InvalidWorkerTag)?;
 
         let handler = self.handlers.get(handler_name).ok_or_else(|| {
@@ -1190,6 +1207,7 @@ impl Engine {
         let resolved_cap = self
             .budget
             .resolve_run_cap(max_cost_usd, handler.default_max_cost_usd());
+        let priority = priority.unwrap_or_else(|| clamp_priority(handler.priority()));
         let required_tags = normalize_worker_tags(
             handler
                 .required_worker_tags()
@@ -1210,6 +1228,7 @@ impl Engine {
                 created_by,
                 idempotency_key,
                 concurrency_key,
+                priority,
                 concurrency_limits,
                 max_cost_usd: resolved_cap,
                 worker_tags: required_tags,
@@ -2598,7 +2617,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::StepStatus;
+    use ironflow_store::models::{MAX_PRIORITY, MIN_PRIORITY, StepStatus};
     use serde_json::json;
 
     // Test handler that echoes a message via shell
@@ -2621,6 +2640,7 @@ mod tests {
                 default_labels: HashMap::new(),
                 schedule: self.schedule().cloned(),
                 default_max_cost_usd: self.default_max_cost_usd(),
+                priority: self.priority(),
             }
         }
 
@@ -3087,6 +3107,144 @@ mod tests {
         assert_eq!(page.total, 0, "no run may be created");
     }
 
+    struct UrgentWorkflow;
+
+    impl WorkflowHandler for UrgentWorkflow {
+        fn name(&self) -> &str {
+            "urgent-workflow"
+        }
+
+        fn priority(&self) -> i16 {
+            60
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn enqueue_priority_defaults_to_the_handler_priority() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+        engine.register(UrgentWorkflow).unwrap();
+
+        let echo = engine
+            .enqueue_handler_with_options(
+                "echo-workflow",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions::default(),
+            )
+            .await
+            .unwrap()
+            .into_run();
+        assert_eq!(echo.priority, 0);
+
+        let urgent = engine
+            .enqueue_handler_with_options(
+                "urgent-workflow",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions::default(),
+            )
+            .await
+            .unwrap()
+            .into_run();
+        assert_eq!(urgent.priority, 60);
+    }
+
+    #[tokio::test]
+    async fn enqueue_priority_explicit_value_overrides_the_handler() {
+        let mut engine = create_test_engine();
+        engine.register(UrgentWorkflow).unwrap();
+
+        let run = engine
+            .enqueue_handler_with_options(
+                "urgent-workflow",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions {
+                    priority: Some(-20),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .into_run();
+        assert_eq!(run.priority, -20);
+
+        let stored = engine.store().get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(stored.priority, -20);
+    }
+
+    #[tokio::test]
+    async fn enqueue_priority_out_of_range_is_rejected() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        for priority in [MAX_PRIORITY + 1, MIN_PRIORITY - 1] {
+            let err = engine
+                .enqueue_handler_with_options(
+                    "echo-workflow",
+                    TriggerKind::Api,
+                    json!({}),
+                    EnqueueOptions {
+                        priority: Some(priority),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, EngineError::InvalidPriority(_)), "{err:?}");
+        }
+
+        // Validated before the handler lookup.
+        let err = engine
+            .enqueue_handler_with_options(
+                "not-registered",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions {
+                    priority: Some(MAX_PRIORITY + 1),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::InvalidPriority(_)), "{err:?}");
+
+        let page = engine
+            .store()
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 0, "no run may be created");
+    }
+
+    #[tokio::test]
+    async fn enqueue_priority_bounds_are_accepted() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        for priority in [MIN_PRIORITY, MAX_PRIORITY] {
+            let run = engine
+                .enqueue_handler_with_options(
+                    "echo-workflow",
+                    TriggerKind::Api,
+                    json!({}),
+                    EnqueueOptions {
+                        priority: Some(priority),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .into_run();
+            assert_eq!(run.priority, priority);
+        }
+    }
+
     struct GpuWorkflow;
 
     impl WorkflowHandler for GpuWorkflow {
@@ -3228,6 +3386,20 @@ mod tests {
             .run;
 
         assert!(run.created_by.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_handler_priority_comes_from_the_handler() {
+        let mut engine = create_test_engine();
+        engine.register(UrgentWorkflow).unwrap();
+
+        let run = engine
+            .run_handler("urgent-workflow", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap()
+            .run;
+
+        assert_eq!(run.priority, 60);
     }
 
     #[tokio::test]
@@ -3688,6 +3860,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),
@@ -3732,6 +3905,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),
@@ -3776,6 +3950,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),
@@ -3820,6 +3995,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),
@@ -3872,6 +4048,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),
@@ -3933,6 +4110,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),
@@ -3961,6 +4139,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),

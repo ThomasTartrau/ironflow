@@ -48,6 +48,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use ironflow_store::entities::{MAX_PRIORITY, MIN_PRIORITY};
 use rust_decimal::Decimal;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -157,6 +158,21 @@ pub struct WorkflowInfo {
     /// the server-wide default. `None` means the handler declares no default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_max_cost_usd: Option<Decimal>,
+    /// Queue priority applied to runs of this workflow when the creation
+    /// request does not supply one. See [`WorkflowHandler::priority`].
+    #[serde(default, skip_serializing_if = "is_default_priority")]
+    pub priority: i16,
+}
+
+/// Whether `priority` is the default `0`, so it is left out of the JSON.
+fn is_default_priority(priority: &i16) -> bool {
+    *priority == 0
+}
+
+/// Bring a handler priority into the range the store accepts, so a
+/// misconfigured handler never makes every run creation fail.
+pub(crate) fn clamp_priority(priority: i16) -> i16 {
+    priority.clamp(MIN_PRIORITY, MAX_PRIORITY)
 }
 
 impl WorkflowInfo {
@@ -326,6 +342,21 @@ impl WorkflowInfo {
     /// ```
     pub fn with_default_max_cost_usd(mut self, cap: Decimal) -> Self {
         self.default_max_cost_usd = Some(cap);
+        self
+    }
+
+    /// Set the default queue priority of the workflow runs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::handler::WorkflowInfo;
+    ///
+    /// let info = WorkflowInfo::new("Hotfix").with_priority(50);
+    /// assert_eq!(info.priority, 50);
+    /// ```
+    pub fn with_priority(mut self, priority: i16) -> Self {
+        self.priority = priority;
         self
     }
 }
@@ -575,6 +606,39 @@ pub trait WorkflowHandler: Send + Sync {
         None
     }
 
+    /// Default queue priority for runs of this workflow.
+    ///
+    /// Workers pick the pending run with the highest priority first, then the
+    /// oldest among equal priorities. Applied when the run creation request
+    /// does not supply a priority. The default is `0`. A value outside
+    /// `-100..=100` is clamped to the nearest bound.
+    ///
+    /// Priority only orders the queue: a running run is never preempted, and
+    /// nothing ages a low-priority run, so a steady flow of higher-priority
+    /// runs can delay it indefinitely.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// struct Hotfix;
+    ///
+    /// impl WorkflowHandler for Hotfix {
+    ///     fn name(&self) -> &str { "hotfix" }
+    ///     fn priority(&self) -> i16 { 50 }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Hotfix.priority(), 50);
+    /// assert_eq!(Hotfix.describe().priority, 50);
+    /// ```
+    fn priority(&self) -> i16 {
+        0
+    }
+
     /// Optional guard configuration for this workflow.
     ///
     /// When present, overrides the engine's global guard configuration
@@ -688,9 +752,10 @@ pub trait WorkflowHandler: Send + Sync {
     /// [`compatible_versions`](Self::compatible_versions),
     /// [`input_schema`](Self::input_schema),
     /// [`default_labels`](Self::default_labels), [`schedule`](Self::schedule)
-    /// and [`default_max_cost_usd`](Self::default_max_cost_usd). Override
-    /// those instead of this method; override `describe` only when the
-    /// metadata cannot be expressed through them.
+    /// [`default_max_cost_usd`](Self::default_max_cost_usd)
+    /// and [`priority`](Self::priority). Override those instead of this
+    /// method; override `describe` only when the metadata cannot be
+    /// expressed through them.
     fn describe(&self) -> WorkflowInfo {
         WorkflowInfo {
             description: self.description().to_string(),
@@ -707,6 +772,7 @@ pub trait WorkflowHandler: Send + Sync {
             default_labels: self.default_labels(),
             schedule: self.schedule().cloned(),
             default_max_cost_usd: self.default_max_cost_usd(),
+            priority: self.priority(),
         }
     }
 
@@ -750,11 +816,10 @@ pub trait WorkflowHandler: Send + Sync {
     ) -> RunCreatorFuture<'a> {
         use tracing::{Instrument, info_span};
 
-        let new_run = opts.worker_tags(self.required_worker_tags()).build(
-            self.name(),
-            self.version(),
-            self.default_max_cost_usd(),
-        );
+        let new_run = opts
+            .default_priority(clamp_priority(self.priority()))
+            .worker_tags(self.required_worker_tags())
+            .build(self.name(), self.version(), self.default_max_cost_usd());
         let span = info_span!("handler.create_run", workflow = %self.name());
         Box::pin(creator.create_run(new_run).instrument(span))
     }
@@ -849,6 +914,10 @@ impl<T: WorkflowHandler + ?Sized> WorkflowHandler for Box<T> {
         (**self).default_max_cost_usd()
     }
 
+    fn priority(&self) -> i16 {
+        (**self).priority()
+    }
+
     fn guard_config(&self) -> Option<WorkflowGuardConfig> {
         (**self).guard_config()
     }
@@ -932,6 +1001,10 @@ mod tests {
             Some(Decimal::new(750, 2))
         }
 
+        fn priority(&self) -> i16 {
+            30
+        }
+
         fn describe(&self) -> WorkflowInfo {
             WorkflowInfo {
                 description: "Full-featured test handler".to_string(),
@@ -948,6 +1021,7 @@ mod tests {
                 default_labels: self.default_labels(),
                 schedule: self.schedule().cloned(),
                 default_max_cost_usd: self.default_max_cost_usd(),
+                priority: self.priority(),
             }
         }
 
@@ -1094,6 +1168,7 @@ mod tests {
             default_labels: HashMap::new(),
             schedule: None,
             default_max_cost_usd: None,
+            priority: 0,
         };
 
         let json = serde_json::to_value(&info).expect("serialize");
@@ -1116,6 +1191,7 @@ mod tests {
             default_labels: HashMap::from([("key".to_string(), "value".to_string())]),
             schedule: Some(CronSchedule::new("0 0 * * * *").unwrap()),
             default_max_cost_usd: Some(Decimal::new(750, 2)),
+            priority: 0,
         };
 
         let json = serde_json::to_value(&info).expect("serialize");
@@ -1199,6 +1275,7 @@ mod tests {
         assert_eq!(run.workflow_name, "full");
         assert_eq!(run.handler_version, Some("1.2.0".to_string()));
         assert_eq!(run.max_cost_usd, Some(Decimal::new(750, 2)));
+        assert_eq!(run.priority, 30);
     }
 
     #[tokio::test]
@@ -1207,7 +1284,9 @@ mod tests {
 
         let store = InMemoryStore::new();
 
-        let opts = CreateRunOpts::new().max_cost_usd(Decimal::new(100, 2));
+        let opts = CreateRunOpts::new()
+            .max_cost_usd(Decimal::new(100, 2))
+            .priority(-5);
         let creation = FullFeaturedHandler
             .create_run(&store, opts)
             .await
@@ -1215,6 +1294,7 @@ mod tests {
         let run = creation.into_run();
 
         assert_eq!(run.max_cost_usd, Some(Decimal::new(100, 2)));
+        assert_eq!(run.priority, -5);
     }
 
     #[tokio::test]
@@ -1233,6 +1313,62 @@ mod tests {
         assert_eq!(run.workflow_name, "minimal");
         assert_eq!(run.handler_version, Some("1".to_string()));
         assert_eq!(run.max_cost_usd, None);
+        assert_eq!(run.priority, 0);
+    }
+
+    struct OutOfRangePriority(i16);
+
+    impl WorkflowHandler for OutOfRangePriority {
+        fn name(&self) -> &str {
+            "out-of-range-priority"
+        }
+
+        fn priority(&self) -> i16 {
+            self.0
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn handler_create_run_clamps_out_of_range_priority() {
+        use ironflow_store::memory::InMemoryStore;
+
+        let store = InMemoryStore::new();
+
+        let high = OutOfRangePriority(i16::MAX)
+            .create_run(&store, CreateRunOpts::new())
+            .await
+            .expect("create_run")
+            .into_run();
+        assert_eq!(high.priority, MAX_PRIORITY);
+
+        let low = OutOfRangePriority(i16::MIN)
+            .create_run(&store, CreateRunOpts::new())
+            .await
+            .expect("create_run")
+            .into_run();
+        assert_eq!(low.priority, MIN_PRIORITY);
+    }
+
+    #[test]
+    fn workflow_info_priority_is_omitted_from_json_only_when_zero() {
+        let json = serde_json::to_value(MinimalHandler.describe()).expect("serialize");
+        assert!(json.get("priority").is_none());
+
+        let json = serde_json::to_value(FullFeaturedHandler.describe()).expect("serialize");
+        assert_eq!(json["priority"], 30);
+    }
+
+    #[test]
+    fn clamp_priority_keeps_in_range_values() {
+        assert_eq!(clamp_priority(0), 0);
+        assert_eq!(clamp_priority(MAX_PRIORITY), MAX_PRIORITY);
+        assert_eq!(clamp_priority(MIN_PRIORITY), MIN_PRIORITY);
+        assert_eq!(clamp_priority(MAX_PRIORITY + 1), MAX_PRIORITY);
+        assert_eq!(clamp_priority(MIN_PRIORITY - 1), MIN_PRIORITY);
     }
 
     struct Documented;
@@ -1278,6 +1414,10 @@ mod tests {
             Some(Decimal::new(250, 2))
         }
 
+        fn priority(&self) -> i16 {
+            -15
+        }
+
         fn guard_config(&self) -> Option<WorkflowGuardConfig> {
             Some(WorkflowGuardConfig::new().with_max_depth(4))
         }
@@ -1299,6 +1439,7 @@ mod tests {
         assert!(info.input_schema.is_some());
         assert_eq!(info.default_labels["team"], "core");
         assert_eq!(info.default_max_cost_usd, Some(Decimal::new(250, 2)));
+        assert_eq!(info.priority, -15);
     }
 
     #[test]
@@ -1323,7 +1464,8 @@ mod tests {
             .with_input_schema(serde_json::json!({"type": "object"}))
             .with_default_labels(HashMap::from([("k".to_string(), "v".to_string())]))
             .with_schedule(schedule)
-            .with_default_max_cost_usd(Decimal::ONE);
+            .with_default_max_cost_usd(Decimal::ONE)
+            .with_priority(-40);
 
         assert_eq!(info.description, "desc");
         assert_eq!(info.source_code.as_deref(), Some("code"));
@@ -1335,6 +1477,7 @@ mod tests {
         assert_eq!(info.default_labels["k"], "v");
         assert!(info.schedule.is_some());
         assert_eq!(info.default_max_cost_usd, Some(Decimal::ONE));
+        assert_eq!(info.priority, -40);
     }
 
     #[test]
@@ -1348,6 +1491,7 @@ mod tests {
         assert_eq!(info.category, default.category);
         assert_eq!(info.version, default.version);
         assert_eq!(info.default_max_cost_usd, default.default_max_cost_usd);
+        assert_eq!(info.priority, default.priority);
     }
 
     #[test]
@@ -1364,6 +1508,7 @@ mod tests {
         assert_eq!(boxed.default_labels()["team"], "core");
         assert!(boxed.schedule().is_none());
         assert_eq!(boxed.default_max_cost_usd(), Some(Decimal::new(250, 2)));
+        assert_eq!(boxed.priority(), -15);
         assert_eq!(boxed.guard_config().map(|g| g.max_depth), Some(4));
         assert!(boxed.is_version_compatible(Some("3.0.0")));
         assert!(!boxed.is_version_compatible(Some("0.1.0")));

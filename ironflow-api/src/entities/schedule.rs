@@ -31,6 +31,8 @@ pub struct ScheduleResponse {
     /// Why Ironflow disabled the schedule on its own (e.g. its next trigger
     /// cannot be computed). `None` when paused by a user or never disabled.
     pub last_error: Option<String>,
+    /// Queue priority given to every run the schedule creates, from -100 to 100.
+    pub priority: i16,
     /// User who created the schedule. `None` for handler-declared schedules.
     pub created_by_user_id: Option<Uuid>,
     /// When the schedule was created.
@@ -51,6 +53,7 @@ impl From<Schedule> for ScheduleResponse {
             last_triggered_at: s.last_triggered_at,
             next_trigger_at: s.next_trigger_at,
             last_error: s.last_error,
+            priority: s.priority,
             created_by_user_id: s.created_by_user_id,
             created_at: s.created_at,
             updated_at: s.updated_at,
@@ -71,6 +74,13 @@ pub struct CreateScheduleRequest {
     /// JSON payload for the workflow. Defaults to `{}`.
     #[serde(default = "default_inputs")]
     pub inputs: Value,
+    /// Queue priority given to every run the schedule creates, from -100 to
+    /// 100. Defaults to the priority the workflow handler declares.
+    ///
+    /// A higher priority run is picked first by workers. A running run is
+    /// never preempted, and a low priority run is not aged.
+    #[serde(default)]
+    pub priority: Option<i16>,
 }
 
 fn default_inputs() -> Value {

@@ -136,6 +136,12 @@ pub struct Run {
     /// re-enabling or renewing an account of that kind wakes the run early.
     #[serde(default)]
     pub capacity_wait_kind: Option<ProviderKind>,
+    /// Queue priority of the run, between [`MIN_PRIORITY`] and [`MAX_PRIORITY`].
+    ///
+    /// Workers pick the highest priority first, and runs of equal priority in
+    /// creation order. See [`NewRun::priority`].
+    #[serde(default)]
+    pub priority: i16,
     /// Worker tags a worker must carry to pick this run up.
     ///
     /// Sorted and deduplicated. Empty means any worker may take the run. See
@@ -214,6 +220,54 @@ pub const MAX_CONCURRENCY_KEY_LEN: usize = 255;
 /// assert_eq!(MAX_CONCURRENCY_GROUP_LEN, 255);
 /// ```
 pub const MAX_CONCURRENCY_GROUP_LEN: usize = 255;
+
+/// Lowest accepted run priority.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::MIN_PRIORITY;
+///
+/// assert_eq!(MIN_PRIORITY, -100);
+/// ```
+pub const MIN_PRIORITY: i16 = -100;
+
+/// Highest accepted run priority.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::MAX_PRIORITY;
+///
+/// assert_eq!(MAX_PRIORITY, 100);
+/// ```
+pub const MAX_PRIORITY: i16 = 100;
+
+/// Validate a run priority before persisting it.
+///
+/// # Errors
+///
+/// Returns a message naming the accepted range when `priority` is lower than
+/// [`MIN_PRIORITY`] or higher than [`MAX_PRIORITY`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::validate_priority;
+///
+/// assert!(validate_priority(0).is_ok());
+/// assert!(validate_priority(100).is_ok());
+/// assert!(validate_priority(101).is_err());
+/// ```
+pub fn validate_priority(priority: i16) -> Result<(), String> {
+    if (MIN_PRIORITY..=MAX_PRIORITY).contains(&priority) {
+        Ok(())
+    } else {
+        Err(format!(
+            "priority must be between {MIN_PRIORITY} and {MAX_PRIORITY}"
+        ))
+    }
+}
 
 /// Membership of a run in a concurrency group, with the limit the run accepts.
 ///
@@ -396,6 +450,7 @@ pub struct ConcurrencyGroupBacklog {
 ///     created_by: None,
 ///     idempotency_key: Some("deploy-2026-07-26".to_string()),
 ///     concurrency_key: None,
+///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 ///     worker_tags: Vec::new(),
@@ -596,6 +651,7 @@ pub struct ReapedRun {
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 ///     worker_tags: Vec::new(),
@@ -648,6 +704,17 @@ pub struct NewRun {
     /// Maximum cumulative cost allowed for this run, in USD. `None` means no cap.
     #[serde(default)]
     pub max_cost_usd: Option<Decimal>,
+    /// Queue priority, between [`MIN_PRIORITY`] and [`MAX_PRIORITY`]. `0` is the
+    /// default.
+    ///
+    /// [`RunStore::pick_next_pending`](crate::store::RunStore::pick_next_pending)
+    /// serves due runs by priority, highest first, then by creation order. A
+    /// running run is never preempted, and nothing ages a waiting run: a
+    /// continuous stream of higher priority runs keeps lower priority runs
+    /// waiting. Defaults to `0` when absent from the payload, so an older worker
+    /// keeps working against a newer API.
+    #[serde(default)]
+    pub priority: i16,
     /// Worker tags a worker must carry to pick this run up.
     ///
     /// Validated with [`validate_worker_tags`](super::validate_worker_tags) and
@@ -693,6 +760,8 @@ pub struct RunFilter {
     /// Filter by concurrency group. Only include runs whose concurrency limits
     /// contain this group.
     pub concurrency_group: Option<String>,
+    /// Filter by queue priority (exact match).
+    pub priority: Option<i16>,
     /// Only include runs the worker with these capabilities could take (see
     /// [`WorkerCapabilities::can_take`]). `None` means no filter.
     pub eligible_for: Option<WorkerCapabilities>,
@@ -857,6 +926,7 @@ mod tests {
             scheduled_at: None,
             idempotency_key: None,
             concurrency_key: None,
+            priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: Some(Decimal::new(250, 2)),
             worker_tags: Vec::new(),
@@ -893,6 +963,7 @@ mod tests {
             created_by: Some(actor.clone()),
             idempotency_key: None,
             concurrency_key: None,
+            priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
             worker_tags: Vec::new(),
@@ -954,6 +1025,7 @@ mod tests {
             created_by_label: Some("alice".to_string()),
             idempotency_key: Some("gh:abc-123".to_string()),
             concurrency_key: Some("issue:12".to_string()),
+            priority: 7,
             concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 2)],
             max_cost_usd: Some(Decimal::new(500, 2)),
             worker_id: Some("worker-1".to_string()),
@@ -993,6 +1065,7 @@ mod tests {
         assert_eq!(back.output, run.output);
         assert_eq!(back.lease_recoveries, run.lease_recoveries);
         assert_eq!(back.capacity_wait_kind, run.capacity_wait_kind);
+        assert_eq!(back.priority, 7);
         assert_eq!(back.worker_tags, run.worker_tags);
     }
 
@@ -1022,6 +1095,7 @@ mod tests {
             created_by_label: None,
             idempotency_key: None,
             concurrency_key: None,
+            priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
             worker_id: None,
@@ -1073,6 +1147,7 @@ mod tests {
             created_by: None,
             idempotency_key: None,
             concurrency_key: None,
+            priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
             worker_tags: Vec::new(),
@@ -1085,6 +1160,40 @@ mod tests {
 
         let parsed: NewRun = serde_json::from_value(value).expect("deserialize");
         assert!(parsed.max_cost_usd.is_none());
+    }
+
+    #[test]
+    fn newrun_priority_defaults_to_zero_when_absent() {
+        let raw = json!({
+            "workflow_name": "deploy",
+            "trigger": {"kind": "manual"},
+            "payload": {},
+            "max_retries": 0,
+            "handler_version": null,
+        });
+
+        let new_run: NewRun = serde_json::from_value(raw).expect("deserialize");
+        assert_eq!(new_run.priority, 0);
+    }
+
+    #[test]
+    fn validate_priority_accepts_bounds() {
+        assert!(validate_priority(MIN_PRIORITY).is_ok());
+        assert!(validate_priority(-100).is_ok());
+        assert!(validate_priority(0).is_ok());
+        assert!(validate_priority(100).is_ok());
+        assert!(validate_priority(MAX_PRIORITY).is_ok());
+    }
+
+    #[test]
+    fn validate_priority_rejects_out_of_range() {
+        assert_eq!(
+            validate_priority(101),
+            Err("priority must be between -100 and 100".to_string())
+        );
+        assert!(validate_priority(-101).is_err());
+        assert!(validate_priority(i16::MAX).is_err());
+        assert!(validate_priority(i16::MIN).is_err());
     }
 
     #[test]
@@ -1114,6 +1223,7 @@ mod tests {
             created_by: None,
             idempotency_key: None,
             concurrency_key: None,
+            priority: 0,
             concurrency_limits: vec![
                 ConcurrencyLimit::new("repo:acme", 2),
                 ConcurrencyLimit::new("tenant:42", 5),

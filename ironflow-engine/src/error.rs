@@ -64,6 +64,14 @@ pub enum EngineError {
     #[error("invalid concurrency limit: {0}")]
     InvalidConcurrencyLimit(ConcurrencyLimitError),
 
+    /// The requested run priority is outside
+    /// [`MIN_PRIORITY`](ironflow_store::entities::MIN_PRIORITY)`..=`[`MAX_PRIORITY`](ironflow_store::entities::MAX_PRIORITY).
+    ///
+    /// Returned by
+    /// [`Engine::enqueue_handler_with_options`](crate::engine::Engine::enqueue_handler_with_options)
+    /// before any other check.
+    #[error("invalid priority: {0}")]
+    InvalidPriority(String),
     /// A requested worker tag is invalid: empty, too long, holding a character
     /// outside ASCII alphanumerics and `- _ . : / =`, or one tag too many.
     ///
@@ -602,6 +610,16 @@ mod tests {
         );
         assert!(engine_err.to_string().contains("repo:acme"));
         assert!(!is_run_retryable(&engine_err));
+    }
+
+    #[test]
+    fn invalid_priority_is_not_retryable() {
+        let err = EngineError::InvalidPriority("priority must be between -100 and 100".to_string());
+        assert_eq!(
+            err.to_string(),
+            "invalid priority: priority must be between -100 and 100"
+        );
+        assert!(!is_run_retryable(&err));
     }
 
     #[test]

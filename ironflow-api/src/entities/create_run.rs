@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use ironflow_store::models::{
     ConcurrencyLimit, MAX_CONCURRENCY_KEY_LEN, MAX_IDEMPOTENCY_KEY_LEN,
-    validate_concurrency_limits, validate_worker_tags,
+    validate_concurrency_limits, validate_priority, validate_worker_tags,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -27,6 +27,7 @@ use serde_json::Value;
 ///     max_retries: Some(2),
 ///     max_cost_usd: None,
 ///     concurrency_key: Some("issue:12".to_string()),
+///     priority: None,
 ///     concurrency_limits: Vec::new(),
 ///     worker_tags: vec!["gpu".to_string()],
 /// };
@@ -71,6 +72,15 @@ pub struct CreateRunRequest {
     /// the run completes, fails, ends with a warning or is cancelled.
     #[serde(default)]
     pub concurrency_key: Option<String>,
+    /// Optional queue priority, from -100 to 100.
+    ///
+    /// Workers pick the pending run with the highest priority first, then the
+    /// oldest among equal priorities. `None` falls back to the workflow
+    /// default, itself `0` unless the handler declares one. A running run is
+    /// never preempted, and a low priority run is not aged: a steady flow of
+    /// higher priority runs can delay it indefinitely.
+    #[serde(default)]
+    pub priority: Option<i16>,
     /// Concurrency groups the run belongs to, each with its own limit.
     ///
     /// The run is always created, but a worker only starts it once, for every
@@ -100,7 +110,7 @@ impl CreateRunRequest {
     /// when `concurrency_key` is blank or longer than
     /// [`MAX_CONCURRENCY_KEY_LEN`] bytes, or when `concurrency_limits` holds an
     /// empty or too long group, a zero limit or a group listed twice, or when a
-    /// worker tag is invalid.
+    /// worker tag is invalid. Also when `priority` is outside `-100..=100`.
     ///
     /// # Examples
     ///
@@ -116,6 +126,7 @@ impl CreateRunRequest {
     ///     max_retries: None,
     ///     max_cost_usd: Some(Decimal::new(-1, 0)),
     ///     concurrency_key: None,
+    ///     priority: None,
     ///     concurrency_limits: Vec::new(),
     ///     worker_tags: Vec::new(),
     /// };
@@ -137,6 +148,9 @@ impl CreateRunRequest {
                 ));
             }
             _ => {}
+        }
+        if let Some(priority) = self.priority {
+            validate_priority(priority)?;
         }
         validate_concurrency_limits(&self.concurrency_limits)
             .map_err(|e| format!("concurrency_limits: {e}"))?;
@@ -238,6 +252,7 @@ mod tests {
             max_retries: None,
             max_cost_usd,
             concurrency_key: None,
+            priority: None,
             concurrency_limits: Vec::new(),
             worker_tags: Vec::new(),
         }
@@ -327,6 +342,40 @@ mod tests {
             .validate()
             .expect_err("the limit is in bytes, not characters");
         assert!(err.contains("255 bytes"));
+    }
+
+    fn prioritized(priority: i16) -> CreateRunRequest {
+        CreateRunRequest {
+            priority: Some(priority),
+            ..request(None)
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_priority_within_bounds() {
+        for priority in [-100, -1, 0, 1, 100] {
+            assert!(prioritized(priority).validate().is_ok(), "{priority}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_a_priority_out_of_bounds() {
+        for priority in [-101, 101, i16::MIN, i16::MAX] {
+            let err = prioritized(priority)
+                .validate()
+                .expect_err("out of range priority must be rejected");
+            assert_eq!(err, "priority must be between -100 and 100");
+        }
+    }
+
+    #[test]
+    fn priority_defaults_to_none_and_parses_from_json() {
+        let req: CreateRunRequest = from_str(r#"{"workflow":"deploy"}"#).expect("deserialize");
+        assert!(req.priority.is_none());
+
+        let req: CreateRunRequest =
+            from_str(r#"{"workflow":"deploy","priority":-7}"#).expect("deserialize");
+        assert_eq!(req.priority, Some(-7));
     }
 
     #[test]

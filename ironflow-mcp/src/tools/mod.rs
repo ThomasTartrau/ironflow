@@ -227,7 +227,8 @@ mod tests {
                             "workflow": params.get("workflow").cloned(),
                             "status": params.get("status").cloned(),
                             "created_by": params.get("created_by").cloned(),
-                            "concurrency_group": params.get("concurrency_group").cloned()
+                            "concurrency_group": params.get("concurrency_group").cloned(),
+                            "priority": params.get("priority").cloned()
                         }
                     }))
                 })
@@ -253,6 +254,9 @@ mod tests {
                     }
                     if let Some(limits) = body.get("concurrency_limits") {
                         data["concurrency_limits"] = limits.clone();
+                    }
+                    if let Some(priority) = body.get("priority") {
+                        data["priority"] = priority.clone();
                     }
                     if let Some(tags) = body.get("worker_tags") {
                         data["worker_tags"] = tags.clone();
@@ -641,6 +645,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -665,6 +670,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -688,6 +694,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -709,6 +716,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -730,6 +738,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -751,6 +760,7 @@ mod tests {
             max_cost_usd: Some(2.5),
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -772,6 +782,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -793,6 +804,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: Some("issue:12".to_string()),
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -814,6 +826,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -835,6 +848,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: Some(vec!["repo:acme=2".to_string(), "env=prod=1".to_string()]),
+            priority: None,
             worker_tags: None,
         };
 
@@ -862,6 +876,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -883,6 +898,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: Some(vec!["gpu".to_string(), "region:eu".to_string()]),
         };
 
@@ -904,6 +920,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            priority: None,
             worker_tags: None,
         };
 
@@ -926,12 +943,57 @@ mod tests {
                 max_cost_usd: None,
                 concurrency_key: None,
                 concurrency_limits: Some(vec![entry.to_string()]),
+                priority: None,
                 worker_tags: None,
             };
 
             let err = tool.run(&client).await.unwrap_err();
             assert!(err.to_string().contains(entry), "{entry}: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn create_run_forwards_the_priority() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: None,
+            concurrency_limits: None,
+            worker_tags: None,
+            priority: Some(-45),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["priority"], -45);
+    }
+
+    #[tokio::test]
+    async fn create_run_omits_the_priority_when_absent() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: None,
+            concurrency_limits: None,
+            worker_tags: None,
+            priority: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed.get("priority").is_none());
     }
 
     // ---------------------------------------------------------------
@@ -947,6 +1009,7 @@ mod tests {
             status: Some("running".to_string()),
             created_by: Some("019a3f2b-0000-7000-8000-000000000000".to_string()),
             concurrency_group: Some("repo:acme".to_string()),
+            priority: Some(-20),
             page: Some(2),
             per_page: Some(10),
         };
@@ -963,6 +1026,7 @@ mod tests {
             "019a3f2b-0000-7000-8000-000000000000"
         );
         assert_eq!(parsed["meta"]["concurrency_group"], "repo:acme");
+        assert_eq!(parsed["meta"]["priority"], "-20");
         assert_eq!(parsed["data"][0]["id"], "r1");
     }
 
@@ -975,6 +1039,7 @@ mod tests {
             status: None,
             created_by: None,
             concurrency_group: None,
+            priority: None,
             page: None,
             per_page: None,
         };
@@ -988,6 +1053,7 @@ mod tests {
         assert!(parsed["meta"]["status"].is_null());
         assert!(parsed["meta"]["created_by"].is_null());
         assert!(parsed["meta"]["concurrency_group"].is_null());
+        assert!(parsed["meta"]["priority"].is_null());
     }
 
     // ---------------------------------------------------------------

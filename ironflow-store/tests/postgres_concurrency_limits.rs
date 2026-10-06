@@ -51,6 +51,7 @@ fn new_run(limits: &[(&str, u32)]) -> NewRun {
         created_by: None,
         idempotency_key: None,
         concurrency_key: None,
+        priority: 0,
         concurrency_limits: limits
             .iter()
             .map(|(group, limit)| ConcurrencyLimit::new(*group, *limit))

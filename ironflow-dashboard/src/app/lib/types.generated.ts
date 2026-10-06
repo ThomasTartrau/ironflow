@@ -451,6 +451,7 @@ export interface paths {
 		 *     - `created_by` — Filter by author user ID (optional). Also matches runs
 		 *       triggered by one of that user's API keys.
 		 *     - `concurrency_group` - Filter by concurrency group (optional)
+		 *     - `priority` - Filter by exact priority, from -100 to 100 (optional)
 		 *     - `page` — Page number, 1-based (default: 1)
 		 *     - `per_page` — Items per page (default: 20, max: 100)
 		 */
@@ -805,6 +806,7 @@ export interface paths {
 		 * @description # Errors
 		 *
 		 *     - 400 if validation fails or cron expression is invalid
+		 *     - 400 if `priority` is outside `-100..=100`
 		 *     - 400 if the workflow is not registered
 		 *     - 401 if not authenticated
 		 */
@@ -2048,6 +2050,7 @@ export interface components {
 		 *         max_retries: Some(2),
 		 *         max_cost_usd: None,
 		 *         concurrency_key: Some("issue:12".to_string()),
+		 *         priority: None,
 		 *         concurrency_limits: Vec::new(),
 		 *         worker_tags: vec!["gpu".to_string()],
 		 *     };
@@ -2103,6 +2106,17 @@ export interface components {
 				[key: string]: unknown;
 			} | null;
 			/**
+			 * Format: int32
+			 * @description Optional queue priority, from -100 to 100.
+			 *
+			 *     Workers pick the pending run with the highest priority first, then the
+			 *     oldest among equal priorities. `None` falls back to the workflow
+			 *     default, itself `0` unless the handler declares one. A running run is
+			 *     never preempted, and a low priority run is not aged: a steady flow of
+			 *     higher priority runs can delay it indefinitely.
+			 */
+			priority?: number | null;
+			/**
 			 * Format: date-time
 			 * @description Optional deferred execution time. `None` means run immediately.
 			 */
@@ -2126,6 +2140,15 @@ export interface components {
 			cron_expression: string;
 			/** @description JSON payload for the workflow. Defaults to `{}`. */
 			inputs?: unknown;
+			/**
+			 * Format: int32
+			 * @description Queue priority given to every run the schedule creates, from -100 to
+			 *     100. Defaults to the priority the workflow handler declares.
+			 *
+			 *     A higher priority run is picked first by workers. A running run is
+			 *     never preempted, and a low priority run is not aged.
+			 */
+			priority?: number | null;
 			/** @description Name of the workflow to trigger. */
 			workflow_name: string;
 		};
@@ -2514,6 +2537,11 @@ export interface components {
 			 * @description Items per page.
 			 */
 			per_page?: number | null;
+			/**
+			 * Format: int32
+			 * @description Filter by priority: only runs with exactly this priority.
+			 */
+			priority?: number | null;
 			status?: null | components["schemas"]["RunStatus"];
 			/** @description Filter by workflow name. */
 			workflow?: string | null;
@@ -3314,6 +3342,13 @@ export interface components {
 			output?: unknown;
 			/**
 			 * Format: int32
+			 * @description Queue priority, from -100 to 100. Workers pick the pending run with
+			 *     the highest priority first, then the oldest among equal priorities.
+			 *     `0` is the default.
+			 */
+			priority?: number;
+			/**
+			 * Format: int32
 			 * @description Number of times retried.
 			 */
 			retry_count: number;
@@ -3495,6 +3530,11 @@ export interface components {
 			 * @description When the schedule will next fire. Always set on an active schedule.
 			 */
 			next_trigger_at?: string | null;
+			/**
+			 * Format: int32
+			 * @description Queue priority given to every run the schedule creates, from -100 to 100.
+			 */
+			priority: number;
 			/** @description Where this schedule was created (`handler` or `api`). */
 			source: components["schemas"]["ScheduleSource"];
 			/**
@@ -5832,6 +5872,8 @@ export interface operations {
 				created_by?: string | null;
 				/** @description Filter by concurrency group: only runs that belong to this group. */
 				concurrency_group?: string | null;
+				/** @description Filter by priority: only runs with exactly this priority. */
+				priority?: number | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */
@@ -7150,6 +7192,8 @@ export interface operations {
 				created_by?: string | null;
 				/** @description Filter by concurrency group: only runs that belong to this group. */
 				concurrency_group?: string | null;
+				/** @description Filter by priority: only runs with exactly this priority. */
+				priority?: number | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */

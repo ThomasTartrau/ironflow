@@ -123,6 +123,7 @@ impl App {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: key.map(str::to_string),
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),

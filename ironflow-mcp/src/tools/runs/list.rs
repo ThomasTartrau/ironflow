@@ -22,6 +22,8 @@ pub struct ListRunsTool {
     pub created_by: Option<String>,
     /// Filter by concurrency group: only runs that belong to this group.
     pub concurrency_group: Option<String>,
+    /// Filter by priority: only runs with exactly this priority (-100 to 100).
+    pub priority: Option<i16>,
     /// Page number (1-based, default: 1).
     pub page: Option<u32>,
     /// Items per page (default: 20, max: 100).
@@ -43,6 +45,9 @@ impl ListRunsTool {
         }
         if let Some(ref g) = self.concurrency_group {
             query.push(("concurrency_group", g.clone()));
+        }
+        if let Some(priority) = self.priority {
+            query.push(("priority", priority.to_string()));
         }
         if let Some(p) = self.page {
             query.push(("page", p.to_string()));

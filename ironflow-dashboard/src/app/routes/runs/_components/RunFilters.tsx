@@ -4,6 +4,7 @@ import {
 	parseAsString,
 	parseAsBoolean,
 	parseAsArrayOf,
+	parseAsInteger,
 	debounce,
 } from "nuqs";
 import { Filter, X, Plus } from "lucide-react";
@@ -29,6 +30,7 @@ import type { RunStatus } from "@/app/lib/types";
 import { capitalize } from "@/app/lib/format";
 import { useUsers } from "@/app/hooks/use-users";
 import { useAppSelector } from "@/app/store";
+import { MAX_PRIORITY, MIN_PRIORITY, parsePriorityFilter } from "./priority";
 
 const STATUS_OPTIONS: RunStatus[] = [
 	"pending",
@@ -55,11 +57,17 @@ interface RunFiltersProps {
 	 * out rather than show charts that ignore it.
 	 */
 	concurrencyGroupFilter?: boolean;
+	/**
+	 * Whether to offer the priority filter. Like the concurrency group, the
+	 * dashboard trends do not accept it.
+	 */
+	priorityFilter?: boolean;
 }
 
 export function RunFilters({
 	paginated = true,
 	concurrencyGroupFilter = false,
+	priorityFilter = false,
 }: RunFiltersProps) {
 	const [open, setOpen] = useState(false);
 	const [labelInput, setLabelInput] = useState("");
@@ -85,11 +93,23 @@ export function RunFilters({
 				shallow: false,
 				limitUrlUpdates: debounce(300),
 			}),
+			priority: parseAsInteger.withOptions({
+				shallow: false,
+				limitUrlUpdates: debounce(300),
+			}),
+			// Debounced like the text filters so a page reset lands in the same
+			// URL update as the filter that caused it, and written even at its
+			// default so the reset is explicit.
 			page: parseAsString.withDefault("1").withOptions({
 				shallow: false,
+				clearOnDefault: false,
+				limitUrlUpdates: debounce(300),
 			}),
 		},
 		{ history: "replace" },
+	);
+	const [priorityInput, setPriorityInput] = useState(
+		filters.priority === null ? "" : String(filters.priority),
 	);
 
 	const auth = useAppSelector((state) => state.auth);
@@ -107,6 +127,7 @@ export function RunFilters({
 		filters.label.length > 0 ? "label" : "",
 		filters.created_by,
 		concurrencyGroupFilter ? filters.concurrency_group : "",
+		priorityFilter && filters.priority !== null ? "priority" : "",
 	].filter(Boolean).length;
 
 	const authorName =
@@ -128,6 +149,18 @@ export function RunFilters({
 
 	const handleConcurrencyGroupChange = (value: string) => {
 		setFilters({ concurrency_group: value || null, ...pageReset });
+	};
+
+	const handlePriorityChange = (value: string) => {
+		// The raw text lives in local state so a partial entry such as "-"
+		// stays in the field while the URL only ever holds a valid priority.
+		setPriorityInput(value);
+		setFilters({ priority: parsePriorityFilter(value), ...pageReset });
+	};
+
+	const clearPriority = () => {
+		setPriorityInput("");
+		setFilters({ priority: null, ...pageReset });
 	};
 
 	const handleAuthorChange = (value: string | null) => {
@@ -174,9 +207,11 @@ export function RunFilters({
 			label: null,
 			created_by: null,
 			concurrency_group: null,
+			priority: null,
 			page: null,
 		});
 		setLabelInput("");
+		setPriorityInput("");
 	};
 
 	return (
@@ -226,6 +261,29 @@ export function RunFilters({
 									placeholder="Filter by concurrency group..."
 									value={filters.concurrency_group}
 									onChange={(e) => handleConcurrencyGroupChange(e.target.value)}
+									className="mt-1.5 font-mono"
+								/>
+							</div>
+						)}
+
+						{priorityFilter && (
+							<div>
+								<label
+									htmlFor="filter-priority"
+									className="text-sm font-medium"
+								>
+									Priority
+								</label>
+								<Input
+									id="filter-priority"
+									type="number"
+									inputMode="numeric"
+									min={MIN_PRIORITY}
+									max={MAX_PRIORITY}
+									step={1}
+									placeholder={`Exact priority, ${MIN_PRIORITY} to ${MAX_PRIORITY}`}
+									value={priorityInput}
+									onChange={(e) => handlePriorityChange(e.target.value)}
 									className="mt-1.5 font-mono"
 								/>
 							</div>
@@ -409,6 +467,17 @@ export function RunFilters({
 					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
 				>
 					group: {filters.concurrency_group}
+					<X className="h-3 w-3" aria-hidden="true" />
+				</button>
+			)}
+			{priorityFilter && filters.priority !== null && (
+				<button
+					type="button"
+					aria-label="Remove priority filter"
+					onClick={clearPriority}
+					className="inline-flex items-center gap-1 font-mono text-xs px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer"
+				>
+					priority: {filters.priority}
 					<X className="h-3 w-3" aria-hidden="true" />
 				</button>
 			)}

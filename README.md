@@ -375,6 +375,32 @@ curl -X POST https://ironflow.example.com/api/v1/runs \
 - With the `prometheus` feature, `ironflow_worker_queue_blocked_runs{group}` counts the
   pending runs a saturated group holds back.
 
+### Run priority
+
+Every run has a queue priority from `-100` to `100`, `0` by default. Workers pick the
+pending run with the highest priority first, then the oldest among equal priorities.
+A delayed run still waits for its `scheduled_at`, and concurrency groups still apply.
+
+```bash
+curl -X POST https://ironflow.example.com/api/v1/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"workflow": "hotfix", "payload": {}, "priority": 80}'
+```
+
+- A handler sets the default priority of its runs with `fn priority(&self) -> i16`
+  (clamped to the range); the body, `EnqueueOptions::priority` or a schedule's
+  `priority` override it. A sub-workflow takes `WorkflowOptions::priority`.
+- A priority outside the range answers `400`.
+- Retries and replays keep the priority of the original run.
+- **No preemption**: a running run keeps its worker until it finishes.
+- **No aging**: a waiting run never moves up. A steady flow of higher priority runs can
+  delay a low priority one indefinitely.
+- `GET /api/v1/runs?priority=80` lists the runs of one priority. The CLI takes
+  `ironflow run create --priority 80` and `ironflow run list --priority 80`, the MCP
+  `create_run` and `list_runs` tools a `priority` argument, and the dashboard shows a
+  sortable Priority column and a priority filter.
+
 ### Artifacts
 
 Steps produce text and JSON outputs by default. When a step produces *files*, declare them and
@@ -677,6 +703,7 @@ let created = client
         max_retries: Some(2),
         max_cost_usd: Some(1.0),
         concurrency_key: None,
+        priority: None,
         concurrency_limits: Vec::new(),
         worker_tags: Vec::new(),
     })

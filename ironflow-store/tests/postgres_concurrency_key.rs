@@ -46,6 +46,7 @@ fn new_run(key: &str) -> NewRun {
         created_by: None,
         idempotency_key: None,
         concurrency_key: Some(key.to_string()),
+        priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
         worker_tags: Vec::new(),

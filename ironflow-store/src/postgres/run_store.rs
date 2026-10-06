@@ -37,8 +37,8 @@ const RUN_BY_IDEMPOTENCY_KEY_SQL: &str = r#"
 /// `create_run`, so the two never collide.
 const CONCURRENCY_GROUP_LOCK_PREFIX: &str = "ironflow:concurrency_group:";
 
-/// Oldest due pending or retrying run that no saturated concurrency group holds
-/// back.
+/// Highest priority due pending or retrying run that no saturated concurrency
+/// group holds back, the oldest first among equal priorities.
 ///
 /// A group's running count only includes root runs in state `running`:
 /// sub-workflow runs (`trigger.kind = 'workflow'`) execute inside their
@@ -75,7 +75,7 @@ const PICK_CANDIDATE_SQL: &str = r#"
           JOIN running ON running.group_name = cl."group"
           WHERE running.n >= cl."limit"
       )
-    ORDER BY r.created_at ASC
+    ORDER BY r.priority DESC, r.created_at ASC
     LIMIT 1
     FOR UPDATE OF r, sm SKIP LOCKED
 "#;
@@ -159,6 +159,10 @@ pub(super) fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
         ));
         bind_idx += 1;
     }
+    if filter.priority.is_some() {
+        conditions.push(format!("r.priority = ${bind_idx}"));
+        bind_idx += 1;
+    }
     if filter.eligible_for.is_some() {
         conditions.push(format!(
             "(${bind_idx}::text[] IS NULL OR r.workflow_name = ANY(${bind_idx}::text[]))"
@@ -213,6 +217,9 @@ pub(super) fn bind_run_filter_params<'q>(
     }
     if let Some(ref group) = filter.concurrency_group {
         query = query.bind(group.as_str());
+    }
+    if let Some(priority) = filter.priority {
+        query = query.bind(priority);
     }
     if let Some(ref caps) = filter.eligible_for {
         query = query.bind(caps.workflows.as_deref());
@@ -332,8 +339,8 @@ pub(super) async fn insert_run(
     let worker_tags = normalize_worker_tags(req.worker_tags.clone());
     let inserted = sqlx::query(
                 r#"
-                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key, concurrency_limits, worker_tags)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key, concurrency_limits, priority, worker_tags)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
                 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
                 "#,
             )
@@ -354,6 +361,7 @@ pub(super) async fn insert_run(
             .bind(now)
             .bind(req.concurrency_key.as_deref())
             .bind(&concurrency_limits_json)
+            .bind(req.priority)
             .bind(&worker_tags)
             .execute(&mut *tx)
             .await

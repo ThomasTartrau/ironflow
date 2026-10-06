@@ -3,7 +3,7 @@
 use std::ops::Not;
 
 use ironflow_core::retry::RetryPolicy;
-use ironflow_store::entities::MAX_CONCURRENCY_KEY_LEN;
+use ironflow_store::entities::{MAX_CONCURRENCY_KEY_LEN, validate_priority};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -36,6 +36,12 @@ pub struct WorkflowStepConfig {
     /// step input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency_key: Option<String>,
+    /// Queue priority of the child run.
+    ///
+    /// Set through [`WorkflowOptions::priority`] and recorded in the step
+    /// input. `None` gives the child the priority of its own handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i16>,
     /// Tolerate a failed child: the step completes with the child's failure
     /// in its output instead of failing the parent.
     #[serde(default, skip_serializing_if = "Not::not")]
@@ -60,6 +66,7 @@ impl WorkflowStepConfig {
             payload,
             retry: None,
             concurrency_key: None,
+            priority: None,
             allow_failure: false,
         }
     }
@@ -118,6 +125,7 @@ pub struct WorkflowOptions {
     /// Tolerate a failed child run instead of failing the parent.
     pub allow_failure: bool,
     concurrency_key: Option<String>,
+    priority: Option<i16>,
 }
 
 impl WorkflowOptions {
@@ -201,15 +209,63 @@ impl WorkflowOptions {
         self.concurrency_key.as_deref()
     }
 
-    /// Consume the options and return the concurrency key.
-    pub(crate) fn into_concurrency_key(self) -> Option<String> {
-        self.concurrency_key
+    /// Set the queue priority of the child run, overriding the priority of
+    /// the child handler.
+    ///
+    /// The child executes inside its parent's worker; the priority is
+    /// recorded on the child run and orders it whenever it waits in the queue.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `priority` is outside
+    /// [`MIN_PRIORITY`](ironflow_store::entities::MIN_PRIORITY)`..=`[`MAX_PRIORITY`](ironflow_store::entities::MAX_PRIORITY).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// let options = WorkflowOptions::new().priority(20);
+    /// assert_eq!(options.priority_ref(), Some(20));
+    /// ```
+    ///
+    /// ```should_panic
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// WorkflowOptions::new().priority(101);
+    /// ```
+    pub fn priority(mut self, priority: i16) -> Self {
+        if let Err(message) = validate_priority(priority) {
+            panic!("{message}");
+        }
+        self.priority = Some(priority);
+        self
+    }
+
+    /// The priority of the child run, if one was set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::config::WorkflowOptions;
+    ///
+    /// assert_eq!(WorkflowOptions::new().priority_ref(), None);
+    /// assert_eq!(WorkflowOptions::new().priority(-5).priority_ref(), Some(-5));
+    /// ```
+    pub fn priority_ref(&self) -> Option<i16> {
+        self.priority
+    }
+
+    /// Consume the options and return the concurrency key and the priority.
+    pub(crate) fn into_parts(self) -> (Option<String>, Option<i16>) {
+        (self.concurrency_key, self.priority)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ironflow_store::entities::{MAX_PRIORITY, MIN_PRIORITY};
     use serde_json::{from_str, json, to_string, to_value};
 
     #[test]
@@ -256,7 +312,7 @@ mod tests {
     fn options_carry_the_concurrency_key() {
         let options = WorkflowOptions::new().concurrency_key("issue:12");
         assert_eq!(options.concurrency_key_ref(), Some("issue:12"));
-        assert_eq!(options.into_concurrency_key().as_deref(), Some("issue:12"));
+        assert_eq!(options.into_parts().0.as_deref(), Some("issue:12"));
         assert!(WorkflowOptions::new().concurrency_key_ref().is_none());
     }
 
@@ -283,6 +339,51 @@ mod tests {
     #[should_panic(expected = "concurrency key must be at most")]
     fn options_reject_a_key_over_the_limit() {
         let _ = WorkflowOptions::new().concurrency_key("a".repeat(MAX_CONCURRENCY_KEY_LEN + 1));
+    }
+
+    #[test]
+    fn options_priority_is_carried_and_split() {
+        let options = WorkflowOptions::new()
+            .concurrency_key("issue:12")
+            .priority(MAX_PRIORITY);
+        assert_eq!(options.priority_ref(), Some(MAX_PRIORITY));
+        let (key, priority) = options.into_parts();
+        assert_eq!(key.as_deref(), Some("issue:12"));
+        assert_eq!(priority, Some(MAX_PRIORITY));
+        assert_eq!(
+            WorkflowOptions::new().priority(MIN_PRIORITY).priority_ref(),
+            Some(MIN_PRIORITY)
+        );
+        assert!(WorkflowOptions::new().priority_ref().is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "priority must be between -100 and 100")]
+    fn options_priority_rejects_above_the_maximum() {
+        let _ = WorkflowOptions::new().priority(MAX_PRIORITY + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "priority must be between -100 and 100")]
+    fn options_priority_rejects_below_the_minimum() {
+        let _ = WorkflowOptions::new().priority(MIN_PRIORITY - 1);
+    }
+
+    #[test]
+    fn step_config_priority_is_omitted_when_unset_and_round_trips() {
+        let config = WorkflowStepConfig::new("build", json!({}));
+        assert!(
+            to_value(&config)
+                .expect("serialize")
+                .get("priority")
+                .is_none()
+        );
+
+        let mut config = WorkflowStepConfig::new("build", json!({}));
+        config.priority = Some(-30);
+        let back: WorkflowStepConfig =
+            from_str(&to_string(&config).expect("serialize")).expect("deserialize");
+        assert_eq!(back.priority, Some(-30));
     }
 
     #[test]

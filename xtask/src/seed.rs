@@ -221,6 +221,9 @@ struct StepSpec {
     cost_usd: Decimal,
 }
 
+/// Queue priorities cycled over the seeded runs, so the dashboard shows a mix.
+const SEED_PRIORITIES: [i16; 4] = [0, 50, -20, 0];
+
 fn run_specs() -> Vec<RunSpec> {
     vec![
         RunSpec {
@@ -462,7 +465,7 @@ async fn seed_runs(store: &dyn Store, users: &[SeededUser]) -> anyhow::Result<Ve
     let admin = &users[0];
     let mut seeded = Vec::new();
 
-    for spec in run_specs() {
+    for (index, spec) in run_specs().into_iter().enumerate() {
         let created_by = Some(RunActor::User { user_id: admin.id });
 
         let creation = store
@@ -477,6 +480,7 @@ async fn seed_runs(store: &dyn Store, users: &[SeededUser]) -> anyhow::Result<Ve
                 created_by,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: SEED_PRIORITIES[index % SEED_PRIORITIES.len()],
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
                 worker_tags: Vec::new(),
@@ -1389,6 +1393,14 @@ mod tests {
             statuses.contains(&RunStatus::Cancelled),
             "should have Cancelled runs"
         );
+
+        let priorities: Vec<i16> = runs.iter().map(|r| r.priority).collect();
+        for priority in SEED_PRIORITIES {
+            assert!(
+                priorities.contains(&priority),
+                "should have a run of priority {priority}"
+            );
+        }
     }
 
     #[tokio::test]

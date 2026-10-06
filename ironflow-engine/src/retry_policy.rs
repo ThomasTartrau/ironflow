@@ -67,6 +67,7 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::MonthlyBudgetExceeded`] | the monthly quota is exhausted for every run |
 /// | [`EngineError::ConcurrencyConflict`] | the key is held by another active run; a replay would only conflict again |
 /// | [`EngineError::InvalidConcurrencyLimit`] | the requested limits are malformed; a replay sends the same ones |
+/// | [`EngineError::InvalidPriority`] | the requested priority is out of range; a replay sends the same one |
 /// | [`EngineError::InvalidWorkerTag`] | the requested worker tags are malformed; a replay sends the same ones |
 /// | [`EngineError::ApprovalRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::ApprovalRejected`] | a human decision, replaying cannot change it |
@@ -103,6 +104,7 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::MonthlyBudgetExceeded { .. }
         | EngineError::ConcurrencyConflict { .. }
         | EngineError::InvalidConcurrencyLimit(_)
+        | EngineError::InvalidPriority(_)
         | EngineError::InvalidWorkerTag(_)
         | EngineError::ApprovalRequired { .. }
         | EngineError::ApprovalRejected { .. }

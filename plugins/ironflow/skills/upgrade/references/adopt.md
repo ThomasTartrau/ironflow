@@ -137,6 +137,30 @@ its limit, while other runs go ahead. `concurrency_limits` in the body,
 +     .await?;
 ```
 
+## run-priority
+- kind: adopt
+- since: ironflow-engine after 2.49.0 (#171)
+
+Workers used to pick pending runs oldest first only. To let urgent work jump ahead, a
+deployment ran a separate worker pool, or a client held back its low priority
+`POST /api/v1/runs` while urgent runs were waiting. Give the run a priority from -100 to
+100 instead: workers pick the highest first, then the oldest. A handler declares it with
+`fn priority(&self) -> i16`, a caller overrides it with `priority` in the body,
+`--priority` in the CLI or `EnqueueOptions::priority`, and a schedule and a child
+(`WorkflowOptions::priority`) carry their own. A running run is never preempted and a
+waiting one is never aged. Section: Sub-workflow.
+
+```diff
+- engine.enqueue_handler("hotfix", TriggerKind::Api, payload).await?;
++ let options = EnqueueOptions {
++     priority: Some(80),
++     ..Default::default()
++ };
++ engine
++     .enqueue_handler_with_options("hotfix", TriggerKind::Api, payload, options)
++     .await?;
+```
+
 ## workflow-allow-failure
 - kind: adopt
 - since: ironflow-engine 2.46.0 (#161)

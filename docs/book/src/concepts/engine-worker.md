@@ -103,6 +103,48 @@ execute inside their parent's slot and are not counted. The
 `ironflow_worker_queue_blocked_runs{group}` gauge reports the pending runs each
 saturated group holds back.
 
+## Run priority
+
+Every run carries a queue priority, an integer from -100 to 100 (default 0). When
+a worker polls, the store hands out the pending run with the highest priority
+first, then the oldest among equal priorities. A run whose `scheduled_at` is still
+in the future is not eligible, whatever its priority, and concurrency groups
+still apply: a blocked high priority run lets the next eligible one through.
+
+A workflow declares the priority of its runs; the creation request can override
+it:
+
+```rust,ignore
+impl WorkflowHandler for Hotfix {
+    fn priority(&self) -> i16 {
+        50
+    }
+    // ...
+}
+
+let options = EnqueueOptions {
+    priority: Some(80),
+    ..Default::default()
+};
+engine
+    .enqueue_handler_with_options("hotfix", TriggerKind::Api, payload, options)
+    .await?;
+```
+
+A handler priority outside the range is clamped; an explicit one is refused with
+`EngineError::InvalidPriority`. `POST /api/v1/runs` takes `priority` in the body
+(400 when out of range), `GET /api/v1/runs?priority=50` lists the runs of one
+priority, and a schedule gives its own `priority` to every run it creates. A
+retry or a replay keeps the priority of the original run, and a sub-workflow
+takes `WorkflowOptions::priority`.
+
+Priority only orders the queue:
+
+- **No preemption.** A running run is never paused or evicted for a higher
+  priority one; it keeps its worker slot until it finishes.
+- **No aging.** A low priority run does not move up while it waits. A steady
+  flow of higher priority runs can delay it indefinitely, so keep negative
+  priorities for work that can wait.
 ## Routing runs to workers
 
 A worker only takes the runs it can execute. When it polls, it sends the

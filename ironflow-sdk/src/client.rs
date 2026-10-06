@@ -85,6 +85,9 @@ pub struct ListRunsFilter<'a> {
     /// Filter by concurrency group: only runs that belong to this group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concurrency_group: Option<&'a str>,
+    /// Filter by priority: only runs with exactly this priority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i16>,
 }
 
 /// Query options for [`IronflowClient::stats_history_with`].

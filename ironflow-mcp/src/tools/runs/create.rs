@@ -42,6 +42,11 @@ pub struct CreateRunTool {
     /// are running; until then it stays pending. Each group is at most 255
     /// bytes and listed once; N is at least 1.
     pub concurrency_limits: Option<Vec<String>>,
+    /// Optional queue priority, from -100 to 100. Workers pick the pending run
+    /// with the highest priority first, then the oldest. Defaults to the
+    /// workflow priority (0 unless the handler declares one). A running run is
+    /// never preempted and a low priority run is not aged.
+    pub priority: Option<i16>,
     /// Optional tags a worker must carry to pick the run (for example "gpu" or
     /// "region:eu"). Only a worker started with every one of them takes it;
     /// until such a worker polls, the run stays pending. Added to the tags the
@@ -67,6 +72,9 @@ impl CreateRunTool {
         }
         if let Some(concurrency_key) = &self.concurrency_key {
             body["concurrency_key"] = json!(concurrency_key);
+        }
+        if let Some(priority) = self.priority {
+            body["priority"] = json!(priority);
         }
         if let Some(limits) = &self.concurrency_limits {
             let limits = limits

@@ -876,7 +876,7 @@
         "type": "object"
       },
       "CreateRunRequest": {
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n    concurrency_key: Some(\"issue:12\".to_string()),\n    concurrency_limits: Vec::new(),\n    worker_tags: vec![\"gpu\".to_string()],\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n    concurrency_key: Some(\"issue:12\".to_string()),\n    priority: None,\n    concurrency_limits: Vec::new(),\n    worker_tags: vec![\"gpu\".to_string()],\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "properties": {
           "concurrency_key": {
             "description": "Optional exclusivity key, at most 255 bytes.\n\nWhile a non-terminal run (pending, running, sleeping, retrying,\nawaiting approval) holds the same key, the request is refused with\n`409 CONCURRENCY_CONFLICT` naming that run. The key is released when\nthe run completes, fails, ends with a warning or is cancelled.",
@@ -923,6 +923,12 @@
             },
             "type": "object"
           },
+          "priority": {
+            "description": "Optional queue priority, from -100 to 100.\n\nWorkers pick the pending run with the highest priority first, then the\noldest among equal priorities. `None` falls back to the workflow\ndefault, itself `0` unless the handler declares one. A running run is\nnever preempted, and a low priority run is not aged: a steady flow of\nhigher priority runs can delay it indefinitely.",
+            "format": "int32",
+            "nullable": true,
+            "type": "integer"
+          },
           "scheduled_at": {
             "description": "Optional deferred execution time. `None` means run immediately.",
             "format": "date-time",
@@ -955,6 +961,12 @@
           },
           "inputs": {
             "description": "JSON payload for the workflow. Defaults to `{}`."
+          },
+          "priority": {
+            "description": "Queue priority given to every run the schedule creates, from -100 to\n100. Defaults to the priority the workflow handler declares.\n\nA higher priority run is picked first by workers. A running run is\nnever preempted, and a low priority run is not aged.",
+            "format": "int32",
+            "nullable": true,
+            "type": "integer"
           },
           "workflow_name": {
             "description": "Name of the workflow to trigger.",
@@ -1750,6 +1762,12 @@
             "description": "Items per page.",
             "format": "int32",
             "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "priority": {
+            "description": "Filter by priority: only runs with exactly this priority.",
+            "format": "int32",
             "nullable": true,
             "type": "integer"
           },
@@ -2761,6 +2779,11 @@
           "output": {
             "description": "Typed output the handler set with `WorkflowContext::set_output`.\n\nWritten when the run ends (completed, warning, failed or cancelled).\nOmitted when the handler set no output."
           },
+          "priority": {
+            "description": "Queue priority, from -100 to 100. Workers pick the pending run with\nthe highest priority first, then the oldest among equal priorities.\n`0` is the default.",
+            "format": "int32",
+            "type": "integer"
+          },
           "retry_count": {
             "description": "Number of times retried.",
             "format": "int32",
@@ -2946,6 +2969,11 @@
             "nullable": true,
             "type": "string"
           },
+          "priority": {
+            "description": "Queue priority given to every run the schedule creates, from -100 to 100.",
+            "format": "int32",
+            "type": "integer"
+          },
           "source": {
             "$ref": "#/components/schemas/ScheduleSource",
             "description": "Where this schedule was created (`handler` or `api`)."
@@ -2966,6 +2994,7 @@
           "cron_expression",
           "inputs",
           "source",
+          "priority",
           "created_at",
           "updated_at"
         ],
@@ -5859,7 +5888,7 @@
     },
     "/api/v1/runs": {
       "get": {
-        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `concurrency_group` - Filter by concurrency group (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
+        "description": "# Query Parameters\n\n- `workflow` — Filter by workflow name (optional)\n- `status` — Filter by run status (optional)\n- `created_by` — Filter by author user ID (optional). Also matches runs\n  triggered by one of that user's API keys.\n- `concurrency_group` - Filter by concurrency group (optional)\n- `priority` - Filter by exact priority, from -100 to 100 (optional)\n- `page` — Page number, 1-based (default: 1)\n- `per_page` — Items per page (default: 20, max: 100)",
         "operationId": "list_runs",
         "parameters": [
           {
@@ -5915,6 +5944,16 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Filter by priority: only runs with exactly this priority.",
+            "in": "query",
+            "name": "priority",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
             }
           },
           {
@@ -6762,7 +6801,7 @@
         ]
       },
       "post": {
-        "description": "# Errors\n\n- 400 if validation fails or cron expression is invalid\n- 400 if the workflow is not registered\n- 401 if not authenticated",
+        "description": "# Errors\n\n- 400 if validation fails or cron expression is invalid\n- 400 if `priority` is outside `-100..=100`\n- 400 if the workflow is not registered\n- 401 if not authenticated",
         "operationId": "create_schedule",
         "requestBody": {
           "content": {
@@ -7497,6 +7536,16 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Filter by priority: only runs with exactly this priority.",
+            "in": "query",
+            "name": "priority",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
             }
           },
           {

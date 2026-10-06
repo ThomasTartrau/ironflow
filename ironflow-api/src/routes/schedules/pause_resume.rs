@@ -183,6 +183,7 @@ mod tests {
                 cron_expression: "0 0 * * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
+                priority: 0,
                 created_by_user_id: Some(user.id),
                 next_trigger_at: None,
             })

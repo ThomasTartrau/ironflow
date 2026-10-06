@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use sqlx::{FromRow, query_as};
 use uuid::Uuid;
 
 use crate::entities::{
@@ -12,6 +13,7 @@ use crate::store::StoreFuture;
 use super::PostgresStore;
 use super::run_store::insert_run;
 
+#[derive(FromRow)]
 struct ScheduleRow {
     id: Uuid,
     workflow_name: String,
@@ -22,6 +24,7 @@ struct ScheduleRow {
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
+    priority: i16,
     created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -39,6 +42,7 @@ impl From<ScheduleRow> for Schedule {
             last_triggered_at: row.last_triggered_at,
             next_trigger_at: row.next_trigger_at,
             last_error: row.last_error,
+            priority: row.priority,
             created_by_user_id: row.created_by_user_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -46,6 +50,7 @@ impl From<ScheduleRow> for Schedule {
     }
 }
 
+#[derive(FromRow)]
 struct ScheduleRowWithTotal {
     id: Uuid,
     workflow_name: String,
@@ -56,6 +61,7 @@ struct ScheduleRowWithTotal {
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
+    priority: i16,
     created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -74,6 +80,7 @@ impl From<ScheduleRowWithTotal> for Schedule {
             last_triggered_at: row.last_triggered_at,
             next_trigger_at: row.next_trigger_at,
             last_error: row.last_error,
+            priority: row.priority,
             created_by_user_id: row.created_by_user_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -87,27 +94,27 @@ impl ScheduleStore for PostgresStore {
             let id = Uuid::now_v7();
             let now = Utc::now();
             let source_str = req.source.as_str();
-            let row = sqlx::query_as!(
-                ScheduleRow,
+            let row = query_as::<_, ScheduleRow>(
                 r#"
                 INSERT INTO ironflow.schedules
                     (id, workflow_name, cron_expression, inputs, source,
-                     next_trigger_at, created_by_user_id, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                     next_trigger_at, created_by_user_id, created_at, updated_at, priority)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at
+                    priority, created_by_user_id, created_at, updated_at
                 "#,
-                id,
-                &req.workflow_name,
-                &req.cron_expression,
-                &req.inputs,
-                source_str,
-                req.next_trigger_at,
-                req.created_by_user_id,
-                now,
-                now,
             )
+            .bind(id)
+            .bind(&req.workflow_name)
+            .bind(&req.cron_expression)
+            .bind(&req.inputs)
+            .bind(source_str)
+            .bind(req.next_trigger_at)
+            .bind(req.created_by_user_id)
+            .bind(now)
+            .bind(now)
+            .bind(req.priority)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -118,17 +125,16 @@ impl ScheduleStore for PostgresStore {
 
     fn find_schedule_by_id(&self, id: Uuid) -> StoreFuture<'_, Option<Schedule>> {
         Box::pin(async move {
-            let row = sqlx::query_as!(
-                ScheduleRow,
+            let row = query_as::<_, ScheduleRow>(
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at
+                    priority, created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
                 "#,
-                id,
             )
+            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -140,20 +146,19 @@ impl ScheduleStore for PostgresStore {
     fn list_schedules(&self, page: u32, per_page: u32) -> StoreFuture<'_, Page<Schedule>> {
         Box::pin(async move {
             let offset = (page.saturating_sub(1) as i64) * (per_page as i64);
-            let rows = sqlx::query_as!(
-                ScheduleRowWithTotal,
+            let rows = query_as::<_, ScheduleRowWithTotal>(
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at,
-                    COUNT(*) OVER () as "total_count!: i64"
+                    priority, created_by_user_id, created_at, updated_at,
+                    COUNT(*) OVER () AS total_count
                 FROM ironflow.schedules
                 ORDER BY created_at DESC
                 LIMIT $1 OFFSET $2
                 "#,
-                per_page as i64,
-                offset,
             )
+            .bind(per_page as i64)
+            .bind(offset)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -172,17 +177,16 @@ impl ScheduleStore for PostgresStore {
 
     fn update_schedule(&self, id: Uuid, update: ScheduleUpdate) -> StoreFuture<'_, Schedule> {
         Box::pin(async move {
-            let existing = sqlx::query_as!(
-                ScheduleRow,
+            let existing = query_as::<_, ScheduleRow>(
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at
+                    priority, created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
                 "#,
-                id,
             )
+            .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?
@@ -206,10 +210,10 @@ impl ScheduleStore for PostgresStore {
                 Some(v) => v,
                 None => existing.last_error,
             };
+            let priority = update.priority.unwrap_or(existing.priority);
             let now = Utc::now();
 
-            let row = sqlx::query_as!(
-                ScheduleRow,
+            let row = query_as::<_, ScheduleRow>(
                 r#"
                 UPDATE ironflow.schedules
                 SET cron_expression = $2,
@@ -218,21 +222,23 @@ impl ScheduleStore for PostgresStore {
                     next_trigger_at = $5,
                     last_triggered_at = $6,
                     last_error = $7,
-                    updated_at = $8
+                    updated_at = $8,
+                    priority = $9
                 WHERE id = $1
                 RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at
+                    priority, created_by_user_id, created_at, updated_at
                 "#,
-                id,
-                &cron_expression,
-                &inputs,
-                disabled_at,
-                next_trigger_at,
-                last_triggered_at,
-                last_error,
-                now,
             )
+            .bind(id)
+            .bind(&cron_expression)
+            .bind(&inputs)
+            .bind(disabled_at)
+            .bind(next_trigger_at)
+            .bind(last_triggered_at)
+            .bind(last_error)
+            .bind(now)
+            .bind(priority)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -257,12 +263,11 @@ impl ScheduleStore for PostgresStore {
 
     fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
         Box::pin(async move {
-            let rows = sqlx::query_as!(
-                ScheduleRow,
+            let rows = query_as::<_, ScheduleRow>(
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at
+                    priority, created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE disabled_at IS NULL
                   AND next_trigger_at IS NOT NULL
@@ -293,21 +298,20 @@ impl ScheduleStore for PostgresStore {
 
             // SKIP LOCKED: an instance firing this occurrence holds the row, so
             // this one steps aside instead of waiting to find it fired.
-            let row = sqlx::query_as!(
-                ScheduleRow,
+            let row = query_as::<_, ScheduleRow>(
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at
+                    priority, created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
                   AND disabled_at IS NULL
                   AND next_trigger_at = $2
                 FOR UPDATE SKIP LOCKED
                 "#,
-                id,
-                occurrence,
             )
+            .bind(id)
+            .bind(occurrence)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -328,8 +332,7 @@ impl ScheduleStore for PostgresStore {
             };
             let now = Utc::now();
 
-            let row = sqlx::query_as!(
-                ScheduleRow,
+            let row = query_as::<_, ScheduleRow>(
                 r#"
                 UPDATE ironflow.schedules
                 SET last_triggered_at = $2,
@@ -340,13 +343,13 @@ impl ScheduleStore for PostgresStore {
                 WHERE id = $1
                 RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    created_by_user_id, created_at, updated_at
+                    priority, created_by_user_id, created_at, updated_at
                 "#,
-                id,
-                now,
-                next_trigger_at,
-                error,
             )
+            .bind(id)
+            .bind(now)
+            .bind(next_trigger_at)
+            .bind(error)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
