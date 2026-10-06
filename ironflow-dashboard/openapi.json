@@ -7563,6 +7563,13 @@
             "format": "uuid",
             "description": "Parent run ID."
           },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Claude Code session the agent step ran in, if any. A step interrupted\nby a lost lease resumes it on its next execution."
+          },
           "started_at": {
             "type": [
               "string",
@@ -8092,6 +8099,37 @@
           }
         }
       },
+      "WorkflowAgentStepResumedEvent": {
+        "type": "object",
+        "description": "Payload of the `WorkflowEvent::AgentStepResumed` workflow event.\n\nPublished when an agent step interrupted by a lost lease is re-executed\non the Claude Code session of the interrupted attempt instead of starting\nfrom scratch.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowAgentStepResumedEvent;\nuse chrono::Utc;\n\nlet payload = WorkflowAgentStepResumedEvent {\n    step_name: \"review\".to_string(),\n    step_index: 2,\n    session_id: \"0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d\".to_string(),\n    timestamp: Utc::now(),\n};\nassert_eq!(payload.step_index, 2);\n```",
+        "required": [
+          "step_name",
+          "step_index",
+          "session_id",
+          "timestamp"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Claude Code session the step resumes."
+          },
+          "step_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based position in the workflow.",
+            "minimum": 0
+          },
+          "step_name": {
+            "type": "string",
+            "description": "Human-readable step name."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the step resumed."
+          }
+        }
+      },
       "WorkflowAgentStepTokensUsedEvent": {
         "type": "object",
         "description": "Payload of the `WorkflowEvent::AgentStepTokensUsed` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowAgentStepTokensUsedEvent;\nuse rust_decimal::Decimal;\n\nlet payload = WorkflowAgentStepTokensUsedEvent {\n    step_name: \"review\".to_string(),\n    tokens: 15_000,\n    cost_usd: Decimal::new(42, 4),\n};\nassert_eq!(payload.tokens, 15_000);\n```",
@@ -8365,6 +8403,29 @@
               }
             ],
             "description": "Token usage report for an agent step."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowAgentStepResumedEvent",
+                "description": "An interrupted agent step resumed its Claude Code session."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "agent_step_resumed"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "An interrupted agent step resumed its Claude Code session."
           }
         ],
         "description": "A granular step-level event for real-time workflow monitoring.\n\nUnlike [`Event`](super::Event) which covers the full system lifecycle\n(runs, auth, audit), `WorkflowEvent` tracks individual step transitions\nwithin a single run. Serialized with a `type` discriminant for UI\nconsumption.\n\nEach variant wraps a dedicated payload struct; the serialized form stays\nflat, with `type` sitting next to the payload fields.\n\n# Examples\n\n```\nuse ironflow_engine::notify::{WorkflowEvent, WorkflowStepStartedEvent};\nuse chrono::Utc;\n\nlet event = WorkflowEvent::StepStarted(WorkflowStepStartedEvent {\n    step_name: \"deploy\".to_string(),\n    step_index: 0,\n    timestamp: Utc::now(),\n});\nassert_eq!(event.event_type(), \"step_started\");\n\nlet json = serde_json::to_string(&event)?;\nassert!(json.contains(\"\\\"type\\\":\\\"step_started\\\"\"));\n# Ok::<(), serde_json::Error>(())\n```"

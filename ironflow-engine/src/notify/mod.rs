@@ -51,8 +51,8 @@ pub use event::{
     StepCompletedEvent, StepFailedEvent, UserSignedInEvent, UserSignedOutEvent, UserSignedUpEvent,
 };
 pub use event_bus::{
-    WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
-    WorkflowEventBus, WorkflowInputRequiredEvent, WorkflowStepCompletedEvent,
+    WorkflowAgentStepResumedEvent, WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent,
+    WorkflowEvent, WorkflowEventBus, WorkflowInputRequiredEvent, WorkflowStepCompletedEvent,
     WorkflowStepFailedEvent, WorkflowStepStartedEvent,
 };
 pub use formatter::{FormattedMessage, MessageFormatter};

@@ -164,6 +164,10 @@ impl AgentProvider for ClaudeCodeProvider {
         Some(ClaudeSubscriptionKind::ID)
     }
 
+    fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
+        true
+    }
+
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             common::validate_prompt_size(config)?;
@@ -321,6 +325,11 @@ mod tests {
             ClaudeCodeProvider::new().account_kind(),
             Some(ClaudeSubscriptionKind::ID)
         );
+    }
+
+    #[test]
+    fn provider_supports_sessions_for_session_id() {
+        assert!(ClaudeCodeProvider::new().supports_sessions_for(&AgentConfig::new("hi")));
     }
 
     #[test]

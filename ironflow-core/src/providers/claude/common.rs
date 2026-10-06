@@ -233,6 +233,43 @@ pub fn push_opt(args: &mut Vec<String>, flag: &str, value: &Option<impl ToString
     }
 }
 
+/// Push the session flags: `--resume <id>` when a session is resumed,
+/// otherwise `--session-id <id>` when the session id is fixed. Never both:
+/// the CLI refuses to create a session it is asked to resume.
+fn push_session_args(args: &mut Vec<String>, config: &AgentConfig) {
+    if let Some(ref session_id) = config.resume_session_id {
+        push_flag(args, "--resume", session_id);
+    } else if let Some(ref session_id) = config.session_id {
+        push_flag(args, "--session-id", session_id);
+    }
+}
+
+/// Message the Claude Code CLI prints when `--resume` names a session it
+/// cannot find on disk.
+const SESSION_NOT_FOUND_MESSAGE: &str = "No conversation found with session ID";
+
+/// Whether `err` reports that the session passed to `--resume` does not exist.
+///
+/// The session lives under `~/.claude/projects/<cwd-slug>` of the machine
+/// that ran it: an ephemeral HOME, another machine or another working
+/// directory all lose it. Callers fall back to a fresh run.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::error::AgentError;
+/// use ironflow_core::providers::claude::is_session_not_found;
+///
+/// let err = AgentError::ProcessFailed {
+///     exit_code: 1,
+///     stderr: "No conversation found with session ID: 0192f0c1".to_string(),
+/// };
+/// assert!(is_session_not_found(&err));
+/// ```
+pub fn is_session_not_found(err: &AgentError) -> bool {
+    err.to_string().contains(SESSION_NOT_FOUND_MESSAGE)
+}
+
 /// Refuse a tool profile: the Claude CLI has no notion of one, and ignoring
 /// it would run the step with tools it did not ask for.
 fn reject_tool_profile(config: &AgentConfig) -> Result<(), AgentError> {
@@ -324,10 +361,7 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
     let transformed_schema = config.json_schema.as_ref().map(|s| transform_schema(s));
     push_opt(&mut args, "--json-schema", &transformed_schema);
 
-    if let Some(ref session_id) = config.resume_session_id {
-        args.push("--resume".to_string());
-        args.push(session_id.clone());
-    }
+    push_session_args(&mut args, config);
 
     Ok(args)
 }
@@ -430,10 +464,7 @@ pub fn build_command(config: &AgentConfig) -> Result<BuiltCommand, AgentError> {
     let transformed_schema = config.json_schema.as_ref().map(|s| transform_schema(s));
     push_opt(&mut args, "--json-schema", &transformed_schema);
 
-    if let Some(ref session_id) = config.resume_session_id {
-        args.push("--resume".to_string());
-        args.push(session_id.clone());
-    }
+    push_session_args(&mut args, config);
 
     Ok(BuiltCommand {
         args,
@@ -1799,6 +1830,8 @@ mod tests {
             strict_mcp_config: false,
             bare: false,
             resume_session_id: None,
+            session_id: None,
+            resume_prompt: None,
             resume_environment_id: None,
             verbose: false,
             pod_labels: std::collections::BTreeMap::new(),
@@ -2385,5 +2418,83 @@ mod tests {
         assert!(built.args.contains(&"claude-sonnet-4-20250514".to_string()));
         assert!(built.args.contains(&"--max-turns".to_string()));
         assert!(built.args.contains(&"5".to_string()));
+    }
+
+    fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        args.iter()
+            .position(|a| a == flag)
+            .map(|pos| args[pos + 1].as_str())
+    }
+
+    #[test]
+    fn build_args_session_id_emits_session_id_flag() {
+        let config = AgentConfig::new("hello").session_id("sid-1");
+        let args = build_args(&config).unwrap();
+        assert_eq!(flag_value(&args, "--session-id"), Some("sid-1"));
+        assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn build_args_without_session_id_emits_no_session_flag() {
+        let args = build_args(&AgentConfig::new("hello")).unwrap();
+        assert!(!args.contains(&"--session-id".to_string()));
+        assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn build_args_resume_wins_over_session_id() {
+        let config = AgentConfig::new("hello")
+            .session_id("sid-new")
+            .resume("sid-old");
+        let args = build_args(&config).unwrap();
+        assert_eq!(flag_value(&args, "--resume"), Some("sid-old"));
+        assert!(!args.contains(&"--session-id".to_string()));
+    }
+
+    #[test]
+    fn build_command_session_id_emits_session_id_flag() {
+        let config = AgentConfig::new("hello").session_id("sid-2");
+        let built = build_command(&config).unwrap();
+        assert_eq!(flag_value(&built.args, "--session-id"), Some("sid-2"));
+        assert!(!built.args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn build_command_session_id_ignored_when_resuming() {
+        let config = AgentConfig::new("hello")
+            .session_id("sid-new")
+            .resume("sid-old");
+        let built = build_command(&config).unwrap();
+        assert_eq!(flag_value(&built.args, "--resume"), Some("sid-old"));
+        assert!(!built.args.contains(&"--session-id".to_string()));
+    }
+
+    #[test]
+    fn build_args_resume_prompt_is_not_a_cli_flag() {
+        let config = AgentConfig::new("hello").resume_prompt("go on");
+        let args = build_args(&config).unwrap();
+        assert!(!args.iter().any(|a| a == "go on"));
+    }
+
+    #[test]
+    fn is_session_not_found_matches_cli_message_for_session_id() {
+        let err = AgentError::ProcessFailed {
+            exit_code: 1,
+            stderr: "No conversation found with session ID: 0192f0c1-7d2e".to_string(),
+        };
+        assert!(is_session_not_found(&err));
+    }
+
+    #[test]
+    fn is_session_not_found_rejects_other_errors_for_session_id() {
+        let err = AgentError::ProcessFailed {
+            exit_code: 1,
+            stderr: "permission denied".to_string(),
+        };
+        assert!(!is_session_not_found(&err));
+        let timeout = AgentError::Timeout {
+            limit: Duration::from_secs(1),
+        };
+        assert!(!is_session_not_found(&timeout));
     }
 }

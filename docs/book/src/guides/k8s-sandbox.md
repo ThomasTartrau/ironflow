@@ -289,6 +289,29 @@ no snapshot: a step that breaks the workspace leaves it broken for the next one.
 The worker needs `create`, `get`, `patch`, `list` and `delete` on
 `persistentvolumeclaims` (see `examples/k8s/sandbox/namespace-rbac.yaml`).
 
+## Sessions volume
+
+An agent step interrupted by a lost lease resumes its Claude Code session on
+its next execution (see
+[Resuming an interrupted agent step](transports.md#resuming-an-interrupted-agent-step)).
+`HOME` of a sandboxed pod is an `emptyDir`, so the session dies with the pod
+and the step restarts from scratch. `sessions_volume` mounts an existing
+PersistentVolumeClaim on `~/.claude/projects`, where Claude Code writes its
+sessions, so the next pod finds the session again:
+
+```rust,ignore
+let provider = K8sEphemeralProvider::sandboxed(&image)
+    .sessions_volume("claude-sessions")
+    .working_dir("/workspace");
+```
+
+The claim is yours to create; the provider never creates nor deletes it. Use a
+`ReadWriteMany` claim, or make sure the next pod lands on the same node.
+Claude Code keys its sessions by working directory: keep the same
+`working_dir` across executions. A Claude profile mapped to `projects` (or
+below) and a step volume mounted on `~/.claude/projects` are refused, since
+they would hide the sessions.
+
 ## The reaper
 
 Every object ironflow creates carries `app.kubernetes.io/managed-by=ironflow`,

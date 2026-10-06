@@ -39,6 +39,7 @@ use super::failure::{
     allowed_failure_output, extract_debug_messages_from_error, extract_partial_usage_from_error,
     extract_raw_response_from_error, is_step_retryable, record_retry_metric,
 };
+use super::session::retry_in_session;
 use super::steps::sub_workflow::recorded_child_run_id;
 
 /// Error recorded on an agent step parked by a capacity wait.
@@ -455,6 +456,8 @@ impl WorkflowContext {
 
         self.carry_capacity_wait_since(&mut config, position, name)
             .await?;
+        self.assign_agent_session(&mut config, step.id, position, name)
+            .await?;
 
         let step_log_sender = self
             .log_sender
@@ -701,6 +704,8 @@ impl WorkflowContext {
             .as_ref()
             .map(|s| StepLogSender::new(s.clone(), self.run_id, step_id, name.to_string()));
 
+        // A retry resumes the agent session the first try created.
+        let config = &retry_in_session(config);
         for attempt in 0..policy.max_retries() {
             if let StepConfig::Agent(agent_config) = config {
                 self.check_run_budget(step_budget_usd(agent_config.max_budget_usd))?;

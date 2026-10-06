@@ -220,6 +220,10 @@ impl<P: AgentProvider> AgentProvider for RecordReplayProvider<P> {
     fn release_run<'a>(&'a self, run_id: &'a str) -> ReleaseFuture<'a> {
         self.inner.release_run(run_id)
     }
+
+    fn supports_sessions_for(&self, config: &AgentConfig) -> bool {
+        self.inner.supports_sessions_for(config)
+    }
 }
 
 #[cfg(test)]
@@ -376,6 +380,28 @@ mod tests {
         config1.resume_session_id = Some("session-123".to_string());
         config2.resume_session_id = Some("session-456".to_string());
         assert_ne!(hash_config(&config1), hash_config(&config2));
+    }
+
+    #[test]
+    fn hash_config_ignores_session_id() {
+        // The engine draws a fresh session id per step: hashing it would
+        // never match a recorded fixture again.
+        let config1 = AgentConfig::new("Review").session_id("sid-1");
+        let config2 = AgentConfig::new("Review").session_id("sid-2");
+        let plain = AgentConfig::new("Review");
+        assert_eq!(hash_config(&config1), hash_config(&config2));
+        assert_eq!(hash_config(&config1), hash_config(&plain));
+    }
+
+    #[test]
+    fn supports_sessions_for_delegates_to_inner_for_session_id() {
+        let (dir, _guard) = temp_fixtures_dir();
+        let config = AgentConfig::new("Review");
+        let claude = RecordReplayProvider::replay(ClaudeCodeProvider::new(), &dir);
+        assert!(claude.supports_sessions_for(&config));
+        let probe =
+            RecordReplayProvider::replay(ReleaseProbe(Arc::new(Mutex::new(Vec::new()))), &dir);
+        assert!(!probe.supports_sessions_for(&config));
     }
 
     #[test]

@@ -295,6 +295,21 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     /// specified session rather than starting a new one.
     pub resume_session_id: Option<String>,
 
+    /// Session id to create (`--session-id <uuid>`).
+    ///
+    /// Fixes the id of the session the provider starts, so it can be resumed
+    /// later through [`AgentConfig::resume_session_id`]. Ignored when
+    /// `resume_session_id` is set. Providers without sessions ignore it.
+    #[serde(default)]
+    pub session_id: Option<String>,
+
+    /// Prompt the engine sends instead of `prompt` when it resumes an
+    /// interrupted step.
+    ///
+    /// Read by the engine/executor only; providers ignore it.
+    #[serde(default)]
+    pub resume_prompt: Option<String>,
+
     /// Optional persistent environment ID to resume (K8s ephemeral provider only).
     ///
     /// The ID is the name of a PersistentVolumeClaim previously returned in
@@ -437,7 +452,8 @@ impl AgentConfig {
             json_schema: None,
 
             resume_session_id: None,
-
+            session_id: None,
+            resume_prompt: None,
             resume_environment_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
@@ -685,6 +701,46 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// Set a session ID to resume a previous conversation.
     pub fn resume(mut self, session_id: &str) -> Self {
         self.resume_session_id = Some(session_id.to_string());
+        self
+    }
+
+    /// Fix the id of the session the provider creates (`--session-id <uuid>`).
+    ///
+    /// Ignored when a session to resume is set with [`AgentConfig::resume`].
+    /// Claude Code requires a UUID.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review the code")
+    ///     .session_id("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d");
+    /// assert!(config.session_id.is_some());
+    /// ```
+    pub fn session_id(mut self, session_id: &str) -> Self {
+        self.session_id = Some(session_id.to_string());
+        self
+    }
+
+    /// Set the prompt sent when the engine resumes an interrupted step.
+    ///
+    /// The engine resumes the Claude Code session of an agent step
+    /// interrupted by a lost worker lease and sends this prompt instead of
+    /// the original one. Without it, the engine uses its default resume
+    /// prompt. Providers ignore this field.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("migrate the schema")
+    ///     .resume_prompt("You were interrupted. Check the migration state and finish it.");
+    /// assert!(config.resume_prompt.is_some());
+    /// ```
+    pub fn resume_prompt(mut self, prompt: &str) -> Self {
+        self.resume_prompt = Some(prompt.to_string());
         self
     }
 
@@ -1212,6 +1268,8 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             permission_mode: self.permission_mode,
             json_schema: self.json_schema,
             resume_session_id: self.resume_session_id,
+            session_id: self.session_id,
+            resume_prompt: self.resume_prompt,
             resume_environment_id: self.resume_environment_id,
             verbose: self.verbose,
             pod_labels: self.pod_labels,
@@ -1803,6 +1861,27 @@ pub trait AgentProvider: Send + Sync {
     fn account_kind_for(&self, _config: &AgentConfig) -> Option<&'static str> {
         self.account_kind()
     }
+
+    /// Whether this provider can create and resume Claude Code sessions for
+    /// this `config`.
+    ///
+    /// When `true`, the provider honours [`AgentConfig::session_id`] and
+    /// [`AgentConfig::resume_session_id`], and the engine fixes a session id
+    /// before an agent step launches so the step can resume after an
+    /// interruption. Defaults to `false` (HTTP providers, fixtures).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_core::provider::{AgentConfig, AgentProvider};
+    ///
+    /// let provider = ClaudeCodeProvider::new();
+    /// assert!(provider.supports_sessions_for(&AgentConfig::new("hi")));
+    /// ```
+    fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
+        false
+    }
 }
 
 // The decision abstraction lives beside `AgentProvider`: re-exported here so
@@ -1838,7 +1917,8 @@ mod tests {
             json_schema: Some(r#"{"type":"object"}"#.to_string()),
 
             resume_session_id: None,
-
+            session_id: None,
+            resume_prompt: None,
             resume_environment_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
@@ -1895,7 +1975,8 @@ mod tests {
             json_schema: None,
 
             resume_session_id: None,
-
+            session_id: None,
+            resume_prompt: None,
             resume_environment_id: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
@@ -2012,6 +2093,49 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let back: AgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.resume_session_id, Some("sess-xyz".to_string()));
+    }
+
+    #[test]
+    fn agent_config_session_id_and_resume_prompt_roundtrip() {
+        let config = AgentConfig::new("test")
+            .session_id("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d")
+            .resume_prompt("keep going");
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.session_id.as_deref(),
+            Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d")
+        );
+        assert_eq!(back.resume_prompt.as_deref(), Some("keep going"));
+    }
+
+    #[test]
+    fn agent_config_without_session_id_fields_deserializes() {
+        let mut raw = serde_json::to_value(AgentConfig::new("test")).unwrap();
+        let object = raw.as_object_mut().unwrap();
+        object.remove("session_id");
+        object.remove("resume_prompt");
+        let back: AgentConfig = serde_json::from_value(raw).unwrap();
+        assert_eq!(back.session_id, None);
+        assert_eq!(back.resume_prompt, None);
+    }
+
+    #[test]
+    fn agent_config_session_id_survives_typestate_change() {
+        let config: AgentConfig = AgentConfig::new("test")
+            .session_id("sid-1")
+            .resume_prompt("again")
+            .allow_tool(Tool::Read)
+            .into();
+        assert_eq!(config.session_id.as_deref(), Some("sid-1"));
+        assert_eq!(config.resume_prompt.as_deref(), Some("again"));
+    }
+
+    #[test]
+    fn agent_config_new_has_no_session_id() {
+        let config = AgentConfig::new("test");
+        assert_eq!(config.session_id, None);
+        assert_eq!(config.resume_prompt, None);
     }
 
     #[test]

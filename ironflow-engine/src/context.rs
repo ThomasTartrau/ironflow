@@ -30,6 +30,7 @@ mod error_handlers;
 mod failure;
 mod guard;
 mod lifecycle;
+mod session;
 mod steps;
 
 #[cfg(test)]

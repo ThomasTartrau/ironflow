@@ -13,6 +13,19 @@ use ironflow_core::provider::{NoSchema, NoTools, RawSchema, WithSchema, WithTool
 use crate::error::EngineError;
 use crate::executor::StepOutput;
 
+/// Prompt the engine sends when it resumes the Claude Code session of an
+/// agent step interrupted by a lost worker lease, unless the step set its own
+/// with [`AgentConfig::resume_prompt`].
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::config::DEFAULT_RESUME_PROMPT;
+///
+/// assert!(DEFAULT_RESUME_PROMPT.contains("interrupted"));
+/// ```
+pub const DEFAULT_RESUME_PROMPT: &str = "The previous run of this task was interrupted. Continue from where you stopped and finish the task.";
+
 /// Backward-compatible alias for [`AgentConfig`].
 ///
 /// # Examples

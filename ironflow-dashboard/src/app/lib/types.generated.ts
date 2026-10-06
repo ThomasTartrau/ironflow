@@ -4177,6 +4177,11 @@ export interface components {
 			 */
 			run_id: string;
 			/**
+			 * @description Claude Code session the agent step ran in, if any. A step interrupted
+			 *     by a lost lease resumes it on its next execution.
+			 */
+			session_id?: string | null;
+			/**
 			 * Format: date-time
 			 * @description When execution started.
 			 */
@@ -4496,6 +4501,44 @@ export interface components {
 			username: string;
 		};
 		/**
+		 * @description Payload of the `WorkflowEvent::AgentStepResumed` workflow event.
+		 *
+		 *     Published when an agent step interrupted by a lost lease is re-executed
+		 *     on the Claude Code session of the interrupted attempt instead of starting
+		 *     from scratch.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_engine::notify::WorkflowAgentStepResumedEvent;
+		 *     use chrono::Utc;
+		 *
+		 *     let payload = WorkflowAgentStepResumedEvent {
+		 *         step_name: "review".to_string(),
+		 *         step_index: 2,
+		 *         session_id: "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string(),
+		 *         timestamp: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.step_index, 2);
+		 *     ```
+		 */
+		WorkflowAgentStepResumedEvent: {
+			/** @description Claude Code session the step resumes. */
+			session_id: string;
+			/**
+			 * Format: int32
+			 * @description Zero-based position in the workflow.
+			 */
+			step_index: number;
+			/** @description Human-readable step name. */
+			step_name: string;
+			/**
+			 * Format: date-time
+			 * @description When the step resumed.
+			 */
+			timestamp: string;
+		};
+		/**
 		 * @description Payload of the `WorkflowEvent::AgentStepTokensUsed` workflow event.
 		 *
 		 *     # Examples
@@ -4643,6 +4686,10 @@ export interface components {
 			| (components["schemas"]["WorkflowAgentStepTokensUsedEvent"] & {
 					/** @enum {string} */
 					type: "agent_step_tokens_used";
+			  })
+			| (components["schemas"]["WorkflowAgentStepResumedEvent"] & {
+					/** @enum {string} */
+					type: "agent_step_resumed";
 			  });
 		/**
 		 * @description Payload of the `WorkflowEvent::InputRequired` workflow event.

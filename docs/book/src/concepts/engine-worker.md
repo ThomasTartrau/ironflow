@@ -127,6 +127,9 @@ A requeued run resumes where its worker stopped, in the same attempt:
 - An interrupted `ctx.workflow` step re-enters the child run it had started
   instead of starting a new one. The child's running steps are interrupted
   the same way, and its finished steps are replayed.
+- An interrupted agent step resumes the Claude Code session it was running
+  in, with a resume prompt, instead of starting the agent from scratch. See
+  [Resuming an interrupted agent step](../guides/transports.md#resuming-an-interrupted-agent-step).
 
 The interrupted step really runs twice, so make it idempotent: a deploy, a
 payment or a notification must tolerate a second call.

@@ -198,6 +198,8 @@ impl WorkflowContext {
             self.scope_step_config(&mut config_with_trace, name);
             self.carry_capacity_wait_since(&mut config_with_trace, wave_position, name)
                 .await?;
+            self.assign_agent_session(&mut config_with_trace, step.id, wave_position, name)
+                .await?;
             step_records.push((step.id, trace_id, name.to_string(), config_with_trace));
             record_slots.push(slot);
         }
