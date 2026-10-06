@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.30](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-mcp-v0.1.29...ironflow-mcp-v0.1.30) - 2026-10-06
 ## [0.1.29](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-mcp-v0.1.28...ironflow-mcp-v0.1.29) - 2026-10-06
 
 ### Fixed

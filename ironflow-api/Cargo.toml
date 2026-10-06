@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-api"
-version = "2.46.3"
+version = "2.46.4"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -24,11 +24,11 @@ storage-s3 = ["ironflow-artifacts/storage-s3"]
 store-postgres = ["ironflow-store/store-postgres"]
 
 [dependencies]
-ironflow-store = { version = "2.43.3", path = "../ironflow-store" }
+ironflow-store = { version = "2.43.4", path = "../ironflow-store" }
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float", "axum_extras"], optional = true }
-ironflow-engine = { version = "2.48.3", path = "../ironflow-engine" }
-ironflow-core = { version = "4.9.1", path = "../ironflow-core" }
-ironflow-auth = { version = "2.4.60", path = "../ironflow-auth" }
+ironflow-engine = { version = "2.48.4", path = "../ironflow-engine" }
+ironflow-core = { version = "4.9.2", path = "../ironflow-core" }
+ironflow-auth = { version = "2.4.61", path = "../ironflow-auth" }
 ironflow-templates = { version = "0.1.4", path = "../ironflow-templates" }
 ironflow-types = { version = "0.2.2", path = "../ironflow-types" }
 
@@ -67,6 +67,6 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 schemars = "1"
 tempfile = "3"
-ironflow-store = { version = "2.43.3", path = "../ironflow-store", features = ["store-memory", "secret-store", "store-postgres"] }
+ironflow-store = { version = "2.43.4", path = "../ironflow-store", features = ["store-memory", "secret-store", "store-postgres"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
