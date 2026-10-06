@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.49.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.48.2...ironflow-api-v2.49.0) - 2026-10-06
+
+### Added
+
+- #171 add run priority to the worker queue
+
+
+### Fixed
+
+- #171 keep the null-author schedule test out of the handler sync race
+
 ## [2.48.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.48.1...ironflow-api-v2.48.2) - 2026-10-06
 ## [2.48.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-api-v2.47.0...ironflow-api-v2.48.0) - 2026-10-06
 
