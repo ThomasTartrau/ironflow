@@ -7,7 +7,9 @@ use serde_json::{Value, from_value};
 use sqlx::Row;
 use strum::IntoEnumIterator;
 
-use crate::entities::{Assignee, FsmState, Run, RunActor, RunStatus, Step, StepKind, StepStatus};
+use crate::entities::{
+    Assignee, FsmState, ProviderKind, Run, RunActor, RunStatus, Step, StepKind, StepStatus,
+};
 use crate::error::StoreError;
 
 // ---------------------------------------------------------------------------
@@ -182,6 +184,9 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         lease_expires_at: row.get("lease_expires_at"),
         output: row.get("output"),
         lease_recoveries: row.get::<i32, _>("lease_recoveries") as u32,
+        capacity_wait_kind: row
+            .get::<Option<String>, _>("capacity_wait_kind")
+            .map(ProviderKind::from),
     })
 }
 

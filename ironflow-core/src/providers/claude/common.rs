@@ -1808,6 +1808,11 @@ mod tests {
             retry: None,
             trace_context: None,
             account: None,
+            max_capacity_wait: None,
+            account_name: None,
+            account_pool: None,
+            rate_limits: None,
+            capacity_wait_since: None,
             _marker: PhantomData,
         };
 

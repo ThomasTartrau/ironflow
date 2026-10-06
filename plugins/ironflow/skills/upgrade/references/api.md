@@ -287,3 +287,31 @@ read a step through it now sees `Null`. Read the step explicitly instead.
 - assert_eq!(result.output()["stdout"], "compiled");
 + assert_eq!(result.steps().last().expect("a step").step_output().stdout(), "compiled");
 ```
+
+## capacity-wait
+- kind: behavior
+- since: ironflow-core after 4.9.1, ironflow-engine after 2.48.3, ironflow-worker after 2.23.18 (#184)
+- detect: `no provider account available`
+
+When every Provider Account an agent step may use is rate limited, the run no longer
+fails with `AgentError::ProcessFailed` ("no provider account available ..."): it sleeps
+until the earliest reset and the step runs again from the start when it wakes, for up to
+6 hours of cumulative wait. A step still fails when the reset is further away, now with
+`AgentError::NoCapacity { next_reset, .. }`. A rejection reported while the step runs
+fails it over to the next account, and a rate limit on the worker's own token sleeps
+the same way. A step can target `.account(name)` (never fails over, unknown name gives
+`AgentError::AccountNotFound`) or `.account_pool(tag)`. Code that matched the old stderr,
+or a retry loop around agent steps, can match the typed variant or drop the loop;
+`.fail_fast_on_capacity()` restores the fail-fast behavior per step (`Duration::ZERO` on the worker).
+
+```diff
+- Err(EngineError::Operation(OperationError::Agent(AgentError::ProcessFailed { stderr, .. })))
+-     if stderr.contains("no provider account available") => notify_limited().await?,
++ Err(EngineError::Operation(OperationError::Agent(AgentError::NoCapacity { next_reset, .. }))) =>
++     notify_limited(next_reset).await?,
+```
+
+```diff
+- let triage = AgentStepConfig::new("Triage the incident");
++ let triage = AgentStepConfig::new("Triage the incident").fail_fast_on_capacity();
+```

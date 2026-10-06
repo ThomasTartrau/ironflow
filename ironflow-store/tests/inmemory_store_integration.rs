@@ -2223,3 +2223,105 @@ async fn update_step_records_environment_id_and_keeps_it_on_later_updates() {
         Some("ironflow-env-0a1b2c")
     );
 }
+
+// ─── Capacity wait ──────────────────────────────────────────────
+
+/// Create a run sleeping until `wake_at` on `kind` capacity, when given.
+async fn capacity_sleeper(
+    store: &InMemoryStore,
+    wake_at: DateTime<Utc>,
+    kind: Option<&str>,
+) -> Uuid {
+    let run = store
+        .create_run(new_run("capacity"))
+        .await
+        .unwrap()
+        .into_run();
+    store
+        .update_run_status(run.id, RunStatus::Running)
+        .await
+        .unwrap();
+    store
+        .update_run(
+            run.id,
+            RunUpdate {
+                status: Some(RunStatus::Sleeping),
+                scheduled_at: Some(wake_at),
+                capacity_wait_kind: kind.map(ProviderKind::from),
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    run.id
+}
+
+#[tokio::test]
+async fn capacity_wait_kind_is_kept_while_sleeping_and_cleared_after() {
+    let store = InMemoryStore::new();
+    let kind = "claude_subscription";
+    let wake_at = Utc::now() + TimeDelta::hours(1);
+    let run_id = capacity_sleeper(&store, wake_at, Some(kind)).await;
+
+    let run = store.get_run(run_id).await.unwrap().unwrap();
+    assert_eq!(run.capacity_wait_kind, Some(ProviderKind::from(kind)));
+
+    store
+        .update_run(
+            run_id,
+            RunUpdate {
+                scheduled_at: Some(Utc::now() - TimeDelta::seconds(1)),
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    let woken = store.claim_due_sleeping_runs(10).await.unwrap();
+    assert_eq!(woken.iter().map(|r| r.id).collect::<Vec<_>>(), vec![run_id]);
+    let run = store.get_run(run_id).await.unwrap().unwrap();
+    assert_eq!(run.status.state, RunStatus::Pending);
+    assert_eq!(run.capacity_wait_kind, None);
+}
+
+#[tokio::test]
+async fn re_enabling_an_account_wakes_the_capacity_sleepers_of_its_kind() {
+    let store = InMemoryStore::new();
+    let mut disabled = new_account("perso", 10);
+    disabled.enabled = false;
+    let account = store.create_provider_account(disabled).await.unwrap();
+
+    let wake_at = Utc::now() + TimeDelta::hours(1);
+    let waiting = capacity_sleeper(&store, wake_at, Some("claude_subscription")).await;
+    let other = capacity_sleeper(&store, wake_at, Some("other_kind")).await;
+    let delayed = capacity_sleeper(&store, wake_at, None).await;
+
+    store
+        .update_provider_account(
+            account.id,
+            ProviderAccountUpdate {
+                priority: Some(1),
+                ..ProviderAccountUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    let run = store.get_run(waiting).await.unwrap().unwrap();
+    assert_eq!(run.scheduled_at, Some(wake_at));
+
+    store
+        .update_provider_account(
+            account.id,
+            ProviderAccountUpdate {
+                enabled: Some(true),
+                ..ProviderAccountUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    let run = store.get_run(waiting).await.unwrap().unwrap();
+    assert!(run.scheduled_at.expect("scheduled") <= Utc::now());
+    for untouched in [other, delayed] {
+        let run = store.get_run(untouched).await.unwrap().unwrap();
+        assert_eq!(run.scheduled_at, Some(wake_at));
+    }
+}

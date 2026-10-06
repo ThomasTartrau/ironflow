@@ -185,6 +185,7 @@ impl SignalStore for InMemoryStore {
             if run_resumed {
                 run.status.state = RunStatus::Pending;
                 run.scheduled_at = None;
+                run.capacity_wait_kind = None;
                 run.updated_at = now;
             }
 
@@ -223,6 +224,7 @@ impl SignalStore for InMemoryStore {
             }
             run.status.state = RunStatus::Sleeping;
             run.worker_id = None;
+            run.capacity_wait_kind = None;
             run.lease_expires_at = None;
             // A signal that resolved the step before the run could sleep left
             // nothing to wait for: the next waker tick resumes it right away.

@@ -35,6 +35,12 @@ pub(super) fn is_step_retryable(err: &EngineError) -> bool {
             OperationError::Agent(
                 AgentError::UnknownToolProfile { .. } | AgentError::ToolProfileUnsupported { .. },
             ) => false,
+            // Account selection already decided: replaying hits the same limits.
+            OperationError::Agent(
+                AgentError::NoCapacity { .. }
+                | AgentError::CapacityWait { .. }
+                | AgentError::AccountNotFound { .. },
+            ) => false,
             // A 4xx from the model API fails the same way on every attempt.
             OperationError::Agent(AgentError::Api { .. }) => is_retryable(op),
             OperationError::Deserialize { .. } => false,
@@ -137,6 +143,8 @@ pub(super) fn extract_partial_usage_from_error(err: &EngineError) -> Option<Step
 mod tests {
     use std::time::Duration;
 
+    use chrono::Utc;
+
     use super::*;
 
     fn agent_error(err: AgentError) -> EngineError {
@@ -161,6 +169,23 @@ mod tests {
         assert!(is_step_retryable(&agent_error(AgentError::Timeout {
             limit: Duration::from_secs(1),
         })));
+    }
+
+    #[test]
+    fn capacity_errors_are_not_step_retryable() {
+        assert!(!is_step_retryable(&agent_error(AgentError::NoCapacity {
+            kind: "claude".to_string(),
+            next_reset: None,
+        })));
+        assert!(!is_step_retryable(&agent_error(AgentError::CapacityWait {
+            kind: "claude".to_string(),
+            wake_at: Utc::now(),
+        })));
+        assert!(!is_step_retryable(&agent_error(
+            AgentError::AccountNotFound {
+                name: "team-a".to_string(),
+            }
+        )));
     }
 
     fn api_error(status: Option<u16>, code: Option<&str>) -> EngineError {

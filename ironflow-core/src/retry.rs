@@ -257,6 +257,9 @@ impl RetryPolicy {
 ///   costs money and cannot succeed)
 /// - [`OperationError::Agent`] wrapping [`AgentError::UnknownToolProfile`] or
 ///   [`AgentError::ToolProfileUnsupported`] (a configuration error)
+/// - [`OperationError::Agent`] wrapping [`AgentError::NoCapacity`],
+///   [`AgentError::CapacityWait`] or [`AgentError::AccountNotFound`] (account
+///   selection already decided: replaying at once hits the same limits)
 /// - [`OperationError::Shell`]
 /// - [`OperationError::Deserialize`]
 /// - [`OperationError::External`]
@@ -278,7 +281,10 @@ pub fn is_retryable(error: &OperationError) -> bool {
             AgentError::PromptTooLarge { .. }
             | AgentError::BudgetExceeded { .. }
             | AgentError::UnknownToolProfile { .. }
-            | AgentError::ToolProfileUnsupported { .. } => false,
+            | AgentError::ToolProfileUnsupported { .. }
+            | AgentError::NoCapacity { .. }
+            | AgentError::CapacityWait { .. }
+            | AgentError::AccountNotFound { .. } => false,
         },
         OperationError::Timeout { .. } => true,
         OperationError::Shell { .. }
@@ -298,6 +304,8 @@ pub(crate) fn is_retryable_status(status: u16) -> bool {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    use chrono::Utc;
 
     // --- RetryPolicy builder ---
 
@@ -513,6 +521,32 @@ mod tests {
             limit_usd: 0.25,
             debug_messages: Vec::new(),
             partial_usage: Box::default(),
+        });
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn agent_no_capacity_is_not_retryable() {
+        let err = OperationError::Agent(AgentError::NoCapacity {
+            kind: "claude".to_string(),
+            next_reset: None,
+        });
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn agent_capacity_wait_is_not_retryable() {
+        let err = OperationError::Agent(AgentError::CapacityWait {
+            kind: "claude".to_string(),
+            wake_at: Utc::now(),
+        });
+        assert!(!is_retryable(&err));
+    }
+
+    #[test]
+    fn agent_account_not_found_is_not_retryable() {
+        let err = OperationError::Agent(AgentError::AccountNotFound {
+            name: "team-a".to_string(),
         });
         assert!(!is_retryable(&err));
     }

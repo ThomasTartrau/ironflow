@@ -26,9 +26,9 @@ use ironflow_core::metric_names::{
 use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter,
-    RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate, TriggerKind,
-    validate_concurrency_limits,
+    ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, ProviderKind, Run, RunActor, RunCreation,
+    RunFilter, RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate,
+    TriggerKind, validate_concurrency_limits,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -2131,6 +2131,36 @@ impl Engine {
                     step_id = %step_id,
                     wake_at = %wake_at,
                     "run sleeping until delay elapses"
+                );
+            }
+            Err(EngineError::CapacitySleeping {
+                run_id: capacity_run_id,
+                step_id,
+                ref kind,
+                wake_at,
+            }) => {
+                final_status = RunStatus::Sleeping;
+                final_run = self
+                    .store
+                    .update_run_returning(
+                        run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::Sleeping),
+                            cost_usd: Some(ctx.total_cost_usd()),
+                            duration_ms: Some(total_duration),
+                            scheduled_at: Some(wake_at),
+                            capacity_wait_kind: Some(ProviderKind::new(kind.as_str())),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    run_id = %capacity_run_id,
+                    step_id = %step_id,
+                    kind = %kind,
+                    wake_at = %wake_at,
+                    "run sleeping until provider capacity returns"
                 );
             }
             Err(EngineError::SignalWaiting {

@@ -12,6 +12,7 @@ use std::any;
 use std::fmt;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use crate::provider::DebugMessage;
@@ -304,6 +305,84 @@ pub enum AgentError {
         provider: String,
         /// The profile the step asked for.
         profile: String,
+    },
+
+    /// No provider account can run the step, and the run will not wait for one.
+    ///
+    /// Returned when every targeted account (or the worker's own token) is
+    /// rate limited and the next reset is unknown or further away than the
+    /// step's `max_capacity_wait`, or when that wait is `Duration::ZERO`
+    /// (fast fail). Never retried: replaying it at once hits the same limits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::error::AgentError;
+    ///
+    /// let err = AgentError::NoCapacity {
+    ///     kind: "claude".to_string(),
+    ///     next_reset: None,
+    /// };
+    /// assert!(err.to_string().contains("no capacity for claude"));
+    /// ```
+    #[error(
+        "no capacity for {kind}: every targeted account is rate limited (next reset {})",
+        next_reset.map_or_else(|| "unknown".to_string(), |at| at.to_rfc3339())
+    )]
+    NoCapacity {
+        /// Provider kind the step needed (e.g. `"claude"`).
+        kind: String,
+        /// Earliest moment a targeted rate limit window resets, when known.
+        next_reset: Option<DateTime<Utc>>,
+    },
+
+    /// Not a failure: asks the engine to suspend the run until `wake_at`.
+    ///
+    /// Returned by the account-aware provider when every targeted account is
+    /// rate limited but capacity comes back within the step's
+    /// `max_capacity_wait`. The engine puts the run to sleep and re-executes
+    /// the step from zero when it wakes, or earlier when an account of `kind`
+    /// is added, re-enabled or gets a new token. Never retried.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use ironflow_core::error::AgentError;
+    ///
+    /// let err = AgentError::CapacityWait {
+    ///     kind: "claude".to_string(),
+    ///     wake_at: Utc::now(),
+    /// };
+    /// assert!(err.to_string().contains("waiting for claude capacity"));
+    /// ```
+    #[error("waiting for {kind} capacity until {}", wake_at.to_rfc3339())]
+    CapacityWait {
+        /// Provider kind the step needs (e.g. `"claude"`).
+        kind: String,
+        /// Moment the engine should wake the run and retry the step.
+        wake_at: DateTime<Utc>,
+    },
+
+    /// The step asked for a provider account by name and none matches.
+    ///
+    /// Never falls back to another account or to the worker's own token: a
+    /// step pinned to an account must not silently spend another one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::error::AgentError;
+    ///
+    /// let err = AgentError::AccountNotFound {
+    ///     name: "team-a".to_string(),
+    /// };
+    /// assert_eq!(err.to_string(), "provider account 'team-a' not found");
+    /// ```
+    #[error("provider account '{name}' not found")]
+    AccountNotFound {
+        /// The account name the step asked for.
+        name: String,
     },
 }
 

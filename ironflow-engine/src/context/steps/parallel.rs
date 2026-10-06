@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::to_value;
 use tokio::task::{Id, JoinSet};
@@ -10,6 +10,7 @@ use tokio::time::timeout;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use ironflow_core::error::{AgentError, OperationError};
 use ironflow_store::models::{NewStep, StepStatus, StepUpdate, step_trace_id};
 
 use crate::budget::step_budget_usd;
@@ -195,6 +196,8 @@ impl WorkflowContext {
 
             let mut config_with_trace = config.clone();
             self.scope_step_config(&mut config_with_trace, name);
+            self.carry_capacity_wait_since(&mut config_with_trace, wave_position, name)
+                .await?;
             step_records.push((step.id, trace_id, name.to_string(), config_with_trace));
             record_slots.push(slot);
         }
@@ -254,6 +257,9 @@ impl WorkflowContext {
         let mut indexed_results: Vec<Option<Result<StepOutput, String>>> =
             vec![None; step_records.len()];
         let mut first_error: Option<EngineError> = None;
+        // Earliest capacity wait of the wave: the run sleeps once every other
+        // step settled, and only the parked steps run again when it wakes.
+        let mut capacity_wait: Option<(Uuid, String, DateTime<Utc>)> = None;
 
         while let Some(join_result) = join_set.join_next().await {
             let (idx, step_result) = match join_result {
@@ -392,6 +398,26 @@ impl WorkflowContext {
 
                     indexed_results[idx] = Some(Ok(output));
                 }
+                Err(EngineError::Operation(OperationError::Agent(AgentError::CapacityWait {
+                    kind,
+                    wake_at,
+                }))) => {
+                    // Not a failure, even with `allow_failure`: see `run_step`.
+                    self.park_capacity_step(*step_id).await?;
+                    info!(
+                        run_id = %self.run_id,
+                        step = %step_name,
+                        kind = %kind,
+                        wake_at = %wake_at,
+                        "no provider capacity, parallel step parked until the run wakes"
+                    );
+                    if capacity_wait
+                        .as_ref()
+                        .is_none_or(|(_, _, earliest)| wake_at < *earliest)
+                    {
+                        capacity_wait = Some((*step_id, kind, wake_at));
+                    }
+                }
                 Err(err) => {
                     let err_msg = err.to_string();
                     let debug_messages_json = extract_debug_messages_from_error(&err);
@@ -482,6 +508,15 @@ impl WorkflowContext {
 
         if let Some(err) = first_error {
             return Err(err);
+        }
+
+        if let Some((step_id, kind, wake_at)) = capacity_wait {
+            return Err(EngineError::CapacitySleeping {
+                run_id: self.run_id,
+                step_id,
+                kind,
+                wake_at,
+            });
         }
 
         self.persist_progress().await;

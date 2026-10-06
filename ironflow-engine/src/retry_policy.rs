@@ -118,6 +118,7 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::Decision(_)
         | EngineError::NoDecisionProvider { .. }
         | EngineError::DelaySleeping { .. }
+        | EngineError::CapacitySleeping { .. }
         | EngineError::SignalWaiting { .. }
         // Not a failure: a child run suspended and the run waits with it.
         | EngineError::ChildSuspended { .. }

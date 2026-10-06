@@ -237,6 +237,43 @@ pub enum EngineError {
         wake_at: chrono::DateTime<chrono::Utc>,
     },
 
+    /// An agent step found every targeted provider account rate limited and
+    /// suspended the run until capacity comes back.
+    ///
+    /// The engine transitions the run to
+    /// [`Sleeping`](ironflow_store::entities::RunStatus::Sleeping), sets
+    /// `scheduled_at` to `wake_at` and records `kind` in
+    /// `capacity_wait_kind`, so adding or re-enabling an account of that kind
+    /// wakes it early. On wake, the step runs again from zero at the same
+    /// position.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// let err = EngineError::CapacitySleeping {
+    ///     run_id: Uuid::nil(),
+    ///     step_id: Uuid::nil(),
+    ///     kind: "claude".to_string(),
+    ///     wake_at: Utc::now(),
+    /// };
+    /// assert!(err.is_suspension());
+    /// ```
+    #[error("run {run_id} waiting for {kind} capacity at step {step_id}: wake at {wake_at}")]
+    CapacitySleeping {
+        /// The run that is sleeping.
+        run_id: Uuid,
+        /// The agent step that found no capacity.
+        step_id: Uuid,
+        /// Provider kind the run waits for (e.g. `claude`).
+        kind: String,
+        /// When the run should be woken up.
+        wake_at: DateTime<Utc>,
+    },
+
     /// A signal step suspended the run until a matching signal or its deadline.
     ///
     /// Raised by
@@ -293,6 +330,7 @@ pub enum EngineError {
         /// ([`ApprovalRequired`](EngineError::ApprovalRequired),
         /// [`HumanInputRequired`](EngineError::HumanInputRequired),
         /// [`DelaySleeping`](EngineError::DelaySleeping),
+        /// [`CapacitySleeping`](EngineError::CapacitySleeping),
         /// [`SignalWaiting`](EngineError::SignalWaiting)) or a nested
         /// `ChildSuspended` for a grand-child.
         cause: Box<EngineError>,
@@ -402,6 +440,7 @@ impl EngineError {
     /// True for [`ApprovalRequired`](EngineError::ApprovalRequired),
     /// [`HumanInputRequired`](EngineError::HumanInputRequired),
     /// [`DelaySleeping`](EngineError::DelaySleeping),
+    /// [`CapacitySleeping`](EngineError::CapacitySleeping),
     /// [`SignalWaiting`](EngineError::SignalWaiting) and
     /// [`ChildSuspended`](EngineError::ChildSuspended).
     ///
@@ -418,6 +457,7 @@ impl EngineError {
             EngineError::ApprovalRequired { .. }
                 | EngineError::HumanInputRequired { .. }
                 | EngineError::DelaySleeping { .. }
+                | EngineError::CapacitySleeping { .. }
                 | EngineError::SignalWaiting { .. }
                 | EngineError::ChildSuspended { .. }
         )
@@ -453,13 +493,13 @@ impl EngineError {
     }
 
     /// The status a run suspended by this error takes: `Sleeping` when the
-    /// leaf suspension is a delay or a signal, `AwaitingApproval` otherwise (a
+    /// leaf suspension is a delay, a capacity wait or a signal, `AwaitingApproval` otherwise (a
     /// gate a human resolves).
     pub(crate) fn suspension_status(&self) -> RunStatus {
         match self.suspension_leaf() {
-            EngineError::DelaySleeping { .. } | EngineError::SignalWaiting { .. } => {
-                RunStatus::Sleeping
-            }
+            EngineError::DelaySleeping { .. }
+            | EngineError::CapacitySleeping { .. }
+            | EngineError::SignalWaiting { .. } => RunStatus::Sleeping,
             _ => RunStatus::AwaitingApproval,
         }
     }
@@ -729,6 +769,12 @@ mod tests {
                 step_id: Uuid::nil(),
                 wake_at,
             },
+            EngineError::CapacitySleeping {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                kind: "claude".to_string(),
+                wake_at,
+            },
             EngineError::SignalWaiting {
                 run_id: Uuid::nil(),
                 step_id: Uuid::nil(),
@@ -800,6 +846,17 @@ mod tests {
             }),
         };
         assert_eq!(delay.suspension_status(), RunStatus::Sleeping);
+
+        let capacity = EngineError::ChildSuspended {
+            run_id: Uuid::nil(),
+            cause: Box::new(EngineError::CapacitySleeping {
+                run_id: Uuid::nil(),
+                step_id: Uuid::nil(),
+                kind: "claude".to_string(),
+                wake_at: Utc::now(),
+            }),
+        };
+        assert_eq!(capacity.suspension_status(), RunStatus::Sleeping);
     }
 
     #[test]

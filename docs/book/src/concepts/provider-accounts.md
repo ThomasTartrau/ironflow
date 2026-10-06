@@ -65,7 +65,55 @@ let worker = WorkerBuilder::new(&api_url, &worker_token)
     .build()?;
 ```
 
-When every account is limited, the step fails with the time of the next reset.
+## Targeting an account or a pool
+
+By default a step may use any account of the kind. A step can narrow that:
+
+```rust,ignore
+use std::time::Duration;
+
+// Only accounts tagged `team`.
+let review = AgentStepConfig::new("Review the diff").account_pool("team");
+// Exactly this account: never another one, never the worker's own token.
+let audit = AgentStepConfig::new("Audit the release").account("perso-max");
+```
+
+A name that matches no account fails the step with `AgentError::AccountNotFound`.
+A pool with no account fails it with `AgentError::NoCapacity`.
+
+## When every account is limited
+
+If the CLI reports a rejected window while a step runs on an account, the
+worker records it and runs the step again on the next available account. A
+step pinned with `.account(..)` has no other account and does not fail over.
+
+When no targeted account is available, the run is not failed: it goes
+`Sleeping` until the earliest window reset, and the step runs again from the
+start when the run wakes. The run shows the provider kind it waits for
+(`capacity_wait_kind` in the API, a line in `ironflow run get <id>`, a note in the
+dashboard) and its wake-up time in `scheduled_at`. Adding an account of that
+kind, re-enabling one or renewing its token wakes the run right away. An
+account that is only saturated (`max_concurrency` reached) is tried again
+after a minute.
+
+The wait is bounded, counting every time the same step was parked: 6 hours by
+default. A reset further away fails the step with `AgentError::NoCapacity`,
+which carries the next reset time. Set the bound per step or on the worker; the
+step wins:
+
+```rust,ignore
+// Fail fast instead of waiting.
+let urgent = AgentStepConfig::new("Triage the incident").fail_fast_on_capacity();
+
+let worker = WorkerBuilder::new(&api_url, &worker_token)
+    .provider(Arc::new(ClaudeCodeProvider::new()))
+    .max_capacity_wait(Duration::from_secs(2 * 3600))
+    .build()?;
+```
+
+A step marked `allow_failure()` still sleeps: waiting for capacity is not a
+failure. With no account at all, a rate limit reported on the worker's own
+token puts the run to sleep the same way.
 
 ## CLI
 

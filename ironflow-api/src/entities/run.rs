@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use ironflow_store::models::{ConcurrencyLimit, Run, RunStatus, TriggerKind};
+use ironflow_store::models::{ConcurrencyLimit, ProviderKind, Run, RunStatus, TriggerKind};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,6 +59,12 @@ pub struct RunResponse {
     /// Scheduled execution time. `None` means the run executed immediately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// Provider kind the run is waiting capacity for, set only while the
+    /// run is `sleeping` because every targeted Provider Account is rate
+    /// limited. `scheduled_at` then holds when the run wakes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub capacity_wait_kind: Option<ProviderKind>,
     /// Who triggered the run. Always present.
     pub created_by: CreatedBy,
     /// Idempotency key that produced this run, when one was supplied.
@@ -104,6 +110,7 @@ impl From<Run> for RunResponse {
             handler_version: run.handler_version,
             labels: run.labels,
             scheduled_at: run.scheduled_at,
+            capacity_wait_kind: run.capacity_wait_kind,
             created_by,
             idempotency_key: run.idempotency_key,
             concurrency_key: run.concurrency_key,

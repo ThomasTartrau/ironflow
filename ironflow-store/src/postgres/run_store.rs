@@ -545,6 +545,9 @@ impl RunStore for PostgresStore {
                 // Leaving Running releases the worker lease.
                 sql.push_str(", worker_id = NULL, lease_expires_at = NULL");
             }
+            if new_status != RunStatus::Sleeping {
+                sql.push_str(", capacity_wait_kind = NULL");
+            }
             if new_status.is_terminal() {
                 sql.push_str(&format!(
                     ", completed_at = COALESCE(completed_at, ${bind_idx})"
@@ -1088,7 +1091,7 @@ impl RunStore for PostgresStore {
                 sqlx::query(
                     r#"
                     UPDATE ironflow.runs
-                    SET scheduled_at = NULL, updated_at = NOW()
+                    SET scheduled_at = NULL, capacity_wait_kind = NULL, updated_at = NOW()
                     WHERE id = $1
                     "#,
                 )

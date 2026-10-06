@@ -75,7 +75,9 @@ Workflows that use `ctx.decision(...)` need a decision provider on the worker to
 
 When [Provider Accounts](provider-accounts.md) exist, the worker picks one for
 every agent step and injects its credential; `WorkerBuilder::account_strategy`
-chooses how.
+chooses how. When every account is limited the run sleeps until the next
+reset, up to `WorkerBuilder::max_capacity_wait` (6 hours by default), and the
+step runs again when it wakes.
 
 ## Concurrency groups
 
@@ -140,7 +142,7 @@ it was created replays nothing either and fails with `HANDLER_VERSION_MISMATCH`.
 
 ## Waker
 
-Runs paused in `Sleeping` (a `ctx.delay` step, or a `ctx.wait_for_signal` step waiting for its signal) carry their wake-up time in `scheduled_at`. The Waker, a background task of the API server, claims every due run every 10 seconds and moves it back to `Pending` exactly once, even with several API instances. Under `ExecutionMode::Local` the API then resumes the run in-process; under `ExecutionMode::Workers` a worker picks it up. A delivered [signal](signals.md) wakes its runs right away, without waiting for the Waker.
+Runs paused in `Sleeping` (a `ctx.delay` step, a `ctx.wait_for_signal` step waiting for its signal, or an agent step waiting for [provider capacity](provider-accounts.md#when-every-account-is-limited)) carry their wake-up time in `scheduled_at`. The Waker, a background task of the API server, claims every due run every 10 seconds and moves it back to `Pending` exactly once, even with several API instances. Under `ExecutionMode::Local` the API then resumes the run in-process; under `ExecutionMode::Workers` a worker picks it up. A delivered [signal](signals.md) wakes its runs right away, without waiting for the Waker.
 
 ## Scaling
 

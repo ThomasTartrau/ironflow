@@ -20,12 +20,14 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::account::AccountSession;
+use crate::account::{AccountSession, RateLimitRecorder};
 use crate::error::AgentError;
 use crate::operations::agent::{Model, PermissionMode};
 use crate::retry::RetryPolicy;
@@ -362,6 +364,42 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(skip)]
     pub account: Option<AccountSession>,
 
+    /// Longest the run may sleep waiting for provider capacity when every
+    /// targeted account is rate limited.
+    ///
+    /// `None` uses the worker default (6 hours). `Duration::ZERO` fails the
+    /// step at once with [`AgentError::NoCapacity`]. Set it with
+    /// [`AgentConfig::max_capacity_wait`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_capacity_wait: Option<Duration>,
+
+    /// Name of the Provider Account the step must run under.
+    ///
+    /// Never falls back to another account: an unknown name fails with
+    /// [`AgentError::AccountNotFound`], a rate-limited one waits. Set it with
+    /// [`AgentConfig::account`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
+
+    /// Tag restricting the step to the Provider Accounts carrying it.
+    ///
+    /// Set it with [`AgentConfig::account_pool`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_pool: Option<String>,
+
+    /// Recorder observed rate-limit windows go to when the invocation runs
+    /// without an [`AccountSession`] (the worker environment token).
+    ///
+    /// Set by the worker. Ignored when [`account`](Self::account) is set.
+    #[serde(skip)]
+    pub rate_limits: Option<RateLimitRecorder>,
+
+    /// When the step started waiting for provider capacity, set by the engine.
+    ///
+    /// Bounds the cumulative wait for an account freed by `max_concurrency`.
+    #[serde(skip)]
+    pub capacity_wait_since: Option<DateTime<Utc>>,
+
     /// Zero-sized typestate marker (not serialized).
     #[serde(skip)]
     pub(crate) _marker: PhantomData<(Tools, Schema)>,
@@ -409,6 +447,11 @@ impl AgentConfig {
             retry: None,
             trace_context: None,
             account: None,
+            max_capacity_wait: None,
+            account_name: None,
+            account_pool: None,
+            rate_limits: None,
+            capacity_wait_since: None,
             _marker: PhantomData,
         }
     }
@@ -1004,6 +1047,123 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Set how long the run may sleep waiting for provider capacity.
+    ///
+    /// When every targeted account is rate limited, the run sleeps until the
+    /// earliest reset if it comes within `wait`, and fails with
+    /// [`AgentError::NoCapacity`] otherwise. `Duration::ZERO` fails at once.
+    /// Overrides the worker default (6 hours).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").max_capacity_wait(Duration::ZERO);
+    /// assert_eq!(config.max_capacity_wait, Some(Duration::ZERO));
+    /// ```
+    pub fn max_capacity_wait(mut self, wait: Duration) -> Self {
+        self.max_capacity_wait = Some(wait);
+        self
+    }
+
+    /// Fail the step at once when every targeted account is rate limited.
+    ///
+    /// Explicit form of [`max_capacity_wait`](Self::max_capacity_wait) with
+    /// `Duration::ZERO`: the step fails with [`AgentError::NoCapacity`] instead
+    /// of putting the run to sleep, whatever the worker default is.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").fail_fast_on_capacity();
+    /// assert_eq!(config.max_capacity_wait, Some(Duration::ZERO));
+    /// ```
+    pub fn fail_fast_on_capacity(self) -> Self {
+        self.max_capacity_wait(Duration::ZERO)
+    }
+
+    /// Run the step under the Provider Account named `name`, and only it.
+    ///
+    /// No failover: when the account is rate limited the run waits (bounded
+    /// by [`max_capacity_wait`](Self::max_capacity_wait)), when it does not
+    /// exist the step fails with [`AgentError::AccountNotFound`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").account("team-a");
+    /// assert_eq!(config.account_name.as_deref(), Some("team-a"));
+    /// ```
+    pub fn account(mut self, name: &str) -> Self {
+        self.account_name = Some(name.to_string());
+        self
+    }
+
+    /// Restrict the step to the Provider Accounts tagged `tag`.
+    ///
+    /// The strategy picks among them and fails over between them when one
+    /// is rate limited during the step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").account_pool("batch");
+    /// assert_eq!(config.account_pool.as_deref(), Some("batch"));
+    /// ```
+    pub fn account_pool(mut self, tag: &str) -> Self {
+        self.account_pool = Some(tag.to_string());
+        self
+    }
+
+    /// Report observed rate-limit windows to `recorder` when the invocation
+    /// runs without a Provider Account (the worker environment token).
+    ///
+    /// Set by the worker; providers prefer the recorder of
+    /// [`account`](Self::account) when both are set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::account::RateLimitRecorder;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("hello").rate_limit_recorder(RateLimitRecorder::default());
+    /// assert!(config.rate_limits.is_some());
+    /// ```
+    pub fn rate_limit_recorder(mut self, recorder: RateLimitRecorder) -> Self {
+        self.rate_limits = Some(recorder);
+        self
+    }
+
+    /// Record when the step started waiting for provider capacity.
+    ///
+    /// Set by the engine when a step resumes after a capacity sleep; bounds
+    /// the cumulative wait for an account freed by `max_concurrency`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let since = Utc::now();
+    /// let config = AgentConfig::new("hello").capacity_wait_since(since);
+    /// assert_eq!(config.capacity_wait_since, Some(since));
+    /// ```
+    pub fn capacity_wait_since(mut self, since: DateTime<Utc>) -> Self {
+        self.capacity_wait_since = Some(since);
+        self
+    }
+
     /// Tag the pod with the run id and step name (K8s providers only).
     ///
     /// Sets [`LABEL_RUN_ID`] and [`LABEL_STEP`], both passed through
@@ -1061,6 +1221,11 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             retry: self.retry,
             trace_context: self.trace_context,
             account: self.account,
+            max_capacity_wait: self.max_capacity_wait,
+            account_name: self.account_name,
+            account_pool: self.account_pool,
+            rate_limits: self.rate_limits,
+            capacity_wait_since: self.capacity_wait_since,
             _marker: PhantomData,
         }
     }
@@ -1683,6 +1848,11 @@ mod tests {
             retry: None,
             trace_context: None,
             account: None,
+            max_capacity_wait: None,
+            account_name: None,
+            account_pool: None,
+            rate_limits: None,
+            capacity_wait_since: None,
             _marker: PhantomData,
         }
     }
@@ -1735,6 +1905,11 @@ mod tests {
             retry: None,
             trace_context: None,
             account: None,
+            max_capacity_wait: None,
+            account_name: None,
+            account_pool: None,
+            rate_limits: None,
+            capacity_wait_since: None,
             _marker: PhantomData,
         };
         let json = serde_json::to_string(&config).unwrap();

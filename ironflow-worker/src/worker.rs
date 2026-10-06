@@ -16,7 +16,7 @@ use ironflow_core::decision::DecisionProvider;
 #[cfg(feature = "prometheus")]
 use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
-use ironflow_engine::accounts::AccountAwareProvider;
+use ironflow_engine::accounts::{AccountAwareProvider, DEFAULT_MAX_CAPACITY_WAIT};
 use ironflow_engine::engine::{Engine, chain_root};
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
@@ -78,6 +78,7 @@ pub struct WorkerBuilder {
     provider: Option<Arc<dyn AgentProvider>>,
     decision_provider: Option<Arc<dyn DecisionProvider>>,
     account_strategy: Option<Arc<dyn AccountStrategy>>,
+    max_capacity_wait: Duration,
     handlers: Vec<Box<dyn WorkflowHandler>>,
     concurrency: usize,
     poll_interval: Duration,
@@ -102,6 +103,7 @@ impl WorkerBuilder {
             provider: None,
             decision_provider: None,
             account_strategy: None,
+            max_capacity_wait: DEFAULT_MAX_CAPACITY_WAIT,
             handlers: Vec::new(),
             concurrency: DEFAULT_CONCURRENCY,
             poll_interval: DEFAULT_POLL_INTERVAL,
@@ -177,6 +179,35 @@ impl WorkerBuilder {
     /// ```
     pub fn account_strategy(mut self, strategy: Arc<dyn AccountStrategy>) -> Self {
         self.account_strategy = Some(strategy);
+        self
+    }
+
+    /// Set how long an agent step may wait for Provider Account capacity.
+    ///
+    /// When every targeted account is rate limited, the run sleeps until the
+    /// earliest reset if it falls within this bound, and fails with
+    /// `AgentError::NoCapacity` otherwise. A step's own
+    /// `AgentConfig::max_capacity_wait` takes precedence. Defaults to
+    /// [`DEFAULT_MAX_CAPACITY_WAIT`] (6 hours); [`Duration::ZERO`] fails fast.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() -> Result<(), ironflow_worker::WorkerError> {
+    /// let worker = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .provider(Arc::new(ClaudeCodeProvider::new()))
+    ///     .max_capacity_wait(Duration::ZERO)
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn max_capacity_wait(mut self, wait: Duration) -> Self {
+        self.max_capacity_wait = wait;
         self
     }
 
@@ -388,8 +419,11 @@ impl WorkerBuilder {
         let strategy = self
             .account_strategy
             .unwrap_or_else(|| Arc::new(LeastUtilized));
-        let provider: Arc<dyn AgentProvider> =
-            Arc::new(AccountAwareProvider::new(provider, store.clone()).with_strategy(strategy));
+        let provider: Arc<dyn AgentProvider> = Arc::new(
+            AccountAwareProvider::new(provider, store.clone())
+                .with_strategy(strategy)
+                .with_max_capacity_wait(self.max_capacity_wait),
+        );
 
         let mut engine = Engine::new(store, provider);
         if let Some(decision_provider) = self.decision_provider {
@@ -1026,6 +1060,15 @@ mod tests {
             builder.account_strategy.as_ref().map(|s| s.name()),
             Some("priority")
         );
+    }
+
+    #[test]
+    fn builder_max_capacity_wait_defaults_to_six_hours_and_can_be_set() {
+        let builder = WorkerBuilder::new("http://localhost:3000", "token");
+        assert_eq!(builder.max_capacity_wait, DEFAULT_MAX_CAPACITY_WAIT);
+        assert_eq!(builder.max_capacity_wait, Duration::from_secs(6 * 3600));
+        let builder = builder.max_capacity_wait(Duration::ZERO);
+        assert_eq!(builder.max_capacity_wait, Duration::ZERO);
     }
 
     #[test]
