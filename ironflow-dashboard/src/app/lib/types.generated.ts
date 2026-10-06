@@ -2044,6 +2044,7 @@ export interface components {
 		 *         max_retries: Some(2),
 		 *         max_cost_usd: None,
 		 *         concurrency_key: Some("issue:12".to_string()),
+		 *         priority: None,
 		 *         concurrency_limits: Vec::new(),
 		 *     };
 		 *     assert_eq!(req.workflow, "deploy");
@@ -7089,6 +7090,8 @@ export interface operations {
 				created_by?: string | null;
 				/** @description Filter by concurrency group: only runs that belong to this group. */
 				concurrency_group?: string | null;
+				/** @description Filter by priority: only runs with exactly this priority. */
+				priority?: number | null;
 				/** @description Page number (1-based). */
 				page?: number | null;
 				/** @description Items per page. */
