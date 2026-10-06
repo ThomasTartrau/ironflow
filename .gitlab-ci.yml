@@ -421,6 +421,38 @@ check-plugin-template:
   script:
     - scripts/check-plugin-template.sh
 
+# Every Rust snippet of the Claude Code plugin skills is a doctest of examples/plugin-tests.
+# plugins/ironflow has no Cargo.toml, so this crate is the way to compile them.
+check-plugin-doctests:
+  extends: [.only-mr, .sccache]
+  stage: test
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
+  needs: []
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - cargo test -p ironflow-plugin-tests --doc
+
+# Evaluate the plugin skills with the Claude Code CLI. Requires the masked CI variable
+# ANTHROPIC_API_KEY. A non-zero exit fails the job; the SARIF report is kept either way.
+eval-plugin-skills:
+  extends: .only-mr
+  stage: test
+  image: node:22
+  needs: []
+  variables:
+    CLAUDE_CODE_VERSION: "2.1.0"
+  script:
+    - npm install -g @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION
+    - cd plugins/ironflow
+    - claude plugin eval . --format=sarif > ../../plugin-eval.sarif
+  artifacts:
+    paths:
+      - plugin-eval.sarif
+    when: always
+    expire_in: 1 week
+
 check-openapi-types:
   extends: .only-mr
   stage: test

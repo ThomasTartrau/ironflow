@@ -62,6 +62,22 @@ The project template is scaffolded and compiled against the workspace by
 doctest by `examples/plugin-tests`. Both run in CI, so a change to the Ironflow API that
 breaks a skill breaks the pipeline.
 
+Three merge request jobs guard the plugin:
+
+- `check-plugin-template` scaffolds and builds the project template.
+- `check-plugin-doctests` runs `cargo test -p ironflow-plugin-tests --doc`. A skill snippet
+  that calls a renamed or removed API (for example `ctx.agent()`) fails the job. Every
+  Markdown file that contains a `rust` block must be attached as a module in
+  `examples/plugin-tests/src/lib.rs`.
+- `eval-plugin-skills` installs the Claude Code CLI and runs
+  `claude plugin eval . --format=sarif` in `plugins/ironflow`. A non-zero exit fails the
+  job, and the report is kept as the `plugin-eval.sarif` artifact for one week, even on
+  failure.
+
+The eval job reads two variables. `CLAUDE_CODE_VERSION` pins the CLI version (set in the job
+variables, bump it deliberately). `ANTHROPIC_API_KEY` must be defined as a masked CI/CD
+variable in the project settings; without it the job fails.
+
 The upgrade catalogue (`skills/upgrade/references/`) is written by hand: a change that
 breaks, deprecates or changes the behavior of code an Ironflow user writes adds an entry
 there, with a `detect:` pattern when a line of code can reveal it. An entry is a `## <id>`

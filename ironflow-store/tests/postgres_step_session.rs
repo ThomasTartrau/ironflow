@@ -48,6 +48,7 @@ fn new_run() -> NewRun {
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
         worker_tags: Vec::new(),
+        priority: 0,
     }
 }
 
