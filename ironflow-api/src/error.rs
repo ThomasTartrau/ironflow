@@ -188,6 +188,7 @@ impl From<StoreError> for ApiError {
                 ApiError::ConcurrencyConflict { key, run_id }
             }
             StoreError::InvalidConcurrencyLimit(e) => ApiError::BadRequest(e.to_string()),
+            StoreError::InvalidWorkerTag(e) => ApiError::BadRequest(e.to_string()),
             other => ApiError::Store(other),
         }
     }

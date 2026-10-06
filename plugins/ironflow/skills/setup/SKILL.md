@@ -37,6 +37,8 @@ Also confirm the target directory (default: current directory if empty, otherwis
 
 The script refuses a non-empty directory. It copies the template and runs `cargo add` for every ironflow crate, so versions come from crates.io at scaffold time. Then apply the answers from step 2 by following `${CLAUDE_SKILL_DIR}/references/options.md` (Postgres block, provider block). Skip it entirely for in-memory + Claude Code.
 
+Workers that run on different hosts (a GPU box, another region) get tags with `WorkerBuilder::tags([..])`, and a workflow that needs one declares `required_worker_tags`: see "Workers with different capabilities" in the same file. Without tags every worker that registered a workflow may take its runs.
+
 ## 4. Verify
 
 ```bash

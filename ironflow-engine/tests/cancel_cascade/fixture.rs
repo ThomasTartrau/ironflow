@@ -417,5 +417,6 @@ fn new_run(workflow: &str, max_retries: u32, concurrency_key: Option<&str>) -> N
         concurrency_key: concurrency_key.map(str::to_string),
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }

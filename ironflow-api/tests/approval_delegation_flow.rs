@@ -113,6 +113,7 @@ async fn run_awaiting_alice(store: &Arc<InMemoryStore>, workflow_name: &str) -> 
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("create run")

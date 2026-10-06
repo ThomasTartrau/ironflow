@@ -187,6 +187,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         capacity_wait_kind: row
             .get::<Option<String>, _>("capacity_wait_kind")
             .map(ProviderKind::from),
+        worker_tags: row.get::<Vec<String>, _>("worker_tags"),
     })
 }
 

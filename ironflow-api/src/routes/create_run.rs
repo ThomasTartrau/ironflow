@@ -36,6 +36,8 @@ const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 /// The workflow, the payload, the concurrency key and the concurrency limits are
 /// compared: labels are merged with the handler's defaults at enqueue time, so
 /// comparing them would turn a handler version bump into a spurious conflict.
+/// Worker tags are left out for the same reason: the run carries the handler's
+/// required tags merged with the request's.
 fn same_request(
     existing: &Run,
     workflow: &str,
@@ -74,12 +76,15 @@ fn record_outcome(_outcome: &'static str) {}
 /// it is created at once but a worker only starts it while, for each group,
 /// fewer root runs of that group than its limit are running.
 ///
+/// Optional `worker_tags` in the body are added to the tags the workflow
+/// requires: only a worker carrying all of them takes the run.
+///
 /// # Errors
 ///
 /// Returns [`ApiError::Forbidden`] for non-admin callers.
 /// Returns [`ApiError::BadRequest`] if the workflow is unknown, the body is
-/// invalid (including malformed `concurrency_limits`), or the `Idempotency-Key`
-/// header is malformed.
+/// invalid (including malformed `concurrency_limits` or `worker_tags`), or the
+/// `Idempotency-Key` header is malformed.
 /// Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
 /// different request.
 /// Returns [`ApiError::ConcurrencyConflict`] if a non-terminal run already
@@ -99,7 +104,7 @@ fn record_outcome(_outcome: &'static str) {}
         responses(
             (status = 201, description = "Run created successfully", body = RunResponse),
             (status = 200, description = "Idempotency key replayed: the existing run is returned", body = RunResponse),
-            (status = 400, description = "Unknown workflow, invalid body (including malformed concurrency_limits) or malformed Idempotency-Key"),
+            (status = 400, description = "Unknown workflow, invalid body (including malformed concurrency_limits or worker_tags) or malformed Idempotency-Key"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
             (status = 409, description = "Idempotency key already used with a different request (IDEMPOTENCY_KEY_CONFLICT), or concurrency key held by an active run (CONCURRENCY_CONFLICT)"),
@@ -163,6 +168,7 @@ pub async fn create_run(
                 idempotency_key: idempotency_key.clone(),
                 concurrency_key: req.concurrency_key.clone(),
                 concurrency_limits: req.concurrency_limits.clone(),
+                worker_tags: req.worker_tags,
             },
         )
         .await
@@ -174,6 +180,7 @@ pub async fn create_run(
                 ApiError::ConcurrencyConflict { key, run_id }
             }
             EngineError::InvalidConcurrencyLimit(e) => ApiError::BadRequest(e.to_string()),
+            EngineError::InvalidWorkerTag(e) => ApiError::BadRequest(e.to_string()),
             other => ApiError::Internal(other.to_string()),
         })?;
 
@@ -278,6 +285,22 @@ mod tests {
         }
     }
 
+    struct GpuWorkflow;
+
+    impl WorkflowHandler for GpuWorkflow {
+        fn name(&self) -> &str {
+            "gpu-workflow"
+        }
+
+        fn required_worker_tags(&self) -> Vec<String> {
+            vec!["gpu".to_string()]
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
     /// Counts the `RunCreated` events the engine actually broadcasts.
     struct RunCreatedCounter(Arc<AtomicUsize>);
 
@@ -298,6 +321,7 @@ mod tests {
         let mut engine = Engine::new(store.clone(), provider).with_budget_config(budget);
         engine.register(TestWorkflow).unwrap();
         engine.register(OtherWorkflow).unwrap();
+        engine.register(GpuWorkflow).unwrap();
         if let Some(counter) = counter {
             engine.subscribe(RunCreatedCounter(counter), &[Event::RUN_CREATED]);
         }
@@ -1252,6 +1276,62 @@ mod tests {
         // The original run allows two runs of the group: replaying it would
         // report a run limited to one that does not exist.
         assert_replay_conflicts(limited_body(2), limited_body(1)).await
+    }
+
+    #[tokio::test]
+    async fn create_run_without_worker_tags_returns_an_empty_list() {
+        let resp = send_run(test_state(), json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(body_json(resp).await["data"]["worker_tags"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn create_run_merges_request_worker_tags_with_the_workflow_ones() {
+        let state = test_state();
+        let resp = send_run(
+            state.clone(),
+            json!({"workflow": "gpu-workflow", "worker_tags": ["region:eu", "gpu"]}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = body_json(resp).await;
+        assert_eq!(body["data"]["worker_tags"], json!(["gpu", "region:eu"]));
+
+        let run_id: Uuid = body["data"]["id"].as_str().unwrap().parse().unwrap();
+        let stored = state.store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.worker_tags,
+            vec!["gpu".to_string(), "region:eu".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_run_records_the_workflow_worker_tags() {
+        let resp = send_run(test_state(), json!({"workflow": "gpu-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(body_json(resp).await["data"]["worker_tags"], json!(["gpu"]));
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_invalid_worker_tag() {
+        let state = test_state();
+        let resp = send_run(
+            state.clone(),
+            json!({"workflow": "test-workflow", "worker_tags": ["two words"]}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], "BAD_REQUEST");
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains("worker_tags"), "{message}");
+
+        let page = state
+            .store
+            .list_runs(RunFilter::default(), 1, 10)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 0, "no run may be created");
     }
 
     /// Creates a run from `original`, replays its idempotency key with `replay`

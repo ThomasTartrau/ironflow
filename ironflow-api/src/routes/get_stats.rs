@@ -45,6 +45,7 @@ pub async fn get_stats(
         labels,
         created_by_user_id: params.created_by,
         concurrency_group: params.concurrency_group,
+        eligible_for: None,
     };
     let stats = state.store.get_stats(filter).await?;
 
@@ -153,6 +154,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -173,6 +175,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -201,6 +204,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -229,6 +233,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -366,6 +371,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -384,6 +390,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -451,6 +458,7 @@ mod tests {
                     concurrency_key: None,
                     concurrency_limits: Vec::new(),
                     max_cost_usd: None,
+                    worker_tags: Vec::new(),
                 })
                 .await
                 .unwrap();

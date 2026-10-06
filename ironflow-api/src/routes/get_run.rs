@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::models::RunStatus;
 use tokio::join;
 use uuid::Uuid;
 
@@ -16,6 +17,9 @@ use crate::response::ok;
 use crate::state::AppState;
 
 /// Get a run by ID, including all its steps and dependency edges.
+///
+/// While the run waits in the queue, `worker_routing` counts the workers seen
+/// recently and those able to take it, so a run no worker can take shows up.
 ///
 /// Returns 404 if the run does not exist.
 #[cfg_attr(
@@ -105,12 +109,21 @@ pub async fn get_run(
         .collect();
 
     let active_descendant_count = state.store.list_active_descendants(id).await?.len() as u64;
+    // Only a run waiting in the queue needs a worker: once it runs or ends,
+    // who could take it no longer matters.
+    let worker_routing = if matches!(run.status.state, RunStatus::Pending | RunStatus::Retrying) {
+        let registry = &state.worker_registry;
+        Some(registry.routing_for(&run.workflow_name, &run.worker_tags))
+    } else {
+        None
+    };
     let payload = run.payload.clone();
     let response = RunDetailResponse {
         run: RunResponse::from(run),
         steps: step_responses,
         payload,
         active_descendant_count,
+        worker_routing,
     };
 
     Ok(ok(response))
@@ -127,7 +140,9 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{NewProviderAccount, provider_account_secret_key};
+    use ironflow_store::entities::{
+        NewProviderAccount, WorkerCapabilities, provider_account_secret_key,
+    };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
         NewRun, NewStep, NewUser, RunActor, RunUpdate, StepKind, StepUpdate, TriggerKind,
@@ -182,6 +197,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -281,6 +297,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -389,6 +406,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -433,6 +451,7 @@ mod tests {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -484,5 +503,107 @@ mod tests {
 
         let run = detail["data"]["run"].as_object().expect("a run object");
         assert!(!run.contains_key("output"), "unexpected output: {run:?}");
+    }
+
+    async fn gpu_run(state: &AppState) -> Uuid {
+        state
+            .store
+            .create_run(NewRun {
+                workflow_name: "transcode".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: vec!["gpu".to_string()],
+            })
+            .await
+            .unwrap()
+            .into_run()
+            .id
+    }
+
+    async fn detail_of(state: &AppState, run_id: Uuid) -> JsonValue {
+        let auth_header = create_user_auth_header(state, "testuser", false).await;
+        let app = Router::new()
+            .route("/{id}", get(get_run))
+            .with_state(state.clone());
+        let req = Request::builder()
+            .uri(format!("/{run_id}"))
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn pending_run_reports_no_eligible_worker() {
+        let state = test_state();
+        let run_id = gpu_run(&state).await;
+        let cpu_only = WorkerCapabilities::new(None, vec!["arm".to_string()]);
+        state.worker_registry.record("cpu-1", Some(cpu_only));
+
+        let detail = detail_of(&state, run_id).await;
+
+        assert_eq!(detail["data"]["run"]["worker_tags"], json!(["gpu"]));
+        assert_eq!(
+            detail["data"]["worker_routing"],
+            json!({"seen_workers": 1, "eligible_workers": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_run_reports_no_worker_seen() {
+        let state = test_state();
+        let run_id = gpu_run(&state).await;
+
+        let detail = detail_of(&state, run_id).await;
+
+        assert_eq!(
+            detail["data"]["worker_routing"],
+            json!({"seen_workers": 0, "eligible_workers": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_run_counts_the_workers_able_to_take_it() {
+        let state = test_state();
+        let run_id = gpu_run(&state).await;
+        let gpu = WorkerCapabilities::new(None, vec!["gpu".to_string()]);
+        state.worker_registry.record("gpu-1", Some(gpu));
+        state.worker_registry.record("legacy", None);
+
+        let detail = detail_of(&state, run_id).await;
+
+        assert_eq!(
+            detail["data"]["worker_routing"],
+            json!({"seen_workers": 2, "eligible_workers": 2})
+        );
+    }
+
+    #[tokio::test]
+    async fn running_run_omits_worker_routing() {
+        let state = test_state();
+        let run_id = gpu_run(&state).await;
+        state
+            .store
+            .update_run_status(run_id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        let detail = detail_of(&state, run_id).await;
+
+        let detail = detail["data"].as_object().expect("a detail object");
+        assert!(!detail.contains_key("worker_routing"), "{detail:?}");
     }
 }

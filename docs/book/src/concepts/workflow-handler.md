@@ -93,6 +93,32 @@ empty) and shown in the run page of the dashboard. A parent reads its child
 output with `child.output::<T>()`, see
 [sub-workflow steps](steps.md#reading-the-child-output).
 
+## Worker tags
+
+A workflow that must run on a given kind of host (a GPU, a region, a network)
+declares the worker tags every one of its runs requires:
+
+```rust,ignore
+impl WorkflowHandler for Transcode {
+    fn name(&self) -> &str {
+        "transcode"
+    }
+
+    fn required_worker_tags(&self) -> Vec<String> {
+        vec!["gpu".into()]
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move { /* steps */ Ok(()) })
+    }
+}
+```
+
+Only a worker built with all of these tags (`WorkerBuilder::tags`) takes the
+run. Tags given when the run is created are added to this list. The default is
+empty: any worker that registered the workflow may take it. See
+[Routing runs to workers](engine-worker.md#routing-runs-to-workers).
+
 ## Registration
 
 Handlers are registered in the `Engine` before starting the server or worker:

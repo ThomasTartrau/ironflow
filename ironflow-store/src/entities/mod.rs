@@ -29,6 +29,7 @@ mod step_kind;
 mod step_status;
 mod trigger_kind;
 mod user;
+mod worker_routing;
 
 pub use api_key::{ApiKey, ApiKeyUpdate, NewApiKey};
 pub use api_key_scope::ApiKeyScope;
@@ -76,3 +77,7 @@ pub use step_kind::StepKind;
 pub use step_status::StepStatus;
 pub use trigger_kind::TriggerKind;
 pub use user::{NewRefreshToken, NewUser, User};
+pub use worker_routing::{
+    MAX_WORKER_TAG_LEN, MAX_WORKER_TAGS, WorkerCapabilities, WorkerTagError, normalize_worker_tags,
+    validate_worker_tags,
+};

@@ -266,6 +266,7 @@ async fn enqueue(store: &InMemoryStore, workflow: &str, max_retries: u32) -> Uui
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("create run")

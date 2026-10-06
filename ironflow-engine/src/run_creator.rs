@@ -37,7 +37,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 
-use ironflow_store::entities::{NewRun, RunActor, RunCreation, TriggerKind};
+use ironflow_store::entities::{NewRun, RunActor, RunCreation, TriggerKind, normalize_worker_tags};
 use ironflow_store::store::RunStore;
 
 use crate::error::EngineError;
@@ -71,6 +71,7 @@ pub type RunCreatorFuture<'a> =
 ///     concurrency_key: None,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
+///     worker_tags: Vec::new(),
 /// };
 /// let creation = creator.create_run(new_run).await?;
 /// # Ok(())
@@ -131,6 +132,7 @@ pub struct CreateRunOpts {
     concurrency_key: Option<String>,
     labels: Option<HashMap<String, String>>,
     max_cost_usd: Option<Decimal>,
+    worker_tags: Vec<String>,
 }
 
 impl CreateRunOpts {
@@ -221,6 +223,31 @@ impl CreateRunOpts {
         self
     }
 
+    /// Add worker tags the run requires. Extends the tags already set.
+    ///
+    /// Tags are trimmed, sorted and deduplicated by [`build`](Self::build).
+    /// The store refuses invalid ones when the run is created.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::run_creator::CreateRunOpts;
+    ///
+    /// let new_run = CreateRunOpts::new()
+    ///     .worker_tags(["region:eu", "gpu"])
+    ///     .worker_tags(["gpu"])
+    ///     .build("transcode", None, None);
+    /// assert_eq!(new_run.worker_tags, vec!["gpu".to_string(), "region:eu".to_string()]);
+    /// ```
+    pub fn worker_tags<I, S>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.worker_tags.extend(tags.into_iter().map(Into::into));
+        self
+    }
+
     /// Assemble a [`NewRun`] from these options and handler metadata.
     ///
     /// * `workflow_name` -- typically from [`WorkflowHandler::name`].
@@ -264,6 +291,7 @@ impl CreateRunOpts {
             concurrency_key: self.concurrency_key,
             concurrency_limits: Vec::new(),
             max_cost_usd: self.max_cost_usd.or(default_max_cost_usd),
+            worker_tags: normalize_worker_tags(self.worker_tags),
         }
     }
 }
@@ -289,6 +317,24 @@ mod tests {
         assert_eq!(new_run.idempotency_key, None);
         assert_eq!(new_run.concurrency_key, None);
         assert_eq!(new_run.max_cost_usd, None);
+    }
+
+    #[test]
+    fn create_run_opts_without_worker_tags_requires_none() {
+        let new_run = CreateRunOpts::new().build("test-workflow", None, None);
+        assert!(new_run.worker_tags.is_empty());
+    }
+
+    #[test]
+    fn create_run_opts_worker_tags_are_merged_and_normalized() {
+        let new_run = CreateRunOpts::new()
+            .worker_tags(["region:eu", " gpu "])
+            .worker_tags(vec!["gpu".to_string()])
+            .build("test-workflow", None, None);
+        assert_eq!(
+            new_run.worker_tags,
+            vec!["gpu".to_string(), "region:eu".to_string()]
+        );
     }
 
     #[test]
