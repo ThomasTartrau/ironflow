@@ -1,7 +1,7 @@
 //! Schedule subcommands: list, create, pause, resume, delete, trigger.
 
 use anyhow::Result;
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, value_parser};
 use comfy_table::{ContentArrangement, Table};
 use ironflow_sdk::IronflowClient;
 use ironflow_sdk::types::{CreateScheduleRequest, ScheduleResponse};
@@ -32,6 +32,14 @@ pub enum ScheduleCommands {
         /// JSON inputs for the workflow (defaults to `{}`).
         #[arg(long, default_value = "{}")]
         inputs: String,
+        /// Queue priority, from -100 to 100, given to every run the schedule
+        /// creates. Defaults to the workflow priority.
+        #[arg(
+            long,
+            allow_negative_numbers = true,
+            value_parser = value_parser!(i16).range(-100..=100)
+        )]
+        priority: Option<i16>,
     },
     /// Pause a schedule (disable automatic triggers).
     Pause {
@@ -76,6 +84,7 @@ fn schedules_table(schedules: &[ScheduleResponse]) -> Table {
         "WORKFLOW",
         "CRON",
         "SOURCE",
+        "PRIORITY",
         "ENABLED",
         "NEXT TRIGGER",
     ]);
@@ -86,6 +95,7 @@ fn schedules_table(schedules: &[ScheduleResponse]) -> Table {
             s.workflow_name.clone(),
             s.cron_expression.clone(),
             source.to_string(),
+            s.priority.to_string(),
             schedule_state(s),
             s.next_trigger_at
                 .as_ref()
@@ -117,6 +127,7 @@ pub async fn execute(client: &IronflowClient, args: &ScheduleArgs, json_mode: bo
             workflow,
             cron,
             inputs,
+            priority,
         } => {
             let parsed_inputs: serde_json::Value =
                 serde_json::from_str(inputs).map_err(|e| anyhow::anyhow!("invalid JSON: {e}"))?;
@@ -125,6 +136,7 @@ pub async fn execute(client: &IronflowClient, args: &ScheduleArgs, json_mode: bo
                     workflow_name: workflow.clone(),
                     cron_expression: cron.clone(),
                     inputs: Some(parsed_inputs),
+                    priority: priority.map(i32::from),
                 })
                 .await?;
             if json_mode {
@@ -188,6 +200,7 @@ mod tests {
             "cron_expression": "0 0 30 2 *",
             "inputs": {},
             "source": "api",
+            "priority": -10,
             "disabled_at": disabled_at,
             "last_triggered_at": null,
             "next_trigger_at": null,
@@ -220,5 +233,15 @@ mod tests {
             "paused"
         );
         assert_eq!(schedule_state(&schedule(None, None)), "active");
+    }
+
+    #[test]
+    fn schedules_table_shows_the_priority() {
+        let output = schedules_table(&[schedule(None, None)]).to_string();
+        assert!(
+            output.contains("PRIORITY"),
+            "header missing from:\n{output}"
+        );
+        assert!(output.contains("-10"), "priority missing from:\n{output}");
     }
 }

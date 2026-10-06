@@ -19,6 +19,7 @@ use crate::state::AppState;
 /// - `created_by` — Filter by author user ID (optional). Also matches runs
 ///   triggered by one of that user's API keys.
 /// - `concurrency_group` - Filter by concurrency group (optional)
+/// - `priority` - Filter by exact priority, from -100 to 100 (optional)
 /// - `page` — Page number, 1-based (default: 1)
 /// - `per_page` — Items per page (default: 20, max: 100)
 #[cfg_attr(
@@ -53,6 +54,7 @@ pub async fn list_runs(
         has_steps: params.has_steps,
         labels,
         created_by_user_id: params.created_by,
+        priority: params.priority,
         concurrency_group: params.concurrency_group,
     };
 
@@ -151,6 +153,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -170,6 +173,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -210,6 +214,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -237,6 +242,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -278,6 +284,7 @@ mod tests {
                     scheduled_at: None,
                     idempotency_key: None,
                     concurrency_key: None,
+                    priority: 0,
                     concurrency_limits: Vec::new(),
                     max_cost_usd: None,
                 })
@@ -418,6 +425,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -474,6 +482,7 @@ mod tests {
                 created_by,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -618,6 +627,7 @@ mod tests {
                     created_by: None,
                     idempotency_key: None,
                     concurrency_key: None,
+                    priority: 0,
                     concurrency_limits: vec![ConcurrencyLimit::new(group, 2)],
                     max_cost_usd: None,
                 })
@@ -635,5 +645,41 @@ mod tests {
             body["data"][0]["concurrency_limits"],
             json!([{"group": "repo:acme", "limit": 2}])
         );
+    }
+
+    #[tokio::test]
+    async fn priority_filter_keeps_only_runs_with_that_priority() {
+        let state = test_state();
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
+        for (workflow, priority) in [("urgent", 50), ("background", -50), ("default", 0)] {
+            state
+                .store
+                .create_run(NewRun {
+                    workflow_name: workflow.to_string(),
+                    trigger: TriggerKind::Api,
+                    payload: json!({}),
+                    max_retries: 0,
+                    handler_version: None,
+                    labels: HashMap::new(),
+                    scheduled_at: None,
+                    created_by: None,
+                    idempotency_key: None,
+                    concurrency_key: None,
+                    priority,
+                    concurrency_limits: Vec::new(),
+                    max_cost_usd: None,
+                })
+                .await
+                .expect("create run");
+        }
+
+        let (status, body) = list(state.clone(), auth_header.clone(), "priority=-50").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["meta"]["total"], 1);
+        assert_eq!(body["data"][0]["workflow_name"], "background");
+        assert_eq!(body["data"][0]["priority"], -50);
+
+        let (status, _) = list(state, auth_header, "priority=urgent").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

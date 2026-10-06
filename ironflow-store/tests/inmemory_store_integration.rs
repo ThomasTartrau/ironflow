@@ -22,6 +22,7 @@ fn new_run(name: &str) -> NewRun {
         scheduled_at: None,
         idempotency_key: None,
         concurrency_key: None,
+        priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
     }
@@ -1003,6 +1004,7 @@ async fn large_payload_preserved_in_roundtrip() {
         scheduled_at: None,
         idempotency_key: None,
         concurrency_key: None,
+        priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
     };

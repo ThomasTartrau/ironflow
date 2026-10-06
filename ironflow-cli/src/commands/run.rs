@@ -8,7 +8,7 @@ use std::slice;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, value_parser};
 use futures_util::StreamExt;
 use humantime::format_duration;
 use ironflow_sdk::IronflowClient;
@@ -71,6 +71,15 @@ pub enum RunCommands {
             value_parser = parse_concurrency_limit
         )]
         concurrency_limits: Vec<ConcurrencyLimit>,
+        /// Queue priority, from -100 to 100. Workers pick the pending run with
+        /// the highest priority first. Defaults to the workflow priority, `0`
+        /// unless the handler declares one.
+        #[arg(
+            long,
+            allow_negative_numbers = true,
+            value_parser = value_parser!(i16).range(-100..=100)
+        )]
+        priority: Option<i16>,
     },
     /// List runs with optional filters.
     List {
@@ -88,6 +97,13 @@ pub enum RunCommands {
         /// Filter by concurrency group: only runs that belong to this group.
         #[arg(long)]
         concurrency_group: Option<String>,
+        /// Filter by priority: only runs with exactly this priority.
+        #[arg(
+            long,
+            allow_negative_numbers = true,
+            value_parser = value_parser!(i16).range(-100..=100)
+        )]
+        priority: Option<i16>,
         /// Page number (1-based).
         #[arg(long)]
         page: Option<u32>,
@@ -262,6 +278,7 @@ pub async fn execute(
             max_cost,
             concurrency_key,
             concurrency_limits,
+            priority,
         } => {
             validate_max_cost(*max_cost)?;
             let payload_value = resolve_payload(payload.as_deref(), payload_file.as_ref())?;
@@ -278,6 +295,7 @@ pub async fn execute(
                 .max_cost_usd(*max_cost)
                 .concurrency_key(concurrency_key.clone())
                 .concurrency_limits(concurrency_limits.clone())
+                .priority(priority.map(i32::from))
                 .try_into()
                 .context("failed to build CreateRunRequest")?;
 
@@ -294,6 +312,7 @@ pub async fn execute(
             workflow,
             created_by,
             concurrency_group,
+            priority,
             page,
             per_page,
         } => {
@@ -302,6 +321,7 @@ pub async fn execute(
                 workflow: workflow.as_deref(),
                 created_by: *created_by,
                 concurrency_group: concurrency_group.as_deref(),
+                priority: *priority,
                 page: *page,
                 per_page: *per_page,
                 ..Default::default()

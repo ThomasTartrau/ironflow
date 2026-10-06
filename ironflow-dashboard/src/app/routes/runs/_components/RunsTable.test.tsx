@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { useState } from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { RunsTable } from "./RunsTable";
+import type { PrioritySort } from "./priority";
 import type { CreatedBy, RunResponse } from "@/app/lib/types";
 
 function runFixture(createdBy: CreatedBy): RunResponse {
@@ -107,5 +110,96 @@ describe("RunsTable duration column", () => {
 		};
 		renderTable([run]);
 		expect(screen.getByText("2.5s")).toBeInTheDocument();
+	});
+});
+
+describe("RunsTable priority column", () => {
+	function prioritized(id: string, workflow: string, priority: number) {
+		return {
+			...runFixture({ kind: "system", id: null, label: "api" }),
+			id,
+			workflow_name: workflow,
+			priority,
+		};
+	}
+
+	const runs = [
+		prioritized("019a3f2b-0000-7000-8000-000000000011", "nightly", -20),
+		prioritized("019a3f2b-0000-7000-8000-000000000012", "hotfix", 90),
+		prioritized("019a3f2b-0000-7000-8000-000000000013", "build", 0),
+	];
+
+	function SortableTable() {
+		const [sort, setSort] = useState<PrioritySort | null>(null);
+		return (
+			<MemoryRouter>
+				<RunsTable
+					runs={runs}
+					prioritySort={sort}
+					onPrioritySortChange={setSort}
+				/>
+			</MemoryRouter>
+		);
+	}
+
+	const workflowOrder = () =>
+		screen
+			.getAllByRole("link", { name: /^View run for / })
+			.map((row) => row.getAttribute("aria-label"));
+
+	it("shows the priority of each run", () => {
+		renderTable(runs);
+		expect(screen.getByText("Priority")).toBeInTheDocument();
+		expect(screen.getByText("-20")).toBeInTheDocument();
+		expect(screen.getByText("90")).toBeInTheDocument();
+	});
+
+	it("shows 0 for a run without a priority", () => {
+		// The fixture leaves `priority` out, like a run serialized before the field existed.
+		renderTable([runFixture({ kind: "system", id: null, label: "api" })]);
+		expect(screen.getByText("0")).toBeInTheDocument();
+	});
+
+	it("is not sortable without a sort handler", () => {
+		renderTable(runs);
+		expect(screen.queryByRole("button", { name: /Priority/ })).toBeNull();
+	});
+
+	it("cycles the sort when the header is clicked", async () => {
+		const user = userEvent.setup();
+		render(<SortableTable />);
+		const header = screen.getByRole("columnheader", { name: /Priority/ });
+		const button = screen.getByRole("button", { name: /Priority/ });
+
+		expect(header).not.toHaveAttribute("aria-sort");
+		expect(workflowOrder()).toEqual([
+			"View run for nightly",
+			"View run for hotfix",
+			"View run for build",
+		]);
+
+		await user.click(button);
+		expect(header).toHaveAttribute("aria-sort", "descending");
+		expect(workflowOrder()).toEqual([
+			"View run for hotfix",
+			"View run for build",
+			"View run for nightly",
+		]);
+
+		await user.click(button);
+		expect(header).toHaveAttribute("aria-sort", "ascending");
+		expect(workflowOrder()).toEqual([
+			"View run for nightly",
+			"View run for build",
+			"View run for hotfix",
+		]);
+
+		await user.click(button);
+		expect(header).not.toHaveAttribute("aria-sort");
+		expect(workflowOrder()).toEqual([
+			"View run for nightly",
+			"View run for hotfix",
+			"View run for build",
+		]);
 	});
 });

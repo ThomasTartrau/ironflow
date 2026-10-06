@@ -24,6 +24,7 @@ impl ScheduleStore for InMemoryStore {
                 last_triggered_at: None,
                 next_trigger_at: req.next_trigger_at,
                 last_error: None,
+                priority: req.priority,
                 created_by_user_id: req.created_by_user_id,
                 created_at: now,
                 updated_at: now,
@@ -87,6 +88,9 @@ impl ScheduleStore for InMemoryStore {
             }
             if let Some(error) = update.last_error {
                 schedule.last_error = error;
+            }
+            if let Some(priority) = update.priority {
+                schedule.priority = priority;
             }
             schedule.updated_at = Utc::now();
             Ok(schedule.clone())
@@ -180,6 +184,7 @@ mod tests {
             cron_expression: cron.to_string(),
             inputs: json!({}),
             source: ScheduleSource::Api,
+            priority: 0,
             created_by_user_id: Some(Uuid::now_v7()),
             next_trigger_at: Some(Utc::now()),
         }
@@ -256,6 +261,56 @@ mod tests {
 
         assert!(!updated.is_active());
         assert_eq!(updated.cron_expression, "0 30 * * * *");
+    }
+
+    #[tokio::test]
+    async fn update_schedule_priority() {
+        let store = InMemoryStore::new();
+        let created = store
+            .create_schedule(NewSchedule {
+                priority: 5,
+                ..new_schedule("deploy", "0 0 * * * *")
+            })
+            .await
+            .expect("create");
+        assert_eq!(created.priority, 5);
+
+        let updated = store
+            .update_schedule(
+                created.id,
+                ScheduleUpdate {
+                    priority: Some(-20),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update");
+        assert_eq!(updated.priority, -20);
+    }
+
+    #[tokio::test]
+    async fn fire_due_schedule_run_inherits_schedule_priority() {
+        let store = InMemoryStore::new();
+        let schedule = store
+            .create_schedule(NewSchedule {
+                priority: 30,
+                ..due_schedule("deploy")
+            })
+            .await
+            .expect("create");
+        let occurrence = schedule.next_trigger_at.expect("due");
+
+        let firing = store
+            .fire_due_schedule(
+                schedule.id,
+                occurrence,
+                ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600)),
+            )
+            .await
+            .expect("fire")
+            .expect("due occurrence fires");
+
+        assert_eq!(firing.run.run().priority, 30);
     }
 
     #[tokio::test]

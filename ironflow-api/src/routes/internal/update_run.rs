@@ -82,6 +82,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })

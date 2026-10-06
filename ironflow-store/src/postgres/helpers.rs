@@ -178,6 +178,7 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
         created_by_label,
         idempotency_key: row.get("idempotency_key"),
         concurrency_key: row.get("concurrency_key"),
+        priority: row.get("priority"),
         concurrency_limits: serde_json::from_value(concurrency_limits_json)?,
         max_cost_usd: row.get("max_cost_usd"),
         worker_id: row.get("worker_id"),

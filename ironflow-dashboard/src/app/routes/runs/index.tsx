@@ -1,6 +1,6 @@
 import { useLoaderData, Link, useNavigation } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
-import { useQueryStates, parseAsInteger } from "nuqs";
+import { useQueryStates, parseAsInteger, parseAsStringLiteral } from "nuqs";
 import type { RunResponse } from "@/app/lib/types";
 import { api } from "@/app/lib/api";
 import { HeaderApp } from "@/app/components/HeaderApp";
@@ -9,6 +9,7 @@ import { useRevalidateOnEvent } from "@/app/hooks/use-revalidate-on-event";
 import { Pagination } from "@/app/components/Pagination";
 import { RunFilters } from "./_components/RunFilters";
 import { RunsTable } from "./_components/RunsTable";
+import { PRIORITY_SORTS } from "./_components/priority";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useAppSelector } from "@/app/store";
@@ -29,6 +30,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	const label = url.searchParams.get("label") ?? "";
 	const createdBy = url.searchParams.get("created_by") ?? "";
 	const concurrencyGroup = url.searchParams.get("concurrency_group") ?? "";
+	const priority = url.searchParams.get("priority") ?? "";
 
 	const params = new URLSearchParams();
 	params.set("page", page);
@@ -39,6 +41,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	if (label) params.set("label", label);
 	if (createdBy) params.set("created_by", createdBy);
 	if (concurrencyGroup) params.set("concurrency_group", concurrencyGroup);
+	if (priority) params.set("priority", priority);
 
 	const res = await api.get<RunResponse[]>(`/runs?${params}`);
 	return { runs: res.data, meta: res.meta };
@@ -62,6 +65,8 @@ export function Component() {
 			page: parseAsInteger.withDefault(1).withOptions({
 				shallow: false,
 			}),
+			// Client-side only: the sort reorders the page already loaded.
+			priority_sort: parseAsStringLiteral(PRIORITY_SORTS),
 		},
 		{ history: "push" },
 	);
@@ -89,7 +94,7 @@ export function Component() {
 			}
 		>
 			<div className="space-y-6">
-				<RunFilters concurrencyGroupFilter />
+				<RunFilters concurrencyGroupFilter priorityFilter />
 				<div
 					aria-busy={isLoading}
 					aria-live="polite"
@@ -97,7 +102,13 @@ export function Component() {
 						isLoading ? "opacity-50 pointer-events-none transition-opacity" : ""
 					}
 				>
-					<RunsTable runs={runs} />
+					<RunsTable
+						runs={runs}
+						prioritySort={queryFilters.priority_sort}
+						onPrioritySortChange={(priority_sort) =>
+							setQueryFilters({ priority_sort })
+						}
+					/>
 				</div>
 				<Pagination
 					currentPage={currentPage}

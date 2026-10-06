@@ -59,6 +59,7 @@ fn future_run(workflow: &str) -> NewRun {
         scheduled_at: Some(Utc::now() + TimeDelta::hours(1)),
         idempotency_key: None,
         concurrency_key: None,
+        priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
     }
@@ -77,6 +78,7 @@ fn grouped_run() -> NewRun {
         scheduled_at: None,
         idempotency_key: None,
         concurrency_key: None,
+        priority: 0,
         concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 1)],
         max_cost_usd: None,
     }

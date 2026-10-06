@@ -37,7 +37,7 @@ use crate::executor::{
     ConcurrencyConflict, RecordedWorkflowStep, SubWorkflowOutcome, SubWorkflowOutput,
 };
 use crate::guard::WorkflowRejection;
-use crate::handler::{TypedWorkflow, WorkflowHandler};
+use crate::handler::{TypedWorkflow, WorkflowHandler, clamp_priority};
 use crate::plan::{SharedPlanRecorder, lock_plan};
 
 /// Key of the open `Workflow` step output that records the child run id.
@@ -375,7 +375,9 @@ impl WorkflowContext {
 
         let mut config = WorkflowStepConfig::new(handler.name(), payload);
         config.allow_failure = options.allow_failure;
-        config.concurrency_key = options.into_concurrency_key();
+        let (concurrency_key, priority) = options.into_parts();
+        config.concurrency_key = concurrency_key;
+        config.priority = priority;
         let position = self.position;
 
         let existing = self.replay_steps.get(&position).cloned();
@@ -788,7 +790,10 @@ impl WorkflowContext {
                 (child_run_id, child_run.cost_usd, child_run.duration_ms)
             }
             None => {
-                let child_run_id = match self.create_child_run(config).await {
+                let priority = config
+                    .priority
+                    .unwrap_or_else(|| clamp_priority(handler.priority()));
+                let child_run_id = match self.create_child_run(config, priority).await {
                     Ok(id) => id,
                     Err(EngineError::ConcurrencyConflict { key, run_id }) => {
                         return Ok(ChildOutcome::Conflict(ConcurrencyConflict::new(
@@ -999,7 +1004,11 @@ impl WorkflowContext {
     /// The child inherits the parent labels and author, and is linked to its
     /// parent and to the root of the chain by two labels, so a suspended child
     /// can be found and resumed like a top-level run.
-    async fn create_child_run(&self, config: &WorkflowStepConfig) -> Result<Uuid, EngineError> {
+    async fn create_child_run(
+        &self,
+        config: &WorkflowStepConfig,
+        priority: i16,
+    ) -> Result<Uuid, EngineError> {
         // Whoever triggered the parent workflow is accountable for its children.
         let parent = self.store.get_run(self.run_id).await?;
         let (mut labels, parent_author) =
@@ -1022,6 +1031,7 @@ impl WorkflowContext {
                 created_by: parent_author,
                 idempotency_key: None,
                 concurrency_key: config.concurrency_key.clone(),
+                priority,
                 // A child runs inside its parent's slot: it never consumes a
                 // concurrency group slot of its own.
                 concurrency_limits: Vec::new(),

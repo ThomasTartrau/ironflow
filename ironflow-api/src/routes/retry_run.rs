@@ -128,6 +128,8 @@ pub async fn retry_run(
             // same key. The original is terminal and no longer holds it; a run
             // that took the key since then makes the retry conflict.
             concurrency_key: original.concurrency_key,
+            // The retry keeps the priority of the run it continues.
+            priority: original.priority,
             // The retry stays in the same concurrency groups under the same limits.
             concurrency_limits: original.concurrency_limits,
             // Inherit the original cost cap so budget constraints survive retries.
@@ -229,6 +231,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -287,6 +290,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: Some(cap),
             })
@@ -330,6 +334,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_keeps_the_original_priority() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "test".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 1,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 42,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+            })
+            .await
+            .unwrap()
+            .into_run();
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let state = test_state(store.clone());
+        let auth_header = create_user_auth_header(&state, "testuser", true).await;
+        let app = Router::new()
+            .route("/{id}/retry", post(retry_run))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/{}/retry", run.id))
+            .header("content-type", "application/json")
+            .header("authorization", auth_header)
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), HttpStatusCode::CREATED);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json_val: JsonValue = from_slice(&body).unwrap();
+        assert_eq!(json_val["data"]["priority"], 42);
+        let new_id: Uuid = from_value(json_val["data"]["id"].clone()).unwrap();
+
+        let new_run = store.get_run(new_id).await.unwrap().unwrap();
+        assert_eq!(new_run.priority, 42);
+    }
+
+    #[tokio::test]
     async fn retry_pending_run_returns_400() {
         let store = Arc::new(InMemoryStore::new());
         let run = store
@@ -344,6 +405,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -384,6 +446,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -433,6 +496,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -478,6 +542,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -534,6 +599,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -623,6 +689,7 @@ mod tests {
                 }),
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -684,6 +751,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: Some("github:abc-123".to_string()),
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -803,6 +871,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -991,6 +1060,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: Some(key.to_string()),
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -1051,6 +1121,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: Some("issue:12".to_string()),
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })

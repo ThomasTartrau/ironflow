@@ -81,6 +81,7 @@ pub const STEP_INTERRUPTED_ERROR: &str = "interrupted: worker lease lost";
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// }).await?.into_run();
@@ -488,6 +489,7 @@ pub trait RunStore: Send + Sync {
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// }).await?.into_run();

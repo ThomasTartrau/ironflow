@@ -7,7 +7,9 @@ use axum::response::IntoResponse;
 use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::{NewSchedule, ScheduleSource};
+use ironflow_store::entities::{
+    MAX_PRIORITY, MIN_PRIORITY, NewSchedule, ScheduleSource, validate_priority,
+};
 
 use crate::entities::{CreateScheduleRequest, ScheduleResponse};
 use crate::error::ApiError;
@@ -20,6 +22,7 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// - 400 if validation fails or cron expression is invalid
+/// - 400 if `priority` is outside `-100..=100`
 /// - 400 if the workflow is not registered
 /// - 401 if not authenticated
 #[cfg_attr(
@@ -45,12 +48,19 @@ pub async fn create_schedule(
     req.validate()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-    if state.engine.get_handler(&req.workflow_name).is_none() {
+    if let Some(priority) = req.priority {
+        validate_priority(priority).map_err(ApiError::BadRequest)?;
+    }
+
+    let Some(handler) = state.engine.get_handler(&req.workflow_name) else {
         return Err(ApiError::BadRequest(format!(
             "workflow '{}' is not registered",
             req.workflow_name
         )));
-    }
+    };
+    let priority = req
+        .priority
+        .unwrap_or_else(|| handler.priority().clamp(MIN_PRIORITY, MAX_PRIORITY));
 
     let next = next_trigger(&req.cron_expression).map_err(ApiError::BadRequest)?;
 
@@ -61,6 +71,7 @@ pub async fn create_schedule(
             cron_expression: req.cron_expression,
             inputs: req.inputs,
             source: ScheduleSource::Api,
+            priority,
             created_by_user_id: Some(auth.user_id),
             next_trigger_at: next,
         })
@@ -86,7 +97,7 @@ mod tests {
     use ironflow_store::entities::NewUser;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
-    use serde_json::json;
+    use serde_json::{Value, from_slice, json};
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
@@ -101,6 +112,22 @@ mod tests {
     impl WorkflowHandler for TestWorkflow {
         fn name(&self) -> &str {
             "deploy"
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    struct UrgentWorkflow;
+
+    impl WorkflowHandler for UrgentWorkflow {
+        fn name(&self) -> &str {
+            "urgent"
+        }
+
+        fn priority(&self) -> i16 {
+            25
         }
 
         fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
@@ -123,6 +150,7 @@ mod tests {
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
         engine.register(TestWorkflow).expect("register");
+        engine.register(UrgentWorkflow).expect("register");
         let (event_sender, _) = broadcast::channel::<Event>(1);
         let state = AppState::new(
             store.clone(),
@@ -266,5 +294,74 @@ mod tests {
 
         let resp = app.oneshot(req).await.expect("request");
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    async fn post_schedule(body: Value) -> (StatusCode, Value) {
+        let (state, user_id) = test_state_with_user().await;
+        let auth = make_auth_header(user_id, &state);
+        let app = Router::new()
+            .route("/", post(create_schedule))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri("/")
+            .method("POST")
+            .header("authorization", &auth)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("build");
+
+        let resp = app.oneshot(req).await.expect("request");
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+        (status, from_slice(&bytes).expect("json"))
+    }
+
+    #[tokio::test]
+    async fn create_schedule_priority_defaults_to_the_handler_priority() {
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "urgent",
+            "cron_expression": "0 0 * * * *",
+        }))
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(val["data"]["priority"], 25);
+
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "deploy",
+            "cron_expression": "0 0 * * * *",
+        }))
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(val["data"]["priority"], 0);
+    }
+
+    #[tokio::test]
+    async fn create_schedule_priority_explicit_value_overrides_the_handler() {
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "urgent",
+            "cron_expression": "0 0 * * * *",
+            "priority": -70,
+        }))
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(val["data"]["priority"], -70);
+    }
+
+    #[tokio::test]
+    async fn create_schedule_priority_out_of_range_returns_400() {
+        for priority in [MAX_PRIORITY + 1, MIN_PRIORITY - 1] {
+            let (status, val) = post_schedule(json!({
+                "workflow_name": "deploy",
+                "cron_expression": "0 0 * * * *",
+                "priority": priority,
+            }))
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(
+                val["error"]["message"],
+                "priority must be between -100 and 100"
+            );
+        }
     }
 }

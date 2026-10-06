@@ -48,6 +48,7 @@ impl IronflowClient {
     ///     workflow_name: "deploy".to_string(),
     ///     cron_expression: "0 * * * *".to_string(),
     ///     inputs: Some(serde_json::json!({})),
+    ///     priority: None,
     /// }).await?;
     /// # Ok(())
     /// # }

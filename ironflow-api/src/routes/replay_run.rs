@@ -79,6 +79,8 @@ pub async fn replay_run(
             // original idempotency key.
             idempotency_key: None,
             concurrency_key: None,
+            // Same work, same urgency: the replay keeps its place in the queue order.
+            priority: original.priority,
             // The replay does the same kind of work, so it stays in the same
             // concurrency groups under the same limits.
             concurrency_limits: original.concurrency_limits,
@@ -188,6 +190,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: Some(format!("key-{}", Uuid::now_v7())),
                 concurrency_key: None,
+                priority: -12,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: Some(Decimal::new(250, 2)),
             })
@@ -261,6 +264,8 @@ mod tests {
         assert_eq!(new_run.payload, original.payload);
         assert_eq!(new_run.labels, original.labels);
         assert_eq!(new_run.max_cost_usd, original.max_cost_usd);
+        assert_eq!(new_run.priority, -12);
+        assert_eq!(new_run.priority, original.priority);
         assert_eq!(new_run.max_retries, original.max_retries);
         assert_eq!(new_run.idempotency_key, None);
     }
@@ -461,6 +466,7 @@ mod tests {
                 }),
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })

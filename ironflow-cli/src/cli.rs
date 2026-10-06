@@ -196,6 +196,7 @@ mod tests {
     use crate::commands::audit_log::AuditLogCommands;
     use crate::commands::delegation::DelegationCommands;
     use crate::commands::run::RunCommands;
+    use crate::commands::schedule::ScheduleCommands;
     use crate::commands::secret::SecretCommands;
     use crate::commands::signal::SignalCommands;
     use crate::commands::user::UserCommands;
@@ -359,6 +360,104 @@ mod tests {
             panic!("expected List subcommand");
         };
         assert_eq!(concurrency_group.as_deref(), Some("repo:acme"));
+    }
+
+    #[test]
+    fn parse_run_create_with_a_negative_priority() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "run",
+            "create",
+            "deploy",
+            "--priority",
+            "-40",
+        ]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create { priority, .. } = &args.command else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(*priority, Some(-40));
+    }
+
+    #[test]
+    fn parse_run_create_without_priority() {
+        let cli = parse(&["ironflow-cli", "run", "create", "deploy"]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create { priority, .. } = &args.command else {
+            panic!("expected Create subcommand");
+        };
+        assert!(priority.is_none());
+    }
+
+    #[test]
+    fn parse_run_create_rejects_an_out_of_range_priority() {
+        for value in ["101", "-101", "high"] {
+            let result = Cli::try_parse_from([
+                "ironflow-cli",
+                "run",
+                "create",
+                "deploy",
+                "--priority",
+                value,
+            ]);
+            assert!(result.is_err(), "--priority {value} must be rejected");
+        }
+    }
+
+    #[test]
+    fn parse_run_list_with_priority() {
+        let cli = parse(&["ironflow-cli", "run", "list", "--priority", "100"]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::List { priority, .. } = &args.command else {
+            panic!("expected List subcommand");
+        };
+        assert_eq!(*priority, Some(100));
+    }
+
+    #[test]
+    fn parse_run_list_rejects_an_out_of_range_priority() {
+        let result = Cli::try_parse_from(["ironflow-cli", "run", "list", "--priority", "-500"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_schedule_create_with_priority() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "schedule",
+            "create",
+            "deploy",
+            "0 0 * * *",
+            "--priority",
+            "-5",
+        ]);
+        let Commands::Schedule(args) = &cli.command else {
+            panic!("expected Schedule command");
+        };
+        let ScheduleCommands::Create { priority, .. } = &args.command else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(*priority, Some(-5));
+    }
+
+    #[test]
+    fn parse_schedule_create_rejects_an_out_of_range_priority() {
+        let result = Cli::try_parse_from([
+            "ironflow-cli",
+            "schedule",
+            "create",
+            "deploy",
+            "0 0 * * *",
+            "--priority",
+            "150",
+        ]);
+        assert!(result.is_err());
     }
 
     #[test]

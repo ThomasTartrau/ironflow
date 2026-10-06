@@ -754,6 +754,13 @@ CLI). The run stays pending until fewer than `limit` runs of each of its groups 
 running. A child started with `ctx.workflow` runs inside the slot of its parent and joins no
 group.
 
+To order the queue, give a run a priority from -100 to 100 (default 0, or the handler's
+`fn priority(&self) -> i16`): `"priority": 50` on `POST /api/v1/runs`,
+`EnqueueOptions { priority: Some(50), .. }` on the engine, `--priority 50` in the CLI,
+`WorkflowOptions::new().priority(50)` for a child. Workers pick the highest priority first,
+then the oldest. A running run is never preempted and a waiting one is never aged: a steady
+flow of higher priorities can delay a low one indefinitely.
+
 A child may suspend (approval, human input, signal wait, delay): the parent and every
 ancestor suspend with it, durably. Resolve the child run itself, by its id or by the
 `ironflow.io/parent-run-id` label (`PARENT_RUN_ID_LABEL` from `ironflow_engine::context`):
@@ -948,6 +955,7 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 | `default_labels()` | empty | Labels applied to every run |
 | `schedule()` | `None` | `CronSchedule`, wired by the runtime |
 | `default_max_cost_usd()` | `None` | Cost cap for runs of this handler |
+| `priority()` | `0` | Queue priority of its runs, -100 to 100 (clamped): workers pick the highest first, then the oldest. No preemption, no aging |
 | `version()` / `compatible_versions()` | `"1"` / empty | Retry compatibility across handler versions |
 | `sub_workflows()` | empty | `sub_workflow_names(&[&Child])`: the handlers invoked through `ctx.workflow` |
 | `guard_config()` | `None` | Recursion depth, fan-out, token and time guards |

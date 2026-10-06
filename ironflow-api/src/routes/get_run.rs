@@ -180,6 +180,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -279,6 +280,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -387,6 +389,7 @@ mod tests {
                 created_by: Some(RunActor::User { user_id: user.id }),
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -431,6 +434,7 @@ mod tests {
                 created_by: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })

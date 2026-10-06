@@ -270,6 +270,7 @@ async fn create_and_get_run() {
         max_retries: Some(2),
         max_cost_usd: None,
         concurrency_key: None,
+        priority: None,
         concurrency_limits: Vec::new(),
     };
 
@@ -294,6 +295,7 @@ async fn create_run_with_max_cost_usd() {
         max_retries: None,
         max_cost_usd: Some(2.5),
         concurrency_key: None,
+        priority: None,
         concurrency_limits: Vec::new(),
     };
 
@@ -314,6 +316,7 @@ async fn create_run_rejects_negative_max_cost_usd() {
         max_retries: None,
         max_cost_usd: Some(-1.0),
         concurrency_key: None,
+        priority: None,
         concurrency_limits: Vec::new(),
     };
 
@@ -334,6 +337,7 @@ async fn create_run_unknown_workflow() {
         max_retries: None,
         max_cost_usd: None,
         concurrency_key: None,
+        priority: None,
         concurrency_limits: Vec::new(),
     };
 
@@ -367,6 +371,42 @@ async fn create_run_with_concurrency_limits_and_filter_by_group() {
     let response = client.list_runs_filtered(&filter).await.unwrap();
     assert_eq!(response.data.len(), 1);
     assert_eq!(response.data[0].id, created.data.id);
+}
+
+#[tokio::test]
+async fn create_run_with_priority_and_filter_by_priority() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let request = ironflow_sdk::types::CreateRunRequest {
+        priority: Some(80),
+        ..deploy_request()
+    };
+    let created = client.create_run(&request).await.unwrap();
+    assert_eq!(created.data.priority, Some(80));
+    let default = client.create_run(&deploy_request()).await.unwrap();
+    assert_eq!(default.data.priority, Some(0));
+
+    let filter = ironflow_sdk::client::ListRunsFilter {
+        priority: Some(80),
+        ..Default::default()
+    };
+    let response = client.list_runs_filtered(&filter).await.unwrap();
+    assert_eq!(response.data.len(), 1);
+    assert_eq!(response.data[0].id, created.data.id);
+}
+
+#[tokio::test]
+async fn create_run_rejects_an_out_of_range_priority() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let request = ironflow_sdk::types::CreateRunRequest {
+        priority: Some(101),
+        ..deploy_request()
+    };
+    let err = client.create_run(&request).await.unwrap_err();
+    assert!(err.is_api_error());
 }
 
 #[tokio::test]
@@ -409,6 +449,7 @@ fn deploy_request() -> ironflow_sdk::types::CreateRunRequest {
         max_retries: None,
         max_cost_usd: None,
         concurrency_key: None,
+        priority: None,
         concurrency_limits: Vec::new(),
     }
 }

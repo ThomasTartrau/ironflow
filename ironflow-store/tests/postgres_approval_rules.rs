@@ -84,6 +84,7 @@ async fn gate(store: &PostgresStore) -> Step {
             created_by: None,
             idempotency_key: None,
             concurrency_key: None,
+            priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
         })

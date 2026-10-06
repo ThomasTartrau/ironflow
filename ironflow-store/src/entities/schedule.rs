@@ -70,6 +70,7 @@ impl ScheduleSource {
 ///     last_triggered_at: None,
 ///     next_trigger_at: Some(Utc::now()),
 ///     last_error: None,
+///     priority: 0,
 ///     created_by_user_id: Some(Uuid::now_v7()),
 ///     created_at: Utc::now(),
 ///     updated_at: Utc::now(),
@@ -107,6 +108,12 @@ pub struct Schedule {
     pub created_at: DateTime<Utc>,
     /// When the schedule was last updated.
     pub updated_at: DateTime<Utc>,
+    /// Queue priority given to every run this schedule creates, between
+    /// [`MIN_PRIORITY`](super::MIN_PRIORITY) and [`MAX_PRIORITY`](super::MAX_PRIORITY).
+    ///
+    /// Defaults to `0` when absent from the payload.
+    #[serde(default)]
+    pub priority: i16,
 }
 
 impl Schedule {
@@ -166,6 +173,7 @@ impl Schedule {
     ///     last_triggered_at: None,
     ///     next_trigger_at: Some(Utc::now()),
     ///     last_error: None,
+    ///     priority: 0,
     ///     created_by_user_id: None,
     ///     created_at: Utc::now(),
     ///     updated_at: Utc::now(),
@@ -189,6 +197,7 @@ impl Schedule {
             created_by,
             idempotency_key: None,
             concurrency_key: None,
+            priority: self.priority,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
         }
@@ -271,6 +280,7 @@ pub struct ScheduleFiring {
 ///     cron_expression: "0 0 * * * *".to_string(),
 ///     inputs: json!({"env": "prod"}),
 ///     source: ScheduleSource::Api,
+///     priority: 0,
 ///     created_by_user_id: Some(Uuid::now_v7()),
 ///     next_trigger_at: Some(Utc::now()),
 /// };
@@ -291,6 +301,9 @@ pub struct NewSchedule {
     pub created_by_user_id: Option<Uuid>,
     /// Pre-computed next trigger time.
     pub next_trigger_at: Option<DateTime<Utc>>,
+    /// Queue priority given to every run the schedule creates, between
+    /// [`MIN_PRIORITY`](super::MIN_PRIORITY) and [`MAX_PRIORITY`](super::MAX_PRIORITY).
+    pub priority: i16,
 }
 
 /// Updatable fields on a schedule.
@@ -309,6 +322,7 @@ pub struct NewSchedule {
 ///     disabled_at: None,
 ///     next_trigger_at: None,
 ///     last_triggered_at: None,
+///     priority: None,
 ///     last_error: None,
 /// };
 /// assert!(update.disabled_at.is_none());
@@ -327,6 +341,8 @@ pub struct ScheduleUpdate {
     pub last_triggered_at: Option<Option<DateTime<Utc>>>,
     /// Set or clear [`Schedule::last_error`]. `Some(None)` clears it.
     pub last_error: Option<Option<String>>,
+    /// New queue priority for the runs the schedule creates.
+    pub priority: Option<i16>,
 }
 
 #[cfg(test)]
@@ -346,6 +362,7 @@ mod tests {
             last_triggered_at: None,
             next_trigger_at: Some(Utc::now()),
             last_error: None,
+            priority: -5,
             created_by_user_id: Some(Uuid::now_v7()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -354,7 +371,28 @@ mod tests {
         let back: Schedule = serde_json::from_str(&json_str).expect("deserialize");
         assert_eq!(schedule.id, back.id);
         assert_eq!(schedule.workflow_name, back.workflow_name);
+        assert_eq!(back.priority, -5);
         assert!(back.is_active());
+    }
+
+    #[test]
+    fn schedule_new_run_carries_the_schedule_priority() {
+        let schedule = Schedule {
+            id: Uuid::now_v7(),
+            workflow_name: "deploy".to_string(),
+            cron_expression: "0 0 * * * *".to_string(),
+            inputs: json!({}),
+            source: ScheduleSource::Api,
+            disabled_at: None,
+            last_triggered_at: None,
+            next_trigger_at: Some(Utc::now()),
+            last_error: None,
+            priority: 42,
+            created_by_user_id: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        assert_eq!(schedule.new_run(None).priority, 42);
     }
 
     #[test]
@@ -369,6 +407,7 @@ mod tests {
             last_triggered_at: None,
             next_trigger_at: None,
             last_error: None,
+            priority: 0,
             created_by_user_id: Some(Uuid::now_v7()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -399,5 +438,6 @@ mod tests {
         assert!(update.next_trigger_at.is_none());
         assert!(update.last_triggered_at.is_none());
         assert!(update.last_error.is_none());
+        assert!(update.priority.is_none());
     }
 }

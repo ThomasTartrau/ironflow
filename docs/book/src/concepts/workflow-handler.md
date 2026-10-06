@@ -15,6 +15,7 @@ pub trait WorkflowHandler: Send + Sync {
     fn input_schema(&self) -> Option<Value> { None }
     fn default_labels(&self) -> HashMap<String, String> { HashMap::new() }
     fn source_code(&self) -> Option<&str> { None }
+    fn priority(&self) -> i16 { 0 }
 }
 ```
 
@@ -31,6 +32,7 @@ pub trait WorkflowHandler: Send + Sync {
 - **`input_schema()`** returns a JSON Schema derived from a `#[derive(JsonSchema)]` struct. The dashboard renders it as a dynamic form.
 - **`source_code()`** optionally embeds the handler source for display in the dashboard.
 - **`sub_workflows()`** lists the handlers this one calls through `ctx.workflow`, for the call graph. Build it from the handlers, `sub_workflow_names(&[&Collect])`, never from hand-written names.
+- **`priority()`** sets the queue priority of the runs, from -100 to 100 (out of range values are clamped). Workers pick the highest priority first, then the oldest; nothing is preempted or aged. See [Engine & Worker](engine-worker.md#run-priority).
 
 ## Typed input for sub-workflows
 

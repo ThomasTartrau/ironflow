@@ -74,6 +74,11 @@ pub struct RunResponse {
     /// when one was supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency_key: Option<String>,
+    /// Queue priority, from -100 to 100. Workers pick the pending run with
+    /// the highest priority first, then the oldest among equal priorities.
+    /// `0` is the default.
+    #[serde(default)]
+    pub priority: i16,
     /// Concurrency groups the run belongs to, with the limit it was created
     /// with. Omitted when the run belongs to no group.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -114,6 +119,7 @@ impl From<Run> for RunResponse {
             created_by,
             idempotency_key: run.idempotency_key,
             concurrency_key: run.concurrency_key,
+            priority: run.priority,
             concurrency_limits: run.concurrency_limits,
             max_cost_usd: run.max_cost_usd,
             output: run.output,
@@ -173,6 +179,8 @@ pub struct ListRunsQuery {
     pub created_by: Option<Uuid>,
     /// Filter by concurrency group: only runs that belong to this group.
     pub concurrency_group: Option<String>,
+    /// Filter by priority: only runs with exactly this priority.
+    pub priority: Option<i16>,
     /// Page number (1-based).
     pub page: Option<u32>,
     /// Items per page.

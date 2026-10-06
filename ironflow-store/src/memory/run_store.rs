@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
@@ -9,7 +10,7 @@ use crate::entities::{
     NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run,
     RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
     StatsHistoryFilter, Step, StepApproval, StepDependency, StepStatus, StepUpdate, TriggerKind,
-    User, validate_concurrency_limits,
+    User, validate_concurrency_limits, validate_priority,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -135,6 +136,11 @@ fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>
     {
         return false;
     }
+    if let Some(priority) = filter.priority
+        && run.priority != priority
+    {
+        return false;
+    }
     true
 }
 
@@ -145,6 +151,8 @@ fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>
 /// create the run under the same lock as the schedule update.
 pub(super) fn insert_run(state: &mut State, req: NewRun) -> Result<RunCreation, StoreError> {
     validate_concurrency_limits(&req.concurrency_limits)?;
+    // Mirrors the CHECK constraint of the PostgreSQL column.
+    validate_priority(req.priority).map_err(StoreError::Database)?;
     let now = Utc::now();
 
     if let Some(ref key) = req.idempotency_key
@@ -201,6 +209,7 @@ pub(super) fn insert_run(state: &mut State, req: NewRun) -> Result<RunCreation, 
         created_by_label: None,
         idempotency_key: req.idempotency_key.clone(),
         concurrency_key: req.concurrency_key,
+        priority: req.priority,
         concurrency_limits: req.concurrency_limits,
         max_cost_usd: req.max_cost_usd,
         worker_id: None,
@@ -259,7 +268,7 @@ impl RunStore for InMemoryStore {
                 .collect();
 
             // Sort newest first.
-            runs.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+            runs.sort_by_key(|r| Reverse(r.created_at));
 
             let total = runs.len() as u64;
             let page = page.max(1);
@@ -407,8 +416,9 @@ impl RunStore for InMemoryStore {
             let mut state = self.state.write().await;
             let now = Utc::now();
 
-            // Find the oldest run waiting for execution whose scheduled_at has
-            // passed (or is None). `Retrying` runs are runs whose automatic retry
+            // Find the highest priority run waiting for execution whose
+            // scheduled_at has passed (or is None), the oldest first among
+            // equal priorities. `Retrying` runs are runs whose automatic retry
             // backoff has been armed: they become eligible again once
             // `scheduled_at` has passed. Runs held back by a saturated
             // concurrency group are skipped, so they never block younger runs.
@@ -418,7 +428,7 @@ impl RunStore for InMemoryStore {
                 .runs
                 .values()
                 .filter(|r| is_due(r, now) && !is_blocked(r, &state.runs))
-                .min_by_key(|r| r.created_at)
+                .min_by_key(|r| (Reverse(r.priority), r.created_at))
                 .map(|r| r.id);
 
             let Some(id) = oldest_id else {
@@ -2699,6 +2709,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -2720,6 +2731,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -2741,6 +2753,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -2760,6 +2773,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -2781,6 +2795,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -3398,6 +3413,153 @@ mod tests {
         assert_eq!(picked.id, run.id);
         assert_eq!(picked.status.state, RunStatus::Running);
         assert_eq!(picked.retry_count, 1);
+    }
+
+    // ---- priority ----
+
+    async fn create_with_priority(store: &InMemoryStore, name: &str, priority: i16) -> Run {
+        let run = store
+            .create_run(NewRun {
+                priority,
+                ..new_run_req(name)
+            })
+            .await
+            .unwrap()
+            .into_run();
+        // Distinct created_at values, so FIFO among equal priorities is observable.
+        sleep(Duration::from_millis(2)).await;
+        run
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_priority_serves_higher_priority_first() {
+        let store = InMemoryStore::new();
+        let low = create_with_priority(&store, "low", 0).await;
+        let high = create_with_priority(&store, "high", 10).await;
+
+        let first = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(first.id, high.id);
+        assert_eq!(first.priority, 10);
+        let second = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(second.id, low.id);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_priority_is_fifo_among_equal_priorities() {
+        let store = InMemoryStore::new();
+        let older = create_with_priority(&store, "older", 5).await;
+        let younger = create_with_priority(&store, "younger", 5).await;
+
+        let first = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(first.id, older.id);
+        let second = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(second.id, younger.id);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_priority_negative_runs_after_default() {
+        let store = InMemoryStore::new();
+        let negative = create_with_priority(&store, "background", -50).await;
+        let default = create_with_priority(&store, "default", 0).await;
+
+        let first = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(first.id, default.id);
+        let second = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(second.id, negative.id);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_priority_skips_high_priority_run_not_yet_due() {
+        let store = InMemoryStore::new();
+        let later = store
+            .create_run(NewRun {
+                priority: 100,
+                scheduled_at: Some(Utc::now() + TimeDelta::seconds(3600)),
+                ..new_run_req("later")
+            })
+            .await
+            .unwrap()
+            .into_run();
+        let now = create_with_priority(&store, "now", 0).await;
+
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(picked.id, now.id);
+        assert!(store.pick_next_pending(None).await.unwrap().is_none());
+        let later = store.get_run(later.id).await.unwrap().unwrap();
+        assert_eq!(later.status.state, RunStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn pick_next_pending_priority_kept_after_retry() {
+        let store = InMemoryStore::new();
+        let run = create_with_priority(&store, "retry-wf", 42).await;
+
+        store
+            .update_run_status(run.id, RunStatus::Running)
+            .await
+            .unwrap();
+        store
+            .update_run(
+                run.id,
+                RunUpdate {
+                    status: Some(RunStatus::Retrying),
+                    increment_retry: true,
+                    scheduled_at: Some(Utc::now() - TimeDelta::seconds(1)),
+                    ..RunUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        let fresh = create_with_priority(&store, "fresh", 0).await;
+
+        let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(picked.id, run.id);
+        assert_eq!(picked.priority, 42);
+        assert_eq!(picked.retry_count, 1);
+        let next = store.pick_next_pending(None).await.unwrap().unwrap();
+        assert_eq!(next.id, fresh.id);
+    }
+
+    #[tokio::test]
+    async fn create_run_priority_out_of_range_is_rejected() {
+        let store = InMemoryStore::new();
+        for priority in [101, -101] {
+            let err = store
+                .create_run(NewRun {
+                    priority,
+                    ..new_run_req("out-of-range")
+                })
+                .await
+                .unwrap_err();
+            assert!(matches!(err, StoreError::Database(_)), "{err:?}");
+        }
+        let page = store.list_runs(RunFilter::default(), 1, 10).await.unwrap();
+        assert_eq!(page.total, 0);
+    }
+
+    #[tokio::test]
+    async fn list_runs_priority_filter_is_exact_match() {
+        let store = InMemoryStore::new();
+        let urgent = create_with_priority(&store, "urgent", 10).await;
+        create_with_priority(&store, "default", 0).await;
+        create_with_priority(&store, "more-urgent", 20).await;
+
+        let page = store
+            .list_runs(
+                RunFilter {
+                    priority: Some(10),
+                    ..RunFilter::default()
+                },
+                1,
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, urgent.id);
+
+        let all = store.list_runs(RunFilter::default(), 1, 10).await.unwrap();
+        assert_eq!(all.total, 3);
     }
 
     #[tokio::test]

@@ -44,6 +44,7 @@ pub async fn get_stats(
         has_steps: params.has_steps,
         labels,
         created_by_user_id: params.created_by,
+        priority: None,
         concurrency_group: params.concurrency_group,
     };
     let stats = state.store.get_stats(filter).await?;
@@ -151,6 +152,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -171,6 +173,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -199,6 +202,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -227,6 +231,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -364,6 +369,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -382,6 +388,7 @@ mod tests {
                 scheduled_at: None,
                 idempotency_key: None,
                 concurrency_key: None,
+                priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
             })
@@ -449,6 +456,7 @@ mod tests {
                     created_by: Some(RunActor::User { user_id }),
                     idempotency_key: None,
                     concurrency_key: None,
+                    priority: 0,
                     concurrency_limits: Vec::new(),
                     max_cost_usd: None,
                 })

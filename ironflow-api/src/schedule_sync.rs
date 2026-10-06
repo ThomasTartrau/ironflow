@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::Utc;
 use ironflow_engine::engine::Engine;
 use ironflow_store::entities::{
-    NewSchedule, Schedule, ScheduleNext, ScheduleSource, ScheduleUpdate,
+    MAX_PRIORITY, MIN_PRIORITY, NewSchedule, Schedule, ScheduleNext, ScheduleSource, ScheduleUpdate,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::store::Store;
@@ -23,7 +23,9 @@ use crate::schedule_ticker::schedule_next;
 /// Performs a three-way sync at startup:
 /// 1. **Create** DB rows for handlers that declare a schedule but have no
 ///    corresponding `source = handler` row.
-/// 2. **Update** the cron expression when the handler's cron changed.
+/// 2. **Update** the cron expression when the handler's cron changed, and the
+///    priority when the handler's
+///    [`priority`](ironflow_engine::handler::WorkflowHandler::priority) changed.
 /// 3. **Delete** orphan `source = handler` rows whose handler was removed
 ///    from the code.
 ///
@@ -51,9 +53,16 @@ use crate::schedule_ticker::schedule_next;
 /// ```
 pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Result<(), StoreError> {
     let handlers = engine.scheduled_handlers();
-    let handler_map: HashMap<&str, &str> = handlers
+    // The priority every run of the schedule gets, clamped like a run the
+    // handler creates itself.
+    let handler_map: HashMap<&str, (&str, i16)> = handlers
         .iter()
-        .map(|(name, cron)| (*name, cron.as_str()))
+        .map(|(name, cron)| {
+            let priority = engine.get_handler(name).map_or(0, |handler| {
+                handler.priority().clamp(MIN_PRIORITY, MAX_PRIORITY)
+            });
+            (*name, (cron.as_str(), priority))
+        })
         .collect();
     let handler_names: HashSet<&str> = handler_map.keys().copied().collect();
 
@@ -83,28 +92,41 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
         .map(|s| (s.workflow_name.as_str(), *s))
         .collect();
 
-    for (name, cron_str) in &handler_map {
+    for (name, (cron_str, priority)) in &handler_map {
         match existing_map.get(name) {
-            Some(existing) if existing.cron_expression != *cron_str => {
-                // 2. Cron changed in code: update DB row. A schedule Ironflow
-                // disabled on an error is re-enabled by a cron that works.
-                let next = schedule_next(cron_str);
-                let reenable = existing.last_error.is_some() && matches!(next, ScheduleNext::At(_));
-                let mut update = next_trigger_update(next);
-                update.cron_expression = Some(cron_str.to_string());
-                if reenable {
-                    update.disabled_at = Some(None);
-                    update.last_error = Some(None);
+            Some(existing) => {
+                let cron_changed = existing.cron_expression != *cron_str;
+                let priority_changed = existing.priority != *priority;
+                if !cron_changed && !priority_changed {
+                    continue;
+                }
+                let mut update = ScheduleUpdate::default();
+                if cron_changed {
+                    // 2. Cron changed in code: update DB row. A schedule Ironflow
+                    // disabled on an error is re-enabled by a cron that works.
+                    let next = schedule_next(cron_str);
+                    let reenable =
+                        existing.last_error.is_some() && matches!(next, ScheduleNext::At(_));
+                    update = next_trigger_update(next);
+                    update.cron_expression = Some(cron_str.to_string());
+                    if reenable {
+                        update.disabled_at = Some(None);
+                        update.last_error = Some(None);
+                    }
+                }
+                if priority_changed {
+                    update.priority = Some(*priority);
                 }
                 store.update_schedule(existing.id, update).await?;
                 info!(
                     workflow = %name,
                     old_cron = %existing.cron_expression,
                     new_cron = %cron_str,
-                    "updated handler schedule cron"
+                    old_priority = existing.priority,
+                    new_priority = *priority,
+                    "updated handler schedule"
                 );
             }
-            Some(_) => {}
             None => {
                 // 3. Missing: create a new handler schedule.
                 let next = schedule_next(cron_str);
@@ -118,6 +140,7 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
                         cron_expression: cron_str.to_string(),
                         inputs: json!({}),
                         source: ScheduleSource::Handler,
+                        priority: *priority,
                         created_by_user_id: None,
                         next_trigger_at,
                     })
@@ -301,6 +324,7 @@ mod tests {
                 cron_expression: "*/5 * * * *".to_string(),
                 inputs: json!({"env": "prod"}),
                 source: ScheduleSource::Handler,
+                priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
             })
@@ -334,6 +358,7 @@ mod tests {
                 cron_expression: "0 0 * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Handler,
+                priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
             })
@@ -347,6 +372,7 @@ mod tests {
                 cron_expression: "0 12 * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
+                priority: 0,
                 created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: None,
             })
@@ -375,6 +401,7 @@ mod tests {
                 cron_expression: "0 0 * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Handler,
+                priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
             })
@@ -418,6 +445,7 @@ mod tests {
                 cron_expression: cron.to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
+                priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
             })
@@ -583,5 +611,91 @@ mod tests {
             .await
             .expect("repair");
         assert_eq!(repaired, 0);
+    }
+
+    struct PriorityScheduled {
+        priority: i16,
+        cron: CronSchedule,
+    }
+    impl WorkflowHandler for PriorityScheduled {
+        fn name(&self) -> &str {
+            "urgent-report"
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+        fn schedule(&self) -> Option<&CronSchedule> {
+            Some(&self.cron)
+        }
+        fn priority(&self) -> i16 {
+            self.priority
+        }
+    }
+
+    fn engine_with_priority(store: &Arc<dyn Store>, priority: i16) -> Engine {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine
+            .register(PriorityScheduled {
+                priority,
+                cron: CronSchedule::new("0 0 * * *").unwrap(),
+            })
+            .expect("register");
+        engine
+    }
+
+    async fn only_schedule(store: &Arc<dyn Store>) -> Schedule {
+        let page = store.list_schedules(1, 10).await.expect("list");
+        assert_eq!(page.items.len(), 1);
+        page.items.into_iter().next().expect("one schedule")
+    }
+
+    #[tokio::test]
+    async fn sync_creates_a_handler_schedule_with_the_handler_priority() {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        let engine = engine_with_priority(&store, 40);
+
+        sync_handler_schedules(&engine, store.as_ref())
+            .await
+            .expect("sync");
+
+        let schedule = only_schedule(&store).await;
+        assert_eq!(schedule.source, ScheduleSource::Handler);
+        assert_eq!(schedule.priority, 40);
+        assert_eq!(schedule.new_run(None).priority, 40);
+    }
+
+    #[tokio::test]
+    async fn sync_updates_the_priority_when_the_handler_priority_changed() {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        sync_handler_schedules(&engine_with_priority(&store, 0), store.as_ref())
+            .await
+            .expect("first sync");
+        let before = only_schedule(&store).await;
+        assert_eq!(before.priority, 0);
+
+        sync_handler_schedules(&engine_with_priority(&store, -30), store.as_ref())
+            .await
+            .expect("second sync");
+
+        let after = only_schedule(&store).await;
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.priority, -30);
+        assert_eq!(after.cron_expression, before.cron_expression);
+        assert_eq!(after.next_trigger_at, before.next_trigger_at);
+    }
+
+    #[tokio::test]
+    async fn sync_clamps_an_out_of_range_handler_priority() {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        sync_handler_schedules(&engine_with_priority(&store, 500), store.as_ref())
+            .await
+            .expect("sync high");
+        assert_eq!(only_schedule(&store).await.priority, MAX_PRIORITY);
+
+        sync_handler_schedules(&engine_with_priority(&store, -500), store.as_ref())
+            .await
+            .expect("sync low");
+        assert_eq!(only_schedule(&store).await.priority, MIN_PRIORITY);
     }
 }

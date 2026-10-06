@@ -30,6 +30,7 @@ import { listAttempts, resolveShownAttempt } from "./_components/attempts";
 import { capacityWaitLabel } from "./_components/capacity-wait";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { CostBudgetCard } from "./_components/CostBudgetCard";
+import { runPriority } from "./_components/priority";
 import { Breadcrumb } from "@/app/components/Breadcrumb";
 import { formatDuration } from "@/app/lib/format";
 import {
@@ -236,6 +237,15 @@ export function Component() {
 						</div>
 					</div>
 				)}
+
+				<div className="flex items-center gap-2">
+					<span className="text-sm font-medium text-muted-foreground">
+						Priority
+					</span>
+					<Badge variant="secondary" className="font-mono text-xs tabular-nums">
+						{runPriority(run)}
+					</Badge>
+				</div>
 
 				{run.concurrency_limits && run.concurrency_limits.length > 0 && (
 					<div className="flex items-center gap-2">

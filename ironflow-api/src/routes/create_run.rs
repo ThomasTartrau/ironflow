@@ -163,6 +163,7 @@ pub async fn create_run(
                 idempotency_key: idempotency_key.clone(),
                 concurrency_key: req.concurrency_key.clone(),
                 concurrency_limits: req.concurrency_limits.clone(),
+                priority: req.priority,
             },
         )
         .await
@@ -174,6 +175,7 @@ pub async fn create_run(
                 ApiError::ConcurrencyConflict { key, run_id }
             }
             EngineError::InvalidConcurrencyLimit(e) => ApiError::BadRequest(e.to_string()),
+            EngineError::InvalidPriority(message) => ApiError::BadRequest(message),
             other => ApiError::Internal(other.to_string()),
         })?;
 
@@ -243,7 +245,7 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{ApiKeyScope, NewApiKey, NewUser, RunFilter, RunStatus};
     use rust_decimal::Decimal;
-    use serde_json::{Value as JsonValue, json};
+    use serde_json::{Value as JsonValue, from_value, json};
     use std::convert::Infallible;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1276,5 +1278,69 @@ mod tests {
         assert_eq!(body["error"]["code"], "IDEMPOTENCY_KEY_CONFLICT");
         assert_eq!(body["error"]["details"]["run_id"], first_id);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_run_priority_defaults_to_zero() {
+        let resp = send_run(test_state(), json!({"workflow": "test-workflow"})).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = body_json(resp).await;
+        assert_eq!(body["data"]["priority"], 0);
+    }
+
+    #[tokio::test]
+    async fn create_run_priority_is_persisted_and_returned() {
+        let state = test_state();
+        let resp = send_run(
+            state.clone(),
+            json!({"workflow": "test-workflow", "priority": 75}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = body_json(resp).await;
+        assert_eq!(body["data"]["priority"], 75);
+        let id: Uuid = from_value(body["data"]["id"].clone()).unwrap();
+        let run = state.store.get_run(id).await.unwrap().unwrap();
+        assert_eq!(run.priority, 75);
+    }
+
+    #[tokio::test]
+    async fn create_run_priority_out_of_range_returns_400() {
+        for priority in [101, -101] {
+            let state = test_state();
+            let resp = send_run(
+                state.clone(),
+                json!({"workflow": "test-workflow", "priority": priority}),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+            let body = body_json(resp).await;
+            assert_eq!(body["error"]["code"], "BAD_REQUEST");
+            assert_eq!(
+                body["error"]["message"],
+                "priority must be between -100 and 100"
+            );
+
+            let runs = state
+                .store
+                .list_runs(RunFilter::default(), 1, 10)
+                .await
+                .unwrap();
+            assert_eq!(runs.total, 0, "an invalid request creates no run");
+        }
+    }
+
+    #[tokio::test]
+    async fn create_run_priority_beyond_i16_is_rejected() {
+        let state = test_state();
+        let resp = send_run(
+            state.clone(),
+            json!({"workflow": "test-workflow", "priority": 40000}),
+        )
+        .await;
+        assert!(resp.status().is_client_error(), "{}", resp.status());
     }
 }

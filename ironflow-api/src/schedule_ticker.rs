@@ -234,6 +234,7 @@ mod tests {
                 cron_expression: cron.to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
+                priority: 0,
                 created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: Some(Utc::now() - ChronoDuration::seconds(10)),
             })
@@ -397,6 +398,7 @@ mod tests {
                 cron_expression: "* * * * *".to_string(),
                 inputs: json!({}),
                 source: ScheduleSource::Api,
+                priority: 0,
                 created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: Some(Utc::now() + ChronoDuration::hours(1)),
             })
@@ -464,6 +466,7 @@ mod tests {
                         cron_expression: "* * * * *".to_string(),
                         inputs: json!({}),
                         source: ScheduleSource::Api,
+                        priority: 0,
                         created_by_user_id: None,
                         next_trigger_at: Some(Utc::now() - ChronoDuration::seconds(10)),
                     })

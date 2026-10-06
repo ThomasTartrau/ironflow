@@ -83,6 +83,7 @@ async fn state_with_schedule_disabled_on_error(
             cron_expression: cron.to_string(),
             inputs: json!({}),
             source: ScheduleSource::Api,
+            priority: 0,
             created_by_user_id: Some(user.id),
             next_trigger_at: None,
         })

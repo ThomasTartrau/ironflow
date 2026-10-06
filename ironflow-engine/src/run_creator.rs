@@ -69,6 +69,7 @@ pub type RunCreatorFuture<'a> =
 ///     created_by: None,
 ///     idempotency_key: None,
 ///     concurrency_key: None,
+///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
 /// };
@@ -131,6 +132,7 @@ pub struct CreateRunOpts {
     concurrency_key: Option<String>,
     labels: Option<HashMap<String, String>>,
     max_cost_usd: Option<Decimal>,
+    priority: Option<i16>,
 }
 
 impl CreateRunOpts {
@@ -221,6 +223,53 @@ impl CreateRunOpts {
         self
     }
 
+    /// Set the queue priority of the run.
+    ///
+    /// Workers pick the pending run with the highest priority first, then
+    /// the oldest among equal priorities. The value must lie in
+    /// [`MIN_PRIORITY`]`..=`[`MAX_PRIORITY`]; the store rejects anything
+    /// else. Defaults to `0` if not set.
+    ///
+    /// [`MIN_PRIORITY`]: ironflow_store::entities::MIN_PRIORITY
+    /// [`MAX_PRIORITY`]: ironflow_store::entities::MAX_PRIORITY
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::run_creator::CreateRunOpts;
+    ///
+    /// let new_run = CreateRunOpts::new().priority(10).build("deploy", None, None);
+    /// assert_eq!(new_run.priority, 10);
+    /// ```
+    pub fn priority(mut self, priority: i16) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// Set the queue priority only when [`priority`](Self::priority) was not
+    /// called, typically with [`WorkflowHandler::priority`].
+    ///
+    /// [`WorkflowHandler::priority`]: crate::handler::WorkflowHandler::priority
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::run_creator::CreateRunOpts;
+    ///
+    /// let handler_default = CreateRunOpts::new().default_priority(5).build("a", None, None);
+    /// assert_eq!(handler_default.priority, 5);
+    ///
+    /// let explicit = CreateRunOpts::new()
+    ///     .priority(-3)
+    ///     .default_priority(5)
+    ///     .build("a", None, None);
+    /// assert_eq!(explicit.priority, -3);
+    /// ```
+    pub fn default_priority(mut self, priority: i16) -> Self {
+        self.priority.get_or_insert(priority);
+        self
+    }
+
     /// Assemble a [`NewRun`] from these options and handler metadata.
     ///
     /// * `workflow_name` -- typically from [`WorkflowHandler::name`].
@@ -262,6 +311,7 @@ impl CreateRunOpts {
             created_by: self.created_by,
             idempotency_key: self.idempotency_key,
             concurrency_key: self.concurrency_key,
+            priority: self.priority.unwrap_or(0),
             concurrency_limits: Vec::new(),
             max_cost_usd: self.max_cost_usd.or(default_max_cost_usd),
         }
@@ -351,6 +401,34 @@ mod tests {
             .build("handler", Some("1"), Some(Decimal::new(1000, 2)));
 
         assert_eq!(new_run.max_cost_usd, Some(Decimal::new(200, 2)));
+    }
+
+    #[test]
+    fn create_run_opts_priority_defaults_to_zero() {
+        let new_run = CreateRunOpts::new().build("handler", None, None);
+        assert_eq!(new_run.priority, 0);
+    }
+
+    #[test]
+    fn create_run_opts_priority_is_carried() {
+        let new_run = CreateRunOpts::new()
+            .priority(-20)
+            .build("handler", None, None);
+        assert_eq!(new_run.priority, -20);
+    }
+
+    #[test]
+    fn create_run_opts_default_priority_applies_only_when_unset() {
+        let defaulted = CreateRunOpts::new()
+            .default_priority(40)
+            .build("handler", None, None);
+        assert_eq!(defaulted.priority, 40);
+
+        let explicit = CreateRunOpts::new()
+            .priority(0)
+            .default_priority(40)
+            .build("handler", None, None);
+        assert_eq!(explicit.priority, 0);
     }
 
     #[tokio::test]
