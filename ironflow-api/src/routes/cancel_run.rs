@@ -1,22 +1,28 @@
-//! `POST /api/v1/runs/:id/cancel` — Cancel a pending or running run.
+//! `POST /api/v1/runs/:id/cancel` — Cancel a run and the sub-workflow runs below it.
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
-use ironflow_engine::notify::{Event, RunStatusChangedEvent};
-use ironflow_store::models::RunStatus;
+use ironflow_engine::error::EngineError;
+use ironflow_store::error::StoreError;
 use uuid::Uuid;
 
-use crate::entities::RunResponse;
+use crate::entities::{CancelRunResponse, RunResponse};
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
 
-/// Cancel a pending or running run.
+/// Cancel a run that has not finished, with every sub-workflow run below it.
 ///
-/// Transitions the run to `Cancelled` status. Returns 400 if the run
-/// is already in a terminal state.
+/// The run and its active descendants move to `Cancelled`, their open steps
+/// are closed and their concurrency keys released (see
+/// [`Engine::cancel_run`](ironflow_engine::engine::Engine::cancel_run)). The
+/// response lists the descendants cancelled. Cancelling a child whose chain
+/// is suspended wakes its root, whose `Workflow` step then fails (or, with
+/// `allow_failure`, completes with the `Cancelled` child).
+///
+/// Cancelling a run already `Cancelled` succeeds and cancels only what was
+/// still active below it. Returns 400 for a run that finished otherwise.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -25,7 +31,7 @@ use crate::state::AppState;
         tags = ["runs"],
         params(("id" = Uuid, Path, description = "Run ID")),
         responses(
-            (status = 200, description = "Run cancelled successfully", body = RunResponse),
+            (status = 200, description = "Run cancelled, with the sub-runs cancelled along", body = CancelRunResponse),
             (status = 400, description = "Run cannot be cancelled"),
             (status = 401, description = "Unauthorized"),
             (status = 403, description = "Forbidden"),
@@ -43,38 +49,19 @@ pub async fn cancel_run(
         return Err(ApiError::Forbidden);
     }
 
-    let run = state.get_run_or_404(id).await?;
+    let cancellation = state.engine.cancel_run(id).await.map_err(|err| match err {
+        EngineError::Store(StoreError::RunNotFound(id)) => ApiError::RunNotFound(id),
+        EngineError::Store(StoreError::InvalidTransition { from, .. }) => {
+            ApiError::BadRequest(format!("cannot cancel run in {from} state"))
+        }
+        EngineError::Store(err) => ApiError::from(err),
+        other => ApiError::Internal(other.to_string()),
+    })?;
 
-    if !run.status.state.can_transition_to(&RunStatus::Cancelled) {
-        return Err(ApiError::BadRequest(format!(
-            "cannot cancel run in {} state",
-            run.status.state
-        )));
-    }
-
-    state
-        .store
-        .update_run_status(id, RunStatus::Cancelled)
-        .await?;
-
-    let cancelled = state.get_run_or_404(id).await?;
-
-    state
-        .engine
-        .event_publisher()
-        .publish(Event::RunStatusChanged(RunStatusChangedEvent {
-            run_id: id,
-            workflow_name: cancelled.workflow_name.clone(),
-            from: run.status.state,
-            to: RunStatus::Cancelled,
-            error: None,
-            cost_usd: cancelled.cost_usd,
-            duration_ms: cancelled.duration_ms,
-            labels: cancelled.labels.clone(),
-            at: Utc::now(),
-        }));
-
-    Ok(ok(RunResponse::from(cancelled)))
+    Ok(ok(CancelRunResponse {
+        run: RunResponse::from(cancellation.run),
+        cancelled_descendants: cancellation.cancelled_descendants,
+    }))
 }
 
 #[cfg(test)]
@@ -85,6 +72,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode as HttpStatusCode};
     use axum::routing::post;
+    use chrono::Utc;
     use http_body_util::BodyExt;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;

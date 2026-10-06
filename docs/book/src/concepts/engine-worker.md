@@ -131,7 +131,9 @@ payment or a notification must tolerate a second call.
 
 Lease recoveries are counted in `lease_recoveries`, apart from `retry_count`.
 A run can be recovered `max_retries` times. One more lost lease fails the run
-with `worker lease expired`, and its open steps are failed with the same error.
+with `worker lease expired`, and its open steps are failed with the same error;
+the sub-workflow runs it left running are cancelled. A requeued run keeps its
+children: it re-enters them when it resumes.
 A handler failure still uses `retry_count` and starts a new attempt that
 replays nothing. A run whose handler changed to an incompatible version since
 it was created replays nothing either and fails with `HANDLER_VERSION_MISMATCH`.

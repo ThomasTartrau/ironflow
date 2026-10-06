@@ -203,6 +203,26 @@ impl RunStore for ApiRunStore {
         })
     }
 
+    fn list_active_descendants(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Run>> {
+        Box::pin(async move {
+            let resp = self
+                .client
+                .get(self.internal(&format!("/runs/{run_id}/descendants")))
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .map_err(Self::err)?;
+
+            if !resp.status().is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(Self::status_err(&body));
+            }
+
+            let api_resp: ApiResponse<Vec<Run>> = resp.json().await.map_err(Self::err)?;
+            Ok(api_resp.data)
+        })
+    }
+
     fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let mut request = self
@@ -1188,7 +1208,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::TriggerKind;
+    use ironflow_store::entities::{PARENT_RUN_ID_LABEL, TriggerKind};
     use ironflow_store::memory::InMemoryStore;
     use tokio::net::TcpListener;
     use tokio::spawn;
@@ -1346,6 +1366,28 @@ mod tests {
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
         }
+    }
+
+    #[tokio::test]
+    async fn list_active_descendants_goes_through_the_internal_route() {
+        let store = ApiRunStore::new(&spawn_api().await, "test-worker-token");
+        let mut root = keyed_run("root");
+        (root.trigger, root.concurrency_key) = (TriggerKind::Manual, None);
+        let root = store.create_run(root).await.unwrap().into_run();
+        let mut child = keyed_run("child");
+        child.labels = HashMap::from([(PARENT_RUN_ID_LABEL.to_string(), root.id.to_string())]);
+        let child = store.create_run(child).await.unwrap().into_run();
+
+        let found = store.list_active_descendants(root.id).await.unwrap();
+        assert_eq!(found.iter().map(|r| r.id).collect::<Vec<_>>(), [child.id]);
+        assert_eq!(found[0].status.state, RunStatus::Pending);
+        assert!(
+            store
+                .list_active_descendants(Uuid::now_v7())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

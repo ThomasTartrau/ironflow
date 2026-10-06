@@ -1384,8 +1384,8 @@
         "tags": [
           "runs"
         ],
-        "summary": "Cancel a pending or running run.",
-        "description": "Transitions the run to `Cancelled` status. Returns 400 if the run\nis already in a terminal state.",
+        "summary": "Cancel a run that has not finished, with every sub-workflow run below it.",
+        "description": "The run and its active descendants move to `Cancelled`, their open steps\nare closed and their concurrency keys released (see\n[`Engine::cancel_run`](ironflow_engine::engine::Engine::cancel_run)). The\nresponse lists the descendants cancelled. Cancelling a child whose chain\nis suspended wakes its root, whose `Workflow` step then fails (or, with\n`allow_failure`, completes with the `Cancelled` child).\n\nCancelling a run already `Cancelled` succeeds and cancels only what was\nstill active below it. Returns 400 for a run that finished otherwise.",
         "operationId": "cancel_run",
         "parameters": [
           {
@@ -1401,11 +1401,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Run cancelled successfully",
+            "description": "Run cancelled, with the sub-runs cancelled along",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunResponse"
+                  "$ref": "#/components/schemas/CancelRunResponse"
                 }
               }
             }
@@ -4115,6 +4115,31 @@
           }
         }
       },
+      "CancelRunResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RunResponse",
+            "description": "The cancelled run."
+          },
+          {
+            "type": "object",
+            "required": [
+              "cancelled_descendants"
+            ],
+            "properties": {
+              "cancelled_descendants": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Sub-workflow runs below it that this request cancelled, oldest first.\nEmpty when none was still active."
+              }
+            }
+          }
+        ],
+        "description": "Response of `POST /api/v1/runs/:id/cancel`: the cancelled run, with the\nsub-workflow runs cancelled along with it.\n\nThe run's fields stay at the top level, as before the descendants were\nlisted, so existing clients read the same document."
+      },
       "ChangePasswordRequest": {
         "type": "object",
         "description": "Change password request body.",
@@ -6241,9 +6266,16 @@
         "required": [
           "run",
           "steps",
-          "payload"
+          "payload",
+          "active_descendant_count"
         ],
         "properties": {
+          "active_descendant_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sub-workflow runs below this run, at any depth, that are not finished:\ncancelling the run cancels them too.",
+            "minimum": 0
+          },
           "payload": {
             "description": "Input payload that triggered this run."
           },

@@ -274,7 +274,11 @@ mod tests {
             .route(
                 "/api/v1/runs/{id}/cancel",
                 post(|Path(id): Path<String>| async move {
-                    Json(json!({ "data": { "id": id, "status": "cancelled" } }))
+                    Json(json!({ "data": {
+                        "id": id,
+                        "status": "cancelled",
+                        "cancelled_descendants": ["c1", "c2"],
+                    } }))
                 }),
             )
             .route(
@@ -978,6 +982,7 @@ mod tests {
 
         assert_eq!(parsed["id"], "r1");
         assert_eq!(parsed["status"], "cancelled");
+        assert_eq!(parsed["cancelled_descendants"], json!(["c1", "c2"]));
     }
 
     // ---------------------------------------------------------------

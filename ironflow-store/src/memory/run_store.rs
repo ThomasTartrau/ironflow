@@ -14,6 +14,7 @@ use crate::entities::{
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
 
+use super::descendants::active_descendants;
 use super::stats_history::aggregate_history_buckets;
 use super::{InMemoryStore, State};
 
@@ -374,6 +375,13 @@ impl RunStore for InMemoryStore {
 
             run.updated_at = now;
             Ok(())
+        })
+    }
+
+    fn list_active_descendants(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Run>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            Ok(active_descendants(&state.runs, run_id))
         })
     }
 

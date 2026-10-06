@@ -22,6 +22,10 @@ use serde::Serialize;
 use serde_json::to_string_pretty;
 use uuid::Uuid;
 
+mod cancel;
+
+pub use cancel::cancelled_table;
+
 /// Map a [`RunStatus`] to a terminal color.
 fn status_color(status: &RunStatus) -> Color {
     match status {
@@ -1443,6 +1447,7 @@ mod tests {
             run,
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
         };
 
         let output = run_detail_table(&detail).to_string();
@@ -1463,6 +1468,7 @@ mod tests {
             }),
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
         };
 
         let output = run_detail_table(&detail).to_string();
@@ -1479,6 +1485,7 @@ mod tests {
             }),
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
         };
 
         let output = run_detail_table(&detail).to_string();
@@ -1517,6 +1524,7 @@ mod tests {
             }),
             steps: Vec::new(),
             payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
         };
         let output = run_detail_table(&detail).to_string();
         assert!(

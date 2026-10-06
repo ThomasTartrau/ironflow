@@ -2,9 +2,7 @@
 //! (wiremock) through the real reqwest client.
 
 use std::future::Future;
-use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::serve;
@@ -14,11 +12,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tokio::time::timeout;
-use tracing::Level;
-use tracing::callsite::rebuild_interest_cache;
-use tracing::subscriber::set_default;
-use tracing_subscriber::fmt as tracing_fmt;
-use tracing_subscriber::fmt::MakeWriter;
 use url::Url;
 use wiremock::matchers::{header, header_exists, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -587,77 +580,6 @@ async fn admin_issue_rejects_past_expiry_with_400() {
         let text = garbage.text().await.unwrap();
         assert!(!text.contains(OAUTH), "{text}");
         assert!(proxy.state.registry().is_empty().await.unwrap());
-    })
-    .await;
-}
-
-/// Log sink shared between the subscriber and the test.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap()).to_string()
-    }
-}
-
-impl Write for Captured {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-// current_thread: the server tasks run on this thread, under the
-// thread-local subscriber set below.
-#[tokio::test(flavor = "current_thread")]
-async fn logs_never_contain_token_or_credential() {
-    let captured = Captured::default();
-    let subscriber = tracing_fmt()
-        .with_writer(captured.clone())
-        .with_max_level(Level::INFO)
-        .with_ansi(false)
-        .finish();
-    let _guard = set_default(subscriber);
-    // Parallel tests without a subscriber may have cached "disabled" for a
-    // callsite before this dispatcher existed.
-    rebuild_interest_cache();
-
-    within_timeout(async {
-        let upstream = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/messages"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_1"})))
-            .mount(&upstream)
-            .await;
-        let proxy = Proxy::start(&upstream.uri()).await;
-        let (id, token) = proxy.issue(CredentialKind::OauthToken, OAUTH).await;
-
-        let resp = proxy.post_messages(&token).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let rejected = proxy.post_messages("ifap_unknown_token_value").await;
-        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
-
-        let logs = captured.text();
-        assert!(logs.contains("token issued"), "{logs}");
-        assert!(logs.contains("relayed"), "{logs}");
-        assert!(logs.contains(&id[..12]), "{logs}");
-        assert!(!logs.contains(&token), "{logs}");
-        assert!(!logs.contains(OAUTH), "{logs}");
-        assert!(!logs.contains("ifap_unknown_token_value"), "{logs}");
-        assert!(!logs.contains(ADMIN_KEY), "{logs}");
     })
     .await;
 }

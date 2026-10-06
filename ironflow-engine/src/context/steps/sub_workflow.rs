@@ -25,8 +25,8 @@ use uuid::Uuid;
 use ironflow_core::provider::LABEL_ROOT_RUN_ID;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, NewStep, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate, TriggerKind,
-    step_trace_id,
+    NewRun, NewStep, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
+    TriggerKind, step_trace_id,
 };
 
 use crate::config::{WorkflowOptions, WorkflowStepConfig};
@@ -89,6 +89,36 @@ enum ChildOutcome {
     Finished(SubWorkflowOutput, bool),
     /// No child run was created: another active run holds the concurrency key.
     Conflict(ConcurrencyConflict),
+}
+
+/// The outcome of a child run found `Cancelled`: with `allow_failure`, a
+/// `Cancelled` output carrying the child's error; otherwise
+/// [`EngineError::ChildRunCancelled`], which fails the step and the parent.
+fn cancelled_child_outcome(
+    config: &WorkflowStepConfig,
+    child: &Run,
+    cost_usd: Decimal,
+    duration_ms: u64,
+    output: Option<Value>,
+) -> Result<ChildOutcome, EngineError> {
+    let cancelled = EngineError::ChildRunCancelled { run_id: child.id };
+    if !config.allow_failure {
+        return Err(cancelled);
+    }
+    let error = child.error.clone().unwrap_or_else(|| cancelled.to_string());
+    let status = RunStatus::Cancelled;
+    Ok(ChildOutcome::Finished(
+        SubWorkflowOutput::new(
+            child.id,
+            &config.workflow_name,
+            status,
+            cost_usd,
+            duration_ms,
+        )
+        .with_output(output)
+        .with_error(error),
+        true,
+    ))
 }
 
 /// The output of a `workflow` or `workflow_dyn` step, which records no
@@ -698,9 +728,20 @@ impl WorkflowContext {
                             .update_run_status(child_run_id, RunStatus::Running)
                             .await?;
                     }
+                    // Cancelled while the chain waited, or before the parent
+                    // closed its step: the cancellation is the outcome.
+                    RunStatus::Cancelled => {
+                        return cancelled_child_outcome(
+                            config,
+                            &child_run,
+                            child_run.cost_usd,
+                            child_run.duration_ms,
+                            child_run.output.clone(),
+                        );
+                    }
                     // The child finished but the parent stopped before closing
                     // its step: report the recorded outcome, run nothing.
-                    status @ (RunStatus::Failed | RunStatus::Cancelled) if config.allow_failure => {
+                    status @ RunStatus::Failed if config.allow_failure => {
                         let error = child_run
                             .error
                             .clone()
@@ -835,6 +876,20 @@ impl WorkflowContext {
         };
         let total_duration = child_ctx.carried_duration_ms + run_start.elapsed().as_millis() as u64;
         let completed_at = Utc::now();
+
+        // Cancelled while it ran: whatever the handler returned, the child
+        // stays cancelled and the cancellation is its outcome.
+        if let Some(child_run) = self.store.get_run(child_run_id).await?
+            && child_run.status.state == RunStatus::Cancelled
+        {
+            return cancelled_child_outcome(
+                config,
+                &child_run,
+                child_ctx.total_cost_usd,
+                total_duration,
+                child_ctx.output().cloned(),
+            );
+        }
 
         match result {
             Ok(()) => {

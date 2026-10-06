@@ -552,9 +552,16 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/**
-		 * Cancel a pending or running run.
-		 * @description Transitions the run to `Cancelled` status. Returns 400 if the run
-		 *     is already in a terminal state.
+		 * Cancel a run that has not finished, with every sub-workflow run below it.
+		 * @description The run and its active descendants move to `Cancelled`, their open steps
+		 *     are closed and their concurrency keys released (see
+		 *     [`Engine::cancel_run`](ironflow_engine::engine::Engine::cancel_run)). The
+		 *     response lists the descendants cancelled. Cancelling a child whose chain
+		 *     is suspended wakes its root, whose `Workflow` step then fails (or, with
+		 *     `allow_failure`, completes with the `Cancelled` child).
+		 *
+		 *     Cancelling a run already `Cancelled` succeeds and cancels only what was
+		 *     still active below it. Returns 400 for a run that finished otherwise.
 		 */
 		post: operations["cancel_run"];
 		delete?: never;
@@ -1840,6 +1847,20 @@ export interface components {
 			 */
 			user_id?: string | null;
 		};
+		/**
+		 * @description Response of `POST /api/v1/runs/:id/cancel`: the cancelled run, with the
+		 *     sub-workflow runs cancelled along with it.
+		 *
+		 *     The run's fields stay at the top level, as before the descendants were
+		 *     listed, so existing clients read the same document.
+		 */
+		CancelRunResponse: components["schemas"]["RunResponse"] & {
+			/**
+			 * @description Sub-workflow runs below it that this request cancelled, oldest first.
+			 *     Empty when none was still active.
+			 */
+			cancelled_descendants: string[];
+		};
 		/** @description Change password request body. */
 		ChangePasswordRequest: {
 			/**
@@ -3120,6 +3141,12 @@ export interface components {
 		};
 		/** @description Run detail response — includes steps and payload. */
 		RunDetailResponse: {
+			/**
+			 * Format: int64
+			 * @description Sub-workflow runs below this run, at any depth, that are not finished:
+			 *     cancelling the run cancels them too.
+			 */
+			active_descendant_count: number;
 			/** @description Input payload that triggered this run. */
 			payload: unknown;
 			/** @description The run. */
@@ -5898,13 +5925,13 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description Run cancelled successfully */
+			/** @description Run cancelled, with the sub-runs cancelled along */
 			200: {
 				headers: {
 					[name: string]: unknown;
 				};
 				content: {
-					"application/json": components["schemas"]["RunResponse"];
+					"application/json": components["schemas"]["CancelRunResponse"];
 				};
 			};
 			/** @description Run cannot be cancelled */

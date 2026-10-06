@@ -155,6 +155,24 @@ pub trait RunStore: Send + Sync {
     /// Returns [`StoreError::RunNotFound`] if the run does not exist.
     fn update_run(&self, id: Uuid, update: RunUpdate) -> StoreFuture<'_, ()>;
 
+    /// List the non-terminal descendants of a run, oldest first.
+    ///
+    /// A descendant is a sub-workflow run
+    /// ([`TriggerKind::Workflow`](crate::entities::TriggerKind::Workflow))
+    /// reached from `run_id` through
+    /// [`PARENT_RUN_ID_LABEL`](crate::entities::PARENT_RUN_ID_LABEL), at any
+    /// depth. Terminal runs are not returned, but their own descendants are:
+    /// a child left running under a finished parent is still found. Labels are
+    /// data, so a chain that loops back on itself is followed once and never
+    /// returns `run_id` itself.
+    ///
+    /// Returns an empty list for an unknown run or a run without children.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the backing store fails.
+    fn list_active_descendants(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Run>>;
+
     /// Atomically pick the oldest pending run and transition it to `Running`.
     ///
     /// In PostgreSQL, this uses `SELECT FOR UPDATE SKIP LOCKED` for safe
