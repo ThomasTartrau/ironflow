@@ -157,9 +157,11 @@ fn engine_with(
     Arc::new(engine)
 }
 
+/// Enqueue the run with one retry: a lost lease consumes a recovery out of
+/// `max_retries`, so with none the reaper fails the run instead of requeuing it.
 async fn enqueue(engine: &Engine) -> Uuid {
     engine
-        .enqueue_handler(WORKFLOW, TriggerKind::Manual, json!({}), 0)
+        .enqueue_handler(WORKFLOW, TriggerKind::Manual, json!({}), 1)
         .await
         .expect("enqueue")
         .id
