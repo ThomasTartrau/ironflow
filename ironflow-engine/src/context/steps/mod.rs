@@ -4,7 +4,7 @@
 //! methods that create, execute and persist that kind of step. They are
 //! descendants of `context`, so they read its private fields directly.
 
-mod agent;
+pub(super) mod agent;
 mod approval;
 mod conditions;
 mod decision;

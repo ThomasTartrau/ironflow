@@ -207,3 +207,21 @@ step so a resume reads the same value. Section: Sub-workflow.
 - let verdict = steps.iter().find(|s| s.name == "verdict").map(StepOutput::from);
 + let verdict: Option<Verdict> = child.output()?;
 ```
+
+## agent-with-meta
+- kind: adopt
+- since: ironflow-engine after 2.49.0 (#180)
+
+A step that needs a typed answer and the `environment_id` of the same step used to run
+without `.output::<T>()` to read the id from the raw `StepOutput`, then parse the text by
+hand. `ctx.agent_with_meta` returns the typed `answer` with `environment_id` and
+`account_id`. Section: Agent, Persistent environment.
+
+```diff
+- let triage = ctx.agent("triage", AgentStepConfig::new("Name the failing test")).await?;
+- let environment = triage.environment_id.clone();
++ let reply = ctx
++     .agent_with_meta("triage", AgentStepConfig::new("Name the failing test").output::<Triage>())
++     .await?;
++ let environment = reply.environment_id.clone();   // reply.answer is the Triage
+```
