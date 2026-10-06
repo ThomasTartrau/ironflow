@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use strum::{Display, EnumString, IntoStaticStr};
+use chrono_tz::Tz;
+use strum::{AsRefStr, Display, EnumString, IntoStaticStr};
 use uuid::Uuid;
 
 use super::{NewRun, RunActor, RunCreation, TriggerKind};
@@ -56,7 +57,7 @@ impl ScheduleSource {
 /// use ironflow_store::entities::CatchupPolicy;
 ///
 /// assert_eq!(CatchupPolicy::default(), CatchupPolicy::Latest);
-/// assert_eq!(CatchupPolicy::All.as_str(), "all");
+/// assert_eq!(CatchupPolicy::All.as_ref(), "all");
 ///
 /// let parsed: CatchupPolicy = "skip".parse().unwrap();
 /// assert_eq!(parsed, CatchupPolicy::Skip);
@@ -74,6 +75,7 @@ impl ScheduleSource {
     Display,
     EnumString,
     IntoStaticStr,
+    AsRefStr,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -88,13 +90,6 @@ pub enum CatchupPolicy {
     Skip,
 }
 
-impl CatchupPolicy {
-    /// String representation used in the database.
-    pub fn as_str(&self) -> &'static str {
-        self.into()
-    }
-}
-
 /// What a schedule does when an occurrence comes while one of its runs is
 /// still active.
 ///
@@ -104,7 +99,7 @@ impl CatchupPolicy {
 /// use ironflow_store::entities::OverlapPolicy;
 ///
 /// assert_eq!(OverlapPolicy::default(), OverlapPolicy::Allow);
-/// assert_eq!(OverlapPolicy::Skip.as_str(), "skip");
+/// assert_eq!(OverlapPolicy::Skip.as_ref(), "skip");
 ///
 /// let parsed: OverlapPolicy = "allow".parse().unwrap();
 /// assert_eq!(parsed, OverlapPolicy::Allow);
@@ -122,6 +117,7 @@ impl CatchupPolicy {
     Display,
     EnumString,
     IntoStaticStr,
+    AsRefStr,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -132,13 +128,6 @@ pub enum OverlapPolicy {
     /// Skip the occurrence while a run of the schedule is active. Enforced
     /// with the concurrency key [`Schedule::concurrency_key`].
     Skip,
-}
-
-impl OverlapPolicy {
-    /// String representation used in the database.
-    pub fn as_str(&self) -> &'static str {
-        self.into()
-    }
 }
 
 /// Default [`SchedulePolicy::catchup_max`].
@@ -154,19 +143,20 @@ pub const MIN_CATCHUP_WINDOW_SECS: u32 = 60;
 /// Highest accepted [`SchedulePolicy::catchup_window_secs`]: thirty days.
 pub const MAX_CATCHUP_WINDOW_SECS: u32 = 2_592_000;
 /// Default [`SchedulePolicy::timezone`].
-pub const DEFAULT_TIMEZONE: &str = "UTC";
+pub const DEFAULT_TIMEZONE: Tz = Tz::UTC;
 
 /// Catch-up, overlap and timezone policy of a schedule.
 ///
 /// # Examples
 ///
 /// ```
+/// use chrono_tz::Tz;
 /// use ironflow_store::entities::{CatchupPolicy, OverlapPolicy, SchedulePolicy};
 ///
 /// let policy = SchedulePolicy {
 ///     catchup: CatchupPolicy::All,
 ///     overlap: OverlapPolicy::Skip,
-///     timezone: "Europe/Paris".to_string(),
+///     timezone: Tz::Europe__Paris,
 ///     ..SchedulePolicy::default()
 /// };
 /// assert!(policy.validate().is_ok());
@@ -187,8 +177,9 @@ pub struct SchedulePolicy {
     pub catchup_window_secs: u32,
     /// What to do when a run of the schedule is still active.
     pub overlap: OverlapPolicy,
-    /// IANA timezone the cron expression is evaluated in, e.g. `"Europe/Paris"`.
-    pub timezone: String,
+    /// IANA timezone the cron expression is evaluated in, e.g. `Europe/Paris`.
+    #[cfg_attr(feature = "openapi", schema(value_type = String, example = "Europe/Paris"))]
+    pub timezone: Tz,
 }
 
 impl Default for SchedulePolicy {
@@ -198,7 +189,7 @@ impl Default for SchedulePolicy {
             catchup_max: DEFAULT_CATCHUP_MAX,
             catchup_window_secs: DEFAULT_CATCHUP_WINDOW_SECS,
             overlap: OverlapPolicy::default(),
-            timezone: DEFAULT_TIMEZONE.to_string(),
+            timezone: DEFAULT_TIMEZONE,
         }
     }
 }
@@ -707,7 +698,7 @@ mod tests {
             priority: -5,
             policy: SchedulePolicy {
                 catchup: CatchupPolicy::All,
-                timezone: "Europe/Paris".to_string(),
+                timezone: Tz::Europe__Paris,
                 ..SchedulePolicy::default()
             },
             created_by_user_id: Some(Uuid::now_v7()),
@@ -814,10 +805,10 @@ mod tests {
             CatchupPolicy::All,
             CatchupPolicy::Skip,
         ] {
-            assert_eq!(policy.as_str().parse::<CatchupPolicy>().unwrap(), policy);
+            assert_eq!(policy.as_ref().parse::<CatchupPolicy>().unwrap(), policy);
         }
         for policy in [OverlapPolicy::Allow, OverlapPolicy::Skip] {
-            assert_eq!(policy.as_str().parse::<OverlapPolicy>().unwrap(), policy);
+            assert_eq!(policy.as_ref().parse::<OverlapPolicy>().unwrap(), policy);
         }
         assert!("never".parse::<CatchupPolicy>().is_err());
         assert!("queue".parse::<OverlapPolicy>().is_err());
@@ -830,7 +821,7 @@ mod tests {
         assert_eq!(policy.catchup_max, DEFAULT_CATCHUP_MAX);
         assert_eq!(policy.catchup_window_secs, DEFAULT_CATCHUP_WINDOW_SECS);
         assert_eq!(policy.overlap, OverlapPolicy::Allow);
-        assert_eq!(policy.timezone, "UTC");
+        assert_eq!(policy.timezone, Tz::UTC);
         assert!(policy.validate().is_ok());
     }
 

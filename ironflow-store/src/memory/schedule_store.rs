@@ -795,7 +795,7 @@ mod tests {
             catchup_max: 3,
             catchup_window_secs: 7200,
             overlap: OverlapPolicy::Skip,
-            timezone: "Europe/Paris".to_string(),
+            timezone: Tz::Europe__Paris,
         };
         let created = store
             .create_schedule(NewSchedule {
@@ -808,7 +808,7 @@ mod tests {
 
         let changed = SchedulePolicy {
             catchup: CatchupPolicy::Skip,
-            timezone: "America/New_York".to_string(),
+            timezone: Tz::America__New_York,
             ..policy
         };
         let updated = store

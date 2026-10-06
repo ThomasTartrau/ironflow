@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use serde_json::Value;
 use sqlx::{FromRow, query_as};
 use tracing::warn;
@@ -46,7 +47,7 @@ fn row_policy(
     catchup_max: i32,
     catchup_window_secs: i32,
     overlap: &str,
-    timezone: String,
+    timezone: &str,
 ) -> SchedulePolicy {
     SchedulePolicy {
         catchup: catchup.parse().unwrap_or_else(|e| {
@@ -70,7 +71,10 @@ fn row_policy(
             warn!(schedule_id = %id, overlap, error = %e, "unknown overlap policy, using the default");
             OverlapPolicy::default()
         }),
-        timezone,
+        timezone: timezone.parse().unwrap_or_else(|e| {
+            warn!(schedule_id = %id, timezone, error = %e, "unknown timezone, using the default");
+            DEFAULT_TIMEZONE
+        }),
     }
 }
 
@@ -82,7 +86,7 @@ impl From<ScheduleRow> for Schedule {
             row.catchup_max,
             row.catchup_window_secs,
             &row.overlap,
-            row.timezone,
+            &row.timezone,
         );
         Self {
             id: row.id,
@@ -188,11 +192,11 @@ impl ScheduleStore for PostgresStore {
             .bind(now)
             .bind(now)
             .bind(req.priority)
-            .bind(req.policy.catchup.as_str())
+            .bind(req.policy.catchup.as_ref())
             .bind(catchup_max)
             .bind(catchup_window_secs)
-            .bind(req.policy.overlap.as_str())
-            .bind(&req.policy.timezone)
+            .bind(req.policy.overlap.as_ref())
+            .bind(req.policy.timezone.name())
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -300,7 +304,7 @@ impl ScheduleStore for PostgresStore {
                     existing.catchup_max,
                     existing.catchup_window_secs,
                     &existing.overlap,
-                    existing.timezone,
+                    &existing.timezone,
                 )
             });
             let catchup_max = policy_int("catchup_max", policy.catchup_max)?;
@@ -340,11 +344,11 @@ impl ScheduleStore for PostgresStore {
             .bind(last_error)
             .bind(now)
             .bind(priority)
-            .bind(policy.catchup.as_str())
+            .bind(policy.catchup.as_ref())
             .bind(catchup_max)
             .bind(catchup_window_secs)
-            .bind(policy.overlap.as_str())
-            .bind(&policy.timezone)
+            .bind(policy.overlap.as_ref())
+            .bind(policy.timezone.name())
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;

@@ -607,7 +607,7 @@ pub trait WorkflowHandler: Send + Sync {
     ///     }
     /// }
     ///
-    /// assert_eq!(MorningReport.schedule().map(|s| s.policy().timezone.as_str()), Some("Europe/Paris"));
+    /// assert_eq!(MorningReport.schedule().map(|s| s.policy().timezone.name()), Some("Europe/Paris"));
     /// ```
     fn schedule(&self) -> Option<&CronSchedule> {
         None

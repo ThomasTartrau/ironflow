@@ -93,8 +93,8 @@ pub(crate) fn next_occurrence(
 }
 
 /// Next trigger time of `cron` evaluated in `timezone`, from now.
-pub(crate) fn next_trigger(cron: &str, timezone: &str) -> Result<Option<DateTime<Utc>>, String> {
-    next_occurrence(cron, parse_timezone(timezone)?, Utc::now())
+pub(crate) fn next_trigger(cron: &str, timezone: Tz) -> Result<Option<DateTime<Utc>>, String> {
+    next_occurrence(cron, timezone, Utc::now())
 }
 
 /// Turn the result of a next-occurrence computation into what the schedule
@@ -112,7 +112,7 @@ fn into_next(next: Result<Option<DateTime<Utc>>, String>) -> ScheduleNext {
 /// What a schedule with this cron expression and timezone does after firing:
 /// fire again at its next occurrence, or be disabled when that occurrence
 /// cannot be computed.
-pub(crate) fn schedule_next(cron: &str, timezone: &str) -> ScheduleNext {
+pub(crate) fn schedule_next(cron: &str, timezone: Tz) -> ScheduleNext {
     into_next(next_trigger(cron, timezone))
 }
 
@@ -155,11 +155,10 @@ pub(crate) struct Firing {
     pub truncated: bool,
 }
 
-/// Parse the cron expression and the timezone of a stored schedule.
+/// Parse the cron expression of a stored schedule, with its timezone.
 fn parse_schedule(schedule: &Schedule) -> Result<(Cron, Tz), String> {
     let cron = parse_cron(&schedule.cron_expression)?;
-    let tz = parse_timezone(&schedule.policy.timezone)?;
-    Ok((cron, tz))
+    Ok((cron, schedule.policy.timezone))
 }
 
 /// Decide which occurrences of a due schedule run, given its policy.
@@ -251,7 +250,7 @@ mod tests {
     }
 
     fn paris() -> Tz {
-        parse_timezone("Europe/Paris").expect("known timezone")
+        Tz::Europe__Paris
     }
 
     fn grace() -> TimeDelta {
@@ -307,10 +306,9 @@ mod tests {
     #[test]
     fn schedule_timezone_defaults_to_utc() {
         let policy = SchedulePolicy::default();
-        assert_eq!(policy.timezone, "UTC");
-        let tz = parse_timezone(&policy.timezone).expect("UTC parses");
+        assert_eq!(policy.timezone, Tz::UTC);
 
-        let next = next_occurrence("0 9 * * *", tz, at("2026-03-27T12:00:00Z"));
+        let next = next_occurrence("0 9 * * *", policy.timezone, at("2026-03-27T12:00:00Z"));
 
         assert_eq!(next, Ok(Some(at("2026-03-28T09:00:00Z"))));
     }
@@ -350,18 +348,11 @@ mod tests {
     fn schedule_timezone_invalid_name_is_rejected() {
         let error = parse_timezone("Mars/Olympus").expect_err("bad zone");
         assert!(error.contains("invalid timezone 'Mars/Olympus'"), "{error}");
-
-        let result = next_trigger("0 9 * * *", "not a zone");
-        let error = result.expect_err("bad zone");
-        assert!(error.contains("invalid timezone"), "{error}");
-
-        let error = disable_error(schedule_next("0 9 * * *", "not a zone"));
-        assert!(error.contains("invalid timezone"), "{error}");
     }
 
     #[test]
     fn schedule_timezone_invalid_cron_is_rejected() {
-        let error = next_trigger("not-a-cron", "UTC").expect_err("bad cron");
+        let error = next_trigger("not-a-cron", Tz::UTC).expect_err("bad cron");
         assert!(error.contains("invalid cron expression"), "{error}");
     }
 
@@ -531,22 +522,6 @@ mod tests {
         let error = disable_error(firing.plan.next);
         assert!(error.contains("invalid cron expression"), "{error}");
         assert!(firing.missed.is_empty());
-    }
-
-    #[test]
-    fn catchup_invalid_stored_timezone_fires_due_and_disables() {
-        let due = at("2026-05-01T07:00:00Z");
-        let now = at("2026-05-01T12:00:00Z");
-        let policy = SchedulePolicy {
-            timezone: "Atlantis/Capital".to_string(),
-            ..SchedulePolicy::default()
-        };
-
-        let firing = plan_firing(&schedule("0 * * * *", policy), due, now, grace());
-
-        assert_eq!(firing.plan.occurrences, vec![due]);
-        let error = disable_error(firing.plan.next);
-        assert!(error.contains("invalid timezone"), "{error}");
     }
 
     #[test]

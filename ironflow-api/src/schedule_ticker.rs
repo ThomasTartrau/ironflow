@@ -292,6 +292,8 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
+    use chrono_tz::Tz;
+
     use crate::schedule_clock::schedule_next;
 
     use super::*;
@@ -530,7 +532,7 @@ mod tests {
 
     #[test]
     fn schedule_next_for_a_valid_cron_is_in_the_future() {
-        match schedule_next("* * * * *", "UTC") {
+        match schedule_next("* * * * *", Tz::UTC) {
             ScheduleNext::At(at) => assert!(at > Utc::now()),
             ScheduleNext::Disable { error } => panic!("unexpected disable: {error}"),
         }

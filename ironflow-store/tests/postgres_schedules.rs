@@ -14,6 +14,7 @@
 //! ```
 
 use chrono::{DateTime, TimeDelta, Utc};
+use chrono_tz::Tz;
 use ironflow_store::entities::{
     CatchupPolicy, NewSchedule, OverlapPolicy, Schedule, ScheduleFiringPlan, ScheduleNext,
     SchedulePolicy, ScheduleSource, ScheduleUpdate, TriggerKind,
@@ -394,7 +395,7 @@ async fn policy_columns_roundtrip() {
         catchup_max: 7,
         catchup_window_secs: 3600,
         overlap: OverlapPolicy::Skip,
-        timezone: "Europe/Paris".to_string(),
+        timezone: Tz::Europe__Paris,
     };
     let (schedule, _) = due_schedule_with(&store, &unique_workflow("policy"), policy.clone()).await;
     assert_eq!(schedule.policy, policy);
@@ -409,7 +410,7 @@ async fn policy_columns_roundtrip() {
     let changed = SchedulePolicy {
         catchup: CatchupPolicy::Skip,
         overlap: OverlapPolicy::Allow,
-        timezone: "America/New_York".to_string(),
+        timezone: Tz::America__New_York,
         ..policy
     };
     let updated = store

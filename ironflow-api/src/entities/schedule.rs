@@ -70,7 +70,7 @@ impl From<Schedule> for ScheduleResponse {
             catchup_max: s.policy.catchup_max,
             catchup_window_secs: s.policy.catchup_window_secs,
             overlap: s.policy.overlap,
-            timezone: s.policy.timezone,
+            timezone: s.policy.timezone.name().to_string(),
             created_by_user_id: s.created_by_user_id,
             created_at: s.created_at,
             updated_at: s.updated_at,

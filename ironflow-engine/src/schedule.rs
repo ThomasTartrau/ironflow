@@ -104,7 +104,7 @@ impl CronSchedule {
     /// use ironflow_engine::schedule::CronSchedule;
     ///
     /// let sched = CronSchedule::new("0 9 * * *")?.with_timezone("Europe/Paris")?;
-    /// assert_eq!(sched.policy().timezone, "Europe/Paris");
+    /// assert_eq!(sched.policy().timezone.name(), "Europe/Paris");
     ///
     /// assert!(CronSchedule::new("0 9 * * *")?.with_timezone("Mars/Olympus").is_err());
     /// # Ok::<(), String>(())
@@ -113,7 +113,7 @@ impl CronSchedule {
         let parsed: Tz = tz
             .parse()
             .map_err(|e| format!("invalid timezone '{tz}': {e}"))?;
-        self.policy.timezone = parsed.name().to_string();
+        self.policy.timezone = parsed;
         Ok(self)
     }
 
@@ -330,7 +330,7 @@ mod tests {
         let sched = CronSchedule::new("0 * * * *").unwrap();
         assert_eq!(sched.policy().catchup, CatchupPolicy::Latest);
         assert_eq!(sched.policy().overlap, OverlapPolicy::Allow);
-        assert_eq!(sched.policy().timezone, "UTC");
+        assert_eq!(sched.policy().timezone.name(), "UTC");
         assert_eq!(sched.policy(), &SchedulePolicy::default());
     }
 
@@ -340,7 +340,7 @@ mod tests {
             .unwrap()
             .with_timezone("Europe/Paris")
             .unwrap();
-        assert_eq!(sched.policy().timezone, "Europe/Paris");
+        assert_eq!(sched.policy().timezone.name(), "Europe/Paris");
         assert_eq!(sched.as_str(), "0 9 * * *");
     }
 

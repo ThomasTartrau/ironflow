@@ -109,7 +109,7 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
                 if cron_changed || existing.policy.timezone != policy.timezone {
                     // 2. Cron changed in code: update DB row. A schedule Ironflow
                     // disabled on an error is re-enabled by a cron that works.
-                    let next = schedule_next(cron_str, &policy.timezone);
+                    let next = schedule_next(cron_str, policy.timezone);
                     let reenable =
                         existing.last_error.is_some() && matches!(next, ScheduleNext::At(_));
                     update = next_trigger_update(next);
@@ -141,7 +141,7 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
             }
             None => {
                 // 3. Missing: create a new handler schedule.
-                let next = schedule_next(cron_str, &policy.timezone);
+                let next = schedule_next(cron_str, policy.timezone);
                 let next_trigger_at = match next {
                     ScheduleNext::At(at) => Some(at),
                     ScheduleNext::Disable { .. } => None,
@@ -255,7 +255,7 @@ pub async fn repair_unscheduled_schedules(store: &dyn Store) -> Result<usize, St
     }
 
     for schedule in &broken {
-        let next = schedule_next(&schedule.cron_expression, &schedule.policy.timezone);
+        let next = schedule_next(&schedule.cron_expression, schedule.policy.timezone);
         match &next {
             ScheduleNext::At(at) => warn!(
                 schedule_id = %schedule.id,
@@ -285,6 +285,7 @@ mod tests {
     use chrono::Timelike;
     use chrono_tz::America::New_York;
     use chrono_tz::Europe::Paris;
+    use chrono_tz::Tz;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
@@ -759,7 +760,7 @@ mod tests {
                 catchup_max: 5,
                 catchup_window_secs: 7200,
                 overlap: OverlapPolicy::Skip,
-                timezone: "Europe/Paris".to_string(),
+                timezone: Tz::Europe__Paris,
             }
         );
         let next = schedule.next_trigger_at.expect("next trigger");
@@ -788,7 +789,7 @@ mod tests {
 
         let after = only_schedule(&store).await;
         assert_eq!(after.id, before.id);
-        assert_eq!(after.policy.timezone, "America/New_York");
+        assert_eq!(after.policy.timezone, Tz::America__New_York);
         assert_eq!(after.policy.overlap, OverlapPolicy::Skip);
         assert_eq!(after.policy.catchup, CatchupPolicy::Latest);
         // The timezone moved the next occurrence to 9:00 in New York.
