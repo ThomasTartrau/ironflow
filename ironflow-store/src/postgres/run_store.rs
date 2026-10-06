@@ -640,6 +640,10 @@ impl RunStore for PostgresStore {
         })
     }
 
+    fn list_active_descendants(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Run>> {
+        Box::pin(self.active_descendants(run_id))
+    }
+
     fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let now = Utc::now();

@@ -643,7 +643,9 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 Pass `WorkflowOptions::new().allow_failure()` to `ctx.workflow_with(&Child, input, options)` to
 tolerate a failed child: the step completes with a `Completed` outcome whose `status()` is `Failed` (or `Cancelled`),
-`error()` carries the message and the parent ends as `Warning`. A suspension is never
+`error()` carries the message and the parent ends as `Warning`. A child cancelled through
+`POST /runs/:id/cancel` gives the same `Cancelled` outcome; without `allow_failure` the step
+fails with `EngineError::ChildRunCancelled`, which is never retried. A suspension is never
 tolerated, and catching the error of a plain `ctx.workflow` is not a substitute: the failed step
 is not completed, so a resume runs the child again.
 

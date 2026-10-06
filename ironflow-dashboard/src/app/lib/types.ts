@@ -27,6 +27,7 @@ export type EventPayload<K extends EventKind> = Extract<Event, { type: K }>;
 export type RunResponse = components["schemas"]["RunResponse"];
 export type CreatedBy = components["schemas"]["CreatedBy"];
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
+export type CancelRunResponse = components["schemas"]["CancelRunResponse"];
 export type CreateRunRequest = components["schemas"]["CreateRunRequest"];
 
 // -- Step --

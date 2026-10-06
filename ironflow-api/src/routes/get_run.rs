@@ -104,11 +104,13 @@ pub async fn get_run(
         })
         .collect();
 
+    let active_descendant_count = state.store.list_active_descendants(id).await?.len() as u64;
     let payload = run.payload.clone();
     let response = RunDetailResponse {
         run: RunResponse::from(run),
         steps: step_responses,
         payload,
+        active_descendant_count,
     };
 
     Ok(ok(response))

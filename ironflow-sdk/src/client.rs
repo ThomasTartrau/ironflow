@@ -551,13 +551,21 @@ impl IronflowClient {
             .await
     }
 
-    /// `POST /api/v1/runs/:id/cancel` -- Cancel a run.
+    /// `POST /api/v1/runs/:id/cancel` -- Cancel a run and the sub-workflow
+    /// runs below it.
+    ///
+    /// The response carries the cancelled run's fields plus
+    /// `cancelled_descendants`, the ids of the sub-runs cancelled with it.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Api`] on 404 or 400 (invalid state transition).
-    pub async fn cancel_run(&self, id: Uuid) -> Result<ApiResponse<types::RunResponse>, Error> {
-        self.run_action(id, "cancel").await
+    pub async fn cancel_run(
+        &self,
+        id: Uuid,
+    ) -> Result<ApiResponse<types::CancelRunResponse>, Error> {
+        self.send_envelope(self.post(&format!("/api/v1/runs/{id}/cancel")))
+            .await
     }
 
     /// `POST /api/v1/runs/:id/approve` -- Approve a run waiting for approval.

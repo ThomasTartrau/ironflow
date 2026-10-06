@@ -256,6 +256,25 @@ of its children, or copied them into the parent to avoid a failed step, can move
 + ctx.workflow(&Release, ReleaseInput { version }).await?;
 ```
 
+## cancel-cascades-to-children
+- kind: behavior
+- since: ironflow-engine after 2.48.2 (#169)
+- detect: `child run .* is Cancelled`
+
+Cancelling a run cancels its active sub-workflow runs, and a parent that fails or retries
+cancels the children its attempt left running, which releases their concurrency keys. A
+child cancelled directly fails its parent's step with `EngineError::ChildRunCancelled`
+(never retried) instead of `InvalidWorkflow("child run .. is Cancelled")`; with
+`allow_failure` the step completes with a `Cancelled` child. The SDK's `cancel_run`
+returns a `CancelRunResponse` (the run's fields plus `cancelled_descendants`). Code that
+cancelled children one by one, or cleared stuck children to free a key, can drop it.
+
+```diff
+- for child in stuck_children { client.cancel_run(child).await?; }
+- client.cancel_run(root).await?;
++ let cancelled = client.cancel_run(root).await?.data.cancelled_descendants;
+```
+
 ## test-result-output
 - kind: behavior
 - since: ironflow-engine after 2.47.0 (#164)

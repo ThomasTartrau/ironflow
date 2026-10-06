@@ -444,6 +444,25 @@ async fn run_cancel_not_found() {
     assert!(result.is_err());
 }
 
+#[tokio::test]
+async fn run_cancel_reports_the_cancelled_sub_runs() {
+    let (base_url, token, store) = spawn_server_with_store().await;
+    let client = make_client(&base_url, &token);
+    let run_id = seed_awaiting_approval_run(&store).await;
+
+    let response = client.cancel_run(run_id).await.unwrap();
+    assert_eq!(response.data.id, run_id);
+    assert_eq!(response.data.status.to_string(), "cancelled");
+    assert!(response.data.cancelled_descendants.is_empty());
+
+    let args = RunArgs {
+        command: RunCommands::Cancel { id: run_id },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+}
+
 // ── Run approve ───────────────────────────────────────────────
 
 #[tokio::test]

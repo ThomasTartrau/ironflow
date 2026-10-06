@@ -325,7 +325,7 @@ pub async fn execute(
         RunCommands::Cancel { id } => {
             let response = client.cancel_run(*id).await?;
             output::print_output(json_mode, &response, || {
-                output::runs_table(slice::from_ref(&response.data))
+                output::cancelled_table(&response.data)
             })?;
         }
         RunCommands::Approve { id } => {

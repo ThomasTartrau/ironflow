@@ -56,6 +56,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod accounts;
 pub mod artifact;
 pub mod budget;
+pub mod cancel;
 pub mod config;
 pub mod context;
 pub mod decision;

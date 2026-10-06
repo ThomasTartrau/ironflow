@@ -148,7 +148,9 @@ impl Reaper {
     ///
     /// The `Running` steps of a requeued run are marked interrupted, see
     /// [`Engine::interrupt_running_steps`]; every open step of a run that
-    /// exhausted its recoveries is failed with [`LEASE_EXPIRED_ERROR`].
+    /// exhausted its recoveries is failed with [`LEASE_EXPIRED_ERROR`], and its
+    /// sub-workflow runs still active are cancelled
+    /// ([`Engine::cancel_descendants`]).
     async fn finish_recovery(&self, entry: &ReapedRun) {
         let run = &entry.run;
 
@@ -174,6 +176,15 @@ impl Reaper {
         };
         if let Err(err) = cleanup {
             error!(run_id = %run.id, error = %err, "failed to clean up orphaned steps");
+        }
+
+        // A requeued run re-enters its children when it resumes. A run out of
+        // recoveries never will: nothing would ever drive them again.
+        if entry.to == RunStatus::Failed {
+            let reason = format!("parent run {} stopped: {LEASE_EXPIRED_ERROR}", run.id);
+            if let Err(err) = self.engine.cancel_descendants(run.id, &reason).await {
+                error!(run_id = %run.id, error = %err, "failed to cancel the children of a reaped run");
+            }
         }
 
         #[cfg(feature = "prometheus")]
@@ -210,8 +221,8 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::notify::{EventSubscriber, SubscriberFuture};
     use ironflow_store::entities::{
-        LeaseRequest, NewRun, NewStep, RunFilter, StepKind, StepStatus, StepUpdate, TriggerKind,
-        step_trace_id,
+        LeaseRequest, NewRun, NewStep, PARENT_RUN_ID_LABEL, RunFilter, StepKind, StepStatus,
+        StepUpdate, TriggerKind, step_trace_id,
     };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::{RunStore, STEP_INTERRUPTED_ERROR};
@@ -505,6 +516,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pending.total, 2);
+    }
+
+    /// Create a sub-workflow child of `parent`, left `Running` without a lease
+    /// like a child its parent's worker was executing.
+    async fn running_child(store: &InMemoryStore, parent: Uuid) -> Uuid {
+        let mut req = new_run(0);
+        req.trigger = TriggerKind::Workflow;
+        req.labels = HashMap::from([(PARENT_RUN_ID_LABEL.to_string(), parent.to_string())]);
+        let child = store.create_run(req).await.unwrap().into_run();
+        store
+            .update_run_status(child.id, RunStatus::Running)
+            .await
+            .unwrap();
+        child.id
+    }
+
+    #[tokio::test]
+    async fn tick_cancels_the_child_of_a_run_out_of_recoveries() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = picked_with_expired_lease(&store, 0).await;
+        let child = running_child(&store, run_id).await;
+        let (reaper, _engine) = build(store.clone());
+
+        reaper.tick().await;
+
+        let child = store.get_run(child).await.unwrap().unwrap();
+        assert_eq!(child.status.state, RunStatus::Cancelled);
+        assert!(
+            child
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains(LEASE_EXPIRED_ERROR)),
+            "got {:?}",
+            child.error
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_leaves_the_child_of_a_requeued_run_to_be_resumed_with_it() {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = picked_with_expired_lease(&store, 3).await;
+        let child = running_child(&store, run_id).await;
+        let (reaper, _engine) = build(store.clone());
+
+        reaper.tick().await;
+
+        let child = store.get_run(child).await.unwrap().unwrap();
+        assert_eq!(child.status.state, RunStatus::Running);
     }
 
     #[tokio::test]

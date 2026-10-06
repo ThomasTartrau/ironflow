@@ -10,12 +10,29 @@ import {
 	retryRun,
 } from "../_actions/actions";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { useAppSelector } from "@/app/store";
 
 interface RunActionsProps {
 	run: RunResponse;
 	/** A human input step is open: it is answered there, not approved. */
 	awaitingInput: boolean;
+	/** Sub-workflow runs below this run that a cancellation also stops. */
+	activeDescendantCount: number;
+}
+
+/** What a cancellation reaches below the run, for the confirmation. */
+function descendantsNotice(count: number): string {
+	if (count === 0) return "No sub-run is active.";
+	const noun = count === 1 ? "sub-run" : "sub-runs";
+	return `${count} active ${noun} will be cancelled with it.`;
 }
 
 type PendingAction =
@@ -26,10 +43,15 @@ type PendingAction =
 	| "approving"
 	| "rejecting";
 
-export function RunActions({ run, awaitingInput }: RunActionsProps) {
+export function RunActions({
+	run,
+	awaitingInput,
+	activeDescendantCount,
+}: RunActionsProps) {
 	const revalidator = useRevalidator();
 	const navigate = useNavigate();
 	const [pendingAction, setPendingAction] = useState<PendingAction>("idle");
+	const [confirmingCancel, setConfirmingCancel] = useState(false);
 	const auth = useAppSelector((state) => state.auth);
 	const isAdmin = auth.status === "authenticated" && auth.user.is_admin;
 
@@ -99,13 +121,7 @@ export function RunActions({ run, awaitingInput }: RunActionsProps) {
 			)}
 			{canCancel && (
 				<Button
-					onClick={() =>
-						handleAction("cancelling", () => cancelRun(run.id), {
-							loading: "Cancelling run...",
-							success: "Run cancelled",
-							error: "Failed to cancel run",
-						})
-					}
+					onClick={() => setConfirmingCancel(true)}
 					disabled={isLoading}
 					variant="outline"
 					className="border-destructive text-destructive hover:bg-destructive/10"
@@ -113,6 +129,39 @@ export function RunActions({ run, awaitingInput }: RunActionsProps) {
 					{pendingAction === "cancelling" ? "Cancelling..." : "Cancel"}
 				</Button>
 			)}
+			<Dialog open={confirmingCancel} onOpenChange={setConfirmingCancel}>
+				<DialogContent showCloseButton={false}>
+					<DialogHeader>
+						<DialogTitle>Cancel this run?</DialogTitle>
+						<DialogDescription>
+							{descendantsNotice(activeDescendantCount)}
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => setConfirmingCancel(false)}
+							type="button"
+						>
+							Keep running
+						</Button>
+						<Button
+							variant="destructive"
+							type="button"
+							onClick={() => {
+								setConfirmingCancel(false);
+								handleAction("cancelling", () => cancelRun(run.id), {
+									loading: "Cancelling run...",
+									success: "Run cancelled",
+									error: "Failed to cancel run",
+								});
+							}}
+						>
+							Cancel run
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 			{canRetry && (
 				<Button
 					onClick={() =>
