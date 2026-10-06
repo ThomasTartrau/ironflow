@@ -2770,6 +2770,8 @@ mod tests {
                 workflow_name: "test".to_string(),
                 trigger: TriggerKind::Cron {
                     schedule: "0 0 * * *".to_string(),
+                    schedule_id: None,
+                    scheduled_for: None,
                 },
                 payload: json!({}),
                 max_retries: 1,

@@ -26,7 +26,7 @@ use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
 use ironflow_engine::prelude::CronSchedule;
-use ironflow_store::entities::{NewSchedule, NewUser, ScheduleSource};
+use ironflow_store::entities::{NewSchedule, NewUser, SchedulePolicy, ScheduleSource};
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::schedule_store::ScheduleStore;
 use ironflow_store::store::Store;
@@ -134,6 +134,7 @@ async fn startup_repairs_active_schedules_without_next_trigger() {
                 priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("seed active schedule without next trigger");
@@ -195,6 +196,7 @@ async fn create_schedule_with_none_persists_null() {
             priority: 0,
             created_by_user_id: None,
             next_trigger_at: None,
+            policy: SchedulePolicy::default(),
         })
         .await
         .expect("create with None must not violate the FK");
@@ -228,6 +230,7 @@ async fn create_schedule_with_some_round_trips_the_author() {
             priority: 0,
             created_by_user_id: Some(user_id),
             next_trigger_at: None,
+            policy: SchedulePolicy::default(),
         })
         .await
         .expect("create with a real author");
@@ -258,6 +261,7 @@ async fn create_schedule_with_unknown_author_is_rejected() {
             priority: 0,
             created_by_user_id: Some(Uuid::now_v7()),
             next_trigger_at: None,
+            policy: SchedulePolicy::default(),
         })
         .await;
 

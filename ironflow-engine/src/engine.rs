@@ -3012,6 +3012,8 @@ mod tests {
                 "echo-workflow",
                 TriggerKind::Cron {
                     schedule: "0 * * * * *".to_string(),
+                    schedule_id: None,
+                    scheduled_for: None,
                 },
                 json!({}),
                 EnqueueOptions::default(),

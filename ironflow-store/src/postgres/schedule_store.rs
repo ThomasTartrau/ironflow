@@ -1,10 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{FromRow, query_as};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::entities::{
-    NewSchedule, Page, Schedule, ScheduleFiring, ScheduleNext, ScheduleSource, ScheduleUpdate,
+    CatchupPolicy, DEFAULT_CATCHUP_MAX, DEFAULT_CATCHUP_WINDOW_SECS, NewSchedule, OverlapPolicy,
+    Page, Schedule, ScheduleFiring, ScheduleFiringPlan, ScheduleNext, SchedulePolicy,
+    ScheduleSource, ScheduleUpdate, ScheduledRun,
 };
 use crate::error::StoreError;
 use crate::schedule_store::ScheduleStore;
@@ -25,13 +28,62 @@ struct ScheduleRow {
     next_trigger_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
     priority: i16,
+    catchup: String,
+    catchup_max: i32,
+    catchup_window_secs: i32,
+    overlap: String,
+    timezone: String,
     created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
+/// Read the policy columns of a schedule row. The CHECK constraints of the
+/// columns make every fallback unreachable; each one is logged.
+fn row_policy(
+    id: Uuid,
+    catchup: &str,
+    catchup_max: i32,
+    catchup_window_secs: i32,
+    overlap: &str,
+    timezone: String,
+) -> SchedulePolicy {
+    SchedulePolicy {
+        catchup: catchup.parse().unwrap_or_else(|e| {
+            warn!(schedule_id = %id, catchup, error = %e, "unknown catchup policy, using the default");
+            CatchupPolicy::default()
+        }),
+        catchup_max: u32::try_from(catchup_max).unwrap_or_else(|e| {
+            warn!(schedule_id = %id, catchup_max, error = %e, "invalid catchup_max, using the default");
+            DEFAULT_CATCHUP_MAX
+        }),
+        catchup_window_secs: u32::try_from(catchup_window_secs).unwrap_or_else(|e| {
+            warn!(
+                schedule_id = %id,
+                catchup_window_secs,
+                error = %e,
+                "invalid catchup_window_secs, using the default"
+            );
+            DEFAULT_CATCHUP_WINDOW_SECS
+        }),
+        overlap: overlap.parse().unwrap_or_else(|e| {
+            warn!(schedule_id = %id, overlap, error = %e, "unknown overlap policy, using the default");
+            OverlapPolicy::default()
+        }),
+        timezone,
+    }
+}
+
 impl From<ScheduleRow> for Schedule {
     fn from(row: ScheduleRow) -> Self {
+        let policy = row_policy(
+            row.id,
+            &row.catchup,
+            row.catchup_max,
+            row.catchup_window_secs,
+            &row.overlap,
+            row.timezone,
+        );
         Self {
             id: row.id,
             workflow_name: row.workflow_name,
@@ -43,6 +95,7 @@ impl From<ScheduleRow> for Schedule {
             next_trigger_at: row.next_trigger_at,
             last_error: row.last_error,
             priority: row.priority,
+            policy,
             created_by_user_id: row.created_by_user_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -62,6 +115,11 @@ struct ScheduleRowWithTotal {
     next_trigger_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
     priority: i16,
+    catchup: String,
+    catchup_max: i32,
+    catchup_window_secs: i32,
+    overlap: String,
+    timezone: String,
     created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -70,22 +128,32 @@ struct ScheduleRowWithTotal {
 
 impl From<ScheduleRowWithTotal> for Schedule {
     fn from(row: ScheduleRowWithTotal) -> Self {
-        Self {
+        Schedule::from(ScheduleRow {
             id: row.id,
             workflow_name: row.workflow_name,
             cron_expression: row.cron_expression,
             inputs: row.inputs,
-            source: row.source.parse().unwrap_or(ScheduleSource::Api),
+            source: row.source,
             disabled_at: row.disabled_at,
             last_triggered_at: row.last_triggered_at,
             next_trigger_at: row.next_trigger_at,
             last_error: row.last_error,
             priority: row.priority,
+            catchup: row.catchup,
+            catchup_max: row.catchup_max,
+            catchup_window_secs: row.catchup_window_secs,
+            overlap: row.overlap,
+            timezone: row.timezone,
             created_by_user_id: row.created_by_user_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
-        }
+        })
     }
+}
+
+/// A `u32` policy bound converted to the `INTEGER` of its column.
+fn policy_int(field: &str, value: u32) -> Result<i32, StoreError> {
+    i32::try_from(value).map_err(|e| StoreError::Database(format!("{field} {value}: {e}")))
 }
 
 impl ScheduleStore for PostgresStore {
@@ -94,15 +162,20 @@ impl ScheduleStore for PostgresStore {
             let id = Uuid::now_v7();
             let now = Utc::now();
             let source_str = req.source.as_str();
+            let catchup_max = policy_int("catchup_max", req.policy.catchup_max)?;
+            let catchup_window_secs =
+                policy_int("catchup_window_secs", req.policy.catchup_window_secs)?;
             let row = query_as::<_, ScheduleRow>(
                 r#"
                 INSERT INTO ironflow.schedules
                     (id, workflow_name, cron_expression, inputs, source,
-                     next_trigger_at, created_by_user_id, created_at, updated_at, priority)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     next_trigger_at, created_by_user_id, created_at, updated_at, priority,
+                     catchup, catchup_max, catchup_window_secs, overlap, timezone)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at
                 "#,
             )
             .bind(id)
@@ -115,6 +188,11 @@ impl ScheduleStore for PostgresStore {
             .bind(now)
             .bind(now)
             .bind(req.priority)
+            .bind(req.policy.catchup.as_str())
+            .bind(catchup_max)
+            .bind(catchup_window_secs)
+            .bind(req.policy.overlap.as_str())
+            .bind(&req.policy.timezone)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -129,7 +207,8 @@ impl ScheduleStore for PostgresStore {
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
                 "#,
@@ -150,7 +229,8 @@ impl ScheduleStore for PostgresStore {
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at,
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at,
                     COUNT(*) OVER () AS total_count
                 FROM ironflow.schedules
                 ORDER BY created_at DESC
@@ -181,7 +261,8 @@ impl ScheduleStore for PostgresStore {
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
                 "#,
@@ -211,6 +292,20 @@ impl ScheduleStore for PostgresStore {
                 None => existing.last_error,
             };
             let priority = update.priority.unwrap_or(existing.priority);
+            let existing_id = existing.id;
+            let policy = update.policy.unwrap_or_else(|| {
+                row_policy(
+                    existing_id,
+                    &existing.catchup,
+                    existing.catchup_max,
+                    existing.catchup_window_secs,
+                    &existing.overlap,
+                    existing.timezone,
+                )
+            });
+            let catchup_max = policy_int("catchup_max", policy.catchup_max)?;
+            let catchup_window_secs =
+                policy_int("catchup_window_secs", policy.catchup_window_secs)?;
             let now = Utc::now();
 
             let row = query_as::<_, ScheduleRow>(
@@ -223,11 +318,17 @@ impl ScheduleStore for PostgresStore {
                     last_triggered_at = $6,
                     last_error = $7,
                     updated_at = $8,
-                    priority = $9
+                    priority = $9,
+                    catchup = $10,
+                    catchup_max = $11,
+                    catchup_window_secs = $12,
+                    overlap = $13,
+                    timezone = $14
                 WHERE id = $1
                 RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at
                 "#,
             )
             .bind(id)
@@ -239,6 +340,11 @@ impl ScheduleStore for PostgresStore {
             .bind(last_error)
             .bind(now)
             .bind(priority)
+            .bind(policy.catchup.as_str())
+            .bind(catchup_max)
+            .bind(catchup_window_secs)
+            .bind(policy.overlap.as_str())
+            .bind(&policy.timezone)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -267,7 +373,8 @@ impl ScheduleStore for PostgresStore {
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE disabled_at IS NULL
                   AND next_trigger_at IS NOT NULL
@@ -286,8 +393,8 @@ impl ScheduleStore for PostgresStore {
     fn fire_due_schedule(
         &self,
         id: Uuid,
-        occurrence: DateTime<Utc>,
-        next: ScheduleNext,
+        due: DateTime<Utc>,
+        plan: ScheduleFiringPlan,
     ) -> StoreFuture<'_, Option<ScheduleFiring>> {
         Box::pin(async move {
             let mut tx = self
@@ -302,7 +409,8 @@ impl ScheduleStore for PostgresStore {
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
                   AND disabled_at IS NULL
@@ -311,7 +419,7 @@ impl ScheduleStore for PostgresStore {
                 "#,
             )
             .bind(id)
-            .bind(occurrence)
+            .bind(due)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -321,12 +429,24 @@ impl ScheduleStore for PostgresStore {
             };
             let schedule = Schedule::from(row);
 
-            let mut new_run = schedule.new_run(None);
-            new_run.idempotency_key = Some(Schedule::occurrence_key(id, occurrence));
-            // Dropping `tx` on error rolls back the run: the schedule stays due.
-            let run = insert_run(&mut tx, self.get_run_lifecycle_machine_id(), new_run).await?;
+            let machine_id = self.get_run_lifecycle_machine_id();
+            let mut runs = Vec::with_capacity(plan.occurrences.len());
+            let mut overlapped = Vec::new();
+            for occurrence in plan.occurrences {
+                let mut new_run = schedule.new_run(Some(occurrence), None);
+                new_run.idempotency_key = Some(Schedule::occurrence_key(id, occurrence));
+                // A concurrency conflict is a returned error, not an SQL one:
+                // the transaction stays usable. Any other error drops `tx`,
+                // which rolls back every run: the schedule stays due.
+                match insert_run(&mut tx, machine_id, new_run).await {
+                    Ok(run) => runs.push(ScheduledRun { occurrence, run }),
+                    Err(StoreError::ConcurrencyConflict { .. }) => overlapped.push(occurrence),
+                    Err(e) => return Err(e),
+                }
+            }
+            let fired_any = !runs.is_empty();
 
-            let (next_trigger_at, error) = match next {
+            let (next_trigger_at, error) = match plan.next {
                 ScheduleNext::At(at) => (Some(at), None),
                 ScheduleNext::Disable { error } => (None, Some(error)),
             };
@@ -335,7 +455,7 @@ impl ScheduleStore for PostgresStore {
             let row = query_as::<_, ScheduleRow>(
                 r#"
                 UPDATE ironflow.schedules
-                SET last_triggered_at = $2,
+                SET last_triggered_at = CASE WHEN $5::boolean THEN $2 ELSE last_triggered_at END,
                     updated_at = $2,
                     next_trigger_at = $3,
                     disabled_at = CASE WHEN $4::text IS NULL THEN disabled_at ELSE $2 END,
@@ -343,13 +463,15 @@ impl ScheduleStore for PostgresStore {
                 WHERE id = $1
                 RETURNING id, workflow_name, cron_expression, inputs, source,
                     disabled_at, last_triggered_at, next_trigger_at, last_error,
-                    priority, created_by_user_id, created_at, updated_at
+                    priority, catchup, catchup_max, catchup_window_secs, overlap, timezone,
+                    created_by_user_id, created_at, updated_at
                 "#,
             )
             .bind(id)
             .bind(now)
             .bind(next_trigger_at)
             .bind(error)
+            .bind(fired_any)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -360,7 +482,8 @@ impl ScheduleStore for PostgresStore {
 
             Ok(Some(ScheduleFiring {
                 schedule: Schedule::from(row),
-                run,
+                runs,
+                overlapped,
             }))
         })
     }

@@ -103,7 +103,7 @@ pub mod prelude {
     };
     pub use crate::plan::{ConditionResult, ExecutionPlan, PlanOptions, PlannedStep};
     pub use crate::run_creator::{CreateRunOpts, RunCreator};
-    pub use crate::schedule::CronSchedule;
+    pub use crate::schedule::{CatchupPolicy, CronSchedule, OverlapPolicy, SchedulePolicy};
     pub use crate::signal::{Signal, SignalDelivery};
     pub use crate::wake::RunWaker;
 }

@@ -1,5 +1,6 @@
 //! [`TriggerKind`] — how a run was triggered.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -29,6 +30,14 @@ pub enum TriggerKind {
     Cron {
         /// The cron expression that fired.
         schedule: String,
+        /// Schedule that created the run. `None` on runs created before it
+        /// was recorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule_id: Option<Uuid>,
+        /// Occurrence the run covers. `None` for a manual trigger of the
+        /// schedule and on older runs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheduled_for: Option<DateTime<Utc>>,
     },
     /// Triggered via the REST API.
     Api,
@@ -66,6 +75,7 @@ pub enum TriggerKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn serde_roundtrip() {
@@ -77,6 +87,13 @@ mod tests {
             },
             TriggerKind::Cron {
                 schedule: "0 */5 * * * *".to_string(),
+                schedule_id: None,
+                scheduled_for: None,
+            },
+            TriggerKind::Cron {
+                schedule: "0 */5 * * * *".to_string(),
+                schedule_id: Some(Uuid::nil()),
+                scheduled_for: Some(Utc.with_ymd_and_hms(2026, 10, 6, 8, 0, 0).unwrap()),
             },
             TriggerKind::Retry {
                 parent_run_id: Uuid::nil(),
@@ -143,5 +160,41 @@ mod tests {
         let json = serde_json::to_string(&trigger).expect("serialize");
         assert!(json.contains("\"kind\":\"polling\""));
         assert!(json.contains("\"probe\":\"http\""));
+    }
+
+    #[test]
+    fn cron_serializes_with_schedule_id_and_scheduled_for() {
+        let trigger = TriggerKind::Cron {
+            schedule: "0 * * * *".to_string(),
+            schedule_id: Some(Uuid::nil()),
+            scheduled_for: Some(Utc.with_ymd_and_hms(2026, 10, 6, 8, 0, 0).unwrap()),
+        };
+        let json = serde_json::to_string(&trigger).expect("serialize");
+        assert!(json.contains("\"kind\":\"cron\""));
+        assert!(json.contains("\"schedule_id\":\"00000000-0000-0000-0000-000000000000\""));
+        assert!(json.contains("\"scheduled_for\":\"2026-10-06T08:00:00Z\""));
+
+        let bare = TriggerKind::Cron {
+            schedule: "0 * * * *".to_string(),
+            schedule_id: None,
+            scheduled_for: None,
+        };
+        let json = serde_json::to_string(&bare).expect("serialize");
+        assert!(!json.contains("schedule_id"));
+        assert!(!json.contains("scheduled_for"));
+    }
+
+    #[test]
+    fn cron_without_new_fields_still_deserializes() {
+        let trigger: TriggerKind =
+            serde_json::from_str(r#"{"kind":"cron","schedule":"0 * * * *"}"#).expect("deserialize");
+        assert_eq!(
+            trigger,
+            TriggerKind::Cron {
+                schedule: "0 * * * *".to_string(),
+                schedule_id: None,
+                scheduled_for: None,
+            }
+        );
     }
 }

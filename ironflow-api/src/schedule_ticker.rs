@@ -4,19 +4,28 @@
 //! and those declared by a [`WorkflowHandler::schedule()`]. At server startup,
 //! call [`sync_handler_schedules`](crate::schedule_sync::sync_handler_schedules)
 //! to reconcile handler-declared schedules, then spawn [`ScheduleTicker::run`]
-//! which polls [`list_due_schedules`] and fires each due occurrence with
-//! [`fire_due_schedule`]: the run creation and the next trigger time are
-//! written in one transaction, or not at all.
+//! which polls [`list_due_schedules`] and fires each due schedule with
+//! [`fire_due_schedule`]: the runs of the occurrences it catches up and the
+//! next trigger time are written in one transaction, or not at all.
 //!
+//! Which occurrences run follows the schedule's policy: occurrences missed
+//! while the server was down are caught up (`latest`, `all` or `skip`) within
+//! the catch-up window, and an `overlap = skip` schedule starts no run while
+//! one of its runs is still active. Every dropped occurrence is logged,
+//! counted in `ironflow_schedule_missed_total` and published as
+//! [`Event::ScheduleOccurrencesMissed`] when the ticker has an engine.
+//!
+//! [`WorkflowHandler::schedule()`]: ironflow_engine::handler::WorkflowHandler::schedule
 //! [`list_due_schedules`]: ironflow_store::schedule_store::ScheduleStore::list_due_schedules
 //! [`fire_due_schedule`]: ironflow_store::schedule_store::ScheduleStore::fire_due_schedule
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use croner::Cron;
-use ironflow_store::entities::ScheduleNext;
+use chrono::{TimeDelta, Utc};
+use ironflow_engine::engine::Engine;
+use ironflow_engine::notify::{Event, ScheduleOccurrencesMissedEvent};
+use ironflow_store::entities::{Schedule, ScheduleMissReason, ScheduleNext};
 use ironflow_store::store::Store;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
@@ -24,34 +33,11 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[cfg(feature = "prometheus")]
-use ironflow_core::metric_names::SCHEDULE_FIRE_ERRORS_TOTAL;
+use ironflow_core::metric_names::{SCHEDULE_FIRE_ERRORS_TOTAL, SCHEDULE_MISSED_TOTAL};
 #[cfg(feature = "prometheus")]
 use metrics::counter;
 
-/// Compute the next trigger time from a cron expression (5-field standard format).
-pub(crate) fn next_trigger(cron_str: &str) -> Result<Option<DateTime<Utc>>, String> {
-    let mut cron = Cron::new(cron_str);
-    cron.pattern.with_seconds_optional = true;
-    let cron = cron
-        .parse()
-        .map_err(|e| format!("invalid cron expression: {e}"))?;
-    let next = cron
-        .find_next_occurrence(&Utc::now(), false)
-        .map_err(|e| format!("cannot compute next trigger: {e}"))?;
-    Ok(Some(next))
-}
-
-/// What a schedule with this cron expression does after firing: fire again at
-/// its next occurrence, or be disabled when that occurrence cannot be computed.
-pub(crate) fn schedule_next(cron_str: &str) -> ScheduleNext {
-    match next_trigger(cron_str) {
-        Ok(Some(at)) => ScheduleNext::At(at),
-        Ok(None) => ScheduleNext::Disable {
-            error: "cannot compute next trigger: no next occurrence".to_string(),
-        },
-        Err(error) => ScheduleNext::Disable { error },
-    }
-}
+use crate::schedule_clock::{MIN_ON_TIME_GRACE, MissedOccurrences, plan_firing};
 
 /// Count a schedule that failed to fire or was disabled by an error.
 fn record_fire_error(schedule_id: Uuid) {
@@ -59,6 +45,14 @@ fn record_fire_error(schedule_id: Uuid) {
     counter!(SCHEDULE_FIRE_ERRORS_TOTAL, "schedule" => schedule_id.to_string()).increment(1);
     #[cfg(not(feature = "prometheus"))]
     let _ = schedule_id;
+}
+
+/// Count occurrences a schedule did not run.
+fn record_missed_metric(schedule_id: Uuid, count: u64) {
+    #[cfg(feature = "prometheus")]
+    counter!(SCHEDULE_MISSED_TOTAL, "schedule" => schedule_id.to_string()).increment(count);
+    #[cfg(not(feature = "prometheus"))]
+    let _ = (schedule_id, count);
 }
 
 /// How often the ticker checks for due schedules.
@@ -81,16 +75,19 @@ pub const DEFAULT_TICK_INTERVAL: Duration = Duration::from_secs(15);
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
-/// let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+/// let engine = Arc::new(Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new())));
 /// sync_handler_schedules(&engine, store.as_ref()).await?;
 ///
-/// let ticker = ScheduleTicker::new(store).interval(Duration::from_secs(10));
+/// let ticker = ScheduleTicker::new(store)
+///     .engine(engine)
+///     .interval(Duration::from_secs(10));
 /// tokio::spawn(ticker.run(CancellationToken::new()));
 /// # Ok(())
 /// # }
 /// ```
 pub struct ScheduleTicker {
     store: Arc<dyn Store>,
+    engine: Option<Arc<Engine>>,
     interval: Duration,
 }
 
@@ -99,14 +96,31 @@ impl ScheduleTicker {
     pub fn new(store: Arc<dyn Store>) -> Self {
         Self {
             store,
+            engine: None,
             interval: DEFAULT_TICK_INTERVAL,
         }
+    }
+
+    /// Publish [`Event::ScheduleOccurrencesMissed`] through this engine's
+    /// event publisher whenever a schedule drops occurrences.
+    ///
+    /// Without an engine, missed occurrences are only logged and counted.
+    pub fn engine(mut self, engine: Arc<Engine>) -> Self {
+        self.engine = Some(engine);
+        self
     }
 
     /// Set how often due schedules are polled.
     pub fn interval(mut self, interval: Duration) -> Self {
         self.interval = interval;
         self
+    }
+
+    /// How late an occurrence may fire and still count as on time: two tick
+    /// intervals, and never less than [`MIN_ON_TIME_GRACE`].
+    fn on_time_grace(&self) -> TimeDelta {
+        let grace = MIN_ON_TIME_GRACE.max(self.interval.saturating_mul(2));
+        TimeDelta::from_std(grace).unwrap_or(TimeDelta::MAX)
     }
 
     /// Run the tick loop until `shutdown` is cancelled.
@@ -136,7 +150,8 @@ impl ScheduleTicker {
 
     /// Fire every due schedule once.
     ///
-    /// Each occurrence is fired atomically: a schedule whose firing fails
+    /// The schedule's catch-up policy decides which of its missed occurrences
+    /// run; all of them are fired atomically: a schedule whose firing fails
     /// stays due and is retried on the next tick. A schedule whose next
     /// occurrence cannot be computed fires its due run, then is disabled with
     /// the reason in `last_error`.
@@ -157,26 +172,45 @@ impl ScheduleTicker {
 
         info!(count = due.len(), "firing due schedules");
 
+        let grace = self.on_time_grace();
         for schedule in due {
             let Some(occurrence) = schedule.next_trigger_at else {
                 continue;
             };
-            let next = schedule_next(&schedule.cron_expression);
+            let firing = plan_firing(&schedule, occurrence, Utc::now(), grace);
 
             match self
                 .store
-                .fire_due_schedule(schedule.id, occurrence, next.clone())
+                .fire_due_schedule(schedule.id, occurrence, firing.plan.clone())
                 .await
             {
-                Ok(Some(firing)) => {
-                    info!(
-                        schedule_id = %schedule.id,
-                        workflow = %schedule.workflow_name,
-                        run_id = %firing.run.run().id,
-                        replayed = !firing.run.is_created(),
-                        "schedule fired"
-                    );
-                    if let ScheduleNext::Disable { error } = next {
+                Ok(Some(fired)) => {
+                    for scheduled in &fired.runs {
+                        info!(
+                            schedule_id = %schedule.id,
+                            workflow = %schedule.workflow_name,
+                            run_id = %scheduled.run.run().id,
+                            occurrence = %scheduled.occurrence,
+                            replayed = !scheduled.run.is_created(),
+                            "schedule fired"
+                        );
+                    }
+                    // Traced only once the firing is committed: a firing that
+                    // fails is retried, and one won by another instance is
+                    // traced there.
+                    let overlapped =
+                        MissedOccurrences::group(ScheduleMissReason::Overlap, &fired.overlapped);
+                    for missed in firing.missed.iter().chain(&overlapped) {
+                        self.record_missed(&schedule, missed);
+                    }
+                    if firing.truncated {
+                        warn!(
+                            schedule_id = %schedule.id,
+                            workflow = %schedule.workflow_name,
+                            "too many missed occurrences to enumerate, the counts are lower bounds"
+                        );
+                    }
+                    if let ScheduleNext::Disable { error } = &firing.plan.next {
                         warn!(
                             schedule_id = %schedule.id,
                             workflow = %schedule.workflow_name,
@@ -204,13 +238,47 @@ impl ScheduleTicker {
             }
         }
     }
+
+    /// Log, count and publish occurrences a schedule did not run.
+    fn record_missed(&self, schedule: &Schedule, missed: &MissedOccurrences) {
+        warn!(
+            schedule_id = %schedule.id,
+            workflow = %schedule.workflow_name,
+            reason = %missed.reason,
+            count = missed.count,
+            first = %missed.first,
+            last = %missed.last,
+            "schedule occurrences missed"
+        );
+        record_missed_metric(schedule.id, missed.count);
+        if let Some(engine) = &self.engine {
+            let event = ScheduleOccurrencesMissedEvent {
+                schedule_id: schedule.id,
+                workflow_name: schedule.workflow_name.clone(),
+                reason: missed.reason,
+                count: missed.count,
+                first: missed.first,
+                last: missed.last,
+                at: Utc::now(),
+            };
+            engine
+                .event_publisher()
+                .publish(Event::ScheduleOccurrencesMissed(event));
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration as ChronoDuration, Utc};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration as StdDuration;
+
+    use chrono::{DateTime, Duration as ChronoDuration, DurationRound, Utc};
+    use ironflow_core::providers::claude::ClaudeCodeProvider;
+    use ironflow_engine::notify::{EventSubscriber, SubscriberFuture};
     use ironflow_store::entities::{
-        NewSchedule, RunFilter, Schedule, ScheduleSource, ScheduleUpdate,
+        CatchupPolicy, NewSchedule, OverlapPolicy, Run, RunFilter, Schedule, SchedulePolicy,
+        ScheduleSource, ScheduleUpdate, TriggerKind,
     };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
@@ -219,14 +287,20 @@ mod tests {
     #[cfg(feature = "prometheus")]
     use metrics_exporter_prometheus::PrometheusBuilder;
     use serde_json::json;
-    use std::sync::Arc;
     #[cfg(feature = "prometheus")]
     use tokio::runtime::Builder;
+    use tokio::time::{sleep, timeout};
     use uuid::Uuid;
+
+    use crate::schedule_clock::schedule_next;
 
     use super::*;
 
-    async fn store_with_due_schedule(cron: &str) -> (Arc<dyn Store>, Schedule) {
+    async fn store_with_schedule(
+        cron: &str,
+        due: DateTime<Utc>,
+        policy: SchedulePolicy,
+    ) -> (Arc<dyn Store>, Schedule) {
         let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let schedule = store
             .create_schedule(NewSchedule {
@@ -236,11 +310,107 @@ mod tests {
                 source: ScheduleSource::Api,
                 priority: 0,
                 created_by_user_id: Some(Uuid::now_v7()),
-                next_trigger_at: Some(Utc::now() - ChronoDuration::seconds(10)),
+                next_trigger_at: Some(due),
+                policy,
             })
             .await
             .expect("create schedule");
         (store, schedule)
+    }
+
+    async fn store_with_due_schedule(cron: &str) -> (Arc<dyn Store>, Schedule) {
+        let due = Utc::now() - ChronoDuration::seconds(10);
+        store_with_schedule(cron, due, SchedulePolicy::default()).await
+    }
+
+    /// The top of the current hour, and an hourly schedule due four hours
+    /// before it: five occurrences to catch up, the last one current.
+    async fn store_with_hourly_backlog(policy: SchedulePolicy) -> (Arc<dyn Store>, Schedule) {
+        let hour = Utc::now()
+            .duration_trunc(ChronoDuration::hours(1))
+            .expect("truncate to the hour");
+        store_with_schedule("0 * * * *", hour - ChronoDuration::hours(4), policy).await
+    }
+
+    fn policy(catchup: CatchupPolicy, overlap: OverlapPolicy) -> SchedulePolicy {
+        SchedulePolicy {
+            catchup,
+            overlap,
+            ..SchedulePolicy::default()
+        }
+    }
+
+    async fn all_runs(store: &Arc<dyn Store>) -> Vec<Run> {
+        store
+            .list_runs(RunFilter::default(), 1, 100)
+            .await
+            .expect("list runs")
+            .items
+    }
+
+    /// Make the schedule due again, as a later occurrence would.
+    async fn make_due_again(store: &Arc<dyn Store>, id: Uuid) {
+        store
+            .update_schedule(
+                id,
+                ScheduleUpdate {
+                    next_trigger_at: Some(Some(Utc::now() - ChronoDuration::seconds(1))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("make due");
+    }
+
+    /// Collects the events published during a test.
+    struct EventCollector(Arc<Mutex<Vec<Event>>>);
+
+    impl EventSubscriber for EventCollector {
+        fn name(&self) -> &str {
+            "event-collector"
+        }
+
+        fn handle<'a>(&'a self, event: &'a Event) -> SubscriberFuture<'a> {
+            Box::pin(async move {
+                self.0.lock().expect("collector lock").push(event.clone());
+            })
+        }
+    }
+
+    /// A ticker whose engine collects every missed-occurrence event.
+    fn recording_ticker(store: Arc<dyn Store>) -> (ScheduleTicker, Arc<Mutex<Vec<Event>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+        engine.subscribe(
+            EventCollector(events.clone()),
+            &[Event::SCHEDULE_OCCURRENCES_MISSED],
+        );
+        (ScheduleTicker::new(store).engine(Arc::new(engine)), events)
+    }
+
+    /// Wait until `count` events were delivered: subscribers run on spawned tasks.
+    async fn collected(events: &Arc<Mutex<Vec<Event>>>, count: usize) -> Vec<Event> {
+        timeout(StdDuration::from_secs(5), async {
+            loop {
+                let seen = events.lock().expect("collector lock").clone();
+                if seen.len() >= count {
+                    return seen;
+                }
+                sleep(StdDuration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("events delivered")
+    }
+
+    fn missed_events(events: &[Event]) -> Vec<ScheduleOccurrencesMissedEvent> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ScheduleOccurrencesMissed(payload) => Some(payload.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     async fn make_store_with_due_schedule() -> (Arc<dyn Store>, Uuid) {
@@ -278,7 +448,9 @@ mod tests {
 
     #[tokio::test]
     async fn tick_run_carries_the_occurrence_key() {
-        let (store, schedule) = store_with_due_schedule("* * * * *").await;
+        // A yearly cron: no later occurrence can fall between the due one and
+        // the tick and supersede it.
+        let (store, schedule) = store_with_due_schedule("0 0 1 1 *").await;
         let occurrence = schedule.next_trigger_at.expect("due");
 
         ScheduleTicker::new(store.clone()).tick().await;
@@ -358,7 +530,7 @@ mod tests {
 
     #[test]
     fn schedule_next_for_a_valid_cron_is_in_the_future() {
-        match schedule_next("* * * * *") {
+        match schedule_next("* * * * *", "UTC") {
             ScheduleNext::At(at) => assert!(at > Utc::now()),
             ScheduleNext::Disable { error } => panic!("unexpected disable: {error}"),
         }
@@ -401,6 +573,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: Some(Utc::now() + ChronoDuration::hours(1)),
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("create");
@@ -469,6 +642,7 @@ mod tests {
                         priority: 0,
                         created_by_user_id: None,
                         next_trigger_at: Some(Utc::now() - ChronoDuration::seconds(10)),
+                        policy: SchedulePolicy::default(),
                     })
                     .await
                     .expect("create healthy");
@@ -485,5 +659,161 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains(&healthy.to_string()), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn tick_catchup_all_creates_one_run_per_missed_occurrence() {
+        let (store, schedule) =
+            store_with_hourly_backlog(policy(CatchupPolicy::All, OverlapPolicy::Allow)).await;
+        let due = schedule.next_trigger_at.expect("due");
+
+        ScheduleTicker::new(store.clone()).tick().await;
+
+        let runs = all_runs(&store).await;
+        assert_eq!(runs.len(), 5, "{runs:?}");
+        let mut occurrences: Vec<DateTime<Utc>> = runs
+            .iter()
+            .map(|run| match &run.trigger {
+                TriggerKind::Cron {
+                    schedule_id,
+                    scheduled_for,
+                    ..
+                } => {
+                    assert_eq!(*schedule_id, Some(schedule.id));
+                    scheduled_for.expect("a scheduled occurrence")
+                }
+                other => panic!("expected a cron trigger, got {other:?}"),
+            })
+            .collect();
+        occurrences.sort();
+        let expected: Vec<DateTime<Utc>> = (0..5)
+            .map(|hours| due + ChronoDuration::hours(hours))
+            .collect();
+        assert_eq!(occurrences, expected);
+
+        let s = reload(&store, schedule.id).await;
+        assert!(s.next_trigger_at.expect("next trigger") > Utc::now());
+    }
+
+    #[tokio::test]
+    async fn tick_catchup_latest_creates_a_single_run() {
+        let (store, schedule) = store_with_hourly_backlog(SchedulePolicy::default()).await;
+        let latest = schedule.next_trigger_at.expect("due") + ChronoDuration::hours(4);
+
+        ScheduleTicker::new(store.clone()).tick().await;
+
+        let runs = all_runs(&store).await;
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(
+            runs[0].trigger,
+            TriggerKind::Cron {
+                schedule: "0 * * * *".to_string(),
+                schedule_id: Some(schedule.id),
+                scheduled_for: Some(latest),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_catchup_publishes_missed_event() {
+        let (store, schedule) = store_with_hourly_backlog(SchedulePolicy::default()).await;
+        let due = schedule.next_trigger_at.expect("due");
+        let (ticker, events) = recording_ticker(store);
+
+        ticker.tick().await;
+
+        let missed = missed_events(&collected(&events, 1).await);
+        assert_eq!(missed.len(), 1, "{missed:?}");
+        assert_eq!(missed[0].schedule_id, schedule.id);
+        assert_eq!(missed[0].workflow_name, "deploy");
+        assert_eq!(missed[0].reason, ScheduleMissReason::Superseded);
+        assert_eq!(missed[0].count, 4);
+        assert_eq!(missed[0].first, due);
+        assert_eq!(missed[0].last, due + ChronoDuration::hours(3));
+    }
+
+    #[tokio::test]
+    async fn tick_catchup_skip_drops_every_late_occurrence() {
+        let skip = policy(CatchupPolicy::Skip, OverlapPolicy::Allow);
+        let due = Utc::now() - ChronoDuration::minutes(30);
+        // A yearly cron: the due occurrence is the only one, half an hour late.
+        let (store, schedule) = store_with_schedule("0 0 1 1 *", due, skip).await;
+        let (ticker, events) = recording_ticker(store.clone());
+
+        ticker.tick().await;
+
+        assert!(all_runs(&store).await.is_empty());
+        let missed = missed_events(&collected(&events, 1).await);
+        assert_eq!(missed[0].reason, ScheduleMissReason::CatchupSkip);
+        assert_eq!(missed[0].count, 1);
+        let s = reload(&store, schedule.id).await;
+        assert!(s.last_triggered_at.is_none());
+        assert!(s.next_trigger_at.expect("next trigger") > Utc::now());
+    }
+
+    #[tokio::test]
+    async fn tick_overlap_skip_skips_while_a_run_is_active() {
+        let skip = policy(CatchupPolicy::Latest, OverlapPolicy::Skip);
+        let due = Utc::now() - ChronoDuration::seconds(10);
+        let (store, schedule) = store_with_schedule("0 0 1 1 *", due, skip).await;
+        let (ticker, events) = recording_ticker(store.clone());
+
+        ticker.tick().await;
+        assert_eq!(all_runs(&store).await.len(), 1);
+        let first_trigger = reload(&store, schedule.id).await.last_triggered_at;
+
+        make_due_again(&store, schedule.id).await;
+        ticker.tick().await;
+
+        let runs = all_runs(&store).await;
+        assert_eq!(runs.len(), 1, "the active run blocks the next occurrence");
+        let missed = missed_events(&collected(&events, 1).await);
+        assert_eq!(missed.len(), 1, "{missed:?}");
+        assert_eq!(missed[0].reason, ScheduleMissReason::Overlap);
+        assert_eq!(missed[0].count, 1);
+        let s = reload(&store, schedule.id).await;
+        assert_eq!(s.last_triggered_at, first_trigger);
+        assert!(s.next_trigger_at.expect("next trigger") > Utc::now());
+    }
+
+    #[tokio::test]
+    async fn tick_overlap_allow_stacks_runs() {
+        let due = Utc::now() - ChronoDuration::seconds(10);
+        let (store, schedule) =
+            store_with_schedule("0 0 1 1 *", due, SchedulePolicy::default()).await;
+        let ticker = ScheduleTicker::new(store.clone());
+
+        ticker.tick().await;
+        make_due_again(&store, schedule.id).await;
+        ticker.tick().await;
+
+        assert_eq!(all_runs(&store).await.len(), 2);
+    }
+
+    #[cfg(feature = "prometheus")]
+    #[test]
+    fn tick_catchup_counts_missed_occurrences_per_schedule() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let schedule_id = with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                let (store, schedule) = store_with_hourly_backlog(SchedulePolicy::default()).await;
+                ScheduleTicker::new(store).tick().await;
+                schedule.id
+            })
+        });
+
+        let rendered = handle.render();
+        assert!(
+            rendered.contains(&format!(
+                "ironflow_schedule_missed_total{{schedule=\"{schedule_id}\"}} 4"
+            )),
+            "{rendered}"
+        );
     }
 }

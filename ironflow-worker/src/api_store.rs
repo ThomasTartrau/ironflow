@@ -21,7 +21,7 @@ use ironflow_store::entities::{
     LogEntry, LogFilter, NewApiKey, NewApprovalDelegation, NewArtifact, NewAuditLogEntry,
     NewLogEntries, NewRun, NewSchedule, NewStep, NewStepDependency, NewUser, Page, PurgePolicy,
     PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
-    RunStatus, RunUpdate, Schedule, ScheduleFiring, ScheduleNext, ScheduleUpdate, Secret,
+    RunStatus, RunUpdate, Schedule, ScheduleFiring, ScheduleFiringPlan, ScheduleUpdate, Secret,
     SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency,
     StepUpdate, User, WorkerCapabilities,
 };
@@ -887,8 +887,8 @@ impl ScheduleStore for ApiRunStore {
     fn fire_due_schedule(
         &self,
         _id: Uuid,
-        _occurrence: DateTime<Utc>,
-        _next: ScheduleNext,
+        _due: DateTime<Utc>,
+        _plan: ScheduleFiringPlan,
     ) -> StoreFuture<'_, Option<ScheduleFiring>> {
         Box::pin(async move {
             Err(StoreError::Database(

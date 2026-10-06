@@ -12,6 +12,26 @@ describe("TriggerBadge", () => {
 		expect(screen.getByText("Cron")).toBeInTheDocument();
 	});
 
+	it("shows the occurrence of a scheduled cron run in the tooltip", async () => {
+		const trigger: TriggerKind = {
+			kind: "cron",
+			schedule: "0 8 * * *",
+			schedule_id: "019a3f2b-0000-7000-8000-0000000000bb",
+			scheduled_for: "2026-10-06T08:00:00Z",
+		};
+		render(<TriggerBadge trigger={trigger} />);
+		const badge = screen.getByText("Cron");
+
+		const user = userEvent.setup();
+		await user.hover(badge);
+		const tooltip = await screen.findByText(
+			"0 8 * * * (occurrence 2026-10-06T08:00:00Z)",
+			{},
+			{ timeout: 2000 },
+		);
+		expect(tooltip).toBeInTheDocument();
+	});
+
 	it("renders 'Manual' for a manual trigger without tooltip", () => {
 		const trigger: TriggerKind = { kind: "manual" };
 		render(<TriggerBadge trigger={trigger} />);

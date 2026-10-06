@@ -10,7 +10,7 @@ use ironflow_store::entities::ScheduleUpdate;
 use crate::entities::ScheduleResponse;
 use crate::error::ApiError;
 use crate::response::ok;
-use crate::schedule_ticker::next_trigger;
+use crate::schedule_clock::next_trigger;
 use crate::state::AppState;
 
 /// Pause a schedule (set enabled = false).
@@ -55,7 +55,9 @@ pub async fn pause_schedule(
 
 /// Resume a schedule (clear `disabled_at` and `last_error`).
 ///
-/// The next trigger time is recomputed from the cron expression.
+/// The next trigger time is recomputed from the cron expression in the
+/// schedule timezone. Occurrences that fell during the pause are never caught
+/// up, whatever the catch-up policy.
 ///
 /// # Errors
 ///
@@ -87,7 +89,8 @@ pub async fn resume_schedule(
         .await?
         .ok_or(ApiError::ScheduleNotFound(id))?;
 
-    let next = next_trigger(&current.cron_expression).map_err(ApiError::BadRequest)?;
+    let next = next_trigger(&current.cron_expression, &current.policy.timezone)
+        .map_err(ApiError::BadRequest)?;
 
     let schedule = state
         .store
@@ -119,7 +122,7 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{NewSchedule, NewUser, ScheduleSource};
+    use ironflow_store::entities::{NewSchedule, NewUser, SchedulePolicy, ScheduleSource};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
     use serde_json::json;
@@ -186,6 +189,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: Some(user.id),
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("create schedule");

@@ -54,6 +54,14 @@ import {
 import { TimeAgo } from "@/app/components/TimeAgo";
 import { withToast } from "@/app/lib/api-toast";
 
+type CatchupPolicy = "latest" | "all" | "skip";
+type OverlapPolicy = "allow" | "skip";
+
+/** The catch-up policy, with its bound under `all`. */
+function catchupLabel(s: ScheduleResponse): string {
+	return s.catchup === "all" ? `all (max ${s.catchup_max})` : s.catchup;
+}
+
 interface ScheduleResponse {
 	id: string;
 	workflow_name: string;
@@ -64,6 +72,11 @@ interface ScheduleResponse {
 	last_triggered_at: string | null;
 	next_trigger_at: string | null;
 	last_error: string | null;
+	catchup: CatchupPolicy;
+	catchup_max: number;
+	catchup_window_secs: number;
+	overlap: OverlapPolicy;
+	timezone: string;
 	created_by_user_id: string | null;
 	created_at: string;
 	updated_at: string;
@@ -96,6 +109,11 @@ export function Component() {
 
 	const [newWorkflow, setNewWorkflow] = useState("");
 	const [newCron, setNewCron] = useState("");
+	const [newCatchup, setNewCatchup] = useState<CatchupPolicy>("latest");
+	const [newCatchupMax, setNewCatchupMax] = useState("10");
+	const [newCatchupWindow, setNewCatchupWindow] = useState("86400");
+	const [newOverlap, setNewOverlap] = useState<OverlapPolicy>("allow");
+	const [newTimezone, setNewTimezone] = useState("UTC");
 	const [creating, setCreating] = useState(false);
 
 	const [schema, setSchema] = useState<JSONSchema7 | null>(null);
@@ -163,6 +181,13 @@ export function Component() {
 				workflow_name: newWorkflow,
 				cron_expression: newCron,
 				inputs,
+				catchup: newCatchup,
+				overlap: newOverlap,
+				timezone: newTimezone,
+				...(newCatchup === "all" && { catchup_max: Number(newCatchupMax) }),
+				...(newCatchup !== "skip" && {
+					catchup_window_secs: Number(newCatchupWindow),
+				}),
 			}),
 			{
 				loading: "Creating schedule...",
@@ -174,6 +199,11 @@ export function Component() {
 		setCreateOpen(false);
 		setNewWorkflow("");
 		setNewCron("");
+		setNewCatchup("latest");
+		setNewCatchupMax("10");
+		setNewCatchupWindow("86400");
+		setNewOverlap("allow");
+		setNewTimezone("UTC");
 		setSchema(null);
 		setFormValues({});
 		revalidator.revalidate();
@@ -239,6 +269,9 @@ export function Component() {
 								<TableHead>Workflow</TableHead>
 								<TableHead>Cron</TableHead>
 								<TableHead>Source</TableHead>
+								<TableHead>Timezone</TableHead>
+								<TableHead>Catch-up</TableHead>
+								<TableHead>Overlap</TableHead>
 								<TableHead>Next trigger</TableHead>
 								<TableHead>Last trigger</TableHead>
 								<TableHead>Status</TableHead>
@@ -263,6 +296,9 @@ export function Component() {
 											{s.source === "handler" ? "Code" : "API"}
 										</Badge>
 									</TableCell>
+									<TableCell className="text-xs">{s.timezone}</TableCell>
+									<TableCell className="text-xs">{catchupLabel(s)}</TableCell>
+									<TableCell className="text-xs">{s.overlap}</TableCell>
 									<TableCell>
 										{s.next_trigger_at ? (
 											<TimeAgo date={s.next_trigger_at} />
@@ -421,6 +457,98 @@ export function Component() {
 								seconds also accepted.
 							</p>
 						</div>
+						<div className="space-y-2">
+							<label htmlFor="timezone" className="text-sm font-medium">
+								Timezone
+							</label>
+							<Input
+								id="timezone"
+								placeholder="UTC"
+								value={newTimezone}
+								onChange={(e) => setNewTimezone(e.target.value)}
+							/>
+							<p className="text-xs text-muted-foreground">
+								IANA name the cron expression is evaluated in, e.g.
+								Europe/Paris.
+							</p>
+						</div>
+						<div className="grid grid-cols-2 gap-4">
+							<div className="space-y-2">
+								<label htmlFor="catchup" className="text-sm font-medium">
+									Catch-up
+								</label>
+								<Select
+									value={newCatchup}
+									onValueChange={(v) => v && setNewCatchup(v as CatchupPolicy)}
+								>
+									<SelectTrigger id="catchup">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="latest">Latest missed run</SelectItem>
+										<SelectItem value="all">Every missed run</SelectItem>
+										<SelectItem value="skip">No missed run</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="space-y-2">
+								<label htmlFor="overlap" className="text-sm font-medium">
+									Overlap
+								</label>
+								<Select
+									value={newOverlap}
+									onValueChange={(v) => v && setNewOverlap(v as OverlapPolicy)}
+								>
+									<SelectTrigger id="overlap">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="allow">Allow</SelectItem>
+										<SelectItem value="skip">
+											Skip while a run is active
+										</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+						</div>
+						{newCatchup !== "skip" && (
+							<div className="grid grid-cols-2 gap-4">
+								{newCatchup === "all" && (
+									<div className="space-y-2">
+										<label
+											htmlFor="catchup-max"
+											className="text-sm font-medium"
+										>
+											Catch-up max
+										</label>
+										<Input
+											id="catchup-max"
+											type="number"
+											min={1}
+											max={1000}
+											value={newCatchupMax}
+											onChange={(e) => setNewCatchupMax(e.target.value)}
+										/>
+									</div>
+								)}
+								<div className="space-y-2">
+									<label
+										htmlFor="catchup-window"
+										className="text-sm font-medium"
+									>
+										Catch-up window (seconds)
+									</label>
+									<Input
+										id="catchup-window"
+										type="number"
+										min={60}
+										max={2592000}
+										value={newCatchupWindow}
+										onChange={(e) => setNewCatchupWindow(e.target.value)}
+									/>
+								</div>
+							</div>
+						)}
 						{schemaLoading && (
 							<div className="flex items-center gap-2 text-sm text-muted-foreground">
 								<Loader2 className="size-4 animate-spin" />

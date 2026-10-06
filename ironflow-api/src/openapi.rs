@@ -38,15 +38,16 @@ use ironflow_engine::notify::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
     Event, LogLineEvent, ProviderAccountChange, ProviderAccountUpdatedEvent,
     ProviderAccountUsageUpdatedEvent, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent,
-    RunFailedEvent, RunStatusChangedEvent, SignalAwaitedEvent, SignalReceivedEvent,
-    StepCompletedEvent, StepFailedEvent, UserSignedInEvent, UserSignedOutEvent, UserSignedUpEvent,
-    WorkflowAgentStepResumedEvent, WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent,
-    WorkflowEvent, WorkflowInputRequiredEvent, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
+    RunFailedEvent, RunStatusChangedEvent, ScheduleOccurrencesMissedEvent, SignalAwaitedEvent,
+    SignalReceivedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
+    UserSignedOutEvent, UserSignedUpEvent, WorkflowAgentStepResumedEvent,
+    WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
+    WorkflowInputRequiredEvent, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
     WorkflowStepStartedEvent,
 };
 use ironflow_store::entities::{
-    AccountWindowStatus, ApprovalRequirement, AuditLogEntry, LogEntry, LogStream,
-    ProviderAccountWindow, StepApproval,
+    AccountWindowStatus, ApprovalRequirement, AuditLogEntry, CatchupPolicy, LogEntry, LogStream,
+    OverlapPolicy, ProviderAccountWindow, ScheduleMissReason, StepApproval,
 };
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -244,6 +245,9 @@ mod with_signup {
                 ScheduleResponse,
                 CreateScheduleRequest,
                 UpdateScheduleRequest,
+                CatchupPolicy,
+                OverlapPolicy,
+                ScheduleMissReason,
                 ApprovalDelegationResponse,
                 CreateApprovalDelegationRequest,
                 ListApprovalDelegationsQuery,
@@ -255,6 +259,7 @@ mod with_signup {
                 ListSignalsQuery,
                 SignalAwaitedEvent,
                 SignalReceivedEvent,
+                ScheduleOccurrencesMissedEvent,
             )
         ),
         tags(
@@ -448,6 +453,9 @@ mod without_signup {
                 ScheduleResponse,
                 CreateScheduleRequest,
                 UpdateScheduleRequest,
+                CatchupPolicy,
+                OverlapPolicy,
+                ScheduleMissReason,
                 ApprovalDelegationResponse,
                 CreateApprovalDelegationRequest,
                 ListApprovalDelegationsQuery,
@@ -459,6 +467,7 @@ mod without_signup {
                 ListSignalsQuery,
                 SignalAwaitedEvent,
                 SignalReceivedEvent,
+                ScheduleOccurrencesMissedEvent,
             )
         ),
         tags(

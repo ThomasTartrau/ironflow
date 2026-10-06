@@ -83,6 +83,7 @@ pub mod rate_limit;
 pub mod reaper;
 pub mod response;
 pub mod routes;
+pub(crate) mod schedule_clock;
 pub mod schedule_sync;
 pub mod schedule_ticker;
 pub mod sse;

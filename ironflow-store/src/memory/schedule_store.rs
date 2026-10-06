@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use super::run_store::insert_run;
-use crate::entities::{NewSchedule, Page, Schedule, ScheduleFiring, ScheduleNext, ScheduleUpdate};
+use crate::entities::{
+    NewSchedule, Page, Schedule, ScheduleFiring, ScheduleFiringPlan, ScheduleNext, ScheduleUpdate,
+    ScheduledRun,
+};
 use crate::error::StoreError;
 use crate::memory::InMemoryStore;
 use crate::schedule_store::ScheduleStore;
@@ -25,6 +28,7 @@ impl ScheduleStore for InMemoryStore {
                 next_trigger_at: req.next_trigger_at,
                 last_error: None,
                 priority: req.priority,
+                policy: req.policy,
                 created_by_user_id: req.created_by_user_id,
                 created_at: now,
                 updated_at: now,
@@ -92,6 +96,9 @@ impl ScheduleStore for InMemoryStore {
             if let Some(priority) = update.priority {
                 schedule.priority = priority;
             }
+            if let Some(policy) = update.policy {
+                schedule.policy = policy;
+            }
             schedule.updated_at = Utc::now();
             Ok(schedule.clone())
         })
@@ -126,32 +133,46 @@ impl ScheduleStore for InMemoryStore {
     fn fire_due_schedule(
         &self,
         id: Uuid,
-        occurrence: DateTime<Utc>,
-        next: ScheduleNext,
+        due: DateTime<Utc>,
+        plan: ScheduleFiringPlan,
     ) -> StoreFuture<'_, Option<ScheduleFiring>> {
         Box::pin(async move {
-            // One write lock covers the check, the run and the schedule update.
+            // One write lock covers the check, the runs and the schedule update.
             let mut state = self.state.write().await;
             let Some(schedule) = state
                 .schedules
                 .get(&id)
-                .filter(|s| s.is_active() && s.next_trigger_at == Some(occurrence))
+                .filter(|s| s.is_active() && s.next_trigger_at == Some(due))
+                .cloned()
             else {
                 return Ok(None);
             };
 
-            let mut new_run = schedule.new_run(None);
-            new_run.idempotency_key = Some(Schedule::occurrence_key(id, occurrence));
-            let run = insert_run(&mut state, new_run)?;
+            // Every run is built from the same schedule, so an error other
+            // than a concurrency conflict (an invalid priority, say) fails on
+            // the first occurrence, before anything is written.
+            let mut runs = Vec::with_capacity(plan.occurrences.len());
+            let mut overlapped = Vec::new();
+            for occurrence in plan.occurrences {
+                let mut new_run = schedule.new_run(Some(occurrence), None);
+                new_run.idempotency_key = Some(Schedule::occurrence_key(id, occurrence));
+                match insert_run(&mut state, new_run) {
+                    Ok(run) => runs.push(ScheduledRun { occurrence, run }),
+                    Err(StoreError::ConcurrencyConflict { .. }) => overlapped.push(occurrence),
+                    Err(e) => return Err(e),
+                }
+            }
 
             let now = Utc::now();
             let schedule = state
                 .schedules
                 .get_mut(&id)
                 .ok_or(StoreError::ScheduleNotFound(id))?;
-            schedule.last_triggered_at = Some(now);
+            if !runs.is_empty() {
+                schedule.last_triggered_at = Some(now);
+            }
             schedule.updated_at = now;
-            match next {
+            match plan.next {
                 ScheduleNext::At(at) => schedule.next_trigger_at = Some(at),
                 ScheduleNext::Disable { error } => {
                     schedule.next_trigger_at = None;
@@ -162,7 +183,8 @@ impl ScheduleStore for InMemoryStore {
 
             Ok(Some(ScheduleFiring {
                 schedule: schedule.clone(),
-                run,
+                runs,
+                overlapped,
             }))
         })
     }
@@ -173,7 +195,9 @@ mod tests {
     use chrono::TimeDelta;
     use serde_json::json;
 
-    use crate::entities::{RunFilter, ScheduleSource};
+    use crate::entities::{
+        CatchupPolicy, OverlapPolicy, RunFilter, SchedulePolicy, ScheduleSource, TriggerKind,
+    };
     use crate::store::RunStore;
 
     use super::*;
@@ -185,9 +209,21 @@ mod tests {
             inputs: json!({}),
             source: ScheduleSource::Api,
             priority: 0,
+            policy: SchedulePolicy::default(),
             created_by_user_id: Some(Uuid::now_v7()),
             next_trigger_at: Some(Utc::now()),
         }
+    }
+
+    fn once(occurrence: DateTime<Utc>, next: ScheduleNext) -> ScheduleFiringPlan {
+        ScheduleFiringPlan {
+            occurrences: vec![occurrence],
+            next,
+        }
+    }
+
+    fn in_an_hour() -> ScheduleNext {
+        ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600))
     }
 
     #[tokio::test]
@@ -301,16 +337,12 @@ mod tests {
         let occurrence = schedule.next_trigger_at.expect("due");
 
         let firing = store
-            .fire_due_schedule(
-                schedule.id,
-                occurrence,
-                ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600)),
-            )
+            .fire_due_schedule(schedule.id, occurrence, once(occurrence, in_an_hour()))
             .await
             .expect("fire")
             .expect("due occurrence fires");
 
-        assert_eq!(firing.run.run().priority, 30);
+        assert_eq!(firing.runs[0].run.run().priority, 30);
     }
 
     #[tokio::test]
@@ -415,13 +447,20 @@ mod tests {
         let next = Utc::now() + TimeDelta::seconds(3600);
 
         let firing = store
-            .fire_due_schedule(schedule.id, occurrence, ScheduleNext::At(next))
+            .fire_due_schedule(
+                schedule.id,
+                occurrence,
+                once(occurrence, ScheduleNext::At(next)),
+            )
             .await
             .expect("fire")
             .expect("due occurrence fires");
 
-        assert!(firing.run.is_created());
-        let run = firing.run.run();
+        assert_eq!(firing.runs.len(), 1);
+        assert!(firing.overlapped.is_empty());
+        assert!(firing.runs[0].run.is_created());
+        assert_eq!(firing.runs[0].occurrence, occurrence);
+        let run = firing.runs[0].run.run();
         assert_eq!(run.workflow_name, "deploy");
         assert_eq!(run.payload, json!({"env": "prod"}));
         assert_eq!(
@@ -449,14 +488,14 @@ mod tests {
             .await
             .expect("create");
         let occurrence = schedule.next_trigger_at.expect("due");
-        let next = ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600));
+        let plan = once(occurrence, in_an_hour());
 
         let first = store
-            .fire_due_schedule(schedule.id, occurrence, next.clone())
+            .fire_due_schedule(schedule.id, occurrence, plan.clone())
             .await
             .expect("first fire");
         let second = store
-            .fire_due_schedule(schedule.id, occurrence, next)
+            .fire_due_schedule(schedule.id, occurrence, plan)
             .await
             .expect("second fire");
 
@@ -473,22 +512,18 @@ mod tests {
             .await
             .expect("create");
         let occurrence = schedule.next_trigger_at.expect("due");
-        let mut earlier = schedule.new_run(None);
+        let mut earlier = schedule.new_run(Some(occurrence), None);
         earlier.idempotency_key = Some(Schedule::occurrence_key(schedule.id, occurrence));
         let earlier = store.create_run(earlier).await.expect("earlier run");
 
         let firing = store
-            .fire_due_schedule(
-                schedule.id,
-                occurrence,
-                ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600)),
-            )
+            .fire_due_schedule(schedule.id, occurrence, once(occurrence, in_an_hour()))
             .await
             .expect("fire")
             .expect("due occurrence fires");
 
-        assert!(!firing.run.is_created());
-        assert_eq!(firing.run.run().id, earlier.run().id);
+        assert!(!firing.runs[0].run.is_created());
+        assert_eq!(firing.runs[0].run.run().id, earlier.run().id);
         assert_eq!(run_count(&store).await, 1);
         assert!(firing.schedule.next_trigger_at.is_some());
     }
@@ -513,11 +548,7 @@ mod tests {
             .expect("pause");
 
         let fired = store
-            .fire_due_schedule(
-                schedule.id,
-                occurrence,
-                ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600)),
-            )
+            .fire_due_schedule(schedule.id, occurrence, once(occurrence, in_an_hour()))
             .await
             .expect("fire");
 
@@ -529,7 +560,7 @@ mod tests {
     async fn fire_unknown_schedule_returns_none() {
         let store = InMemoryStore::new();
         let fired = store
-            .fire_due_schedule(Uuid::now_v7(), Utc::now(), ScheduleNext::At(Utc::now()))
+            .fire_due_schedule(Uuid::now_v7(), Utc::now(), once(Utc::now(), in_an_hour()))
             .await
             .expect("fire");
         assert!(fired.is_none());
@@ -548,15 +579,18 @@ mod tests {
             .fire_due_schedule(
                 schedule.id,
                 occurrence,
-                ScheduleNext::Disable {
-                    error: "no next occurrence".to_string(),
-                },
+                once(
+                    occurrence,
+                    ScheduleNext::Disable {
+                        error: "no next occurrence".to_string(),
+                    },
+                ),
             )
             .await
             .expect("fire")
             .expect("due occurrence fires");
 
-        assert!(firing.run.is_created());
+        assert!(firing.runs[0].run.is_created());
         let stored = store
             .find_schedule_by_id(schedule.id)
             .await
@@ -599,5 +633,200 @@ mod tests {
             .await
             .expect("clear");
         assert!(cleared.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn fire_due_schedule_creates_a_run_per_occurrence() {
+        let store = InMemoryStore::new();
+        let schedule = store
+            .create_schedule(due_schedule("deploy"))
+            .await
+            .expect("create");
+        let due = schedule.next_trigger_at.expect("due");
+        let occurrences = vec![
+            due,
+            due + TimeDelta::seconds(3600),
+            due + TimeDelta::seconds(7200),
+        ];
+
+        let firing = store
+            .fire_due_schedule(
+                schedule.id,
+                due,
+                ScheduleFiringPlan {
+                    occurrences: occurrences.clone(),
+                    next: in_an_hour(),
+                },
+            )
+            .await
+            .expect("fire")
+            .expect("due schedule fires");
+
+        assert!(firing.overlapped.is_empty());
+        let fired: Vec<_> = firing.runs.iter().map(|r| r.occurrence).collect();
+        assert_eq!(fired, occurrences);
+        for scheduled in &firing.runs {
+            let run = scheduled.run.run();
+            assert_eq!(
+                run.trigger,
+                TriggerKind::Cron {
+                    schedule: "0 0 * * * *".to_string(),
+                    schedule_id: Some(schedule.id),
+                    scheduled_for: Some(scheduled.occurrence),
+                }
+            );
+            assert_eq!(
+                run.idempotency_key.as_deref(),
+                Some(Schedule::occurrence_key(schedule.id, scheduled.occurrence).as_str())
+            );
+        }
+        assert_eq!(run_count(&store).await, 3);
+        assert!(firing.schedule.last_triggered_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn fire_due_schedule_with_no_occurrence_only_moves_next_trigger() {
+        let store = InMemoryStore::new();
+        let schedule = store
+            .create_schedule(due_schedule("deploy"))
+            .await
+            .expect("create");
+        let due = schedule.next_trigger_at.expect("due");
+        let next = Utc::now() + TimeDelta::seconds(3600);
+
+        let firing = store
+            .fire_due_schedule(
+                schedule.id,
+                due,
+                ScheduleFiringPlan {
+                    occurrences: Vec::new(),
+                    next: ScheduleNext::At(next),
+                },
+            )
+            .await
+            .expect("fire")
+            .expect("due schedule fires");
+
+        assert!(firing.runs.is_empty());
+        assert_eq!(firing.schedule.next_trigger_at, Some(next));
+        assert!(firing.schedule.last_triggered_at.is_none());
+        assert_eq!(run_count(&store).await, 0);
+    }
+
+    #[tokio::test]
+    async fn fire_due_schedule_reports_overlapped_occurrences() {
+        let store = InMemoryStore::new();
+        let schedule = store
+            .create_schedule(NewSchedule {
+                policy: SchedulePolicy {
+                    overlap: OverlapPolicy::Skip,
+                    ..SchedulePolicy::default()
+                },
+                ..due_schedule("deploy")
+            })
+            .await
+            .expect("create");
+        let due = schedule.next_trigger_at.expect("due");
+        let later = due + TimeDelta::seconds(3600);
+
+        // The first catch-up run holds the schedule key: the second overlaps.
+        let firing = store
+            .fire_due_schedule(
+                schedule.id,
+                due,
+                ScheduleFiringPlan {
+                    occurrences: vec![due, later],
+                    next: ScheduleNext::At(Utc::now() + TimeDelta::seconds(60)),
+                },
+            )
+            .await
+            .expect("fire")
+            .expect("due schedule fires");
+
+        assert_eq!(firing.runs.len(), 1);
+        assert_eq!(firing.runs[0].occurrence, due);
+        assert_eq!(
+            firing.runs[0].run.run().concurrency_key,
+            Some(Schedule::concurrency_key(schedule.id))
+        );
+        assert_eq!(firing.overlapped, vec![later]);
+        assert_eq!(run_count(&store).await, 1);
+    }
+
+    #[tokio::test]
+    async fn fire_with_every_occurrence_overlapped_keeps_last_triggered_at() {
+        let store = InMemoryStore::new();
+        let schedule = store
+            .create_schedule(NewSchedule {
+                policy: SchedulePolicy {
+                    overlap: OverlapPolicy::Skip,
+                    ..SchedulePolicy::default()
+                },
+                ..due_schedule("deploy")
+            })
+            .await
+            .expect("create");
+        let due = schedule.next_trigger_at.expect("due");
+        // A manual trigger of the schedule holds its key.
+        store
+            .create_run(schedule.new_run(None, None))
+            .await
+            .expect("manual run");
+        let next = Utc::now() + TimeDelta::seconds(3600);
+
+        let firing = store
+            .fire_due_schedule(schedule.id, due, once(due, ScheduleNext::At(next)))
+            .await
+            .expect("fire")
+            .expect("due schedule fires");
+
+        assert!(firing.runs.is_empty());
+        assert_eq!(firing.overlapped, vec![due]);
+        assert!(firing.schedule.last_triggered_at.is_none());
+        assert_eq!(firing.schedule.next_trigger_at, Some(next));
+        assert_eq!(run_count(&store).await, 1);
+    }
+
+    #[tokio::test]
+    async fn create_and_update_persist_policy() {
+        let store = InMemoryStore::new();
+        let policy = SchedulePolicy {
+            catchup: CatchupPolicy::All,
+            catchup_max: 3,
+            catchup_window_secs: 7200,
+            overlap: OverlapPolicy::Skip,
+            timezone: "Europe/Paris".to_string(),
+        };
+        let created = store
+            .create_schedule(NewSchedule {
+                policy: policy.clone(),
+                ..new_schedule("deploy", "0 0 * * * *")
+            })
+            .await
+            .expect("create");
+        assert_eq!(created.policy, policy);
+
+        let changed = SchedulePolicy {
+            catchup: CatchupPolicy::Skip,
+            timezone: "America/New_York".to_string(),
+            ..policy
+        };
+        let updated = store
+            .update_schedule(
+                created.id,
+                ScheduleUpdate {
+                    policy: Some(changed.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update");
+        assert_eq!(updated.policy, changed);
+
+        let untouched = store
+            .update_schedule(created.id, ScheduleUpdate::default())
+            .await
+            .expect("no-op update");
+        assert_eq!(untouched.policy, changed);
     }
 }

@@ -4,12 +4,23 @@
 //! holds a syntactically valid cron expression. Construction
 //! is fallible; once built the value is safe to pass to
 //! `tokio_cron_scheduler` without further validation.
+//!
+//! A schedule also carries a [`SchedulePolicy`]: what to do with missed
+//! occurrences, with overlapping runs, and the timezone the expression is
+//! evaluated in.
 
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
+use chrono_tz::Tz;
 use croner::Cron;
+use ironflow_store::entities::{
+    MAX_CATCHUP_MAX, MAX_CATCHUP_WINDOW_SECS, MIN_CATCHUP_MAX, MIN_CATCHUP_WINDOW_SECS,
+};
 use serde::{Deserialize, Serialize};
+
+pub use ironflow_store::entities::{CatchupPolicy, OverlapPolicy, SchedulePolicy};
 
 /// A validated cron expression.
 ///
@@ -18,6 +29,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// [`as_str`](CronSchedule::as_str) returns the original expression
 /// as provided by the user, not the normalized form.
+///
+/// The schedule also carries a [`SchedulePolicy`], set with the `with_*`
+/// builder methods. The policy is not part of the serialized form: a
+/// `CronSchedule` serializes to its raw expression, and deserializing one
+/// gives the default policy.
 ///
 /// # Examples
 ///
@@ -34,6 +50,7 @@ use serde::{Deserialize, Serialize};
 pub struct CronSchedule {
     inner: Cron,
     raw: String,
+    policy: SchedulePolicy,
 }
 
 impl CronSchedule {
@@ -60,12 +77,148 @@ impl CronSchedule {
         Ok(Self {
             inner,
             raw: expression.to_string(),
+            policy: SchedulePolicy::default(),
         })
     }
 
     /// Returns the original cron expression string as provided to [`new`](Self::new).
     pub fn as_str(&self) -> &str {
         &self.raw
+    }
+
+    /// Evaluate the expression in an IANA timezone instead of UTC.
+    ///
+    /// Occurrences follow the wall clock of the timezone across daylight
+    /// saving changes: `0 9 * * *` in `Europe/Paris` fires at 9:00 Paris
+    /// time in winter and in summer. An occurrence in an hour skipped in
+    /// spring fires once at the end of the gap; an occurrence in an hour
+    /// repeated in autumn fires once, on its first pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if `tz` is not a known IANA timezone name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::schedule::CronSchedule;
+    ///
+    /// let sched = CronSchedule::new("0 9 * * *")?.with_timezone("Europe/Paris")?;
+    /// assert_eq!(sched.policy().timezone, "Europe/Paris");
+    ///
+    /// assert!(CronSchedule::new("0 9 * * *")?.with_timezone("Mars/Olympus").is_err());
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn with_timezone(mut self, tz: &str) -> Result<Self, String> {
+        let parsed: Tz = tz
+            .parse()
+            .map_err(|e| format!("invalid timezone '{tz}': {e}"))?;
+        self.policy.timezone = parsed.name().to_string();
+        Ok(self)
+    }
+
+    /// Set what the schedule does with the occurrences it missed while no
+    /// server fired it. Defaults to [`CatchupPolicy::Latest`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::schedule::{CronSchedule, CatchupPolicy};
+    ///
+    /// let sched = CronSchedule::new("0 * * * *")?.with_catchup(CatchupPolicy::All);
+    /// assert_eq!(sched.policy().catchup, CatchupPolicy::All);
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn with_catchup(mut self, catchup: CatchupPolicy) -> Self {
+        self.policy.catchup = catchup;
+        self
+    }
+
+    /// Set the most runs created to catch up under [`CatchupPolicy::All`].
+    /// The most recent missed occurrences are kept. Defaults to `10`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max` is not between `1` and `1000`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::schedule::CronSchedule;
+    ///
+    /// let sched = CronSchedule::new("0 * * * *")?.with_catchup_max(24);
+    /// assert_eq!(sched.policy().catchup_max, 24);
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn with_catchup_max(mut self, max: u32) -> Self {
+        assert!(
+            (MIN_CATCHUP_MAX..=MAX_CATCHUP_MAX).contains(&max),
+            "catchup_max must be between {MIN_CATCHUP_MAX} and {MAX_CATCHUP_MAX}, got {max}"
+        );
+        self.policy.catchup_max = max;
+        self
+    }
+
+    /// Set how far back a missed occurrence is still caught up. Older ones
+    /// are dropped. Defaults to one day.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `window` is shorter than one minute or longer than 30 days.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use ironflow_engine::schedule::CronSchedule;
+    ///
+    /// let sched = CronSchedule::new("0 * * * *")?.with_catchup_window(Duration::from_secs(6 * 3600));
+    /// assert_eq!(sched.policy().catchup_window_secs, 21_600);
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn with_catchup_window(mut self, window: Duration) -> Self {
+        let secs = window.as_secs();
+        assert!(
+            (u64::from(MIN_CATCHUP_WINDOW_SECS)..=u64::from(MAX_CATCHUP_WINDOW_SECS))
+                .contains(&secs),
+            "catchup window must be between {MIN_CATCHUP_WINDOW_SECS} and {MAX_CATCHUP_WINDOW_SECS} seconds, got {secs}"
+        );
+        self.policy.catchup_window_secs =
+            u32::try_from(secs).expect("catchup window bounded by the assert above");
+        self
+    }
+
+    /// Set what the schedule does when an occurrence comes while one of its
+    /// runs is still active. Defaults to [`OverlapPolicy::Allow`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::schedule::{CronSchedule, OverlapPolicy};
+    ///
+    /// let sched = CronSchedule::new("*/5 * * * *")?.with_overlap(OverlapPolicy::Skip);
+    /// assert_eq!(sched.policy().overlap, OverlapPolicy::Skip);
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn with_overlap(mut self, overlap: OverlapPolicy) -> Self {
+        self.policy.overlap = overlap;
+        self
+    }
+
+    /// Returns the catch-up, overlap and timezone policy of the schedule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::schedule::{CronSchedule, SchedulePolicy};
+    ///
+    /// let sched = CronSchedule::new("0 * * * *")?;
+    /// assert_eq!(sched.policy(), &SchedulePolicy::default());
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn policy(&self) -> &SchedulePolicy {
+        &self.policy
     }
 }
 
@@ -77,7 +230,7 @@ impl fmt::Display for CronSchedule {
 
 impl PartialEq for CronSchedule {
     fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
+        self.inner == other.inner && self.policy == other.policy
     }
 }
 
@@ -170,5 +323,96 @@ mod tests {
     fn deserialize_invalid_expression_fails() {
         let result: Result<CronSchedule, _> = serde_json::from_str("\"garbage\"");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_policy_is_latest_allow_utc() {
+        let sched = CronSchedule::new("0 * * * *").unwrap();
+        assert_eq!(sched.policy().catchup, CatchupPolicy::Latest);
+        assert_eq!(sched.policy().overlap, OverlapPolicy::Allow);
+        assert_eq!(sched.policy().timezone, "UTC");
+        assert_eq!(sched.policy(), &SchedulePolicy::default());
+    }
+
+    #[test]
+    fn with_timezone_accepts_iana_name() {
+        let sched = CronSchedule::new("0 9 * * *")
+            .unwrap()
+            .with_timezone("Europe/Paris")
+            .unwrap();
+        assert_eq!(sched.policy().timezone, "Europe/Paris");
+        assert_eq!(sched.as_str(), "0 9 * * *");
+    }
+
+    #[test]
+    fn with_timezone_rejects_unknown_name() {
+        let err = CronSchedule::new("0 9 * * *")
+            .unwrap()
+            .with_timezone("Mars/Olympus")
+            .unwrap_err();
+        assert!(err.contains("invalid timezone 'Mars/Olympus'"), "{err}");
+    }
+
+    #[test]
+    fn builders_set_the_policy() {
+        let sched = CronSchedule::new("0 * * * *")
+            .unwrap()
+            .with_catchup(CatchupPolicy::All)
+            .with_catchup_max(1000)
+            .with_catchup_window(Duration::from_secs(60))
+            .with_overlap(OverlapPolicy::Skip);
+        let policy = sched.policy();
+        assert_eq!(policy.catchup, CatchupPolicy::All);
+        assert_eq!(policy.catchup_max, 1000);
+        assert_eq!(policy.catchup_window_secs, 60);
+        assert_eq!(policy.overlap, OverlapPolicy::Skip);
+    }
+
+    #[test]
+    #[should_panic(expected = "catchup_max must be between 1 and 1000")]
+    fn with_catchup_max_zero_panics() {
+        let _ = CronSchedule::new("0 * * * *").unwrap().with_catchup_max(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "catchup window must be between 60 and 2592000 seconds")]
+    fn with_catchup_window_below_a_minute_panics() {
+        let _ = CronSchedule::new("0 * * * *")
+            .unwrap()
+            .with_catchup_window(Duration::from_secs(59));
+    }
+
+    #[test]
+    #[should_panic(expected = "catchup window must be between 60 and 2592000 seconds")]
+    fn with_catchup_window_above_thirty_days_panics() {
+        let _ = CronSchedule::new("0 * * * *")
+            .unwrap()
+            .with_catchup_window(Duration::from_secs(2_592_001));
+    }
+
+    #[test]
+    fn policies_take_part_in_equality() {
+        let a = CronSchedule::new("0 * * * *").unwrap();
+        let b = CronSchedule::new("0 * * * *")
+            .unwrap()
+            .with_overlap(OverlapPolicy::Skip);
+        let c = CronSchedule::new("0 * * * *")
+            .unwrap()
+            .with_timezone("Europe/Paris")
+            .unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(b, b.clone());
+    }
+
+    #[test]
+    fn serialized_form_drops_the_policy() {
+        let sched = CronSchedule::new("0 9 * * *")
+            .unwrap()
+            .with_catchup(CatchupPolicy::Skip);
+        let json = serde_json::to_string(&sched).unwrap();
+        assert_eq!(json, "\"0 9 * * *\"");
+        let back: CronSchedule = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.policy(), &SchedulePolicy::default());
     }
 }

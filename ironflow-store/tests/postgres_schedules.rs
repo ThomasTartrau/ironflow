@@ -15,7 +15,8 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use ironflow_store::entities::{
-    NewSchedule, Schedule, ScheduleNext, ScheduleSource, ScheduleUpdate,
+    CatchupPolicy, NewSchedule, OverlapPolicy, Schedule, ScheduleFiringPlan, ScheduleNext,
+    SchedulePolicy, ScheduleSource, ScheduleUpdate, TriggerKind,
 };
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::schedule_store::ScheduleStore;
@@ -50,6 +51,16 @@ fn unique_workflow(label: &str) -> String {
 
 /// Create a schedule due one minute ago and return it with its occurrence.
 async fn due_schedule(store: &PostgresStore, workflow: &str) -> (Schedule, DateTime<Utc>) {
+    due_schedule_with(store, workflow, SchedulePolicy::default()).await
+}
+
+/// Create a schedule with `policy`, due one minute ago, and return it with its
+/// occurrence.
+async fn due_schedule_with(
+    store: &PostgresStore,
+    workflow: &str,
+    policy: SchedulePolicy,
+) -> (Schedule, DateTime<Utc>) {
     let schedule = store
         .create_schedule(NewSchedule {
             workflow_name: workflow.to_string(),
@@ -57,6 +68,7 @@ async fn due_schedule(store: &PostgresStore, workflow: &str) -> (Schedule, DateT
             inputs: json!({"env": "prod"}),
             source: ScheduleSource::Api,
             priority: 0,
+            policy,
             created_by_user_id: None,
             next_trigger_at: Some(Utc::now() - TimeDelta::seconds(60)),
         })
@@ -67,8 +79,11 @@ async fn due_schedule(store: &PostgresStore, workflow: &str) -> (Schedule, DateT
     (schedule, occurrence)
 }
 
-fn next_hour() -> ScheduleNext {
-    ScheduleNext::At(Utc::now() + TimeDelta::hours(1))
+fn next_hour(occurrence: DateTime<Utc>) -> ScheduleFiringPlan {
+    ScheduleFiringPlan {
+        occurrences: vec![occurrence],
+        next: ScheduleNext::At(Utc::now() + TimeDelta::hours(1)),
+    }
 }
 
 #[tokio::test]
@@ -78,18 +93,18 @@ async fn fire_creates_run_with_occurrence_key_and_advances_next_trigger() {
     let (schedule, occurrence) = due_schedule(&store, &unique_workflow("fire")).await;
 
     let firing = store
-        .fire_due_schedule(schedule.id, occurrence, next_hour())
+        .fire_due_schedule(schedule.id, occurrence, next_hour(occurrence))
         .await
         .expect("fire")
         .expect("due occurrence fires");
 
     let key = Schedule::occurrence_key(schedule.id, occurrence);
-    assert!(firing.run.is_created());
+    assert!(firing.runs[0].run.is_created());
     assert_eq!(
-        firing.run.run().idempotency_key.as_deref(),
+        firing.runs[0].run.run().idempotency_key.as_deref(),
         Some(key.as_str())
     );
-    assert_eq!(firing.run.run().payload, json!({"env": "prod"}));
+    assert_eq!(firing.runs[0].run.run().payload, json!({"env": "prod"}));
     assert!(firing.schedule.is_active());
     assert!(firing.schedule.next_trigger_at.expect("next") > Utc::now());
     assert!(firing.schedule.last_triggered_at.is_some());
@@ -147,7 +162,7 @@ async fn failed_run_creation_leaves_the_schedule_due() {
     .expect("create trigger");
 
     let result = store
-        .fire_due_schedule(schedule.id, occurrence, next_hour())
+        .fire_due_schedule(schedule.id, occurrence, next_hour(occurrence))
         .await;
 
     sqlx::query(&format!("DROP TRIGGER {trigger} ON ironflow.runs"))
@@ -181,11 +196,11 @@ async fn failed_run_creation_leaves_the_schedule_due() {
 
     // Retried on the next tick, the occurrence fires.
     let firing = store
-        .fire_due_schedule(schedule.id, occurrence, next_hour())
+        .fire_due_schedule(schedule.id, occurrence, next_hour(occurrence))
         .await
         .expect("retry")
         .expect("still due");
-    assert!(firing.run.is_created());
+    assert!(firing.runs[0].run.is_created());
 }
 
 #[tokio::test]
@@ -195,8 +210,8 @@ async fn concurrent_fires_of_one_occurrence_create_one_run() {
     let (schedule, occurrence) = due_schedule(&store, &unique_workflow("race")).await;
 
     let (first, second) = tokio::join!(
-        store.fire_due_schedule(schedule.id, occurrence, next_hour()),
-        store.fire_due_schedule(schedule.id, occurrence, next_hour()),
+        store.fire_due_schedule(schedule.id, occurrence, next_hour(occurrence)),
+        store.fire_due_schedule(schedule.id, occurrence, next_hour(occurrence)),
     );
 
     let fired = [first.expect("first"), second.expect("second")]
@@ -225,14 +240,17 @@ async fn fire_with_disable_stores_last_error() {
         .fire_due_schedule(
             schedule.id,
             occurrence,
-            ScheduleNext::Disable {
-                error: "cannot compute next trigger".to_string(),
+            ScheduleFiringPlan {
+                occurrences: vec![occurrence],
+                next: ScheduleNext::Disable {
+                    error: "cannot compute next trigger".to_string(),
+                },
             },
         )
         .await
         .expect("fire")
         .expect("due occurrence fires");
-    assert!(firing.run.is_created());
+    assert!(firing.runs[0].run.is_created());
 
     let stored = store
         .find_schedule_by_id(schedule.id)
@@ -264,7 +282,7 @@ async fn fire_paused_schedule_returns_none() {
         .expect("pause");
 
     let fired = store
-        .fire_due_schedule(schedule.id, occurrence, next_hour())
+        .fire_due_schedule(schedule.id, occurrence, next_hour(occurrence))
         .await
         .expect("fire");
 
@@ -277,4 +295,138 @@ async fn fire_paused_schedule_returns_none() {
             .expect("find run")
             .is_none()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn fire_creates_one_run_per_occurrence() {
+    let store = get_store().await;
+    let (schedule, due) = due_schedule(&store, &unique_workflow("catchup")).await;
+    let occurrences = vec![due, due + TimeDelta::hours(1), due + TimeDelta::hours(2)];
+
+    let firing = store
+        .fire_due_schedule(
+            schedule.id,
+            due,
+            ScheduleFiringPlan {
+                occurrences: occurrences.clone(),
+                next: ScheduleNext::At(Utc::now() + TimeDelta::hours(3)),
+            },
+        )
+        .await
+        .expect("fire")
+        .expect("due schedule fires");
+
+    assert!(firing.overlapped.is_empty());
+    let fired: Vec<_> = firing.runs.iter().map(|r| r.occurrence).collect();
+    assert_eq!(fired, occurrences);
+    for scheduled in &firing.runs {
+        assert!(scheduled.run.is_created());
+        let run = scheduled.run.run();
+        assert!(matches!(
+            run.trigger,
+            TriggerKind::Cron { schedule_id: Some(id), scheduled_for: Some(at), .. }
+                if id == schedule.id && at == scheduled.occurrence
+        ));
+        let key = Schedule::occurrence_key(schedule.id, scheduled.occurrence);
+        assert_eq!(run.idempotency_key.as_deref(), Some(key.as_str()));
+    }
+    assert!(firing.schedule.last_triggered_at.is_some());
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn fire_with_overlap_skip_reports_overlapped() {
+    let store = get_store().await;
+    let policy = SchedulePolicy {
+        overlap: OverlapPolicy::Skip,
+        ..SchedulePolicy::default()
+    };
+    let (schedule, due) = due_schedule_with(&store, &unique_workflow("overlap"), policy).await;
+    let later = due + TimeDelta::hours(1);
+
+    // The first run holds the schedule key: the second occurrence overlaps,
+    // and the transaction still commits the first run and the next trigger.
+    let next = Utc::now() + TimeDelta::hours(1);
+    let firing = store
+        .fire_due_schedule(
+            schedule.id,
+            due,
+            ScheduleFiringPlan {
+                occurrences: vec![due, later],
+                next: ScheduleNext::At(next),
+            },
+        )
+        .await
+        .expect("fire")
+        .expect("due schedule fires");
+
+    assert_eq!(firing.runs.len(), 1);
+    assert_eq!(firing.runs[0].occurrence, due);
+    assert_eq!(
+        firing.runs[0].run.run().concurrency_key,
+        Some(Schedule::concurrency_key(schedule.id))
+    );
+    assert_eq!(firing.overlapped, vec![later]);
+
+    let key = Schedule::occurrence_key(schedule.id, later);
+    assert!(
+        store
+            .find_run_by_idempotency_key(&key)
+            .await
+            .expect("find run")
+            .is_none()
+    );
+    let stored = store
+        .find_schedule_by_id(schedule.id)
+        .await
+        .expect("find")
+        .expect("exists");
+    assert!(stored.next_trigger_at.expect("next") > Utc::now());
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL"]
+async fn policy_columns_roundtrip() {
+    let store = get_store().await;
+    let policy = SchedulePolicy {
+        catchup: CatchupPolicy::All,
+        catchup_max: 7,
+        catchup_window_secs: 3600,
+        overlap: OverlapPolicy::Skip,
+        timezone: "Europe/Paris".to_string(),
+    };
+    let (schedule, _) = due_schedule_with(&store, &unique_workflow("policy"), policy.clone()).await;
+    assert_eq!(schedule.policy, policy);
+
+    let found = store
+        .find_schedule_by_id(schedule.id)
+        .await
+        .expect("find")
+        .expect("exists");
+    assert_eq!(found.policy, policy);
+
+    let changed = SchedulePolicy {
+        catchup: CatchupPolicy::Skip,
+        overlap: OverlapPolicy::Allow,
+        timezone: "America/New_York".to_string(),
+        ..policy
+    };
+    let updated = store
+        .update_schedule(
+            schedule.id,
+            ScheduleUpdate {
+                policy: Some(changed.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update");
+    assert_eq!(updated.policy, changed);
+
+    let untouched = store
+        .update_schedule(schedule.id, ScheduleUpdate::default())
+        .await
+        .expect("no-op update");
+    assert_eq!(untouched.policy, changed);
 }

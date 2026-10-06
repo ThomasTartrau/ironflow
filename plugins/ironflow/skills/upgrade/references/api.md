@@ -335,3 +335,20 @@ the failed try created, so the agent sees what that try did.
 + let review = AgentStepConfig::new("Review the diff.")
 +     .resume_prompt("You were interrupted. Finish the review where you stopped.");
 ```
+
+## cron-trigger-fields
+- kind: breaking
+- since: ironflow-store after 2.45.2 (#174)
+- detect: `TriggerKind::Cron \{ schedule \}`
+- compiler: `pattern does not mention fields`, `missing fields`
+
+`TriggerKind::Cron` now carries the `schedule_id` that created the run and the
+`scheduled_for` occurrence it covers (`None` for a manual trigger). A pattern or a literal
+that names only `schedule` no longer compiles.
+
+```diff
+- if let TriggerKind::Cron { schedule } = ctx.trigger().await? {
++ if let TriggerKind::Cron { schedule, .. } = ctx.trigger().await? {
+- let trigger = TriggerKind::Cron { schedule: "0 9 * * *".into() };
++ let trigger = TriggerKind::Cron { schedule: "0 9 * * *".into(), schedule_id: None, scheduled_for: None };
+```

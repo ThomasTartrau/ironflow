@@ -15,10 +15,14 @@ use crate::state::AppState;
 
 /// Trigger a schedule manually, creating a run immediately.
 ///
+/// The run carries the schedule id and no `scheduled_for` occurrence.
+///
 /// # Errors
 ///
 /// - 401 if not authenticated
 /// - 404 if the schedule does not exist
+/// - 409 if the schedule has `overlap = skip` and one of its runs is still
+///   active
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -29,7 +33,8 @@ use crate::state::AppState;
         responses(
             (status = 201, description = "Run created from schedule", body = ScheduleResponse),
             (status = 401, description = "Unauthorized"),
-            (status = 404, description = "Schedule not found")
+            (status = 404, description = "Schedule not found"),
+            (status = 409, description = "Overlap skip: a run of the schedule is still active")
         ),
         security(("Bearer" = []))
     )
@@ -47,9 +52,12 @@ pub async fn trigger_schedule(
 
     let _run = state
         .store
-        .create_run(schedule.new_run(Some(RunActor::User {
-            user_id: auth.user_id,
-        })))
+        .create_run(schedule.new_run(
+            None,
+            Some(RunActor::User {
+                user_id: auth.user_id,
+            }),
+        ))
         .await?;
 
     Ok((StatusCode::CREATED, ok(ScheduleResponse::from(schedule))))
@@ -69,7 +77,9 @@ mod tests {
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{NewSchedule, NewUser, RunFilter, ScheduleSource};
+    use ironflow_store::entities::{
+        NewSchedule, NewUser, OverlapPolicy, RunFilter, SchedulePolicy, ScheduleSource, TriggerKind,
+    };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::Store;
     use serde_json::json;
@@ -105,6 +115,10 @@ mod tests {
     }
 
     async fn test_state_with_schedule() -> (AppState, Uuid, Uuid) {
+        test_state_with_policy(SchedulePolicy::default()).await
+    }
+
+    async fn test_state_with_policy(policy: SchedulePolicy) -> (AppState, Uuid, Uuid) {
         let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine = Engine::new(store.clone(), provider);
@@ -136,6 +150,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: Some(user.id),
                 next_trigger_at: None,
+                policy,
             })
             .await
             .expect("create schedule");
@@ -177,5 +192,90 @@ mod tests {
             .expect("list runs");
         assert_eq!(runs.items.len(), 1);
         assert_eq!(runs.items[0].workflow_name, "deploy");
+    }
+
+    async fn post_trigger(state: &AppState, user_id: Uuid, schedule_id: Uuid) -> StatusCode {
+        let app = Router::new()
+            .route("/{id}/trigger", post(trigger_schedule))
+            .with_state(state.clone());
+        let req = Request::builder()
+            .uri(format!("/{schedule_id}/trigger"))
+            .method("POST")
+            .header("authorization", make_auth_header(user_id, state))
+            .body(Body::empty())
+            .expect("build");
+        app.oneshot(req).await.expect("request").status()
+    }
+
+    #[tokio::test]
+    async fn trigger_run_carries_the_schedule_id_and_no_occurrence() {
+        let (state, user_id, schedule_id) = test_state_with_schedule().await;
+
+        assert_eq!(
+            post_trigger(&state, user_id, schedule_id).await,
+            StatusCode::CREATED
+        );
+
+        let runs = state
+            .store
+            .list_runs(RunFilter::default(), 0, 10)
+            .await
+            .expect("list runs");
+        match &runs.items[0].trigger {
+            TriggerKind::Cron {
+                schedule_id: id,
+                scheduled_for,
+                ..
+            } => {
+                assert_eq!(*id, Some(schedule_id));
+                assert_eq!(*scheduled_for, None);
+            }
+            other => panic!("expected a cron trigger, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn trigger_with_overlap_skip_conflicts_with_active_run() {
+        let policy = SchedulePolicy {
+            overlap: OverlapPolicy::Skip,
+            ..SchedulePolicy::default()
+        };
+        let (state, user_id, schedule_id) = test_state_with_policy(policy).await;
+
+        assert_eq!(
+            post_trigger(&state, user_id, schedule_id).await,
+            StatusCode::CREATED
+        );
+        // The first run is still pending: it holds the schedule key.
+        assert_eq!(
+            post_trigger(&state, user_id, schedule_id).await,
+            StatusCode::CONFLICT
+        );
+
+        let runs = state
+            .store
+            .list_runs(RunFilter::default(), 0, 10)
+            .await
+            .expect("list runs");
+        assert_eq!(runs.items.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn trigger_with_overlap_allow_stacks_runs() {
+        let (state, user_id, schedule_id) = test_state_with_schedule().await;
+
+        for _ in 0..2 {
+            assert_eq!(
+                post_trigger(&state, user_id, schedule_id).await,
+                StatusCode::CREATED
+            );
+        }
+
+        let runs = state
+            .store
+            .list_runs(RunFilter::default(), 0, 10)
+            .await
+            .expect("list runs");
+        assert_eq!(runs.items.len(), 2);
     }
 }
