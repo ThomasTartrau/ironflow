@@ -234,6 +234,7 @@ mod tests {
                     scheduled_at: None,
                     output: None,
                     lease: None,
+                    capacity_wait_kind: None,
                 },
             )
             .await
