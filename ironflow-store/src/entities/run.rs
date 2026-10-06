@@ -1194,6 +1194,7 @@ mod tests {
             scheduled_at: Some(Utc::now()),
             output: None,
             lease: None,
+            capacity_wait_kind: None,
         };
 
         let json = serde_json::to_string(&update).expect("serialize");

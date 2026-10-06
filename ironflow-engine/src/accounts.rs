@@ -603,6 +603,7 @@ impl AccountAwareProvider {
 }
 
 /// What a run under one account ended with.
+#[allow(clippy::large_enum_variant)]
 enum AccountRun {
     /// The invocation finished, successfully or not, without a rate-limit
     /// rejection.

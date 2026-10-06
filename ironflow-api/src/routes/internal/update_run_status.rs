@@ -73,6 +73,7 @@ pub async fn update_run_status(
         scheduled_at: None,
         output: None,
         lease: None,
+        capacity_wait_kind: None,
     };
     state.store.update_run(id, update).await?;
 
