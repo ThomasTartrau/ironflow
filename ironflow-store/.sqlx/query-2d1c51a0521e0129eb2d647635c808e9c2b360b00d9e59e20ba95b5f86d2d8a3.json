@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                INSERT INTO ironflow.schedules\n                    (id, workflow_name, cron_expression, inputs, source,\n                     next_trigger_at, created_by_user_id, created_at, updated_at)\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n                RETURNING id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at,\n                    created_by_user_id, created_at, updated_at\n                ",
+  "query": "\n                UPDATE ironflow.schedules\n                SET cron_expression = $2,\n                    inputs = $3,\n                    disabled_at = $4,\n                    next_trigger_at = $5,\n                    last_triggered_at = $6,\n                    last_error = $7,\n                    updated_at = $8\n                WHERE id = $1\n                RETURNING id, workflow_name, cron_expression, inputs, source,\n                    disabled_at, last_triggered_at, next_trigger_at, last_error,\n                    created_by_user_id, created_at, updated_at\n                ",
   "describe": {
     "columns": [
       {
@@ -45,16 +45,21 @@
       },
       {
         "ordinal": 8,
+        "name": "last_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
         "name": "created_by_user_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -63,12 +68,11 @@
       "Left": [
         "Uuid",
         "Text",
-        "Text",
         "Jsonb",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
         "Text",
-        "Timestamptz",
-        "Uuid",
-        "Timestamptz",
         "Timestamptz"
       ]
     },
@@ -82,9 +86,10 @@
       true,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "99d222065ccfc1544d62c3a3ac453a1b72f82dcdae8e7b1d8e233e56d806e1ab"
+  "hash": "2d1c51a0521e0129eb2d647635c808e9c2b360b00d9e59e20ba95b5f86d2d8a3"
 }
