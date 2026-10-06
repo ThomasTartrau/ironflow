@@ -23,7 +23,7 @@ use ironflow_store::entities::{
     PurgeableRun, ReapedRun, RotationBatch, RotationRequest, Run, RunCreation, RunFilter, RunStats,
     RunStatus, RunUpdate, Schedule, ScheduleFiring, ScheduleNext, ScheduleUpdate, Secret,
     SecretMetadata, StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency,
-    StepUpdate, User, WorkerCapabilities,
+    StepUpdate, User, WorkerCapabilities, WorkflowPause,
 };
 use ironflow_store::entities::{
     NewProviderAccount, NewProviderAccountObservation, ProviderAccount, ProviderAccountCandidate,
@@ -327,6 +327,36 @@ impl RunStore for ApiRunStore {
         // Waking sleeping runs is an API-server responsibility: the worker has
         // no route for it and picks the requeued runs up like any pending run.
         Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    fn pause_workflow(
+        &self,
+        _workflow_name: &str,
+        _paused_by: Option<Uuid>,
+    ) -> StoreFuture<'_, WorkflowPause> {
+        // Pausing is an operator action served by the API server.
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "pause_workflow not supported via worker API".to_string(),
+            ))
+        })
+    }
+
+    fn resume_workflow(&self, _workflow_name: &str) -> StoreFuture<'_, bool> {
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "resume_workflow not supported via worker API".to_string(),
+            ))
+        })
+    }
+
+    fn list_workflow_pauses(&self) -> StoreFuture<'_, Vec<WorkflowPause>> {
+        // The API server filters paused workflows out of the pick itself.
+        Box::pin(async move {
+            Err(StoreError::Database(
+                "list_workflow_pauses not supported via worker API".to_string(),
+            ))
+        })
     }
 
     fn list_purgeable_runs(

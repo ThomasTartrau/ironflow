@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::entities::RunResponse;
 use crate::error::ApiError;
 use crate::response::ok;
-use crate::routes::approve_run::authorize_gate;
+use crate::routes::approve_run::{authorize_gate, awaits_gate, resume_paused_run_later};
 use crate::state::AppState;
 
 /// Request body for rejecting a human input step.
@@ -110,12 +110,7 @@ pub async fn submit_human_input(
             },
         )
         .await?;
-    state
-        .store
-        .update_run_status(id, resume_status(&state))
-        .await?;
-
-    resume_in_background(&state, id);
+    release_run(&state, &run).await?;
 
     Ok(ok(RunResponse::from(state.get_run_or_404(id).await?)))
 }
@@ -182,12 +177,7 @@ pub async fn reject_human_input(
             },
         )
         .await?;
-    state
-        .store
-        .update_run_status(id, resume_status(&state))
-        .await?;
-
-    resume_in_background(&state, id);
+    release_run(&state, &run).await?;
 
     Ok(ok(RunResponse::from(state.get_run_or_404(id).await?)))
 }
@@ -225,9 +215,7 @@ async fn open_input_step(
         _ => {}
     }
 
-    if step.status.state != StepStatus::AwaitingApproval
-        || run.status.state != RunStatus::AwaitingApproval
-    {
+    if step.status.state != StepStatus::AwaitingApproval || !awaits_gate(&run) {
         return Err(ApiError::BadRequest(
             "step is not awaiting input".to_string(),
         ));
@@ -253,6 +241,22 @@ fn validate_answer(input: Option<&Value>, answer: &Value) -> Result<(), ApiError
     } else {
         Err(ApiError::InvalidInput(errors))
     }
+}
+
+/// Let the run go on once its input is answered or rejected.
+///
+/// A run an operator paused while it waited stays paused: it resumes to
+/// `Pending` once the operator resumes it.
+async fn release_run(state: &AppState, run: &Run) -> Result<(), ApiError> {
+    if run.status.state == RunStatus::Paused {
+        return resume_paused_run_later(state, run.id).await;
+    }
+    state
+        .store
+        .update_run_status(run.id, resume_status(state))
+        .await?;
+    resume_in_background(state, run.id);
+    Ok(())
 }
 
 /// The status a run moves to once its input is answered or rejected:
@@ -662,6 +666,28 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let step = store.get_step(step_id).await.unwrap().unwrap();
         assert_eq!(step.approvals[0].user_id, alice.id);
+    }
+
+    #[tokio::test]
+    async fn human_input_submit_on_a_paused_run_keeps_it_paused() {
+        let (store, state, run_id, step_id) = setup().await;
+        store
+            .update_run_status(run_id, RunStatus::Paused)
+            .await
+            .unwrap();
+        let auth = create_user_auth_header(&state, "admin", true).await;
+        let answer = json!({"answers": ["staging"]});
+
+        let (status, body) = call(&state, &auth, run_id, step_id, "input", Some(answer)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["status"], "paused");
+        assert_eq!(body["data"]["resume_status"], "pending");
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Completed);
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Paused);
+        assert_eq!(run.resume_status, Some(RunStatus::Pending));
     }
 
     #[tokio::test]

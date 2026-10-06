@@ -60,6 +60,16 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
     ),
     (
         "POST",
+        "/api/v1/runs/{id}/pause",
+        Coverage::Command(&["run", "pause", UUID]),
+    ),
+    (
+        "POST",
+        "/api/v1/runs/{id}/resume",
+        Coverage::Command(&["run", "resume", UUID]),
+    ),
+    (
+        "POST",
         "/api/v1/runs/{id}/approve",
         Coverage::Command(&["run", "approve", UUID]),
     ),
@@ -108,6 +118,16 @@ const COVERAGE: &[(&str, &str, Coverage)] = &[
         "POST",
         "/api/v1/workflows/{name}/plan",
         Coverage::Command(&["run", "plan", "deploy"]),
+    ),
+    (
+        "POST",
+        "/api/v1/workflows/{name}/pause",
+        Coverage::Command(&["workflow", "pause", "deploy"]),
+    ),
+    (
+        "POST",
+        "/api/v1/workflows/{name}/resume",
+        Coverage::Command(&["workflow", "resume", "deploy"]),
     ),
     // ── Stats ──
     ("GET", "/api/v1/stats", Coverage::Command(&["stats"])),

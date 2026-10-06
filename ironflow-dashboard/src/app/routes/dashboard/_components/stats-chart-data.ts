@@ -13,7 +13,8 @@ export type StatusKey =
 	| "pending"
 	| "retrying"
 	| "awaiting_approval"
-	| "sleeping";
+	| "sleeping"
+	| "paused";
 
 export interface StatusSeries {
 	key: StatusKey;
@@ -44,6 +45,7 @@ export const STATUS_SERIES: readonly StatusSeries[] = [
 		color: "var(--status-awaiting-fg)",
 	},
 	{ key: "sleeping", label: "Sleeping", color: "var(--status-sleeping-fg)" },
+	{ key: "paused", label: "Paused", color: "var(--status-paused-fg)" },
 ];
 
 export type ChartDatum = Record<StatusKey, number> & {
@@ -94,6 +96,7 @@ export function toChartData(
 			retrying: b.retrying,
 			awaiting_approval: b.awaiting_approval,
 			sleeping: b.sleeping,
+			paused: b.paused,
 		};
 		return {
 			...counts,

@@ -97,6 +97,10 @@ pub struct RunResponse {
     /// Omitted when the handler set no output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Value>,
+    /// State a `paused` run returns to when it is resumed. Omitted in every
+    /// other state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_status: Option<RunStatus>,
 }
 
 impl From<Run> for RunResponse {
@@ -128,6 +132,7 @@ impl From<Run> for RunResponse {
             max_cost_usd: run.max_cost_usd,
             worker_tags: run.worker_tags,
             output: run.output,
+            resume_status: run.resume_status,
         }
     }
 }
@@ -193,6 +198,30 @@ pub struct CancelRunResponse {
     /// Sub-workflow runs below it that this request cancelled, oldest first.
     /// Empty when none was still active.
     pub cancelled_descendants: Vec<Uuid>,
+}
+
+/// Response of `POST /api/v1/runs/:id/pause`: the paused run, with the
+/// sub-workflow runs paused along with it.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Serialize)]
+pub struct PauseRunResponse {
+    /// The paused run. Its `resume_status` is the state it returns to.
+    #[serde(flatten)]
+    pub run: RunResponse,
+    /// Sub-workflow runs below it that this request paused, oldest first.
+    pub paused_descendants: Vec<Uuid>,
+}
+
+/// Response of `POST /api/v1/runs/:id/resume`: the resumed run, with the
+/// sub-workflow runs resumed along with it.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Serialize)]
+pub struct ResumeRunResponse {
+    /// The resumed run, in the state it was paused from.
+    #[serde(flatten)]
+    pub run: RunResponse,
+    /// Sub-workflow runs below it that this request resumed, oldest first.
+    pub resumed_descendants: Vec<Uuid>,
 }
 
 /// Query parameters for listing runs.

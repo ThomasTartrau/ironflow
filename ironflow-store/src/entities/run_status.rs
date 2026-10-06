@@ -11,6 +11,9 @@ use strum::EnumIter;
 /// - `Retrying` -> `Running`, `Failed`, `Cancelled`
 /// - `AwaitingApproval` -> `Running`, `Pending` (requeued for a worker under `ExecutionMode::Workers`), `Failed`, `Cancelled`
 /// - `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`
+/// - `Pending`, `Retrying`, `Sleeping`, `AwaitingApproval`, `Running` -> `Paused` (operator pause)
+/// - `Paused` -> `Pending`, `Running`, `Retrying`, `Sleeping`, `AwaitingApproval` (resume),
+///   `Failed` (rejection decided while paused), `Cancelled`
 ///
 /// Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
 /// transitioning to the same terminal state is a no-op, not an error.
@@ -32,6 +35,8 @@ use strum::EnumIter;
 /// assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
 /// assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
 /// assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));
+/// assert!(RunStatus::Running.can_transition_to(&RunStatus::Paused));
+/// assert!(RunStatus::Paused.can_transition_to(&RunStatus::Pending));
 /// // Terminal-to-same is idempotent:
 /// assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
 /// assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
@@ -60,6 +65,10 @@ pub enum RunStatus {
     Warning,
     /// Paused by a delay step; resumes automatically when `scheduled_at` elapses.
     Sleeping,
+    /// Paused by an operator; holds until resumed or cancelled.
+    ///
+    /// The state to return to on resume is kept in `Run::resume_status`.
+    Paused,
 }
 
 impl RunStatus {
@@ -91,6 +100,18 @@ impl RunStatus {
                 | (RunStatus::AwaitingApproval, RunStatus::Cancelled)
                 | (RunStatus::Sleeping, RunStatus::Pending)
                 | (RunStatus::Sleeping, RunStatus::Cancelled)
+                | (RunStatus::Pending, RunStatus::Paused)
+                | (RunStatus::Retrying, RunStatus::Paused)
+                | (RunStatus::Sleeping, RunStatus::Paused)
+                | (RunStatus::AwaitingApproval, RunStatus::Paused)
+                | (RunStatus::Running, RunStatus::Paused)
+                | (RunStatus::Paused, RunStatus::Pending)
+                | (RunStatus::Paused, RunStatus::Running)
+                | (RunStatus::Paused, RunStatus::Retrying)
+                | (RunStatus::Paused, RunStatus::Sleeping)
+                | (RunStatus::Paused, RunStatus::AwaitingApproval)
+                | (RunStatus::Paused, RunStatus::Failed)
+                | (RunStatus::Paused, RunStatus::Cancelled)
         )
     }
 
@@ -115,6 +136,7 @@ impl std::fmt::Display for RunStatus {
             RunStatus::AwaitingApproval => f.write_str("AwaitingApproval"),
             RunStatus::Warning => f.write_str("Warning"),
             RunStatus::Sleeping => f.write_str("Sleeping"),
+            RunStatus::Paused => f.write_str("Paused"),
         }
     }
 }
@@ -305,6 +327,7 @@ mod tests {
         assert_eq!(RunStatus::AwaitingApproval.to_string(), "AwaitingApproval");
         assert_eq!(RunStatus::Warning.to_string(), "Warning");
         assert_eq!(RunStatus::Sleeping.to_string(), "Sleeping");
+        assert_eq!(RunStatus::Paused.to_string(), "Paused");
     }
 
     #[test]
@@ -319,10 +342,77 @@ mod tests {
             RunStatus::AwaitingApproval,
             RunStatus::Warning,
             RunStatus::Sleeping,
+            RunStatus::Paused,
         ] {
             let json = serde_json::to_string(&status).expect("serialize");
             let back: RunStatus = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(status, back);
         }
+    }
+
+    #[test]
+    fn pausable_states_can_transition_to_paused() {
+        for from in [
+            RunStatus::Pending,
+            RunStatus::Retrying,
+            RunStatus::Sleeping,
+            RunStatus::AwaitingApproval,
+            RunStatus::Running,
+        ] {
+            assert!(
+                from.can_transition_to(&RunStatus::Paused),
+                "{from} -> Paused"
+            );
+        }
+    }
+
+    #[test]
+    fn paused_can_transition_out_to_resume_targets() {
+        for to in [
+            RunStatus::Pending,
+            RunStatus::Running,
+            RunStatus::Retrying,
+            RunStatus::Sleeping,
+            RunStatus::AwaitingApproval,
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+        ] {
+            assert!(RunStatus::Paused.can_transition_to(&to), "Paused -> {to}");
+        }
+    }
+
+    #[test]
+    fn terminal_states_cannot_transition_to_paused() {
+        for from in [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+            RunStatus::Warning,
+        ] {
+            assert!(
+                !from.can_transition_to(&RunStatus::Paused),
+                "{from} -> Paused"
+            );
+        }
+    }
+
+    #[test]
+    fn paused_refuses_self_and_completion() {
+        assert!(!RunStatus::Paused.can_transition_to(&RunStatus::Paused));
+        assert!(!RunStatus::Paused.can_transition_to(&RunStatus::Completed));
+        assert!(!RunStatus::Paused.can_transition_to(&RunStatus::Warning));
+    }
+
+    #[test]
+    fn paused_is_not_terminal() {
+        assert!(!RunStatus::Paused.is_terminal());
+    }
+
+    #[test]
+    fn paused_serde_is_snake_case() {
+        let json = serde_json::to_string(&RunStatus::Paused).expect("serialize");
+        assert_eq!(json, "\"paused\"");
+        let back: RunStatus = serde_json::from_str("\"paused\"").expect("deserialize");
+        assert_eq!(back, RunStatus::Paused);
     }
 }

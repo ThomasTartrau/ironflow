@@ -14,12 +14,15 @@ pub struct WorkflowSummary {
     pub name: String,
     /// Optional `/`-separated category path.
     pub category: Option<String>,
+    /// When the workflow was paused (RFC 3339), absent when it is not paused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_at: Option<String>,
 }
 
 /// List all available workflows in Ironflow.
 #[mcp_tool(
     name = "list_workflows",
-    description = "List all available workflows registered in Ironflow. Returns workflow name + optional /-separated category path."
+    description = "List all available workflows registered in Ironflow. Returns workflow name, optional /-separated category path, and paused_at when the workflow is paused."
 )]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ListWorkflowsTool {}

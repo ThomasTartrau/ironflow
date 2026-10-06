@@ -7,8 +7,8 @@ use crate::entities::{
     ConcurrencyGroupBacklog, ConcurrencyLimit, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep,
     NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor,
     RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter,
-    Step, StepApproval, StepDependency, StepUpdate, WorkerCapabilities, normalize_worker_tags,
-    validate_concurrency_limits, validate_worker_tags,
+    Step, StepApproval, StepDependency, StepUpdate, WorkerCapabilities, WorkflowPause,
+    normalize_worker_tags, validate_concurrency_limits, validate_worker_tags,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -69,6 +69,7 @@ const PICK_CANDIDATE_SQL: &str = r#"
       AND r.id <> ALL($1::uuid[])
       AND ($2::text[] IS NULL OR r.workflow_name = ANY($2::text[]))
       AND ($3::text[] IS NULL OR r.worker_tags <@ $3::text[])
+      AND NOT EXISTS (SELECT 1 FROM ironflow.workflow_pauses wp WHERE wp.workflow_name = r.workflow_name)
       AND NOT EXISTS (
           SELECT 1
           FROM jsonb_to_recordset(r.concurrency_limits) AS cl("group" text, "limit" bigint)
@@ -120,6 +121,7 @@ const BLOCKED_RUNS_BY_GROUP_SQL: &str = r#"
     WHERE ast.name IN ('pending', 'retrying')
       AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
       AND running.n >= cl."limit"
+      AND NOT EXISTS (SELECT 1 FROM ironflow.workflow_pauses wp WHERE wp.workflow_name = r.workflow_name)
     GROUP BY 1
     ORDER BY 1
 "#;
@@ -575,7 +577,8 @@ impl RunStore for PostgresStore {
                 // Leaving Running releases the worker lease.
                 sql.push_str(", worker_id = NULL, lease_expires_at = NULL");
             }
-            if new_status != RunStatus::Sleeping {
+            // A paused run keeps its capacity wait kind for the resume.
+            if new_status != RunStatus::Sleeping && new_status != RunStatus::Paused {
                 sql.push_str(", capacity_wait_kind = NULL");
             }
             if new_status.is_terminal() {
@@ -583,6 +586,13 @@ impl RunStore for PostgresStore {
                     ", completed_at = COALESCE(completed_at, ${bind_idx})"
                 ));
                 bind_idx += 1;
+            }
+            // Entering Paused records where to go back; leaving it forgets.
+            if new_status == RunStatus::Paused {
+                sql.push_str(&format!(", resume_status = ${bind_idx}"));
+                bind_idx += 1;
+            } else if current == RunStatus::Paused {
+                sql.push_str(", resume_status = NULL");
             }
             sql.push_str(&format!(" WHERE id = ${bind_idx}"));
 
@@ -592,6 +602,9 @@ impl RunStore for PostgresStore {
             }
             if new_status.is_terminal() {
                 query = query.bind(now);
+            }
+            if new_status == RunStatus::Paused {
+                query = query.bind(run_status_to_db_str(&current));
             }
             query = query.bind(id);
 
@@ -1168,6 +1181,85 @@ impl RunStore for PostgresStore {
         })
     }
 
+    fn pause_workflow(
+        &self,
+        workflow_name: &str,
+        paused_by: Option<Uuid>,
+    ) -> StoreFuture<'_, WorkflowPause> {
+        let workflow_name = workflow_name.to_string();
+        Box::pin(async move {
+            // ON CONFLICT DO NOTHING keeps the first pause: pausing twice is a
+            // no-op that returns the original timestamp and author.
+            sqlx::query(
+                r#"
+                INSERT INTO ironflow.workflow_pauses (workflow_name, paused_at, paused_by)
+                VALUES ($1, NOW(), $2)
+                ON CONFLICT (workflow_name) DO NOTHING
+                "#,
+            )
+            .bind(&workflow_name)
+            .bind(paused_by)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT workflow_name, paused_at, paused_by
+                FROM ironflow.workflow_pauses
+                WHERE workflow_name = $1
+                "#,
+            )
+            .bind(&workflow_name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(WorkflowPause {
+                workflow_name: row.get("workflow_name"),
+                paused_at: row.get("paused_at"),
+                paused_by: row.get("paused_by"),
+            })
+        })
+    }
+
+    fn resume_workflow(&self, workflow_name: &str) -> StoreFuture<'_, bool> {
+        let workflow_name = workflow_name.to_string();
+        Box::pin(async move {
+            let result =
+                sqlx::query("DELETE FROM ironflow.workflow_pauses WHERE workflow_name = $1")
+                    .bind(&workflow_name)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(result.rows_affected() > 0)
+        })
+    }
+
+    fn list_workflow_pauses(&self) -> StoreFuture<'_, Vec<WorkflowPause>> {
+        Box::pin(async move {
+            let rows = sqlx::query(
+                r#"
+                SELECT workflow_name, paused_at, paused_by
+                FROM ironflow.workflow_pauses
+                ORDER BY workflow_name
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(rows
+                .iter()
+                .map(|row| WorkflowPause {
+                    workflow_name: row.get("workflow_name"),
+                    paused_at: row.get("paused_at"),
+                    paused_by: row.get("paused_by"),
+                })
+                .collect())
+        })
+    }
+
     fn list_purgeable_runs(
         &self,
         policy: &PurgePolicy,
@@ -1633,7 +1725,8 @@ impl RunStore for PostgresStore {
                     COUNT(*) FILTER (WHERE ast.name = 'cancelled') as cancelled,
                     COUNT(*) FILTER (
                         WHERE ast.name IN (
-                            'pending', 'running', 'retrying', 'awaiting_approval', 'sleeping'
+                            'pending', 'running', 'retrying', 'awaiting_approval', 'sleeping',
+                            'paused'
                         )
                     ) as active,
                     COUNT(*) FILTER (WHERE ast.name = 'awaiting_approval') as awaiting_approval,

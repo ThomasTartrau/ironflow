@@ -94,6 +94,7 @@ fn run_path(status: RunStatus) -> &'static [RunStatus] {
         RunStatus::AwaitingApproval => &[RunStatus::Running, RunStatus::AwaitingApproval],
         RunStatus::Warning => &[RunStatus::Running, RunStatus::Warning],
         RunStatus::Sleeping => &[RunStatus::Running, RunStatus::Sleeping],
+        RunStatus::Paused => &[RunStatus::Running, RunStatus::Paused],
     }
 }
 
@@ -472,21 +473,26 @@ async fn run_fsm_state_migrations_revert_and_reapply() {
 
         assert_eq!(
             run_lifecycle_transitions_touching(&pool, "awaiting_approval").await,
-            5
+            7
         );
         assert_eq!(
             run_lifecycle_transitions_touching(&pool, "sleeping").await,
-            4
+            6
+        );
+        assert_eq!(
+            run_lifecycle_transitions_touching(&pool, "paused").await,
+            12
         );
         let awaiting = run_in(&store, RunStatus::AwaitingApproval).await;
         let sleeping = run_in(&store, RunStatus::Sleeping).await;
+        let paused = run_in(&store, RunStatus::Paused).await;
 
         migrator
             .undo(&pool, BEFORE_RUN_FSM_STATES)
             .await
             .expect("down migrations must apply");
 
-        for state in ["awaiting_approval", "sleeping"] {
+        for state in ["awaiting_approval", "sleeping", "paused"] {
             assert_eq!(run_lifecycle_states_named(&pool, state).await, 0, "{state}");
             assert_eq!(
                 run_lifecycle_transitions_touching(&pool, state).await,
@@ -496,7 +502,7 @@ async fn run_fsm_state_migrations_revert_and_reapply() {
         }
         // Read through SQL, not the store: the store maps every column of the
         // current schema, and the undo dropped the ones added after the target.
-        for id in [awaiting, sleeping] {
+        for id in [awaiting, sleeping, paused] {
             let run = query!(
                 r#"SELECT ast.name AS "state!", r.error IS NOT NULL AS "has_error!",
                           r.completed_at IS NOT NULL AS "completed!"
@@ -521,11 +527,15 @@ async fn run_fsm_state_migrations_revert_and_reapply() {
 
         assert_eq!(
             run_lifecycle_transitions_touching(&pool, "awaiting_approval").await,
-            5
+            7
         );
         assert_eq!(
             run_lifecycle_transitions_touching(&pool, "sleeping").await,
-            4
+            6
+        );
+        assert_eq!(
+            run_lifecycle_transitions_touching(&pool, "paused").await,
+            12
         );
 
         pool.close().await;

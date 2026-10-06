@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use chrono::{DateTime, Utc};
 use ironflow_auth::extractor::Authenticated;
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -60,6 +61,10 @@ pub struct WorkflowDetailResponse {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_max_cost_usd: Option<Decimal>,
+    /// When the workflow was paused: its queued runs are not picked up until
+    /// it is resumed. Omitted when the workflow is not paused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paused_at: Option<DateTime<Utc>>,
 }
 
 /// Get details about a registered workflow.
@@ -103,6 +108,14 @@ pub async fn get_workflow(
         5,
     );
 
+    let paused_at = state
+        .store
+        .list_workflow_pauses()
+        .await?
+        .into_iter()
+        .find(|pause| pause.workflow_name == name)
+        .map(|pause| pause.paused_at);
+
     Ok(ok(WorkflowDetailResponse {
         name,
         description: info.description,
@@ -115,6 +128,7 @@ pub async fn get_workflow(
         default_labels: info.default_labels,
         schedule: info.schedule.map(|s| s.as_str().to_string()),
         default_max_cost_usd: info.default_max_cost_usd,
+        paused_at,
     }))
 }
 

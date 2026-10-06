@@ -518,3 +518,87 @@ async fn update_run_lease_none_leaves_lease_untouched() {
     assert_eq!(after.worker_id.as_deref(), Some("worker-1"));
     assert_eq!(after.lease_expires_at, picked.lease_expires_at);
 }
+
+#[tokio::test]
+#[ignore]
+async fn pick_skips_paused_workflow() {
+    let _serial = SERIAL.lock().await;
+    let store = get_store().await;
+    drain_pending(&store).await;
+    let name = "lease-paused-workflow".to_string();
+    // A previous failed run of this test may have left the pause behind.
+    store.resume_workflow(&name).await.unwrap();
+    let run = store
+        .create_run(new_run(&name, 0))
+        .await
+        .unwrap()
+        .into_run();
+
+    let pause = store.pause_workflow(&name, None).await.unwrap();
+    assert_eq!(pause.workflow_name, name);
+    let again = store.pause_workflow(&name, None).await.unwrap();
+    assert_eq!(
+        again.paused_at, pause.paused_at,
+        "pausing twice keeps the first pause"
+    );
+    assert!(
+        store
+            .list_workflow_pauses()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.workflow_name == name)
+    );
+
+    assert!(store.pick_next_pending(None).await.unwrap().is_none());
+    let held = store.get_run(run.id).await.unwrap().unwrap();
+    assert_eq!(held.status.state, RunStatus::Pending);
+
+    assert!(store.resume_workflow(&name).await.unwrap());
+    assert!(
+        !store.resume_workflow(&name).await.unwrap(),
+        "already resumed"
+    );
+
+    let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+    assert_eq!(picked.id, run.id);
+}
+
+#[tokio::test]
+#[ignore]
+async fn paused_run_not_reaped() {
+    let _serial = SERIAL.lock().await;
+    let store = get_store().await;
+    drain_pending(&store).await;
+    store
+        .create_run(new_run("lease-paused-run", 3))
+        .await
+        .unwrap();
+    let picked = store
+        .pick_next_pending(Some(lease("worker-1", 90)))
+        .await
+        .unwrap()
+        .unwrap();
+    expire_lease(picked.id).await;
+
+    store
+        .update_run_status(picked.id, RunStatus::Paused)
+        .await
+        .unwrap();
+    let paused = store.get_run(picked.id).await.unwrap().unwrap();
+    assert_eq!(paused.resume_status, Some(RunStatus::Running));
+    assert_eq!(paused.worker_id, None, "a pause releases the lease");
+
+    let reaped = store.reap_expired_leases(100).await.unwrap();
+    assert!(reaped.iter().all(|r| r.run.id != picked.id));
+    let after = store.get_run(picked.id).await.unwrap().unwrap();
+    assert_eq!(after.status.state, RunStatus::Paused);
+
+    store
+        .update_run_status(picked.id, RunStatus::Pending)
+        .await
+        .unwrap();
+    let resumed = store.get_run(picked.id).await.unwrap().unwrap();
+    assert_eq!(resumed.status.state, RunStatus::Pending);
+    assert_eq!(resumed.resume_status, None);
+}

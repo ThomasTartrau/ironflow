@@ -30,6 +30,8 @@ export function StatusBadge({ status, awaitingKind }: StatusBadgeProps) {
 				return "bg-[var(--status-warning-bg)] text-[var(--status-warning-fg)] border-[var(--status-warning-border)]";
 			case "sleeping":
 				return "bg-[var(--status-awaiting-bg)] text-[var(--status-awaiting-fg)] border-[var(--status-awaiting-border)] animate-pulse";
+			case "paused":
+				return "bg-[var(--status-paused-bg)] text-[var(--status-paused-fg)] border-[var(--status-paused-border)]";
 			case "cancelled":
 			case "skipped":
 				return "bg-[var(--status-cancelled-bg)] text-[var(--status-cancelled-fg)] border-[var(--status-cancelled-border)]";

@@ -253,6 +253,52 @@ async fn workflow_get_not_found() {
     assert!(result.is_err());
 }
 
+#[tokio::test]
+async fn workflow_pause_then_resume() {
+    let (base_url, token, store) = spawn_server_with_store().await;
+    let client = make_client(&base_url, &token);
+
+    let args = WorkflowArgs {
+        command: WorkflowCommands::Pause {
+            name: "deploy".to_string(),
+        },
+    };
+    commands::workflow::execute(&client, &args, false)
+        .await
+        .unwrap();
+    let pauses = store.list_workflow_pauses().await.unwrap();
+    assert_eq!(pauses.len(), 1);
+    assert_eq!(pauses[0].workflow_name, "deploy");
+
+    let detail = client.get_workflow("deploy").await.unwrap();
+    assert!(detail.data.paused_at.is_some());
+
+    let args = WorkflowArgs {
+        command: WorkflowCommands::Resume {
+            name: "deploy".to_string(),
+        },
+    };
+    commands::workflow::execute(&client, &args, true)
+        .await
+        .unwrap();
+    assert!(store.list_workflow_pauses().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn workflow_pause_not_found() {
+    let (base_url, token, store) = spawn_server_with_store().await;
+    let client = make_client(&base_url, &token);
+
+    let args = WorkflowArgs {
+        command: WorkflowCommands::Pause {
+            name: "nonexistent".to_string(),
+        },
+    };
+    let result = commands::workflow::execute(&client, &args, false).await;
+    assert!(result.is_err());
+    assert!(store.list_workflow_pauses().await.unwrap().is_empty());
+}
+
 // ── Run list ──────────────────────────────────────────────────
 
 #[tokio::test]
@@ -531,6 +577,80 @@ async fn run_cancel_reports_the_cancelled_sub_runs() {
     commands::run::execute(&client, &args, false, false)
         .await
         .unwrap();
+}
+
+// ── Run pause / resume ────────────────────────────────────────
+
+#[tokio::test]
+async fn run_pause_not_found() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Pause { id: Uuid::now_v7() },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn run_pause_then_resume_restores_the_waiting_state() {
+    let (base_url, token, store) = spawn_server_with_store().await;
+    let client = make_client(&base_url, &token);
+    let run_id = seed_awaiting_approval_run(&store).await;
+
+    let args = RunArgs {
+        command: RunCommands::Pause { id: run_id },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+    let paused = store.get_run(run_id).await.unwrap().unwrap();
+    assert_eq!(paused.status.state, RunStatus::Paused);
+    assert_eq!(paused.resume_status, Some(RunStatus::AwaitingApproval));
+
+    // A second pause is an invalid transition.
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+
+    let args = RunArgs {
+        command: RunCommands::Resume { id: run_id },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+    let resumed = store.get_run(run_id).await.unwrap().unwrap();
+    assert_eq!(resumed.status.state, RunStatus::AwaitingApproval);
+    assert!(resumed.resume_status.is_none());
+}
+
+#[tokio::test]
+async fn run_resume_a_run_not_paused_fails() {
+    let (base_url, token, store) = spawn_server_with_store().await;
+    let client = make_client(&base_url, &token);
+    let run_id = seed_awaiting_approval_run(&store).await;
+
+    let args = RunArgs {
+        command: RunCommands::Resume { id: run_id },
+    };
+    let result = commands::run::execute(&client, &args, true, false).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn run_pause_through_the_sdk_reports_the_paused_sub_runs() {
+    let (base_url, token, store) = spawn_server_with_store().await;
+    let client = make_client(&base_url, &token);
+    let run_id = seed_awaiting_approval_run(&store).await;
+
+    let response = client.pause_run(run_id).await.unwrap();
+    assert_eq!(response.data.id, run_id);
+    assert_eq!(response.data.status.to_string(), "paused");
+    assert!(response.data.paused_descendants.is_empty());
+
+    let response = client.resume_run(run_id).await.unwrap();
+    assert_eq!(response.data.status.to_string(), "awaiting_approval");
+    assert!(response.data.resumed_descendants.is_empty());
 }
 
 // ── Run approve ───────────────────────────────────────────────

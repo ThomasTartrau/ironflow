@@ -1,9 +1,10 @@
 //! MCP tool definitions for Ironflow.
 //!
 //! Each tool lives in its own file, grouped by domain:
-//! - `workflows/` - list and inspect workflows
+//! - `workflows/` - list, inspect, plan, pause and resume workflows
 //! - `runs/` - create, list, search, and inspect runs
-//! - `actions/` - cancel, approve, reject, retry, replay runs; submit and reject human input
+//! - `actions/` - cancel, pause, resume, approve, reject, retry, replay runs; submit and
+//!   reject human input
 //! - `secrets/` - list, create, update, delete, rotate secrets
 //! - `api_keys/` - list, create, delete API keys
 //! - `users/` - list, create, update role, delete users
@@ -28,8 +29,8 @@ pub mod users;
 pub mod workflows;
 
 pub use actions::{
-    ApproveRunTool, CancelRunTool, RejectInputTool, RejectRunTool, ReplayRunTool, RetryRunTool,
-    SubmitInputTool,
+    ApproveRunTool, CancelRunTool, PauseRunTool, RejectInputTool, RejectRunTool, ReplayRunTool,
+    ResumeRunTool, RetryRunTool, SubmitInputTool,
 };
 pub use api_keys::{CreateApiKeyTool, DeleteApiKeyTool, ListApiKeysTool};
 pub use artifacts::DownloadArtifactTool;
@@ -53,7 +54,9 @@ pub use secrets::{
 pub use signals::{ListSignalsTool, SendSignalTool};
 pub use stats::{GetStatsHistoryTool, GetStatsTool};
 pub use users::{CreateUserTool, DeleteUserTool, ListUsersTool, UpdateUserRoleTool};
-pub use workflows::{GetWorkflowTool, ListWorkflowsTool, PlanWorkflowTool};
+pub use workflows::{
+    GetWorkflowTool, ListWorkflowsTool, PauseWorkflowTool, PlanWorkflowTool, ResumeWorkflowTool,
+};
 
 rust_mcp_sdk::tool_box!(
     IronflowTools,
@@ -61,12 +64,16 @@ rust_mcp_sdk::tool_box!(
         ListWorkflowsTool,
         GetWorkflowTool,
         PlanWorkflowTool,
+        PauseWorkflowTool,
+        ResumeWorkflowTool,
         CreateRunTool,
         ListRunsTool,
         SearchRunsTool,
         GetRunTool,
         GetRunLogsTool,
         CancelRunTool,
+        PauseRunTool,
+        ResumeRunTool,
         ApproveRunTool,
         RejectRunTool,
         RetryRunTool,
@@ -174,7 +181,11 @@ mod tests {
                 get(|| async {
                     Json(json!({
                         "data": [
-                            { "name": "deploy", "category": "infra/prod" },
+                            {
+                                "name": "deploy",
+                                "category": "infra/prod",
+                                "paused_at": "2026-10-06T12:00:00Z"
+                            },
                             { "name": "backup", "category": null }
                         ]
                     }))
@@ -214,6 +225,30 @@ mod tests {
                         }
                     }))
                     .into_response()
+                }),
+            )
+            .route(
+                "/api/v1/workflows/{name}/pause",
+                post(|Path(name): Path<String>| async move {
+                    if name == "unknown" {
+                        return (
+                            StatusCode::NOT_FOUND,
+                            Json(json!({ "error": { "code": "WORKFLOW_NOT_FOUND", "message": "workflow introuvable" } })),
+                        )
+                            .into_response();
+                    }
+                    Json(json!({ "data": {
+                        "workflow_name": name,
+                        "paused": true,
+                        "paused_at": "2026-10-06T12:00:00Z",
+                    } }))
+                    .into_response()
+                }),
+            )
+            .route(
+                "/api/v1/workflows/{name}/resume",
+                post(|Path(name): Path<String>| async move {
+                    Json(json!({ "data": { "workflow_name": name, "paused": false } }))
                 }),
             )
             .route(
@@ -285,6 +320,35 @@ mod tests {
                         "id": id,
                         "status": "cancelled",
                         "cancelled_descendants": ["c1", "c2"],
+                    } }))
+                }),
+            )
+            .route(
+                "/api/v1/runs/{id}/pause",
+                post(|Path(id): Path<String>| async move {
+                    if id == "done" {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({ "error": { "code": "BAD_REQUEST", "message": "cannot pause run in completed state" } })),
+                        )
+                            .into_response();
+                    }
+                    Json(json!({ "data": {
+                        "id": id,
+                        "status": "paused",
+                        "resume_status": "running",
+                        "paused_descendants": ["c1"],
+                    } }))
+                    .into_response()
+                }),
+            )
+            .route(
+                "/api/v1/runs/{id}/resume",
+                post(|Path(id): Path<String>| async move {
+                    Json(json!({ "data": {
+                        "id": id,
+                        "status": "pending",
+                        "resumed_descendants": ["c1"],
                     } }))
                 }),
             )
@@ -556,8 +620,10 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0]["name"], "deploy");
         assert_eq!(parsed[0]["category"], "infra/prod");
+        assert_eq!(parsed[0]["paused_at"], "2026-10-06T12:00:00Z");
         assert_eq!(parsed[1]["name"], "backup");
         assert!(parsed[1]["category"].is_null());
+        assert!(parsed[1].get("paused_at").is_none());
     }
 
     // ---------------------------------------------------------------
@@ -627,6 +693,54 @@ mod tests {
         let err = tool.run(&client).await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("introuvable"), "got: {msg}");
+    }
+
+    // ---------------------------------------------------------------
+    // PauseWorkflowTool / ResumeWorkflowTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn pause_workflow_returns_paused() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = PauseWorkflowTool {
+            name: "deploy".to_string(),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["workflow_name"], "deploy");
+        assert_eq!(parsed["paused"], true);
+        assert_eq!(parsed["paused_at"], "2026-10-06T12:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn pause_workflow_propagates_404() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = PauseWorkflowTool {
+            name: "unknown".to_string(),
+        };
+
+        let err = tool.run(&client).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("introuvable"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn resume_workflow_returns_not_paused() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = ResumeWorkflowTool {
+            name: "deploy".to_string(),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["workflow_name"], "deploy");
+        assert_eq!(parsed["paused"], false);
     }
 
     // ---------------------------------------------------------------
@@ -1106,6 +1220,56 @@ mod tests {
         assert_eq!(parsed["id"], "r1");
         assert_eq!(parsed["status"], "cancelled");
         assert_eq!(parsed["cancelled_descendants"], json!(["c1", "c2"]));
+    }
+
+    // ---------------------------------------------------------------
+    // PauseRunTool / ResumeRunTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn pause_run_returns_paused_status() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = PauseRunTool {
+            run_id: "r1".to_string(),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["id"], "r1");
+        assert_eq!(parsed["status"], "paused");
+        assert_eq!(parsed["resume_status"], "running");
+        assert_eq!(parsed["paused_descendants"], json!(["c1"]));
+    }
+
+    #[tokio::test]
+    async fn pause_run_propagates_400() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = PauseRunTool {
+            run_id: "done".to_string(),
+        };
+
+        let err = tool.run(&client).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("cannot pause run"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn resume_run_returns_pending_status() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = ResumeRunTool {
+            run_id: "r1".to_string(),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["id"], "r1");
+        assert_eq!(parsed["status"], "pending");
+        assert_eq!(parsed["resumed_descendants"], json!(["c1"]));
     }
 
     // ---------------------------------------------------------------

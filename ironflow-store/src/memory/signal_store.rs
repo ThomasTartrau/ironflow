@@ -138,7 +138,10 @@ impl SignalStore for InMemoryStore {
                     state.runs.get(&s.run_id).is_some_and(|run| {
                         matches!(
                             run.status.state,
-                            RunStatus::Sleeping | RunStatus::Running | RunStatus::Pending
+                            RunStatus::Sleeping
+                                | RunStatus::Running
+                                | RunStatus::Pending
+                                | RunStatus::Paused
                         )
                     })
                 })
@@ -184,6 +187,15 @@ impl SignalStore for InMemoryStore {
             let run_resumed = run.status.state == RunStatus::Sleeping;
             if run_resumed {
                 run.status.state = RunStatus::Pending;
+                run.scheduled_at = None;
+                run.capacity_wait_kind = None;
+                run.updated_at = now;
+            } else if run.status.state == RunStatus::Paused
+                && run.resume_status == Some(RunStatus::Sleeping)
+            {
+                // The signal ended the wait: the resume requeues the run
+                // instead of putting it back to sleep.
+                run.resume_status = Some(RunStatus::Pending);
                 run.scheduled_at = None;
                 run.capacity_wait_kind = None;
                 run.updated_at = now;

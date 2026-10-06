@@ -17,7 +17,8 @@ use uuid::Uuid;
 use ironflow_core::error::{AgentError, OperationError};
 use ironflow_core::provider::{LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, sanitize_label_value};
 use ironflow_store::models::{
-    NewStep, NewStepDependency, RunUpdate, Step, StepKind, StepStatus, StepUpdate, step_trace_id,
+    NewStep, NewStepDependency, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
+    step_trace_id,
 };
 use ironflow_store::store::{STEP_INTERRUPTED_ERROR, Store};
 
@@ -384,6 +385,10 @@ impl WorkflowContext {
         if let Some(output) = self.try_replay_step(position, name, &kind)? {
             return Ok(output);
         }
+
+        // Pause: an operator paused the run while it executed. The step is not
+        // started; the run stops here and replays from this position on resume.
+        self.check_not_paused().await?;
 
         // Cost cap: refuse before creating the step record, so a run that hits
         // its cap never launches the work it cannot afford.
@@ -810,6 +815,19 @@ impl WorkflowContext {
             .await?;
 
         Ok(())
+    }
+
+    /// Stop before a new step when an operator paused the run.
+    ///
+    /// Read from the store, not cached: the pause happens outside this
+    /// execution, through [`Engine::pause_run`](crate::engine::Engine::pause_run).
+    pub(crate) async fn check_not_paused(&self) -> Result<(), EngineError> {
+        match self.store.get_run(self.run_id).await? {
+            Some(run) if run.status.state == RunStatus::Paused => Err(EngineError::RunPaused {
+                run_id: self.run_id,
+            }),
+            _ => Ok(()),
+        }
     }
 
     /// Mark a step as failed, best-effort.

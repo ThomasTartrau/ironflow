@@ -16,6 +16,7 @@ function bucketFixture(
 		retrying: 0,
 		awaiting_approval: 0,
 		sleeping: 0,
+		paused: 0,
 		success_rate_percent: null,
 		avg_duration_ms: 0,
 		p95_duration_ms: 0,
@@ -67,6 +68,7 @@ describe("toChartData", () => {
 					retrying: 7,
 					awaiting_approval: 8,
 					sleeping: 9,
+					paused: 10,
 				}),
 			],
 			"7d",
@@ -75,7 +77,8 @@ describe("toChartData", () => {
 			expect(datum[s.key]).toBeGreaterThan(0);
 		}
 		expect(datum.awaiting_approval).toBe(8);
-		expect(datum.total).toBe(45);
+		expect(datum.paused).toBe(10);
+		expect(datum.total).toBe(55);
 	});
 
 	it("has a series for every status", () => {
@@ -87,6 +90,7 @@ describe("toChartData", () => {
 			"cancelled",
 			"completed",
 			"failed",
+			"paused",
 			"pending",
 			"retrying",
 			"running",

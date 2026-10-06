@@ -1,9 +1,28 @@
 import { api } from "@/app/lib/api";
-import type { CancelRunResponse, RunResponse } from "@/app/lib/types";
+import type {
+	CancelRunResponse,
+	PauseRunResponse,
+	ResumeRunResponse,
+	RunResponse,
+} from "@/app/lib/types";
 
 export function cancelRun(runId: string): Promise<CancelRunResponse> {
 	return api
 		.post<CancelRunResponse>(`/runs/${runId}/cancel`)
+		.then((res) => res.data);
+}
+
+/** Pause a run with its sub-runs: a running run stops at its next step. */
+export function pauseRun(runId: string): Promise<PauseRunResponse> {
+	return api
+		.post<PauseRunResponse>(`/runs/${runId}/pause`)
+		.then((res) => res.data);
+}
+
+/** Resume a paused run with its sub-runs, in the state it was paused from. */
+export function resumeRun(runId: string): Promise<ResumeRunResponse> {
+	return api
+		.post<ResumeRunResponse>(`/runs/${runId}/resume`)
 		.then((res) => res.data);
 }
 

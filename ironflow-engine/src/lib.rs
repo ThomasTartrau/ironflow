@@ -70,6 +70,7 @@ pub mod handler;
 pub mod log_sender;
 pub mod notify;
 pub mod operation;
+pub mod pause;
 pub mod plan;
 pub mod replay_policy;
 pub mod retry_policy;

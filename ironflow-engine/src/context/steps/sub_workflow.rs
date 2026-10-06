@@ -417,6 +417,9 @@ impl WorkflowContext {
             state.check(guard_config, handler.name())?;
         }
 
+        // Paused while it ran: no child is started, the run stops here.
+        self.check_not_paused().await?;
+
         self.position += 1;
 
         // An open step was left by a child that suspended: reuse it instead of
@@ -525,9 +528,9 @@ impl WorkflowContext {
                 self.guard_record_return();
                 Ok(SubWorkflowOutcome::Completed(output))
             }
-            // The child suspended: the step stays open, neither failed nor
-            // completed, so the next replay re-enters the same child run.
-            Err(err) if err.is_suspension() => {
+            // The child suspended or was paused: the step stays open, neither
+            // failed nor completed, so the next replay re-enters the same child run.
+            Err(err) if err.is_suspension() || matches!(err, EngineError::RunPaused { .. }) => {
                 self.guard_record_return();
                 Err(err)
             }
@@ -914,16 +917,31 @@ impl WorkflowContext {
 
         // Cancelled while it ran: whatever the handler returned, the child
         // stays cancelled and the cancellation is its outcome.
-        if let Some(child_run) = self.store.get_run(child_run_id).await?
-            && child_run.status.state == RunStatus::Cancelled
-        {
-            return cancelled_child_outcome(
-                config,
-                &child_run,
-                child_ctx.total_cost_usd,
-                total_duration,
-                child_ctx.output().cloned(),
-            );
+        if let Some(child_run) = self.store.get_run(child_run_id).await? {
+            match child_run.status.state {
+                RunStatus::Cancelled => {
+                    return cancelled_child_outcome(
+                        config,
+                        &child_run,
+                        child_ctx.total_cost_usd,
+                        total_duration,
+                        child_ctx.output().cloned(),
+                    );
+                }
+                // Paused with its root while it ran: the child is left as the
+                // pause recorded it and the parent stops with it.
+                RunStatus::Paused => {
+                    info!(
+                        parent_run_id = %self.run_id,
+                        child_run_id = %child_run_id,
+                        "child run paused"
+                    );
+                    return Err(EngineError::RunPaused {
+                        run_id: child_run_id,
+                    });
+                }
+                _ => {}
+            }
         }
 
         match result {

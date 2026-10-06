@@ -272,7 +272,7 @@ impl SignalStore for PostgresStore {
                   AND s.input->>'name' = $1
                   AND s.input->>'key' = $2
                   AND ast.name = 'running'
-                  AND rast.name IN ('sleeping', 'running', 'pending')
+                  AND rast.name IN ('sleeping', 'running', 'pending', 'paused')
                 ORDER BY s.created_at ASC, s.id ASC
                 "#,
             )
@@ -338,6 +338,21 @@ impl SignalStore for PostgresStore {
                     UPDATE ironflow.runs
                     SET scheduled_at = NULL, capacity_wait_kind = NULL, updated_at = NOW()
                     WHERE id = $1
+                    "#,
+                )
+                .bind(step.run_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            } else if run_status == RunStatus::Paused {
+                // The signal ended the wait of a run paused while sleeping: the
+                // resume requeues it instead of putting it back to sleep.
+                sqlx::query(
+                    r#"
+                    UPDATE ironflow.runs
+                    SET resume_status = 'pending', scheduled_at = NULL,
+                        capacity_wait_kind = NULL, updated_at = NOW()
+                    WHERE id = $1 AND resume_status = 'sleeping'
                     "#,
                 )
                 .bind(step.run_id)

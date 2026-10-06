@@ -14,6 +14,7 @@ describe("StatusBadge", () => {
 		"cancelled",
 		"awaiting_approval",
 		"sleeping",
+		"paused",
 	];
 
 	const stepStatuses: StepStatus[] = [
@@ -69,6 +70,13 @@ describe("StatusBadge", () => {
 		const { container } = render(<StatusBadge status="cancelled" />);
 		const badge = container.firstElementChild;
 		expect(badge?.className).toContain("var(--status-cancelled-bg)");
+	});
+
+	it("applies the paused status token without pulse for paused", () => {
+		const { container } = render(<StatusBadge status="paused" />);
+		const badge = container.firstElementChild;
+		expect(badge?.className).toContain("var(--status-paused-bg)");
+		expect(badge?.className).not.toContain("animate-pulse");
 	});
 
 	it("applies the cancelled status token for skipped", () => {

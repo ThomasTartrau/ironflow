@@ -327,6 +327,7 @@ async fn empty_store_returns_zero_filled_buckets() {
             "retrying",
             "awaiting_approval",
             "sleeping",
+            "paused",
         ] {
             assert_eq!(bucket[key], 0, "{key} should be 0");
         }

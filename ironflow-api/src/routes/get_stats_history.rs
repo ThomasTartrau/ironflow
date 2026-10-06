@@ -139,7 +139,7 @@ mod tests {
     use super::*;
     use crate::routes::test_helpers::{create_terminal_run, create_user_auth_header};
 
-    const COUNTERS: [&str; 9] = [
+    const COUNTERS: [&str; 10] = [
         "completed",
         "warning",
         "failed",
@@ -149,6 +149,7 @@ mod tests {
         "retrying",
         "awaiting_approval",
         "sleeping",
+        "paused",
     ];
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
@@ -199,6 +200,7 @@ mod tests {
             RunStatus::Retrying => &[RunStatus::Running, RunStatus::Retrying],
             RunStatus::AwaitingApproval => &[RunStatus::Running, RunStatus::AwaitingApproval],
             RunStatus::Sleeping => &[RunStatus::Running, RunStatus::Sleeping],
+            RunStatus::Paused => &[RunStatus::Paused],
             RunStatus::Completed => &[RunStatus::Running, RunStatus::Completed],
             RunStatus::Warning => &[RunStatus::Running, RunStatus::Warning],
             RunStatus::Failed => &[RunStatus::Running, RunStatus::Failed],
@@ -287,6 +289,7 @@ mod tests {
             RunStatus::Retrying,
             RunStatus::AwaitingApproval,
             RunStatus::Sleeping,
+            RunStatus::Paused,
             RunStatus::Completed,
             RunStatus::Warning,
             RunStatus::Failed,

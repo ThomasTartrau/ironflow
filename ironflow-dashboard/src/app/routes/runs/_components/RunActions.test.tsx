@@ -5,6 +5,8 @@ import type { RunResponse } from "@/app/lib/types";
 
 vi.mock("../_actions/actions", () => ({
 	cancelRun: vi.fn().mockResolvedValue({ cancelled_descendants: [] }),
+	pauseRun: vi.fn().mockResolvedValue({ paused_descendants: [] }),
+	resumeRun: vi.fn().mockResolvedValue({ resumed_descendants: [] }),
 	approveRun: vi.fn(),
 	rejectRun: vi.fn(),
 	replayRun: vi.fn(),
@@ -21,12 +23,12 @@ vi.mock("@/app/store", () => ({
 		}),
 }));
 
-import { cancelRun } from "../_actions/actions";
+import { cancelRun, pauseRun, resumeRun } from "../_actions/actions";
 import { RunActions } from "./RunActions";
 
 const RUN_ID = "019a3f2b-0000-7000-8000-0000000000ff";
 
-function runFixture(): RunResponse {
+function runFixture(overrides: Partial<RunResponse> = {}): RunResponse {
 	return {
 		id: RUN_ID,
 		workflow_name: "deploy",
@@ -39,16 +41,20 @@ function runFixture(): RunResponse {
 		created_at: "2026-01-01T00:00:00Z",
 		updated_at: "2026-01-01T00:00:00Z",
 		created_by: { kind: "system", label: "cron" },
+		...overrides,
 	} as RunResponse;
 }
 
-function renderActions(activeDescendantCount: number) {
+function renderActions(
+	activeDescendantCount: number,
+	overrides: Partial<RunResponse> = {},
+) {
 	const router = createMemoryRouter([
 		{
 			path: "/",
 			element: (
 				<RunActions
-					run={runFixture()}
+					run={runFixture(overrides)}
 					awaitingInput={false}
 					activeDescendantCount={activeDescendantCount}
 				/>
@@ -103,5 +109,45 @@ describe("RunActions cancel confirmation", () => {
 			expect(screen.queryByText(/will be cancelled with it/)).toBeNull(),
 		);
 		expect(cancelRun).not.toHaveBeenCalled();
+	});
+});
+
+describe("RunActions pause and resume", () => {
+	beforeEach(() => {
+		vi.mocked(pauseRun).mockClear();
+		vi.mocked(resumeRun).mockClear();
+	});
+
+	it("pauses a running root run", async () => {
+		renderActions(0);
+		fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
+
+		await waitFor(() => expect(pauseRun).toHaveBeenCalledWith(RUN_ID));
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+	});
+
+	it("resumes a paused run and still offers to cancel it", async () => {
+		renderActions(0, { status: "paused" });
+		fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+
+		await waitFor(() => expect(resumeRun).toHaveBeenCalledWith(RUN_ID));
+		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+	});
+
+	it("offers neither on a sub-workflow run", async () => {
+		renderActions(0, { trigger: { kind: "workflow" } });
+		await screen.findByRole("button", { name: "Cancel" });
+
+		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+	});
+
+	it("offers neither on a finished run", async () => {
+		renderActions(0, { status: "completed" });
+		await screen.findByRole("button", { name: "Replay" });
+
+		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 	});
 });

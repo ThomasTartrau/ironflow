@@ -366,6 +366,21 @@ impl PostgresStore {
             (RunStatus::Running, RunStatus::Sleeping) => Ok("delay_started"),
             (RunStatus::Sleeping, RunStatus::Pending) => Ok("delay_elapsed"),
             (RunStatus::Sleeping, RunStatus::Cancelled) => Ok("cancel_requested"),
+            (
+                RunStatus::Pending
+                | RunStatus::Retrying
+                | RunStatus::Sleeping
+                | RunStatus::AwaitingApproval
+                | RunStatus::Running,
+                RunStatus::Paused,
+            ) => Ok("pause_requested"),
+            (RunStatus::Paused, RunStatus::Pending) => Ok("resume_to_pending"),
+            (RunStatus::Paused, RunStatus::Running) => Ok("resume_to_running"),
+            (RunStatus::Paused, RunStatus::Retrying) => Ok("resume_to_retrying"),
+            (RunStatus::Paused, RunStatus::Sleeping) => Ok("resume_to_sleeping"),
+            (RunStatus::Paused, RunStatus::AwaitingApproval) => Ok("resume_to_awaiting_approval"),
+            (RunStatus::Paused, RunStatus::Failed) => Ok("pause_rejected"),
+            (RunStatus::Paused, RunStatus::Cancelled) => Ok("cancel_requested"),
             _ => Err(StoreError::InvalidTransition { from, to }),
         }
     }
@@ -379,6 +394,9 @@ impl PostgresStore {
         id: Uuid,
         update: &RunUpdate,
     ) -> Result<(), StoreError> {
+        // `None` leaves `resume_status` untouched, `Some(None)` clears it.
+        let mut resume_change: Option<Option<RunStatus>> = None;
+
         if let Some(new_status) = update.status {
             let row = sqlx::query!(
                 r#"
@@ -417,6 +435,38 @@ impl PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
             }
+
+            if new_status == RunStatus::Paused {
+                resume_change = Some(Some(current));
+            } else if current == RunStatus::Paused {
+                resume_change = Some(None);
+            }
+        } else if let Some(target) = update.resume_status {
+            let state_name: String = sqlx::query_scalar(
+                r#"
+                SELECT ast.name
+                FROM ironflow.runs r
+                JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
+                JOIN lib_fsm.abstract_state ast ON ast.abstract_state__id = sm.abstract_state__id
+                WHERE r.id = $1
+                FOR UPDATE
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .ok_or(StoreError::RunNotFound(id))?;
+
+            let current = helpers::parse_run_status(&state_name)?;
+            // Only a paused run carries a state to return to.
+            if current != RunStatus::Paused {
+                return Err(StoreError::InvalidTransition {
+                    from: current,
+                    to: target,
+                });
+            }
+            resume_change = Some(Some(target));
         }
 
         let now = Utc::now();
@@ -467,18 +517,27 @@ impl PostgresStore {
         }
 
         // The kind only means something while the run sleeps on capacity:
-        // any other status change clears it.
+        // any other status change clears it, except a pause, which keeps it
+        // for the resume.
         let capacity_wait_kind = match update.status {
             Some(RunStatus::Sleeping) => update.capacity_wait_kind.as_ref(),
             _ => None,
         };
-        if update.status.is_some() {
+        if update.status.is_some_and(|s| s != RunStatus::Paused) {
             if capacity_wait_kind.is_some() {
                 sets.push(format!("capacity_wait_kind = ${bind_idx}"));
                 bind_idx += 1;
             } else {
                 sets.push("capacity_wait_kind = NULL".to_string());
             }
+        }
+        match resume_change {
+            Some(Some(_)) => {
+                sets.push(format!("resume_status = ${bind_idx}"));
+                bind_idx += 1;
+            }
+            Some(None) => sets.push("resume_status = NULL".to_string()),
+            None => {}
         }
 
         let sql = format!(
@@ -518,6 +577,9 @@ impl PostgresStore {
         }
         if let Some(kind) = capacity_wait_kind {
             query = query.bind(kind.as_str());
+        }
+        if let Some(Some(status)) = resume_change {
+            query = query.bind(helpers::run_status_to_db_str(&status));
         }
 
         query = query.bind(id);

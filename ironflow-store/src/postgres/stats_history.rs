@@ -59,6 +59,7 @@ impl PostgresStore {
                         WHERE ast.name = 'awaiting_approval'
                     ) AS awaiting_approval,
                     COUNT(*) FILTER (WHERE ast.name = 'sleeping') AS sleeping,
+                    COUNT(*) FILTER (WHERE ast.name = 'paused') AS paused,
                     COALESCE(
                         AVG(r.duration_ms) FILTER (
                             WHERE ast.name IN ('completed', 'warning', 'failed')
@@ -108,6 +109,7 @@ impl PostgresStore {
                     retrying: count(row, "retrying"),
                     awaiting_approval: count(row, "awaiting_approval"),
                     sleeping: count(row, "sleeping"),
+                    paused: count(row, "paused"),
                     avg_duration_ms: count(row, "avg_duration_ms"),
                     p95_duration_ms: count(row, "p95_duration_ms"),
                     total_cost_usd: row.get::<Decimal, _>("total_cost_usd"),

@@ -9,7 +9,7 @@ use ironflow_auth::extractor::{AuthMethod, Authenticated};
 use ironflow_engine::engine::ExecutionMode;
 use ironflow_engine::notify::{ApprovalGrantedEvent, ApprovalRejectedEvent, Event};
 use ironflow_store::models::{
-    Assignee, Run, RunStatus, Step, StepApproval, StepKind, StepStatus, StepUpdate,
+    Assignee, Run, RunStatus, RunUpdate, Step, StepApproval, StepKind, StepStatus, StepUpdate,
 };
 use tokio::spawn;
 use tracing::error;
@@ -29,6 +29,10 @@ use crate::state::AppState;
 /// requires (one for a gate opened without approvers), the run transitions from
 /// `AwaitingApproval` back to `Running` and resumes. Until then the response
 /// returns the run still `AwaitingApproval`, and the gate keeps its SLA timer.
+///
+/// A run an operator paused while it awaited approval can be approved too: the
+/// vote is recorded and the run stays `paused`, resuming to `pending` once the
+/// operator resumes it.
 ///
 /// Returns 400 if the run is not in `AwaitingApproval` state, 403 if the
 /// caller may not vote on the gate, and 409 if the caller already approved it.
@@ -63,6 +67,7 @@ pub async fn approve_run(
 /// Transitions the run from `AwaitingApproval` to `Failed`. A single rejection
 /// from anyone allowed to vote on the gate vetoes it, even after partial
 /// approvals.
+/// A run paused while it awaited approval is rejected the same way.
 /// Returns 400 if the run is not in `AwaitingApproval` state.
 #[cfg_attr(
     feature = "openapi",
@@ -194,6 +199,28 @@ pub(crate) async fn authorize_gate(
     }
 }
 
+/// Whether `run` waits on a gate a human resolves: suspended on it, or paused
+/// by an operator while suspended on it.
+pub(crate) fn awaits_gate(run: &Run) -> bool {
+    run.status.state == RunStatus::AwaitingApproval
+        || (run.status.state == RunStatus::Paused
+            && run.resume_status == Some(RunStatus::AwaitingApproval))
+}
+
+/// Record that a paused run whose gate was just resolved resumes to `Pending`:
+/// it stays paused, and the operator's resume requeues it.
+pub(crate) async fn resume_paused_run_later(
+    state: &AppState,
+    run_id: Uuid,
+) -> Result<(), ApiError> {
+    let update = RunUpdate {
+        resume_status: Some(RunStatus::Pending),
+        ..RunUpdate::default()
+    };
+    state.store.update_run(run_id, update).await?;
+    Ok(())
+}
+
 /// The name a decision is recorded under: the username of a session, the key
 /// name of an API key.
 fn caller_name(auth: &Authenticated) -> String {
@@ -221,7 +248,7 @@ async fn resolve_approval(
 ) -> Result<impl IntoResponse, ApiError> {
     let run = state.get_run_or_404(id).await?;
 
-    if run.status.state != RunStatus::AwaitingApproval {
+    if !awaits_gate(&run) {
         return Err(ApiError::BadRequest(format!(
             "cannot {verb} run in {} state, expected AwaitingApproval",
             run.status.state
@@ -324,7 +351,11 @@ async fn resolve_approval(
     } else {
         target_status
     };
-    state.store.update_run_status(id, next_status).await?;
+    if run.status.state == RunStatus::Paused && target_status == RunStatus::Running {
+        resume_paused_run_later(&state, id).await?;
+    } else {
+        state.store.update_run_status(id, next_status).await?;
+    }
 
     // A rejected gate inside a sub-workflow fails the runs suspended with
     // its child run, up to the root: none of them can resume any more.
@@ -352,8 +383,10 @@ async fn resolve_approval(
     // background. The handler is re-executed with step replay: completed
     // steps return cached output, and execution continues from where it
     // stopped. Under `ExecutionMode::Workers` the run is already `Pending`
-    // and a worker picks it up, so nothing runs in this process.
+    // and a worker picks it up, so nothing runs in this process. A paused run
+    // waits for its operator.
     if target_status == RunStatus::Running
+        && run.status.state != RunStatus::Paused
         && matches!(state.engine.execution_mode(), ExecutionMode::Local)
     {
         let engine = state.engine.clone();
@@ -912,6 +945,71 @@ mod tests {
         let step = store.get_step(step_id).await.unwrap().unwrap();
         assert_eq!(step.status.state, StepStatus::Rejected);
         assert!(step.approval_deadline_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn approve_paused_run_defers_resume() {
+        let store = Arc::new(InMemoryStore::new());
+        let (run_id, step_id) = run_with_armed_gate(&store).await;
+        store
+            .update_run_status(run_id, RunStatus::Paused)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolve(store.clone(), run_id, "approve").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Paused);
+        assert_eq!(run.resume_status, Some(RunStatus::Pending));
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.approvals.len(), 1);
+        assert!(step.approval_deadline_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn reject_paused_run_fails_it() {
+        let store = Arc::new(InMemoryStore::new());
+        let (run_id, step_id) = run_with_armed_gate(&store).await;
+        store
+            .update_run_status(run_id, RunStatus::Paused)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolve(store.clone(), run_id, "reject").await,
+            HttpStatusCode::OK
+        );
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Failed);
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.status.state, StepStatus::Rejected);
+    }
+
+    #[tokio::test]
+    async fn approve_paused_run_not_awaiting_approval_returns_400() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+        store
+            .update_run_status(run.id, RunStatus::Pending)
+            .await
+            .unwrap();
+        store
+            .update_run_status(run.id, RunStatus::Paused)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolve(store.clone(), run.id, "approve").await,
+            HttpStatusCode::BAD_REQUEST
+        );
+
+        let stored = store.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(stored.status.state, RunStatus::Paused);
+        assert_eq!(stored.resume_status, Some(RunStatus::Pending));
     }
 
     #[tokio::test]

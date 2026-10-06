@@ -19,7 +19,7 @@ use crate::entities::{
     ConcurrencyGroupBacklog, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
     PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
     StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate,
-    WorkerCapabilities,
+    WorkerCapabilities, WorkflowPause,
 };
 use crate::error::StoreError;
 use crate::log_store::LogStore;
@@ -197,6 +197,9 @@ pub trait RunStore: Send + Sync {
     /// eligible run wins. The check is atomic across concurrent callers, so a
     /// group never exceeds its limit.
     ///
+    /// Runs of a workflow paused with [`pause_workflow`](Self::pause_workflow)
+    /// are skipped the same way until the workflow is resumed.
+    ///
     /// Returns `None` if no pending runs are available.
     ///
     /// Equivalent to [`pick_next_pending_for`](Self::pick_next_pending_for)
@@ -311,6 +314,76 @@ pub trait RunStore: Send + Sync {
     /// Returns [`StoreError`] on storage failure.
     fn claim_due_sleeping_runs(&self, limit: u32) -> StoreFuture<'_, Vec<Run>>;
 
+    /// Pause a workflow: its queued runs are no longer picked.
+    ///
+    /// Idempotent: pausing an already paused workflow keeps the original
+    /// [`WorkflowPause::paused_at`] and [`WorkflowPause::paused_by`] and
+    /// returns them. Runs already executing are not touched, and new runs are
+    /// still created: [`pick_next_pending`](Self::pick_next_pending) skips
+    /// them until [`resume_workflow`](Self::resume_workflow) is called.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] on storage failure.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// let pause = store.pause_workflow("deploy", None).await?;
+    /// assert_eq!(pause.workflow_name, "deploy");
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn pause_workflow(
+        &self,
+        workflow_name: &str,
+        paused_by: Option<Uuid>,
+    ) -> StoreFuture<'_, WorkflowPause>;
+
+    /// Resume a paused workflow so its queued runs are picked again.
+    ///
+    /// Returns `true` when the workflow was paused, `false` when it was not
+    /// (resuming is idempotent).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] on storage failure.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// let was_paused = store.resume_workflow("deploy").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn resume_workflow(&self, workflow_name: &str) -> StoreFuture<'_, bool>;
+
+    /// List every paused workflow, ordered by workflow name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] on storage failure.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_store::store::RunStore;
+    ///
+    /// # async fn example(store: &dyn RunStore) -> Result<(), ironflow_store::error::StoreError> {
+    /// for pause in store.list_workflow_pauses().await? {
+    ///     println!("{} paused at {}", pause.workflow_name, pause.paused_at);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn list_workflow_pauses(&self) -> StoreFuture<'_, Vec<WorkflowPause>>;
+
     /// Create a new step for a run.
     ///
     /// # Errors
@@ -347,7 +420,7 @@ pub trait RunStore: Send + Sync {
     /// Get aggregated statistics across runs matching the filter.
     ///
     /// Returns counts of runs by terminal state, counts of active runs
-    /// (`Pending`, `Running`, `Retrying`, `AwaitingApproval` or `Sleeping`),
+    /// (`Pending`, `Running`, `Retrying`, `AwaitingApproval`, `Sleeping` or `Paused`),
     /// the number of runs awaiting approval, and totals for cost and duration.
     /// Computed efficiently by the store implementation (single SQL query in
     /// PostgreSQL).

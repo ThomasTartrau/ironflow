@@ -158,6 +158,8 @@ pub struct StatsHistoryBucketResponse {
     pub awaiting_approval: u64,
     /// Number of runs created in this bucket and currently sleeping.
     pub sleeping: u64,
+    /// Number of runs created in this bucket and currently paused.
+    pub paused: u64,
     /// Success rate: (completed + warning) / (completed + warning + failed),
     /// as a percentage. `null` when the bucket has no completed, warning or
     /// failed run.
@@ -184,6 +186,7 @@ impl From<StatsHistoryBucket> for StatsHistoryBucketResponse {
             retrying: b.retrying,
             awaiting_approval: b.awaiting_approval,
             sleeping: b.sleeping,
+            paused: b.paused,
             success_rate_percent,
             avg_duration_ms: b.avg_duration_ms,
             p95_duration_ms: b.p95_duration_ms,

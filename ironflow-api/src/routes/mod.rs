@@ -22,6 +22,8 @@ pub mod list_workflows;
 #[cfg(feature = "prometheus")]
 pub mod metrics;
 pub mod openapi_spec;
+pub mod pause_run;
+pub mod pause_workflow;
 pub mod plan_workflow;
 pub mod provider_accounts;
 pub mod replay_run;
@@ -270,6 +272,8 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/runs/{id}", get(get_run::get_run))
         .route("/runs/{id}/logs", get(get_run_logs::get_run_logs))
         .route("/runs/{id}/cancel", post(cancel_run::cancel_run))
+        .route("/runs/{id}/pause", post(pause_run::pause_run))
+        .route("/runs/{id}/resume", post(pause_run::resume_run))
         .route("/runs/{id}/approve", post(approve_run::approve_run))
         .route("/runs/{id}/reject", post(approve_run::reject_run))
         .route("/runs/{id}/retry", post(retry_run::retry_run))
@@ -290,6 +294,14 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/workflows", get(list_workflows::list_workflows))
         .route("/workflows/{name}", get(get_workflow::get_workflow))
         .route("/workflows/{name}/plan", post(plan_workflow::plan_workflow))
+        .route(
+            "/workflows/{name}/pause",
+            post(pause_workflow::pause_workflow),
+        )
+        .route(
+            "/workflows/{name}/resume",
+            post(pause_workflow::resume_workflow),
+        )
         .route("/stats", get(get_stats::get_stats))
         .route("/stats/history", get(get_stats_history::get_stats_history))
         .route("/audit-logs", get(audit_logs::list_audit_logs))

@@ -16,7 +16,8 @@ use crate::client::ApiClient;
 pub struct ListRunsTool {
     /// Filter by workflow name (exact match).
     pub workflow: Option<String>,
-    /// Filter by status: pending, running, completed, failed, retrying, cancelled, awaiting_approval.
+    /// Filter by status: pending, running, completed, failed, retrying, cancelled, awaiting_approval,
+    /// paused.
     pub status: Option<String>,
     /// Filter by author: the UUID of the user that triggered the run. Also matches runs triggered by one of that user's API keys.
     pub created_by: Option<String>,

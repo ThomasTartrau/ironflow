@@ -8,12 +8,16 @@ MCP (Model Context Protocol) server for **ironflow**. Exposes workflow orchestra
 |------|-------------|
 | `list_workflows` | List all registered workflows |
 | `get_workflow` | Get details of a specific workflow |
+| `pause_workflow` | Pause a workflow: workers stop picking its queued runs (admin) |
+| `resume_workflow` | Resume a paused workflow (admin) |
 | `create_run` | Create a new workflow run |
 | `get_run` | Get run status and details |
 | `list_runs` | List runs with filtering |
 | `approve_run` | Approve a run waiting for approval |
 | `reject_run` | Reject a pending run |
 | `cancel_run` | Cancel a running workflow |
+| `pause_run` | Pause a run and its sub-runs; a running run stops at its next step (admin) |
+| `resume_run` | Resume a paused run and its sub-runs (admin) |
 | `retry_run` | Retry a failed run |
 | `replay_run` | Replay a finished run on the current handler version |
 | `get_stats` | Get aggregate statistics |

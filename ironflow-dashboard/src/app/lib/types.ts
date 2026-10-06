@@ -28,6 +28,8 @@ export type RunResponse = components["schemas"]["RunResponse"];
 export type CreatedBy = components["schemas"]["CreatedBy"];
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
 export type CancelRunResponse = components["schemas"]["CancelRunResponse"];
+export type PauseRunResponse = components["schemas"]["PauseRunResponse"];
+export type ResumeRunResponse = components["schemas"]["ResumeRunResponse"];
 export type CreateRunRequest = components["schemas"]["CreateRunRequest"];
 
 // -- Step --
@@ -62,6 +64,8 @@ export type WorkflowSummary = components["schemas"]["WorkflowSummary"];
 export type WorkflowDetailResponse =
 	components["schemas"]["WorkflowDetailResponse"];
 export type SubWorkflowDetail = components["schemas"]["SubWorkflowDetail"];
+export type WorkflowPauseResponse =
+	components["schemas"]["WorkflowPauseResponse"];
 
 // -- Execution plans --
 export type ExecutionPlanResponse =

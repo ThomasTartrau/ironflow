@@ -1821,6 +1821,9 @@ impl Engine {
     /// totals (a timeout or a panic observed from outside the handler); the
     /// values already stored on the run are then left untouched.
     ///
+    /// A run an operator paused meanwhile is left untouched and
+    /// [`RunStatus::Paused`] is returned: the resume replays the attempt.
+    ///
     /// Returns the status the run was moved to.
     ///
     /// # Errors
@@ -1855,6 +1858,13 @@ impl Engine {
             .get_run(run_id)
             .await?
             .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+
+        // An operator paused the run: its fate is decided by the resume or
+        // the cancellation, not by the attempt that stopped.
+        if run.status.state == RunStatus::Paused {
+            info!(run_id = %run_id, error = %error, "run paused, failure not recorded");
+            return Ok(RunStatus::Paused);
+        }
 
         let has_attempts_left = run.retry_count < run.max_retries;
         let update = if retryable && has_attempts_left {
@@ -2042,6 +2052,34 @@ impl Engine {
         // run reports the time it really consumed.
         let total_duration = ctx.carried_duration_ms() + run_start.elapsed().as_millis() as u64;
         let completed_at = Utc::now();
+
+        // Paused while it ran: whatever the handler returned, the run stays
+        // paused for the operator. Only what this execution spent is kept;
+        // the resume replays from the first step that did not complete.
+        if let Some(run) = self.store.get_run(run_id).await?
+            && run.status.state == RunStatus::Paused
+        {
+            let run = self
+                .store
+                .update_run_returning(
+                    run_id,
+                    RunUpdate {
+                        cost_usd: Some(ctx.total_cost_usd()),
+                        duration_ms: Some(total_duration),
+                        ..RunUpdate::default()
+                    },
+                )
+                .await?;
+            info!(
+                run_id = %run_id,
+                outcome = ?result.err().map(|err| err.to_string()),
+                "run paused, execution stopped"
+            );
+            return Ok(WorkflowResult {
+                run,
+                steps: ctx.step_results().to_vec(),
+            });
+        }
 
         let final_status;
         let final_run;
@@ -2444,6 +2482,10 @@ impl Engine {
     /// without a retry, which also fails its open `Workflow` step. A run that
     /// is not a child of a sub-workflow has no ancestor: nothing happens.
     ///
+    /// A paused ancestor is not failed: the root of the chain is set to resume
+    /// to `Pending`, so its replay observes the failed child once an operator
+    /// resumes it.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] if a run of the chain does not exist or
@@ -2479,6 +2521,12 @@ impl Engine {
             let status = self
                 .fail_or_schedule_retry(parent_id, reason, false, None, None)
                 .await?;
+            // A paused chain waits for its operator: the root replays on
+            // resume and observes the failed child, like a cancelled one.
+            if status == RunStatus::Paused {
+                self.requeue_paused_root(&current).await?;
+                break;
+            }
             info!(
                 run_id = %run_id,
                 ancestor_run_id = %parent_id,

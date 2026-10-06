@@ -10,7 +10,7 @@ use crate::entities::{
     NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run,
     RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
     StatsHistoryFilter, Step, StepApproval, StepDependency, StepStatus, StepUpdate, TriggerKind,
-    User, WorkerCapabilities, normalize_worker_tags, validate_concurrency_limits,
+    User, WorkerCapabilities, WorkflowPause, normalize_worker_tags, validate_concurrency_limits,
     validate_priority, validate_worker_tags,
 };
 use crate::error::StoreError;
@@ -56,6 +56,16 @@ fn run_with_label(run: &Run, state: &State) -> Run {
 fn clear_lease(run: &mut Run) {
     run.worker_id = None;
     run.lease_expires_at = None;
+}
+
+/// Record the state a run is paused from, or forget it once the run leaves
+/// `Paused`. Called before `run.status.state` takes `next`.
+fn track_resume_status(run: &mut Run, next: RunStatus) {
+    if next == RunStatus::Paused {
+        run.resume_status = Some(run.status.state);
+    } else if run.status.state == RunStatus::Paused {
+        run.resume_status = None;
+    }
 }
 
 /// Number of root runs in `Running` that carry `group`.
@@ -224,6 +234,7 @@ pub(super) fn insert_run(state: &mut State, req: NewRun) -> Result<RunCreation, 
         output: None,
         lease_recoveries: 0,
         capacity_wait_kind: None,
+        resume_status: None,
         worker_tags: normalize_worker_tags(req.worker_tags),
     };
 
@@ -315,6 +326,7 @@ impl RunStore for InMemoryStore {
             }
 
             let now = Utc::now();
+            track_resume_status(run, new_status);
             run.status.state = new_status;
             run.updated_at = now;
 
@@ -327,7 +339,8 @@ impl RunStore for InMemoryStore {
             if new_status != RunStatus::Running {
                 clear_lease(run);
             }
-            if new_status != RunStatus::Sleeping {
+            // A paused run keeps its capacity wait kind for the resume.
+            if new_status != RunStatus::Sleeping && new_status != RunStatus::Paused {
                 run.capacity_wait_kind = None;
             }
 
@@ -342,6 +355,17 @@ impl RunStore for InMemoryStore {
 
             let now = Utc::now();
 
+            // Only a paused run carries a state to return to.
+            if let (None, Some(target)) = (update.status, update.resume_status) {
+                if run.status.state != RunStatus::Paused {
+                    return Err(StoreError::InvalidTransition {
+                        from: run.status.state,
+                        to: target,
+                    });
+                }
+                run.resume_status = Some(target);
+            }
+
             if let Some(status) = update.status {
                 if !run.status.state.can_transition_to(&status) {
                     return Err(StoreError::InvalidTransition {
@@ -350,6 +374,7 @@ impl RunStore for InMemoryStore {
                     });
                 }
                 if !(run.status.state == status && status.is_terminal()) {
+                    track_resume_status(run, status);
                     run.status.state = status;
                     if status == RunStatus::Running && run.started_at.is_none() {
                         run.started_at = Some(now);
@@ -361,12 +386,13 @@ impl RunStore for InMemoryStore {
                         clear_lease(run);
                     }
                 }
-                // The kind only means something while the run sleeps on capacity.
-                run.capacity_wait_kind = if status == RunStatus::Sleeping {
-                    update.capacity_wait_kind.clone()
-                } else {
-                    None
-                };
+                // The kind only means something while the run sleeps on capacity;
+                // a pause keeps it for the resume.
+                if status == RunStatus::Sleeping {
+                    run.capacity_wait_kind = update.capacity_wait_kind.clone();
+                } else if status != RunStatus::Paused {
+                    run.capacity_wait_kind = None;
+                }
             }
 
             // After the status block, so `Running` + `Set` ends with a lease.
@@ -442,6 +468,7 @@ impl RunStore for InMemoryStore {
                 .runs
                 .values()
                 .filter(|r| is_due(r, now) && !is_blocked(r, &state.runs))
+                .filter(|r| !state.workflow_pauses.contains_key(&r.workflow_name))
                 .filter(|r| {
                     capabilities
                         .as_ref()
@@ -479,7 +506,11 @@ impl RunStore for InMemoryStore {
             let now = Utc::now();
 
             let mut blocked: BTreeMap<String, u64> = BTreeMap::new();
-            for run in state.runs.values().filter(|r| is_due(r, now)) {
+            for run in state
+                .runs
+                .values()
+                .filter(|r| is_due(r, now) && !state.workflow_pauses.contains_key(&r.workflow_name))
+            {
                 for limit in &run.concurrency_limits {
                     if running_count(&state.runs, &limit.group) >= u64::from(limit.limit) {
                         *blocked.entry(limit.group.clone()).or_default() += 1;
@@ -622,6 +653,43 @@ impl RunStore for InMemoryStore {
             }
 
             Ok(woken)
+        })
+    }
+
+    fn pause_workflow(
+        &self,
+        workflow_name: &str,
+        paused_by: Option<Uuid>,
+    ) -> StoreFuture<'_, WorkflowPause> {
+        let workflow_name = workflow_name.to_string();
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            let pause = state
+                .workflow_pauses
+                .entry(workflow_name.clone())
+                .or_insert_with(|| WorkflowPause {
+                    workflow_name,
+                    paused_at: Utc::now(),
+                    paused_by,
+                });
+            Ok(pause.clone())
+        })
+    }
+
+    fn resume_workflow(&self, workflow_name: &str) -> StoreFuture<'_, bool> {
+        let workflow_name = workflow_name.to_string();
+        Box::pin(async move {
+            let mut state = self.state.write().await;
+            Ok(state.workflow_pauses.remove(&workflow_name).is_some())
+        })
+    }
+
+    fn list_workflow_pauses(&self) -> StoreFuture<'_, Vec<WorkflowPause>> {
+        Box::pin(async move {
+            let state = self.state.read().await;
+            let mut pauses: Vec<WorkflowPause> = state.workflow_pauses.values().cloned().collect();
+            pauses.sort_by(|a, b| a.workflow_name.cmp(&b.workflow_name));
+            Ok(pauses)
         })
     }
 
@@ -935,7 +1003,8 @@ impl RunStore for InMemoryStore {
                     RunStatus::Pending
                     | RunStatus::Running
                     | RunStatus::Retrying
-                    | RunStatus::Sleeping => {
+                    | RunStatus::Sleeping
+                    | RunStatus::Paused => {
                         active_runs += 1;
                     }
                 }

@@ -243,6 +243,15 @@ impl Engine {
             }
         };
 
+        // A paused root is not woken: it resumes as an active run, so its
+        // replay observes the cancelled child once an operator resumes it.
+        if root.status.state == RunStatus::Paused {
+            if let Err(err) = self.requeue_paused_root(run).await {
+                warn!(run_id = %run.id, root_run_id = %root_id, error = %err, "cannot requeue the paused root of a cancelled child");
+            }
+            return;
+        }
+
         let woken = match (root.status.state, self.execution_mode()) {
             (RunStatus::AwaitingApproval | RunStatus::Sleeping, ExecutionMode::Workers) => {
                 self.store()
@@ -303,7 +312,7 @@ impl Engine {
             }));
     }
 
-    async fn load_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
+    pub(crate) async fn load_run(&self, run_id: Uuid) -> Result<Run, EngineError> {
         self.store()
             .get_run(run_id)
             .await?
