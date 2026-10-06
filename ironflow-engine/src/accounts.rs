@@ -1428,7 +1428,10 @@ mod tests {
         assert!(woken.scheduled_at.is_some_and(|at| at <= now));
         let untouched = store.get_run(runs[1]).await.unwrap().unwrap();
         assert_eq!(untouched.scheduled_at, Some(far));
-        assert_eq!(untouched.capacity_wait_kind, Some(ProviderKind::from("other_kind")));
+        assert_eq!(
+            untouched.capacity_wait_kind,
+            Some(ProviderKind::from("other_kind"))
+        );
     }
 
     #[test]

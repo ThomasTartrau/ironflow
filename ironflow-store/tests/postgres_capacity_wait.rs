@@ -19,8 +19,8 @@ use std::env::var;
 use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use ironflow_store::crypto::KeyRing;
 use ironflow_store::entities::{
-    NewProviderAccount, NewRun, ProviderAccountUpdate, ProviderKind, RunStatus, RunUpdate, TriggerKind,
-    provider_account_secret_key,
+    NewProviderAccount, NewRun, ProviderAccountUpdate, ProviderKind, RunStatus, RunUpdate,
+    TriggerKind, provider_account_secret_key,
 };
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::provider_account_store::ProviderAccountStore;
@@ -139,7 +139,10 @@ async fn postgres_capacity_wait_kind_is_persisted_while_sleeping() {
     let run_id = sleeping_run(&store, wake_at, Some(&kind)).await;
     let run = store.get_run(run_id).await.unwrap().unwrap();
     assert_eq!(run.status.state, RunStatus::Sleeping);
-    assert_eq!(run.capacity_wait_kind, Some(ProviderKind::new(kind.as_str())));
+    assert_eq!(
+        run.capacity_wait_kind,
+        Some(ProviderKind::new(kind.as_str()))
+    );
 
     store
         .update_run_status(run_id, RunStatus::Cancelled)

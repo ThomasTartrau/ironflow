@@ -25,8 +25,8 @@ use uuid::Uuid;
 use ironflow_core::provider::LABEL_ROOT_RUN_ID;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, NewStep, ProviderKind, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
-    TriggerKind, step_trace_id,
+    NewRun, NewStep, ProviderKind, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus,
+    StepUpdate, TriggerKind, step_trace_id,
 };
 
 use crate::config::{WorkflowOptions, WorkflowStepConfig};

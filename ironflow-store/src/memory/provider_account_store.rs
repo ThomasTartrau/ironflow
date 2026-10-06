@@ -65,8 +65,7 @@ fn running_steps(state: &State, now: DateTime<Utc>) -> HashMap<Uuid, u32> {
 /// the capacity it waits for.
 fn wake_capacity_sleepers(state: &mut State, kind: &ProviderKind, now: DateTime<Utc>) {
     for run in state.runs.values_mut() {
-        if run.status.state == RunStatus::Sleeping
-            && run.capacity_wait_kind.as_ref() == Some(kind)
+        if run.status.state == RunStatus::Sleeping && run.capacity_wait_kind.as_ref() == Some(kind)
         {
             run.scheduled_at = Some(now);
             run.updated_at = now;

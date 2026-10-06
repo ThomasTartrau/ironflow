@@ -151,7 +151,8 @@ impl ProviderAccountStore for PostgresStore {
             })?;
             let account = ProviderAccount::from(row);
             if account.enabled {
-                self.wake_capacity_sleepers(&ProviderKind::new(account.kind.as_str())).await?;
+                self.wake_capacity_sleepers(&ProviderKind::new(account.kind.as_str()))
+                    .await?;
             }
             Ok(account)
         })
@@ -334,7 +335,8 @@ impl ProviderAccountStore for PostgresStore {
             .ok_or(StoreError::ProviderAccountNotFound(id))?;
             let account = ProviderAccount::from(row);
             if renewed && account.enabled {
-                self.wake_capacity_sleepers(&ProviderKind::new(account.kind.as_str())).await?;
+                self.wake_capacity_sleepers(&ProviderKind::new(account.kind.as_str()))
+                    .await?;
             }
             Ok(account)
         })
