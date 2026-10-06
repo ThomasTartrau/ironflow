@@ -500,6 +500,44 @@ impl LeaseRequest {
     }
 }
 
+/// Change to the worker lease of a run, applied by [`RunUpdate::lease`].
+///
+/// Lets the engine hand a lease over from one run to another, atomically
+/// with a status transition: a root run resumed through its child takes the
+/// child's lease so the worker keeps renewing it and the reaper still sees it.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_store::entities::{LeaseUpdate, RunStatus, RunUpdate};
+///
+/// let update = RunUpdate {
+///     status: Some(RunStatus::Running),
+///     lease: Some(LeaseUpdate::Set {
+///         worker_id: "worker-1".to_string(),
+///         expires_at: Utc::now(),
+///     }),
+///     ..RunUpdate::default()
+/// };
+/// assert!(matches!(update.lease, Some(LeaseUpdate::Set { .. })));
+///
+/// let release = LeaseUpdate::Release;
+/// assert_eq!(release, LeaseUpdate::Release);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LeaseUpdate {
+    /// Hand the lease to `worker_id` until `expires_at`.
+    Set {
+        /// Identifier of the worker holding the lease.
+        worker_id: String,
+        /// When the lease expires without a renewal.
+        expires_at: DateTime<Utc>,
+    },
+    /// Drop the lease while the run stays in its state.
+    Release,
+}
+
 /// A run recovered by the reaper after its worker lease expired.
 ///
 /// # Examples
@@ -670,6 +708,23 @@ pub struct RunUpdate {
     /// Output set by the workflow handler. `None` leaves the stored output unchanged.
     #[serde(default)]
     pub output: Option<Value>,
+    /// Lease change applied after the status transition. `None` leaves the
+    /// lease as the status transition left it (a run leaving `Running` always
+    /// loses its lease). See [`LeaseUpdate`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_store::entities::{LeaseUpdate, RunUpdate};
+    ///
+    /// let update = RunUpdate {
+    ///     lease: Some(LeaseUpdate::Release),
+    ///     ..RunUpdate::default()
+    /// };
+    /// assert_eq!(update.lease, Some(LeaseUpdate::Release));
+    /// ```
+    #[serde(default)]
+    pub lease: Option<LeaseUpdate>,
 }
 
 /// Retention policy for purging old runs.
@@ -1123,6 +1178,7 @@ mod tests {
             completed_at: None,
             scheduled_at: Some(Utc::now()),
             output: None,
+            lease: None,
         };
 
         let json = serde_json::to_string(&update).expect("serialize");
@@ -1134,6 +1190,45 @@ mod tests {
         assert_eq!(back.cost_usd, update.cost_usd);
         assert_eq!(back.duration_ms, update.duration_ms);
         assert_eq!(back.scheduled_at, update.scheduled_at);
+    }
+
+    #[test]
+    fn runupdate_lease_serde_roundtrip() {
+        let set = RunUpdate {
+            status: Some(RunStatus::Running),
+            lease: Some(LeaseUpdate::Set {
+                worker_id: "worker-1".to_string(),
+                expires_at: Utc::now(),
+            }),
+            ..RunUpdate::default()
+        };
+        let json = serde_json::to_string(&set).expect("serialize");
+        let back: RunUpdate = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.lease, set.lease);
+
+        let release = RunUpdate {
+            lease: Some(LeaseUpdate::Release),
+            ..RunUpdate::default()
+        };
+        let json = serde_json::to_string(&release).expect("serialize");
+        let back: RunUpdate = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.lease, Some(LeaseUpdate::Release));
+    }
+
+    #[test]
+    fn runupdate_without_lease_field_deserializes_to_none() {
+        let json = json!({
+            "status": "completed",
+            "error": null,
+            "increment_retry": false,
+            "cost_usd": null,
+            "duration_ms": null,
+            "started_at": null,
+            "completed_at": null,
+        });
+        let back: RunUpdate = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back.status, Some(RunStatus::Completed));
+        assert!(back.lease.is_none());
     }
 
     #[test]

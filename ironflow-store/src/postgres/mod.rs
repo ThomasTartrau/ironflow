@@ -44,7 +44,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::entities::{RunStatus, RunUpdate};
+use crate::entities::{LeaseUpdate, RunStatus, RunUpdate};
 use crate::error::StoreError;
 
 /// Configuration for the PostgreSQL connection pool.
@@ -444,11 +444,26 @@ impl PostgresStore {
             sets.push("retry_count = retry_count + 1".to_string());
         }
 
-        // A run that is no longer executing must not keep a worker lease,
-        // otherwise the reaper would see a stale expiry on a finished run.
-        if update.status.is_some_and(|s| s != RunStatus::Running) {
-            sets.push("worker_id = NULL".to_string());
-            sets.push("lease_expires_at = NULL".to_string());
+        // An explicit lease change wins over the status-driven clearing: the
+        // same column cannot be assigned twice in one UPDATE.
+        match update.lease {
+            Some(LeaseUpdate::Set { .. }) => {
+                sets.push(format!("worker_id = ${bind_idx}"));
+                sets.push(format!("lease_expires_at = ${}", bind_idx + 1));
+                bind_idx += 2;
+            }
+            Some(LeaseUpdate::Release) => {
+                sets.push("worker_id = NULL".to_string());
+                sets.push("lease_expires_at = NULL".to_string());
+            }
+            None => {
+                // A run that is no longer executing must not keep a worker lease,
+                // otherwise the reaper would see a stale expiry on a finished run.
+                if update.status.is_some_and(|s| s != RunStatus::Running) {
+                    sets.push("worker_id = NULL".to_string());
+                    sets.push("lease_expires_at = NULL".to_string());
+                }
+            }
         }
 
         let sql = format!(
@@ -478,6 +493,13 @@ impl PostgresStore {
         }
         if let Some(ref output) = update.output {
             query = query.bind(output);
+        }
+        if let Some(LeaseUpdate::Set {
+            worker_id,
+            expires_at,
+        }) = &update.lease
+        {
+            query = query.bind(worker_id).bind(*expires_at);
         }
 
         query = query.bind(id);

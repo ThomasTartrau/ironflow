@@ -105,6 +105,12 @@ saturated group holds back.
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.
 
+A sub-workflow child that was suspended (human input, signal, delay) is picked
+like any run, but the worker resumes its root run instead. The lease follows:
+the root takes the child's lease when it goes back to `Running`, the child
+releases it, and the worker keeps refreshing the root until it finishes. A
+root resumed this way is recovered by the Reaper like any other run.
+
 ### Resuming after a lost lease
 
 A requeued run resumes where its worker stopped, in the same attempt:

@@ -72,6 +72,7 @@ pub async fn update_run_status(
         increment_retry: false,
         scheduled_at: None,
         output: None,
+        lease: None,
     };
     state.store.update_run(id, update).await?;
 
@@ -231,6 +232,7 @@ mod tests {
                     increment_retry: false,
                     scheduled_at: None,
                     output: None,
+                    lease: None,
                 },
             )
             .await

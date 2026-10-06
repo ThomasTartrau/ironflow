@@ -53,9 +53,9 @@ pub use provider_account::{
 };
 pub use run::{
     ConcurrencyGroupBacklog, ConcurrencyLimit, ConcurrencyLimitError, IDEMPOTENCY_WINDOW,
-    LeaseRequest, MAX_CONCURRENCY_GROUP_LEN, MAX_CONCURRENCY_KEY_LEN, MAX_IDEMPOTENCY_KEY_LEN,
-    NewRun, PARENT_RUN_ID_LABEL, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run,
-    RunCreation, RunFilter, RunUpdate, validate_concurrency_limits,
+    LeaseRequest, LeaseUpdate, MAX_CONCURRENCY_GROUP_LEN, MAX_CONCURRENCY_KEY_LEN,
+    MAX_IDEMPOTENCY_KEY_LEN, NewRun, PARENT_RUN_ID_LABEL, PurgePolicy, PurgeReason, PurgeableRun,
+    ReapedRun, Run, RunCreation, RunFilter, RunUpdate, validate_concurrency_limits,
 };
 pub use run_actor::RunActor;
 pub use run_status::RunStatus;

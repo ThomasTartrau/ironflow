@@ -11,13 +11,16 @@
 //! ironflow-engine sub_workflow` selects them.
 
 use std::collections::HashMap;
+use std::future::pending;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::spawn;
+use tokio::sync::Notify;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
@@ -36,8 +39,8 @@ use ironflow_engine::signal::Signal;
 use ironflow_engine::wake::RunWaker;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{
-    NewRun, Run, RunFilter, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
-    TriggerKind,
+    LeaseRequest, NewRun, Run, RunFilter, RunStatus, RunUpdate, Step, StepKind, StepStatus,
+    StepUpdate, TriggerKind,
 };
 use ironflow_store::store::{RunStore, Store};
 
@@ -1408,6 +1411,298 @@ async fn sub_workflow_allow_failure_does_not_tolerate_a_suspension() {
             StepStatus::Completed
         );
         assert_eq!(seen(&seen_names), vec!["Ada".to_string()]);
+    })
+    .await
+    .expect("test timed out");
+}
+
+// ---- resume_chain: the worker lease follows the root ----
+
+/// Workflow name of [`LeaseProbe`].
+const LEASE_PROBE: &str = "lease-probe";
+
+/// Worker that picks the child in the `resume_chain_*` tests.
+const WORKER_ID: &str = "worker-1";
+
+/// Leases seen by [`LeaseProbe`] each time its handler body starts.
+#[derive(Debug, Clone)]
+struct LeaseObservation {
+    root_worker_id: Option<String>,
+    root_lease_expires_at: Option<DateTime<Utc>>,
+    child_worker_id: Option<String>,
+    child_lease_expires_at: Option<DateTime<Utc>>,
+}
+
+type Observations = Arc<Mutex<Vec<LeaseObservation>>>;
+
+/// A root that records the leases of itself and of its [`Asker`] child, then
+/// runs the child and a step.
+///
+/// The record happens before the `Workflow` step, so on the resumed
+/// execution it sees the root and the child right after `resume_chain`
+/// moved the root to `Running`, before the child is re-entered. With `hold`,
+/// a resumed execution holding a lease notifies it and never goes further,
+/// so the root stays `Running` with its lease.
+struct LeaseProbe {
+    store: Arc<InMemoryStore>,
+    observed: Observations,
+    seen: Seen,
+    hold: Option<Arc<Notify>>,
+}
+
+impl WorkflowHandler for LeaseProbe {
+    fn name(&self) -> &str {
+        LEASE_PROBE
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let root = load_run(&self.store, ctx.run_id()).await;
+            let child = runs_of(&self.store, "asker").await.into_iter().next();
+            self.observed
+                .lock()
+                .expect("observed lock")
+                .push(LeaseObservation {
+                    root_worker_id: root.worker_id.clone(),
+                    root_lease_expires_at: root.lease_expires_at,
+                    child_worker_id: child.as_ref().and_then(|c| c.worker_id.clone()),
+                    child_lease_expires_at: child.as_ref().and_then(|c| c.lease_expires_at),
+                });
+            if root.worker_id.is_some()
+                && let Some(reached) = &self.hold
+            {
+                reached.notify_one();
+                pending::<()>().await;
+            }
+            ctx.workflow(
+                &Asker {
+                    seen: self.seen.clone(),
+                },
+                NoInput {},
+            )
+            .await?;
+            ctx.shell("after-child", ShellConfig::new("echo done"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
+impl TypedWorkflow for LeaseProbe {
+    type Input = NoInput;
+}
+
+/// An engine running [`LeaseProbe`] over `store`.
+fn lease_probe_engine(
+    store: &Arc<InMemoryStore>,
+    hold: Option<Arc<Notify>>,
+) -> (Arc<Engine>, Observations) {
+    let observed = Observations::default();
+    let seen = Seen::default();
+    let mut engine = new_engine(store);
+    engine
+        .register(Asker { seen: seen.clone() })
+        .expect("register asker");
+    engine
+        .register(LeaseProbe {
+            store: store.clone(),
+            observed: observed.clone(),
+            seen,
+            hold,
+        })
+        .expect("register lease probe");
+    (Arc::new(engine), observed)
+}
+
+/// Answer the human input of the child and requeue it to `Pending`, like the
+/// API does in `ExecutionMode::Workers`.
+async fn answer_and_requeue(store: &InMemoryStore, child_run_id: Uuid) {
+    let step = open_input_step(store, child_run_id).await;
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                status: Some(StepStatus::Completed),
+                output: Some(json!({ "name": "Ada" })),
+                completed_at: Some(Utc::now()),
+                clear_approval_deadline: true,
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .expect("store the answer");
+    store
+        .update_run_status(child_run_id, RunStatus::Pending)
+        .await
+        .expect("requeue the child");
+}
+
+/// Pick the requeued child like a worker does, with a lease of `ttl`.
+async fn pick_child(store: &InMemoryStore, child_run_id: Uuid, ttl: Duration) -> Run {
+    let picked = store
+        .pick_next_pending(Some(LeaseRequest {
+            worker_id: WORKER_ID.to_string(),
+            ttl,
+        }))
+        .await
+        .expect("pick")
+        .expect("the requeued child is pending");
+    assert_eq!(picked.id, child_run_id, "only the child is pending");
+    picked
+}
+
+/// The last observation of [`LeaseProbe`]: the resumed execution.
+fn last_observation(observed: &Observations) -> LeaseObservation {
+    observed
+        .lock()
+        .expect("observed lock")
+        .last()
+        .cloned()
+        .expect("the probe ran")
+}
+
+#[tokio::test]
+async fn resume_chain_transfers_the_child_lease_to_the_root() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, observed) = lease_probe_engine(&store, None);
+
+        let root = start_chain(&engine, LEASE_PROBE).await;
+        assert_eq!(root.status.state, RunStatus::AwaitingApproval);
+        let child = run_of(&store, "asker").await;
+
+        answer_and_requeue(&store, child.id).await;
+        let picked = pick_child(&store, child.id, Duration::from_secs(60)).await;
+        let child_expiry = picked.lease_expires_at.expect("the child holds a lease");
+
+        let result = engine
+            .execute_handler_run(child.id)
+            .await
+            .expect("the chain resumes");
+        assert_eq!(result.run.id, root.id);
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+
+        let resumed = last_observation(&observed);
+        assert_eq!(
+            resumed.root_worker_id.as_deref(),
+            Some(WORKER_ID),
+            "the root takes the worker of the child"
+        );
+        assert_eq!(
+            resumed.root_lease_expires_at,
+            Some(child_expiry),
+            "the root takes the expiry of the child"
+        );
+
+        // A finished run never keeps a lease.
+        let root_after = load_run(&store, root.id).await;
+        assert!(root_after.worker_id.is_none());
+        assert!(root_after.lease_expires_at.is_none());
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn resume_chain_releases_the_child_lease() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, observed) = lease_probe_engine(&store, None);
+
+        start_chain(&engine, LEASE_PROBE).await;
+        let child = run_of(&store, "asker").await;
+
+        answer_and_requeue(&store, child.id).await;
+        pick_child(&store, child.id, Duration::from_secs(60)).await;
+
+        engine
+            .execute_handler_run(child.id)
+            .await
+            .expect("the chain resumes");
+
+        let resumed = last_observation(&observed);
+        assert!(
+            resumed.child_worker_id.is_none(),
+            "the child gave its lease to the root"
+        );
+        assert!(resumed.child_lease_expires_at.is_none());
+        let child_after = load_run(&store, child.id).await;
+        assert_eq!(child_after.status.state, RunStatus::Completed);
+        assert!(child_after.worker_id.is_none());
+        assert!(child_after.lease_expires_at.is_none());
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn resume_chain_without_child_lease_leaves_root_unleased() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let (engine, observed) = lease_probe_engine(&store, None);
+
+        let root = start_chain(&engine, LEASE_PROBE).await;
+        let child = run_of(&store, "asker").await;
+
+        // Resumed in-process (Local mode, API-side resume): no lease anywhere.
+        answer(&store, child.id, "Ada").await;
+        let result = engine
+            .resume_run(child.id)
+            .await
+            .expect("the chain resumes");
+        assert_eq!(result.run.id, root.id);
+        assert_eq!(result.run.status.state, RunStatus::Completed);
+
+        let resumed = last_observation(&observed);
+        assert!(resumed.root_worker_id.is_none());
+        assert!(resumed.root_lease_expires_at.is_none());
+        assert!(resumed.child_worker_id.is_none());
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn resume_chain_root_lease_is_reaped_when_expired() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let reached = Arc::new(Notify::new());
+        let (engine, _observed) = lease_probe_engine(&store, Some(reached.clone()));
+
+        let root = start_chain(&engine, LEASE_PROBE).await;
+        let child = run_of(&store, "asker").await;
+
+        answer_and_requeue(&store, child.id).await;
+        pick_child(&store, child.id, Duration::from_nanos(1)).await;
+        // `Utc::now()` has microsecond resolution: let the lease expire for real.
+        sleep(Duration::from_millis(2)).await;
+
+        // The worker died mid-replay: the root holds the expired lease.
+        let execution = {
+            let engine = engine.clone();
+            let child_run_id = child.id;
+            spawn(async move { engine.execute_handler_run(child_run_id).await })
+        };
+        reached.notified().await;
+
+        let reaped = store.reap_expired_leases(10).await.expect("reap");
+        execution.abort();
+
+        assert_eq!(reaped.len(), 1, "only the root holds a lease");
+        assert_eq!(reaped[0].run.id, root.id);
+        assert_eq!(reaped[0].from, RunStatus::Running);
+        let expected = if root.max_retries == 0 {
+            RunStatus::Failed
+        } else {
+            RunStatus::Pending
+        };
+        assert_eq!(reaped[0].to, expected);
+        let root_after = load_run(&store, root.id).await;
+        assert_eq!(root_after.status.state, expected);
+        assert_eq!(root_after.lease_recoveries, 1);
+        assert!(root_after.worker_id.is_none());
+        let child_after = load_run(&store, child.id).await;
+        assert_eq!(child_after.lease_recoveries, 0, "the child is not reaped");
     })
     .await
     .expect("test timed out");

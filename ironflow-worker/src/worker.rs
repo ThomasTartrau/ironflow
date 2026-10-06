@@ -17,7 +17,7 @@ use ironflow_core::decision::DecisionProvider;
 use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKER_POLLS_TOTAL};
 use ironflow_core::provider::AgentProvider;
 use ironflow_engine::accounts::AccountAwareProvider;
-use ironflow_engine::engine::Engine;
+use ironflow_engine::engine::{Engine, chain_root};
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
 use ironflow_store::entities::{LeaseRequest, RunStatus};
@@ -848,26 +848,48 @@ async fn acquire_slot(
 /// Cancels `lease_token` when the API hands the run to another worker, or when
 /// refreshes keep failing for longer than the lease TTL — in both cases this
 /// worker must stop executing the run rather than risk a double execution.
+///
+/// A sub-workflow child run is executed by resuming its root run, which takes
+/// the child's lease over (see [`Engine::execute_handler_run`]). When the
+/// child's lease is lost, the refresher follows it to the root: if the root's
+/// lease renews for this worker, the root is refreshed from then on instead
+/// of abandoning the execution.
 async fn refresh_lease(
     store: Arc<dyn Store>,
-    run_id: uuid::Uuid,
+    run_id: Uuid,
     lease: LeaseRequest,
     refresh_interval: Duration,
     lease_token: CancellationToken,
 ) {
     let ttl = lease.ttl;
     let mut deadline = Instant::now() + ttl;
+    let mut target = run_id;
 
     loop {
         sleep(refresh_interval).await;
 
-        match store.renew_lease(run_id, lease.clone()).await {
+        match store.renew_lease(target, lease.clone()).await {
             Ok(_) => {
                 deadline = Instant::now() + ttl;
             }
             Err(StoreError::LeaseLost { held_by, .. }) => {
+                let followed = if target == run_id {
+                    follow_lease_to_root(store.as_ref(), run_id, &lease).await
+                } else {
+                    None
+                };
+                if let Some(root) = followed {
+                    info!(
+                        run_id = %run_id,
+                        root_run_id = %root,
+                        "lease followed the run to its root"
+                    );
+                    target = root;
+                    deadline = Instant::now() + ttl;
+                    continue;
+                }
                 warn!(
-                    run_id = %run_id,
+                    run_id = %target,
                     held_by = held_by.as_deref().unwrap_or("unknown"),
                     "lease taken over by another worker"
                 );
@@ -878,7 +900,7 @@ async fn refresh_lease(
                 // The API has been unreachable longer than the lease lasts:
                 // another worker may already have picked the run up.
                 warn!(
-                    run_id = %run_id,
+                    run_id = %target,
                     error = %err,
                     ttl_secs = ttl.as_secs(),
                     "lease could not be refreshed before it expired"
@@ -887,8 +909,41 @@ async fn refresh_lease(
                 return;
             }
             Err(err) => {
-                warn!(run_id = %run_id, error = %err, "lease refresh failed, retrying");
+                warn!(run_id = %target, error = %err, "lease refresh failed, retrying");
             }
+        }
+    }
+}
+
+/// The root run that took the lease of `run_id` over, if any.
+///
+/// `Some` only when `run_id` is a sub-workflow child run and the lease of its
+/// root renews for this worker, i.e. the engine handed the child's lease to
+/// the root it resumed. Any failure yields `None`: the caller then treats the
+/// lease as lost.
+async fn follow_lease_to_root(
+    store: &dyn Store,
+    run_id: Uuid,
+    lease: &LeaseRequest,
+) -> Option<Uuid> {
+    let run = match store.get_run(run_id).await {
+        Ok(run) => run?,
+        Err(err) => {
+            warn!(run_id = %run_id, error = %err, "could not load run to follow its lease");
+            return None;
+        }
+    };
+    let root = chain_root(&run)?;
+    match store.renew_lease(root, lease.clone()).await {
+        Ok(_) => Some(root),
+        Err(err) => {
+            warn!(
+                run_id = %run_id,
+                root_run_id = %root,
+                error = %err,
+                "lease could not follow the run to its root"
+            );
+            None
         }
     }
 }
