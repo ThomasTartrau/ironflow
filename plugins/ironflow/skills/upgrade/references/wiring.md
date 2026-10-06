@@ -138,3 +138,26 @@ the tool:
 - .register(WebFetchTool::new())
 + .register(WebFetchTool::new().allow_host("docs.internal"))
 ```
+
+## worker-routing
+- kind: behavior
+- since: ironflow-store after 2.44.0, ironflow-engine after 2.49.0, ironflow-api after 2.47.0, ironflow-worker after 2.24.0 (#170)
+
+A worker now sends the workflows it registered and the tags it carries when it polls, and
+only takes the runs it can execute: a run of a workflow it did not register stays
+`pending` for another worker instead of being picked here. Deploy every worker binary
+with the full `handlers()` list, or the runs of a workflow no worker registers stay
+`pending` (the dashboard and `ironflow-cli run get` warn about them). A workflow that must
+run on a given host declares `required_worker_tags`, and only the workers built with all
+of those tags take it:
+
+```diff
+  let mut builder = WorkerBuilder::new(&api_url, &worker_token)
+      .provider(provider)
++     .tags(["gpu", "region:eu"])
+      .concurrency(concurrency)
+```
+
+A worker released before this change sends no capabilities and still takes every run, so
+workers can be upgraded one at a time. Upgrade the API server first: an older server
+ignores the filter and hands any run to an upgraded worker.

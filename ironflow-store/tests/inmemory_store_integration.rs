@@ -8,6 +8,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use ironflow_store::prelude::*;
 use rust_decimal::Decimal;
 use serde_json::json;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 fn new_run(name: &str) -> NewRun {
@@ -25,6 +26,7 @@ fn new_run(name: &str) -> NewRun {
         priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }
 
@@ -1007,6 +1009,7 @@ async fn large_payload_preserved_in_roundtrip() {
         priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     };
 
     let run = store.create_run(req).await.unwrap().into_run();
@@ -2326,4 +2329,210 @@ async fn re_enabling_an_account_wakes_the_capacity_sleepers_of_its_kind() {
         let run = store.get_run(untouched).await.unwrap().unwrap();
         assert_eq!(run.scheduled_at, Some(wake_at));
     }
+}
+
+// ─── Worker routing ─────────────────────────────────────────────
+
+fn tagged_run(name: &str, tags: &[&str]) -> NewRun {
+    NewRun {
+        worker_tags: strings(tags),
+        ..new_run(name)
+    }
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|v| (*v).to_string()).collect()
+}
+
+fn caps(workflows: Option<&[&str]>, tags: &[&str]) -> WorkerCapabilities {
+    WorkerCapabilities::new(workflows.map(strings), strings(tags))
+}
+
+async fn pick_for(store: &InMemoryStore, worker: Option<WorkerCapabilities>) -> Option<Uuid> {
+    let picked = store.pick_next_pending_for(None, worker).await.unwrap();
+    picked.map(|run| run.id)
+}
+
+#[tokio::test]
+async fn pick_next_pending_skips_run_whose_tags_worker_lacks() {
+    let store = InMemoryStore::new();
+    let gpu = create(&store, tagged_run("wf", &["gpu"])).await;
+    sleep(Duration::from_millis(5)).await;
+    let plain = create(&store, new_run("wf")).await;
+
+    let worker = caps(None, &["arm"]);
+    let picked = pick_for(&store, Some(worker)).await;
+    assert_eq!(picked, Some(plain.id));
+
+    let gpu_run = store.get_run(gpu.id).await.unwrap().unwrap();
+    assert_eq!(gpu_run.status.state, RunStatus::Pending);
+}
+
+#[tokio::test]
+async fn pick_next_pending_skips_unknown_workflow() {
+    let store = InMemoryStore::new();
+    let other = create(&store, new_run("other")).await;
+    sleep(Duration::from_millis(5)).await;
+    let known = create(&store, new_run("known")).await;
+
+    let worker = caps(Some(&["known"]), &[]);
+    let picked = pick_for(&store, Some(worker)).await;
+    assert_eq!(picked, Some(known.id));
+
+    let other_run = store.get_run(other.id).await.unwrap().unwrap();
+    assert_eq!(other_run.status.state, RunStatus::Pending);
+}
+
+#[tokio::test]
+async fn pick_next_pending_ineligible_head_does_not_block_queue() {
+    let store = InMemoryStore::new();
+    let head = create(&store, tagged_run("wf", &["gpu"])).await;
+    sleep(Duration::from_millis(5)).await;
+    let younger = create(&store, new_run("wf")).await;
+    assert!(head.created_at < younger.created_at);
+
+    let worker = caps(Some(&["wf"]), &[]);
+    let picked = pick_for(&store, Some(worker.clone())).await;
+    assert_eq!(picked, Some(younger.id));
+    let next = pick_for(&store, Some(worker)).await;
+    assert_eq!(next, None);
+}
+
+#[tokio::test]
+async fn pick_next_pending_without_capabilities_takes_everything() {
+    let store = InMemoryStore::new();
+    let gpu = create(&store, tagged_run("wf", &["gpu"])).await;
+
+    let picked = pick_for(&store, None).await;
+    assert_eq!(picked, Some(gpu.id));
+}
+
+#[tokio::test]
+async fn pick_next_pending_legacy_method_takes_tagged_run() {
+    let store = InMemoryStore::new();
+    let gpu = create(&store, tagged_run("wf", &["gpu"])).await;
+
+    let picked = store.pick_next_pending(None).await.unwrap().unwrap();
+    assert_eq!(picked.id, gpu.id);
+}
+
+#[tokio::test]
+async fn pick_next_pending_worker_with_superset_tags_takes_run() {
+    let store = InMemoryStore::new();
+    let req = tagged_run("wf", &["gpu", "region:eu"]);
+    let run = create(&store, req).await;
+
+    let worker = caps(Some(&["wf", "other"]), &["arm", "gpu", "region:eu"]);
+    let picked = pick_for(&store, Some(worker)).await;
+    assert_eq!(picked, Some(run.id));
+}
+
+#[tokio::test]
+async fn pick_next_pending_worker_without_tags_only_takes_untagged_runs() {
+    let store = InMemoryStore::new();
+    let _gpu = create(&store, tagged_run("wf", &["gpu"])).await;
+    sleep(Duration::from_millis(5)).await;
+    let plain = create(&store, new_run("wf")).await;
+
+    let worker = caps(None, &[]);
+    let picked = pick_for(&store, Some(worker.clone())).await;
+    assert_eq!(picked, Some(plain.id));
+    let next = pick_for(&store, Some(worker)).await;
+    assert_eq!(next, None);
+}
+
+#[tokio::test]
+async fn pick_next_pending_for_returns_none_when_nothing_eligible() {
+    let store = InMemoryStore::new();
+    let gpu = create(&store, tagged_run("wf", &["gpu"])).await;
+    let other = create(&store, new_run("other")).await;
+
+    let worker = caps(Some(&["wf"]), &[]);
+    let picked = pick_for(&store, Some(worker)).await;
+    assert_eq!(picked, None);
+
+    for id in [gpu.id, other.id] {
+        let run = store.get_run(id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Pending);
+    }
+}
+
+#[tokio::test]
+async fn pick_next_pending_for_attaches_lease() {
+    let store = InMemoryStore::new();
+    let run = create(&store, tagged_run("wf", &["gpu"])).await;
+
+    let lease = LeaseRequest {
+        worker_id: "worker-gpu".to_string(),
+        ttl: Duration::from_secs(30),
+    };
+    let worker = caps(Some(&["wf"]), &["gpu"]);
+    let picked = store
+        .pick_next_pending_for(Some(lease), Some(worker))
+        .await
+        .unwrap()
+        .expect("eligible run");
+    assert_eq!(picked.id, run.id);
+    assert_eq!(picked.worker_id.as_deref(), Some("worker-gpu"));
+}
+
+#[tokio::test]
+async fn create_run_normalizes_worker_tags() {
+    let store = InMemoryStore::new();
+    let req = tagged_run("wf", &["gpu", " arm", "gpu"]);
+    let run = create(&store, req).await;
+    assert_eq!(run.worker_tags, strings(&["arm", "gpu"]));
+
+    let fetched = store.get_run(run.id).await.unwrap().unwrap();
+    assert_eq!(fetched.worker_tags, run.worker_tags);
+}
+
+#[tokio::test]
+async fn create_run_rejects_invalid_worker_tag() {
+    let store = InMemoryStore::new();
+    let result = store.create_run(tagged_run("wf", &["bad,tag"])).await;
+    let Err(StoreError::InvalidWorkerTag(err)) = result else {
+        panic!("expected an invalid worker tag error");
+    };
+    assert!(matches!(err, WorkerTagError::InvalidChar { .. }));
+
+    let filter = RunFilter::default();
+    let page = store.list_runs(filter, 1, 10).await.unwrap();
+    assert!(page.items.is_empty());
+}
+
+#[tokio::test]
+async fn create_run_rejects_empty_worker_tag() {
+    let store = InMemoryStore::new();
+    let result = store.create_run(tagged_run("wf", &["  "])).await;
+    assert!(matches!(
+        result,
+        Err(StoreError::InvalidWorkerTag(WorkerTagError::Empty))
+    ));
+}
+
+#[tokio::test]
+async fn get_stats_with_eligible_for_counts_only_takeable_runs() {
+    let store = InMemoryStore::new();
+    create(&store, tagged_run("wf", &["gpu"])).await;
+    create(&store, new_run("wf")).await;
+    create(&store, new_run("other")).await;
+
+    let filter = RunFilter {
+        eligible_for: Some(caps(Some(&["wf"]), &[])),
+        ..RunFilter::default()
+    };
+    let stats = store.get_stats(filter).await.unwrap();
+    assert_eq!(stats.total_runs, 1);
+    assert_eq!(stats.active_runs, 1);
+
+    let filter = RunFilter {
+        eligible_for: Some(caps(None, &["gpu"])),
+        ..RunFilter::default()
+    };
+    let with_gpu = store.get_stats(filter).await.unwrap();
+    assert_eq!(with_gpu.total_runs, 3);
+
+    let unfiltered = store.get_stats(RunFilter::default()).await.unwrap();
+    assert_eq!(unfiltered.total_runs, 3);
 }

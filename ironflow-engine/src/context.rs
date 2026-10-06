@@ -86,6 +86,8 @@ use crate::plan::SharedPlanRecorder;
 /// ```
 pub use ironflow_store::entities::PARENT_RUN_ID_LABEL;
 
+pub use steps::agent::AgentReply;
+
 /// Callback type for resolving workflow handlers by name.
 pub(crate) type HandlerResolver =
     Arc<dyn Fn(&str) -> Option<Arc<dyn WorkflowHandler>> + Send + Sync>;
@@ -194,6 +196,10 @@ pub struct WorkflowContext {
     /// Output set by the handler with [`set_output`](Self::set_output),
     /// persisted on the run when the execution ends.
     output: Option<Value>,
+    /// Worker tags carried by the process running this context, set by the
+    /// engine of a tagged worker. A sub-workflow requiring a tag missing from
+    /// this list is refused. `None` outside a worker: no check.
+    worker_tags: Option<Arc<Vec<String>>>,
 }
 
 /// A registered error handler that fires when a subsequent step fails.

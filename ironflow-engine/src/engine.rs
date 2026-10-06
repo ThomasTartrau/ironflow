@@ -28,7 +28,8 @@ use ironflow_store::error::StoreError;
 use ironflow_store::models::{
     ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, ProviderKind, Run, RunActor, RunCreation,
     RunFilter, RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate,
-    TriggerKind, validate_concurrency_limits, validate_priority,
+    TriggerKind, normalize_worker_tags, validate_concurrency_limits, validate_priority,
+    validate_worker_tags,
 };
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -146,6 +147,12 @@ pub struct EnqueueOptions {
     /// [`MIN_PRIORITY`](ironflow_store::entities::MIN_PRIORITY)`..=`[`MAX_PRIORITY`](ironflow_store::entities::MAX_PRIORITY)
     /// is refused with [`EngineError::InvalidPriority`].
     pub priority: Option<i16>,
+    /// Worker tags the run requires, merged with the handler's
+    /// [`required_worker_tags`](WorkflowHandler::required_worker_tags).
+    ///
+    /// Only a worker carrying every tag picks the run. Invalid tags are
+    /// refused with [`EngineError::InvalidWorkerTag`].
+    pub worker_tags: Vec<String>,
 }
 
 /// Where a run resumes once an approval, a human input or an escalation
@@ -223,6 +230,7 @@ pub struct Engine {
     decision_provider: Option<Arc<dyn DecisionProvider>>,
     step_interceptor: Option<Arc<dyn StepInterceptor>>,
     execution_mode: ExecutionMode,
+    worker_tags: Option<Arc<Vec<String>>>,
 }
 
 /// Validate a workflow category path.
@@ -331,6 +339,7 @@ impl Engine {
             decision_provider: None,
             step_interceptor: None,
             execution_mode: ExecutionMode::default(),
+            worker_tags: None,
         }
     }
 
@@ -483,6 +492,53 @@ impl Engine {
         self.execution_mode
     }
 
+    /// Declare the worker tags carried by the process running this engine.
+    ///
+    /// Set by a worker at build time. A `ctx.workflow(..)` step then refuses
+    /// a child whose [`required_worker_tags`](WorkflowHandler::required_worker_tags)
+    /// are not all carried here, instead of running it on the wrong host.
+    /// Unset by default (API or local mode): no check is made.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let mut engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// );
+    /// engine.set_worker_tags(vec!["gpu".to_string()]);
+    /// assert_eq!(engine.worker_tags(), Some(&["gpu".to_string()][..]));
+    /// ```
+    pub fn set_worker_tags(&mut self, tags: Vec<String>) {
+        self.worker_tags = Some(Arc::new(tags));
+    }
+
+    /// Returns the worker tags set by [`set_worker_tags`](Self::set_worker_tags),
+    /// or `None` when the engine does not run inside a tagged worker.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_engine::engine::Engine;
+    /// use ironflow_store::memory::InMemoryStore;
+    ///
+    /// let engine = Engine::new(
+    ///     Arc::new(InMemoryStore::new()),
+    ///     Arc::new(ClaudeCodeProvider::new()),
+    /// );
+    /// assert!(engine.worker_tags().is_none());
+    /// ```
+    pub fn worker_tags(&self) -> Option<&[String]> {
+        self.worker_tags.as_deref().map(Vec::as_slice)
+    }
+
     /// Attach a log sender for real-time step output streaming.
     ///
     /// When set, all workflow contexts created by this engine will forward
@@ -589,6 +645,9 @@ impl Engine {
         }
         if let Some(ref interceptor) = self.step_interceptor {
             ctx.set_step_interceptor(interceptor.clone());
+        }
+        if let Some(ref tags) = self.worker_tags {
+            ctx.set_worker_tags(tags.clone());
         }
         ctx
     }
@@ -889,6 +948,7 @@ impl Engine {
                 priority: clamp_priority(handler.priority()),
                 concurrency_limits: Vec::new(),
                 max_cost_usd,
+                worker_tags: normalize_worker_tags(handler.required_worker_tags()),
             })
             .await?
             .into_run();
@@ -1074,6 +1134,8 @@ impl Engine {
     /// [`EnqueueOptions::concurrency_limits`] is invalid, before any other check.
     /// Returns [`EngineError::InvalidPriority`] if [`EnqueueOptions::priority`]
     /// is out of range, before any other check.
+    /// Returns [`EngineError::InvalidWorkerTag`] if [`EnqueueOptions::worker_tags`]
+    /// holds an invalid tag, checked right after the concurrency limits.
     /// Returns [`EngineError::Store`] if the run cannot be persisted.
     ///
     /// # Examples
@@ -1121,6 +1183,7 @@ impl Engine {
             concurrency_key,
             concurrency_limits,
             priority,
+            worker_tags,
         } = options;
 
         // Checked first: a malformed request is the caller's error, whatever
@@ -1130,6 +1193,7 @@ impl Engine {
         if let Some(priority) = priority {
             validate_priority(priority).map_err(EngineError::InvalidPriority)?;
         }
+        validate_worker_tags(&worker_tags).map_err(EngineError::InvalidWorkerTag)?;
 
         let handler = self.handlers.get(handler_name).ok_or_else(|| {
             EngineError::InvalidWorkflow(format!("no handler registered: {handler_name}"))
@@ -1144,6 +1208,12 @@ impl Engine {
             .budget
             .resolve_run_cap(max_cost_usd, handler.default_max_cost_usd());
         let priority = priority.unwrap_or_else(|| clamp_priority(handler.priority()));
+        let required_tags = normalize_worker_tags(
+            handler
+                .required_worker_tags()
+                .into_iter()
+                .chain(worker_tags),
+        );
 
         let creation = self
             .store
@@ -1161,6 +1231,7 @@ impl Engine {
                 priority,
                 concurrency_limits,
                 max_cost_usd: resolved_cap,
+                worker_tags: required_tags,
             })
             .await?;
 
@@ -3174,6 +3245,135 @@ mod tests {
         }
     }
 
+    struct GpuWorkflow;
+
+    impl WorkflowHandler for GpuWorkflow {
+        fn name(&self) -> &str {
+            "gpu-workflow"
+        }
+
+        fn required_worker_tags(&self) -> Vec<String> {
+            vec!["gpu".to_string()]
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn enqueue_merges_handler_and_request_worker_tags() {
+        let mut engine = create_test_engine();
+        engine.register(GpuWorkflow).unwrap();
+
+        let run = engine
+            .enqueue_handler_with_options(
+                "gpu-workflow",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions {
+                    worker_tags: vec!["region:eu".to_string(), "gpu".to_string()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .into_run();
+
+        assert_eq!(
+            run.worker_tags,
+            vec!["gpu".to_string(), "region:eu".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_without_worker_tags_keeps_handler_tags() {
+        let mut engine = create_test_engine();
+        engine.register(GpuWorkflow).unwrap();
+        engine.register(EchoWorkflow).unwrap();
+
+        let gpu = engine
+            .enqueue_handler("gpu-workflow", TriggerKind::Api, json!({}), 0)
+            .await
+            .unwrap();
+        assert_eq!(gpu.worker_tags, vec!["gpu".to_string()]);
+
+        let echo = engine
+            .enqueue_handler("echo-workflow", TriggerKind::Api, json!({}), 0)
+            .await
+            .unwrap();
+        assert!(echo.worker_tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn enqueue_rejects_invalid_worker_tags() {
+        let mut engine = create_test_engine();
+        engine.register(EchoWorkflow).unwrap();
+
+        for worker_tags in [
+            vec!["bad,tag".to_string()],
+            vec![" ".to_string()],
+            vec!["x".repeat(65)],
+        ] {
+            let err = engine
+                .enqueue_handler_with_options(
+                    "echo-workflow",
+                    TriggerKind::Api,
+                    json!({}),
+                    EnqueueOptions {
+                        worker_tags,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, EngineError::InvalidWorkerTag(_)), "{err:?}");
+        }
+
+        // Validated before the handler lookup.
+        let err = engine
+            .enqueue_handler_with_options(
+                "not-registered",
+                TriggerKind::Api,
+                json!({}),
+                EnqueueOptions {
+                    worker_tags: vec!["bad,tag".to_string()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::InvalidWorkerTag(_)), "{err:?}");
+    }
+
+    #[test]
+    fn worker_tags_are_unset_by_default() {
+        let engine = create_test_engine();
+        assert!(engine.worker_tags().is_none());
+    }
+
+    #[test]
+    fn set_worker_tags_stores_the_tags() {
+        let mut engine = create_test_engine();
+        engine.set_worker_tags(vec!["gpu".to_string()]);
+        assert_eq!(engine.worker_tags(), Some(&["gpu".to_string()][..]));
+
+        engine.set_worker_tags(Vec::new());
+        assert_eq!(engine.worker_tags(), Some(&[][..]));
+    }
+
+    #[tokio::test]
+    async fn run_handler_records_handler_worker_tags() {
+        let mut engine = create_test_engine();
+        engine.register(GpuWorkflow).unwrap();
+
+        let result = engine
+            .run_handler("gpu-workflow", TriggerKind::Manual, json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result.run.worker_tags, vec!["gpu".to_string()]);
+    }
+
     #[tokio::test]
     async fn run_handler_leaves_the_run_unattributed() {
         let mut engine = create_test_engine();
@@ -3663,6 +3863,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -3707,6 +3908,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -3751,6 +3953,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -3795,6 +3998,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -3847,6 +4051,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -3908,6 +4113,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -3936,6 +4142,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()

@@ -474,12 +474,15 @@ export interface paths {
 		 *     it is created at once but a worker only starts it while, for each group,
 		 *     fewer root runs of that group than its limit are running.
 		 *
+		 *     Optional `worker_tags` in the body are added to the tags the workflow
+		 *     requires: only a worker carrying all of them takes the run.
+		 *
 		 *     # Errors
 		 *
 		 *     Returns [`ApiError::Forbidden`] for non-admin callers.
 		 *     Returns [`ApiError::BadRequest`] if the workflow is unknown, the body is
-		 *     invalid (including malformed `concurrency_limits`), or the `Idempotency-Key`
-		 *     header is malformed.
+		 *     invalid (including malformed `concurrency_limits` or `worker_tags`), or the
+		 *     `Idempotency-Key` header is malformed.
 		 *     Returns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a
 		 *     different request.
 		 *     Returns [`ApiError::ConcurrencyConflict`] if a non-terminal run already
@@ -503,7 +506,10 @@ export interface paths {
 		};
 		/**
 		 * Get a run by ID, including all its steps and dependency edges.
-		 * @description Returns 404 if the run does not exist.
+		 * @description While the run waits in the queue, `worker_routing` counts the workers seen
+		 *     recently and those able to take it, so a run no worker can take shows up.
+		 *
+		 *     Returns 404 if the run does not exist.
 		 */
 		get: operations["get_run"];
 		put?: never;
@@ -2046,6 +2052,7 @@ export interface components {
 		 *         concurrency_key: Some("issue:12".to_string()),
 		 *         priority: None,
 		 *         concurrency_limits: Vec::new(),
+		 *         worker_tags: vec!["gpu".to_string()],
 		 *     };
 		 *     assert_eq!(req.workflow, "deploy");
 		 *     ```
@@ -2114,6 +2121,16 @@ export interface components {
 			 * @description Optional deferred execution time. `None` means run immediately.
 			 */
 			scheduled_at?: string | null;
+			/**
+			 * @description Tags a worker must carry to take this run, added to the ones the
+			 *     workflow requires.
+			 *
+			 *     The run stays pending until a worker carrying all of them asks for
+			 *     work. Each tag is 1 to 64 bytes of ASCII letters, digits and
+			 *     `- _ . : / =`; at most 32 tags. Empty means only the workflow's own
+			 *     requirements apply.
+			 */
+			worker_tags?: string[];
 			/** @description The workflow name to trigger. */
 			workflow: string;
 		};
@@ -3183,6 +3200,7 @@ export interface components {
 			run: components["schemas"]["RunResponse"];
 			/** @description Associated steps, ordered by position. */
 			steps: components["schemas"]["StepResponse"][];
+			worker_routing?: null | components["schemas"]["WorkerRouting"];
 		};
 		/**
 		 * @description Payload of the `Event::RunFailed` event.
@@ -3353,6 +3371,11 @@ export interface components {
 			 * @description When last updated.
 			 */
 			updated_at: string;
+			/**
+			 * @description Tags a worker must carry to take this run, sorted. Empty when any
+			 *     worker can take it.
+			 */
+			worker_tags?: string[];
 			/** @description Workflow name. */
 			workflow_name: string;
 		};
@@ -4534,6 +4557,38 @@ export interface components {
 			user_id: string;
 			/** @description Username. */
 			username: string;
+		};
+		/**
+		 * @description Workers the API saw recently, as seen from one queued run.
+		 *
+		 *     Counted from the pick requests received in the last few minutes by this
+		 *     API process: with several replicas, each one only counts the workers that
+		 *     polled it.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::WorkerRouting;
+		 *
+		 *     let routing = WorkerRouting {
+		 *         seen_workers: 2,
+		 *         eligible_workers: 0,
+		 *     };
+		 *     assert!(routing.eligible_workers < routing.seen_workers);
+		 *     ```
+		 */
+		WorkerRouting: {
+			/**
+			 * Format: int32
+			 * @description Among them, the workers that registered the run's workflow and carry
+			 *     every tag it requires.
+			 */
+			eligible_workers: number;
+			/**
+			 * Format: int32
+			 * @description Workers that asked for a run recently.
+			 */
+			seen_workers: number;
 		};
 		/**
 		 * @description Payload of the `WorkflowEvent::AgentStepTokensUsed` workflow event.
@@ -5836,7 +5891,7 @@ export interface operations {
 					"application/json": components["schemas"]["RunResponse"];
 				};
 			};
-			/** @description Unknown workflow, invalid body (including malformed concurrency_limits) or malformed Idempotency-Key */
+			/** @description Unknown workflow, invalid body (including malformed concurrency_limits or worker_tags) or malformed Idempotency-Key */
 			400: {
 				headers: {
 					[name: string]: unknown;

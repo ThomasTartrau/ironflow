@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.51.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.50.0...ironflow-engine-v2.51.0) - 2026-10-06
+
+### Added
+
+- #180 expose environment_id and account_id on typed agent steps
+
+
+### Fixed
+
+- #180 typed agent_with_meta example uses no tools
+
+## [2.50.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.49.0...ironflow-engine-v2.50.0) - 2026-10-06
+
+### Added
+
+- #170 route runs to workers that support their workflow and tags
+
 ## [2.49.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.48.4...ironflow-engine-v2.49.0) - 2026-10-06
 
 ### Added

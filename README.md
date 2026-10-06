@@ -705,6 +705,7 @@ let created = client
         concurrency_key: None,
         priority: None,
         concurrency_limits: Vec::new(),
+        worker_tags: Vec::new(),
     })
     .await?;
 

@@ -10,15 +10,17 @@ use ironflow_engine::notify::{Event, RunStatusChangedEvent};
 use ironflow_store::models::RunStatus;
 
 use crate::entities::lease::validate_lease_ttl;
+use crate::entities::parse_worker_capabilities;
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
 
 /// Query parameters for [`pick_next_run`].
 ///
-/// Both fields are optional: a worker that does not send `worker_id` picks runs
+/// Every field is optional: a worker that does not send `worker_id` picks runs
 /// without a lease, which keeps workers from an older release working during a
-/// rolling upgrade. Those runs are never recovered by the reaper.
+/// rolling upgrade. Those runs are never recovered by the reaper. Likewise, a
+/// worker that sends neither `workflows` nor `tags` takes every run.
 #[derive(Debug, Deserialize)]
 pub struct PickNextQuery {
     /// Identifier of the worker requesting a run.
@@ -27,9 +29,25 @@ pub struct PickNextQuery {
     /// Lease duration in seconds. Defaults to 90 when `worker_id` is set.
     #[serde(default)]
     pub lease_ttl_secs: Option<u64>,
+    /// Comma-separated workflow names the worker registered. Absent means
+    /// any workflow.
+    #[serde(default)]
+    pub workflows: Option<String>,
+    /// Comma-separated tags the worker carries. An empty value means none:
+    /// the worker only takes runs that require no tag.
+    #[serde(default)]
+    pub tags: Option<String>,
 }
 
-/// Atomically pick the next pending run and transition it to Running.
+/// Atomically pick the next pending run the worker can take and transition it
+/// to Running.
+///
+/// A run is eligible when the worker registered its workflow and carries every
+/// tag it requires (see [`parse_worker_capabilities`]). A run the worker cannot
+/// take stays pending for another worker and does not hold back the runs
+/// behind it. The worker is recorded in the
+/// [`WorkerRegistry`](crate::worker_registry::WorkerRegistry) so the run detail
+/// can tell whether a queued run has a worker able to take it.
 ///
 /// Returns the raw store [`Run`] entity or null if no pending runs are available.
 /// Internal routes return store entities (not public DTOs) because the worker
@@ -38,13 +56,23 @@ pub struct PickNextQuery {
 /// # Errors
 ///
 /// Returns [`ApiError::BadRequest`] if `worker_id` is blank or `lease_ttl_secs`
-/// is outside `1..=3600`.
+/// is outside `1..=3600`, or if a tag is invalid.
 pub async fn pick_next_run(
     State(state): State<AppState>,
     Query(query): Query<PickNextQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let lease = validate_lease_ttl(query.worker_id, query.lease_ttl_secs)?;
-    let run = state.store.pick_next_pending(lease).await?;
+    let capabilities =
+        parse_worker_capabilities(query.workflows.as_deref(), query.tags.as_deref())?;
+    if let Some(ref lease) = lease {
+        state
+            .worker_registry
+            .record(&lease.worker_id, capabilities.clone());
+    }
+    let run = state
+        .store
+        .pick_next_pending_for(lease, capabilities)
+        .await?;
 
     if let Some(ref picked) = run {
         state
@@ -82,6 +110,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     use crate::routes::{RouterConfig, create_router};
     use crate::state::AppState;
@@ -126,6 +155,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -185,6 +215,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap();
@@ -225,6 +256,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap();
@@ -295,6 +327,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -314,5 +347,118 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = from_slice(&body).unwrap();
         assert_eq!(json_val["data"]["status"]["state"], "running");
+    }
+
+    async fn create_tagged(state: &AppState, workflow: &str, tags: &[&str]) -> Uuid {
+        state
+            .store
+            .create_run(NewRun {
+                workflow_name: workflow.to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 0,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: tags.iter().map(|t| (*t).to_string()).collect(),
+            })
+            .await
+            .unwrap()
+            .into_run()
+            .id
+    }
+
+    async fn pick(state: &AppState, query: &str) -> (StatusCode, JsonValue) {
+        let app = create_router(state.clone(), RouterConfig::default());
+        let req = Request::builder()
+            .uri(format!("/api/v1/internal/runs/next?{query}"))
+            .header("authorization", "Bearer test-worker-token")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        let status = resp.status();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn pick_next_skips_run_whose_tags_the_worker_lacks() {
+        let state = test_state();
+        let gpu = create_tagged(&state, "transcode", &["gpu"]).await;
+        let plain = create_tagged(&state, "transcode", &[]).await;
+
+        let (status, body) = pick(&state, "worker_id=cpu-1&tags=arm").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["id"], plain.to_string());
+
+        let (_, body) = pick(&state, "worker_id=cpu-1&tags=arm").await;
+        assert!(body["data"].is_null());
+
+        let (_, body) = pick(&state, "worker_id=gpu-1&tags=gpu,arm").await;
+        assert_eq!(body["data"]["id"], gpu.to_string());
+        assert_eq!(body["data"]["worker_tags"], json!(["gpu"]));
+    }
+
+    #[tokio::test]
+    async fn pick_next_skips_workflow_the_worker_did_not_register() {
+        let state = test_state();
+        create_tagged(&state, "build", &[]).await;
+        let deploy = create_tagged(&state, "deploy", &[]).await;
+
+        let (status, body) = pick(&state, "worker_id=w-1&workflows=deploy,lint&tags=").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["id"], deploy.to_string());
+
+        let (_, body) = pick(&state, "worker_id=w-1&workflows=deploy,lint&tags=").await;
+        assert!(body["data"].is_null());
+    }
+
+    #[tokio::test]
+    async fn pick_next_without_capabilities_takes_tagged_run() {
+        let state = test_state();
+        let gpu = create_tagged(&state, "transcode", &["gpu"]).await;
+
+        let (status, body) = pick(&state, "worker_id=legacy").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["id"], gpu.to_string());
+    }
+
+    #[tokio::test]
+    async fn pick_next_rejects_invalid_tag() {
+        let state = test_state();
+        create_tagged(&state, "transcode", &[]).await;
+
+        let (status, _) = pick(&state, "worker_id=w-1&tags=two%20words").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (_, body) = pick(&state, "worker_id=w-1").await;
+        assert!(
+            !body["data"].is_null(),
+            "the rejected request must not pick a run"
+        );
+    }
+
+    #[tokio::test]
+    async fn pick_next_records_the_worker_and_its_tags() {
+        let state = test_state();
+        pick(&state, "worker_id=cpu-1&tags=arm").await;
+        pick(&state, "worker_id=gpu-1&tags=gpu").await;
+        pick(&state, "tags=gpu").await;
+
+        let routing = state
+            .worker_registry
+            .routing_for("transcode", &["gpu".to_string()]);
+        assert_eq!(
+            routing.seen_workers, 2,
+            "a request without worker_id is not recorded"
+        );
+        assert_eq!(routing.eligible_workers, 1);
     }
 }

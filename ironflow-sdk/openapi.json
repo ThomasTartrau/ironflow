@@ -876,7 +876,7 @@
         "type": "object"
       },
       "CreateRunRequest": {
-        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n    concurrency_key: Some(\"issue:12\".to_string()),\n    priority: None,\n    concurrency_limits: Vec::new(),\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
+        "description": "Request to trigger a workflow.\n\n# Examples\n\n```\nuse ironflow_api::entities::CreateRunRequest;\nuse serde_json::json;\n\nlet req = CreateRunRequest {\n    workflow: \"deploy\".to_string(),\n    payload: Some(json!({\"env\": \"prod\"})),\n    labels: None,\n    scheduled_at: None,\n    max_retries: Some(2),\n    max_cost_usd: None,\n    concurrency_key: Some(\"issue:12\".to_string()),\n    priority: None,\n    concurrency_limits: Vec::new(),\n    worker_tags: vec![\"gpu\".to_string()],\n};\nassert_eq!(req.workflow, \"deploy\");\n```",
         "properties": {
           "concurrency_key": {
             "description": "Optional exclusivity key, at most 255 bytes.\n\nWhile a non-terminal run (pending, running, sleeping, retrying,\nawaiting approval) holds the same key, the request is refused with\n`409 CONCURRENCY_CONFLICT` naming that run. The key is released when\nthe run completes, fails, ends with a warning or is cancelled.",
@@ -934,6 +934,13 @@
             "format": "date-time",
             "nullable": true,
             "type": "string"
+          },
+          "worker_tags": {
+            "description": "Tags a worker must carry to take this run, added to the ones the\nworkflow requires.\n\nThe run stays pending until a worker carrying all of them asks for\nwork. Each tag is 1 to 64 bytes of ASCII letters, digits and\n`- _ . : / =`; at most 32 tags. Empty means only the workflow's own\nrequirements apply.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "workflow": {
             "description": "The workflow name to trigger.",
@@ -2613,6 +2620,11 @@
               "$ref": "#/components/schemas/StepResponse"
             },
             "type": "array"
+          },
+          "worker_routing": {
+            "$ref": "#/components/schemas/WorkerRouting",
+            "description": "Workers seen recently that could take the run. Only filled while the\nrun waits in the queue (`pending` or `retrying`), so a run no worker\ncan take is visible instead of waiting in silence.",
+            "nullable": true
           }
         },
         "required": [
@@ -2802,6 +2814,13 @@
             "description": "When last updated.",
             "format": "date-time",
             "type": "string"
+          },
+          "worker_tags": {
+            "description": "Tags a worker must carry to take this run, sorted. Empty when any\nworker can take it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "workflow_name": {
             "description": "Workflow name.",
@@ -4327,6 +4346,28 @@
           "user_id",
           "username",
           "at"
+        ],
+        "type": "object"
+      },
+      "WorkerRouting": {
+        "description": "Workers the API saw recently, as seen from one queued run.\n\nCounted from the pick requests received in the last few minutes by this\nAPI process: with several replicas, each one only counts the workers that\npolled it.\n\n# Examples\n\n```\nuse ironflow_api::entities::WorkerRouting;\n\nlet routing = WorkerRouting {\n    seen_workers: 2,\n    eligible_workers: 0,\n};\nassert!(routing.eligible_workers < routing.seen_workers);\n```",
+        "properties": {
+          "eligible_workers": {
+            "description": "Among them, the workers that registered the run's workflow and carry\nevery tag it requires.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seen_workers": {
+            "description": "Workers that asked for a run recently.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seen_workers",
+          "eligible_workers"
         ],
         "type": "object"
       },
@@ -5908,7 +5949,7 @@
         ]
       },
       "post": {
-        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\nAn optional `concurrency_key` in the body makes the run exclusive: while a\nnon-terminal run holds the same key, the call is refused with 409\n`CONCURRENCY_CONFLICT` naming that run.\n\nOptional `concurrency_limits` in the body put the run in concurrency groups:\nit is created at once but a worker only starts it while, for each group,\nfewer root runs of that group than its limit are running.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid (including malformed `concurrency_limits`), or the `Idempotency-Key`\nheader is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::ConcurrencyConflict`] if a non-terminal run already\nholds the requested `concurrency_key`.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
+        "description": "Returns 201 Created with the newly enqueued run.\n\nAn optional `Idempotency-Key` header makes the call safe to replay: the same\nkey returns the run it already produced with 200 OK instead of enqueueing a\nsecond one. A key reused with a different workflow or payload is rejected with\n409 Conflict. Keys stay bound for 24 hours, after which they are released.\n\nAn optional `concurrency_key` in the body makes the run exclusive: while a\nnon-terminal run holds the same key, the call is refused with 409\n`CONCURRENCY_CONFLICT` naming that run.\n\nOptional `concurrency_limits` in the body put the run in concurrency groups:\nit is created at once but a worker only starts it while, for each group,\nfewer root runs of that group than its limit are running.\n\nOptional `worker_tags` in the body are added to the tags the workflow\nrequires: only a worker carrying all of them takes the run.\n\n# Errors\n\nReturns [`ApiError::Forbidden`] for non-admin callers.\nReturns [`ApiError::BadRequest`] if the workflow is unknown, the body is\ninvalid (including malformed `concurrency_limits` or `worker_tags`), or the\n`Idempotency-Key` header is malformed.\nReturns [`ApiError::IdempotencyKeyConflict`] if the key is bound to a\ndifferent request.\nReturns [`ApiError::ConcurrencyConflict`] if a non-terminal run already\nholds the requested `concurrency_key`.\nReturns [`ApiError::MonthlyBudgetExceeded`] if the global monthly cost quota\nis exhausted.",
         "operationId": "create_run",
         "parameters": [
           {
@@ -5954,7 +5995,7 @@
             "description": "Run created successfully"
           },
           "400": {
-            "description": "Unknown workflow, invalid body (including malformed concurrency_limits) or malformed Idempotency-Key"
+            "description": "Unknown workflow, invalid body (including malformed concurrency_limits or worker_tags) or malformed Idempotency-Key"
           },
           "401": {
             "description": "Unauthorized"
@@ -5982,7 +6023,7 @@
     },
     "/api/v1/runs/{id}": {
       "get": {
-        "description": "Returns 404 if the run does not exist.",
+        "description": "While the run waits in the queue, `worker_routing` counts the workers seen\nrecently and those able to take it, so a run no worker can take shows up.\n\nReturns 404 if the run does not exist.",
         "operationId": "get_run",
         "parameters": [
           {

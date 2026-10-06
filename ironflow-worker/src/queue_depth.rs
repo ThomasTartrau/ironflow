@@ -1,4 +1,5 @@
-//! `ironflow_worker_queue_depth`: the number of `Pending` runs, and
+//! `ironflow_worker_queue_depth`: the number of `Pending` runs the worker can
+//! take (see [`WorkerCapabilities`]), and
 //! `ironflow_worker_queue_blocked_runs`: the due runs held back by each
 //! saturated concurrency group, published by the worker.
 //!
@@ -14,7 +15,9 @@ use serde::Deserialize;
 use tracing::debug;
 
 use ironflow_core::metric_names::{WORKER_QUEUE_BLOCKED_RUNS, WORKER_QUEUE_DEPTH};
+use ironflow_store::entities::WorkerCapabilities;
 
+use crate::api_store::capability_query;
 use crate::error::WorkerError;
 
 /// How often the gauge is refreshed.
@@ -40,6 +43,9 @@ pub(crate) struct QueueDepthGauge {
     client: Client,
     url: String,
     token: String,
+    /// The worker capabilities, so only the runs this worker can take are
+    /// counted.
+    query: Vec<(&'static str, String)>,
     last_refresh: Option<Instant>,
     /// Groups given a non-zero value at the last refresh, so a group that
     /// is no longer saturated drops back to zero instead of keeping a stale
@@ -48,12 +54,13 @@ pub(crate) struct QueueDepthGauge {
 }
 
 impl QueueDepthGauge {
-    /// Build a gauge that reads the count from the API at `api_url`.
+    /// Build a gauge that reads, from the API at `api_url`, the count of pending
+    /// runs a worker with `capabilities` can take.
     ///
     /// # Panics
     ///
     /// Panics if the HTTP client cannot be built (TLS backend unavailable).
-    pub(crate) fn new(api_url: &str, token: &str) -> Self {
+    pub(crate) fn new(api_url: &str, token: &str, capabilities: &WorkerCapabilities) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -66,6 +73,7 @@ impl QueueDepthGauge {
                 api_url.trim_end_matches('/')
             ),
             token: token.to_string(),
+            query: capability_query(capabilities),
             last_refresh: None,
             blocked_groups: HashSet::new(),
         }
@@ -128,6 +136,7 @@ impl QueueDepthGauge {
             .client
             .get(&self.url)
             .bearer_auth(&self.token)
+            .query(&self.query)
             .send()
             .await
             .map_err(|e| WorkerError::Internal(format!("queue depth request failed: {e}")))?;
@@ -172,6 +181,11 @@ mod tests {
 
     use super::*;
 
+    /// Capabilities of a worker carrying no tag and accepting any workflow.
+    fn untagged() -> WorkerCapabilities {
+        WorkerCapabilities::default()
+    }
+
     fn new_run(concurrency_limits: Vec<ConcurrencyLimit>) -> NewRun {
         NewRun {
             created_by: None,
@@ -187,6 +201,7 @@ mod tests {
             priority: 0,
             concurrency_limits,
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         }
     }
 
@@ -234,7 +249,7 @@ mod tests {
     #[tokio::test]
     async fn pending_runs_reads_the_api_count() {
         let api_url = spawn_api(2).await;
-        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token");
+        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token", &untagged());
 
         let snapshot = gauge.snapshot().await.unwrap();
         assert_eq!(snapshot.pending_runs, 2);
@@ -256,7 +271,7 @@ mod tests {
             .unwrap();
         store.create_run(new_run(limits())).await.unwrap();
         let api_url = serve_store(store).await;
-        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token");
+        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token", &untagged());
 
         let snapshot = gauge.snapshot().await.unwrap();
         assert_eq!(snapshot.pending_runs, 1);
@@ -269,6 +284,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn snapshot_counts_only_runs_matching_worker_tags() {
+        let store = Arc::new(InMemoryStore::new());
+        store.create_run(new_run(Vec::new())).await.unwrap();
+        let mut gpu = new_run(Vec::new());
+        gpu.worker_tags = vec!["gpu".to_string()];
+        store.create_run(gpu).await.unwrap();
+        let mut other = new_run(Vec::new());
+        other.workflow_name = "other".to_string();
+        store.create_run(other).await.unwrap();
+        let api_url = serve_store(store).await;
+
+        let cpu_worker = WorkerCapabilities::new(Some(vec!["queued".to_string()]), Vec::new());
+        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token", &cpu_worker);
+        assert_eq!(gauge.snapshot().await.unwrap().pending_runs, 1);
+
+        let gpu_worker =
+            WorkerCapabilities::new(Some(vec!["queued".to_string()]), vec!["gpu".to_string()]);
+        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token", &gpu_worker);
+        assert_eq!(gauge.snapshot().await.unwrap().pending_runs, 2);
+
+        let any_workflow = WorkerCapabilities::new(None, vec!["gpu".to_string()]);
+        let gauge = QueueDepthGauge::new(&api_url, "test-worker-token", &any_workflow);
+        assert_eq!(gauge.snapshot().await.unwrap().pending_runs, 3);
+    }
+
     #[test]
     fn snapshot_accepts_an_api_without_concurrency_groups() {
         let snapshot: QueueSnapshot = from_value(json!({ "pending_runs": 4 })).unwrap();
@@ -279,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn pending_runs_fails_on_a_rejected_token() {
         let api_url = spawn_api(2).await;
-        let gauge = QueueDepthGauge::new(&api_url, "wrong-token");
+        let gauge = QueueDepthGauge::new(&api_url, "wrong-token", &untagged());
 
         let err = gauge.snapshot().await.unwrap_err().to_string();
         assert!(err.contains("401"), "{err}");
@@ -292,7 +333,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
-        let gauge = QueueDepthGauge::new(&format!("http://{addr}"), "test-worker-token");
+        let gauge =
+            QueueDepthGauge::new(&format!("http://{addr}"), "test-worker-token", &untagged());
 
         let err = gauge.snapshot().await.unwrap_err().to_string();
         assert!(err.contains("queue depth request failed"), "{err}");

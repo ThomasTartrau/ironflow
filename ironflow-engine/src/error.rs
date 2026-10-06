@@ -8,7 +8,7 @@ use uuid::Uuid;
 use ironflow_artifacts::error::ArtifactError;
 use ironflow_core::error::OperationError;
 use ironflow_store::error::StoreError;
-use ironflow_store::models::{ConcurrencyLimitError, RunStatus};
+use ironflow_store::models::{ConcurrencyLimitError, RunStatus, WorkerTagError};
 
 use crate::guard::{WORKFLOW_GUARD_REJECTED_CODE, WorkflowRejection};
 
@@ -72,6 +72,14 @@ pub enum EngineError {
     /// before any other check.
     #[error("invalid priority: {0}")]
     InvalidPriority(String),
+    /// A requested worker tag is invalid: empty, too long, holding a character
+    /// outside ASCII alphanumerics and `- _ . : / =`, or one tag too many.
+    ///
+    /// Converted from [`StoreError::InvalidWorkerTag`], and returned by
+    /// [`Engine::enqueue_handler_with_options`](crate::engine::Engine::enqueue_handler_with_options)
+    /// before the run is created.
+    #[error("invalid worker tag: {0}")]
+    InvalidWorkerTag(WorkerTagError),
 
     /// The workflow definition is invalid.
     #[error("invalid workflow: {0}")]
@@ -438,6 +446,7 @@ impl From<StoreError> for EngineError {
                 EngineError::ConcurrencyConflict { key, run_id }
             }
             StoreError::InvalidConcurrencyLimit(e) => EngineError::InvalidConcurrencyLimit(e),
+            StoreError::InvalidWorkerTag(e) => EngineError::InvalidWorkerTag(e),
             other => EngineError::Store(other),
         }
     }
@@ -611,6 +620,23 @@ mod tests {
             "invalid priority: priority must be between -100 and 100"
         );
         assert!(!is_run_retryable(&err));
+    }
+
+    #[test]
+    fn store_invalid_worker_tag_converts_to_engine_variant() {
+        let engine_err =
+            EngineError::from(StoreError::InvalidWorkerTag(WorkerTagError::InvalidChar {
+                tag: "bad,tag".to_string(),
+            }));
+        assert!(
+            matches!(
+                engine_err,
+                EngineError::InvalidWorkerTag(WorkerTagError::InvalidChar { .. })
+            ),
+            "{engine_err:?}"
+        );
+        assert!(engine_err.to_string().contains("bad,tag"));
+        assert!(!is_run_retryable(&engine_err));
     }
 
     #[test]

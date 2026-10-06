@@ -253,8 +253,49 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 ```
 
 A resumed environment that no longer exists (expired and reaped) fails the step. A
-structured step (`.output::<T>()`) answers with `T` only: run the step that creates the
-environment without a schema to read its id.
+structured step (`.output::<T>()`) answers with `T`, so `ctx.agent` hides the id. Use
+`ctx.agent_with_meta`: it returns an `AgentReply` with the typed `answer` next to
+`environment_id` and `account_id` (`None` on a provider without persistent environments,
+and for `account_id` when the worker environment was used). A replayed step returns the
+same ids.
+
+```rust,no_run
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+use ironflow_engine::config::{AgentStepConfig, Tool};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+#[derive(Deserialize, JsonSchema)]
+struct Triage {
+    test: String,
+}
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    // A structured step cannot use tools: it only reads its prompt.
+    let reply = ctx
+        .agent_with_meta(
+            "triage",
+            AgentStepConfig::new("Name the failing test in this CI log: ...")
+                .max_budget_usd(0.50)
+                .output::<Triage>(),
+        )
+        .await?;
+    if let Some(environment) = reply.environment_id.as_deref() {
+        let prompt = format!("Fix the test {} in /workspace.", reply.answer.test);
+        ctx.agent(
+            "fix",
+            AgentStepConfig::new(&prompt)
+                .allow_tool(Tool::Bash)
+                .max_budget_usd(0.50)
+                .resume_environment(environment),
+        )
+        .await?;
+    }
+    Ok(())
+}
+```
 
 ## Approval
 

@@ -272,6 +272,7 @@ async fn create_and_get_run() {
         concurrency_key: None,
         priority: None,
         concurrency_limits: Vec::new(),
+        worker_tags: Vec::new(),
     };
 
     let created = client.create_run(&request).await.unwrap();
@@ -297,6 +298,7 @@ async fn create_run_with_max_cost_usd() {
         concurrency_key: None,
         priority: None,
         concurrency_limits: Vec::new(),
+        worker_tags: Vec::new(),
     };
 
     let created = client.create_run(&request).await.unwrap();
@@ -318,6 +320,7 @@ async fn create_run_rejects_negative_max_cost_usd() {
         concurrency_key: None,
         priority: None,
         concurrency_limits: Vec::new(),
+        worker_tags: Vec::new(),
     };
 
     let err = client.create_run(&request).await.unwrap_err();
@@ -339,6 +342,7 @@ async fn create_run_unknown_workflow() {
         concurrency_key: None,
         priority: None,
         concurrency_limits: Vec::new(),
+        worker_tags: Vec::new(),
     };
 
     let err = client.create_run(&request).await.unwrap_err();
@@ -426,6 +430,36 @@ async fn create_run_rejects_a_zero_concurrency_limit() {
 }
 
 #[tokio::test]
+async fn create_run_with_worker_tags_returns_them_sorted() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let request = ironflow_sdk::types::CreateRunRequest {
+        worker_tags: vec!["region:eu".to_string(), "gpu".to_string()],
+        ..deploy_request()
+    };
+    let created = client.create_run(&request).await.unwrap();
+    let expected = vec!["gpu".to_string(), "region:eu".to_string()];
+    assert_eq!(created.data.worker_tags, expected);
+
+    let fetched = client.get_run(created.data.id).await.unwrap();
+    assert_eq!(fetched.data.run.worker_tags, expected);
+}
+
+#[tokio::test]
+async fn create_run_rejects_an_invalid_worker_tag() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let request = ironflow_sdk::types::CreateRunRequest {
+        worker_tags: vec!["not a tag".to_string()],
+        ..deploy_request()
+    };
+    let err = client.create_run(&request).await.unwrap_err();
+    assert_eq!(err.status(), Some(400));
+}
+
+#[tokio::test]
 async fn unauthorized_without_token() {
     let (base_url, _) = spawn_server().await;
     let client = make_client(&base_url, "invalid-token");
@@ -451,6 +485,7 @@ fn deploy_request() -> ironflow_sdk::types::CreateRunRequest {
         concurrency_key: None,
         priority: None,
         concurrency_limits: Vec::new(),
+        worker_tags: Vec::new(),
     }
 }
 

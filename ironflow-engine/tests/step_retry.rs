@@ -43,6 +43,7 @@ async fn enqueue(store: &InMemoryStore, workflow: &str) -> Uuid {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("create run")

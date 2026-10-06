@@ -87,6 +87,10 @@ pub struct RunResponse {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_cost_usd: Option<Decimal>,
+    /// Tags a worker must carry to take this run, sorted. Empty when any
+    /// worker can take it.
+    #[serde(default)]
+    pub worker_tags: Vec<String>,
     /// Typed output the handler set with `WorkflowContext::set_output`.
     ///
     /// Written when the run ends (completed, warning, failed or cancelled).
@@ -122,6 +126,7 @@ impl From<Run> for RunResponse {
             priority: run.priority,
             concurrency_limits: run.concurrency_limits,
             max_cost_usd: run.max_cost_usd,
+            worker_tags: run.worker_tags,
             output: run.output,
         }
     }
@@ -140,6 +145,38 @@ pub struct RunDetailResponse {
     /// Sub-workflow runs below this run, at any depth, that are not finished:
     /// cancelling the run cancels them too.
     pub active_descendant_count: u64,
+    /// Workers seen recently that could take the run. Only filled while the
+    /// run waits in the queue (`pending` or `retrying`), so a run no worker
+    /// can take is visible instead of waiting in silence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_routing: Option<WorkerRouting>,
+}
+
+/// Workers the API saw recently, as seen from one queued run.
+///
+/// Counted from the pick requests received in the last few minutes by this
+/// API process: with several replicas, each one only counts the workers that
+/// polled it.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_api::entities::WorkerRouting;
+///
+/// let routing = WorkerRouting {
+///     seen_workers: 2,
+///     eligible_workers: 0,
+/// };
+/// assert!(routing.eligible_workers < routing.seen_workers);
+/// ```
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerRouting {
+    /// Workers that asked for a run recently.
+    pub seen_workers: u32,
+    /// Among them, the workers that registered the run's workflow and carry
+    /// every tag it requires.
+    pub eligible_workers: u32,
 }
 
 /// Response of `POST /api/v1/runs/:id/cancel`: the cancelled run, with the

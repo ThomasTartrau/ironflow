@@ -56,6 +56,7 @@ pub async fn list_runs(
         created_by_user_id: params.created_by,
         priority: params.priority,
         concurrency_group: params.concurrency_group,
+        eligible_for: None,
     };
 
     let page_result = state.store.list_runs(filter, page, per_page).await?;
@@ -156,6 +157,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -176,6 +178,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -217,6 +220,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -245,6 +249,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -287,6 +292,7 @@ mod tests {
                     priority: 0,
                     concurrency_limits: Vec::new(),
                     max_cost_usd: None,
+                    worker_tags: Vec::new(),
                 })
                 .await
                 .unwrap()
@@ -428,6 +434,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -485,6 +492,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .expect("create run");
@@ -630,6 +638,7 @@ mod tests {
                     priority: 0,
                     concurrency_limits: vec![ConcurrencyLimit::new(group, 2)],
                     max_cost_usd: None,
+                    worker_tags: Vec::new(),
                 })
                 .await
                 .expect("create run");
@@ -668,6 +677,7 @@ mod tests {
                     priority,
                     concurrency_limits: Vec::new(),
                     max_cost_usd: None,
+                    worker_tags: Vec::new(),
                 })
                 .await
                 .expect("create run");

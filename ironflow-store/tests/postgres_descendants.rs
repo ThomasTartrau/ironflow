@@ -47,6 +47,7 @@ fn new_run(trigger: TriggerKind, labels: HashMap<String, String>) -> NewRun {
         priority: 0,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }
 

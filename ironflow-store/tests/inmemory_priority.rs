@@ -26,6 +26,7 @@ fn new_run(name: &str, priority: i16) -> NewRun {
         priority,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }
 

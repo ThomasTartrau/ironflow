@@ -11,7 +11,7 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::{FsmState, ProviderKind, RunActor, RunStatus, TriggerKind};
+use super::{FsmState, ProviderKind, RunActor, RunStatus, TriggerKind, WorkerCapabilities};
 
 /// A workflow execution record.
 ///
@@ -142,6 +142,12 @@ pub struct Run {
     /// creation order. See [`NewRun::priority`].
     #[serde(default)]
     pub priority: i16,
+    /// Worker tags a worker must carry to pick this run up.
+    ///
+    /// Sorted and deduplicated. Empty means any worker may take the run. See
+    /// [`WorkerCapabilities::can_take`] for the routing rule.
+    #[serde(default)]
+    pub worker_tags: Vec<String>,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -447,6 +453,7 @@ pub struct ConcurrencyGroupBacklog {
 ///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
+///     worker_tags: Vec::new(),
 /// };
 ///
 /// assert!(store.create_run(req.clone()).await?.is_created());
@@ -647,6 +654,7 @@ pub struct ReapedRun {
 ///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
+///     worker_tags: Vec::new(),
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -707,6 +715,12 @@ pub struct NewRun {
     /// keeps working against a newer API.
     #[serde(default)]
     pub priority: i16,
+    /// Worker tags a worker must carry to pick this run up.
+    ///
+    /// Validated with [`validate_worker_tags`](super::validate_worker_tags) and
+    /// stored normalized (sorted, deduplicated). Empty means any worker.
+    #[serde(default)]
+    pub worker_tags: Vec<String>,
 }
 
 /// Filters for listing runs.
@@ -748,6 +762,9 @@ pub struct RunFilter {
     pub concurrency_group: Option<String>,
     /// Filter by queue priority (exact match).
     pub priority: Option<i16>,
+    /// Only include runs the worker with these capabilities could take (see
+    /// [`WorkerCapabilities::can_take`]). `None` means no filter.
+    pub eligible_for: Option<WorkerCapabilities>,
 }
 
 /// Partial update for a run.
@@ -912,6 +929,7 @@ mod tests {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: Some(Decimal::new(250, 2)),
+            worker_tags: Vec::new(),
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");
@@ -948,6 +966,7 @@ mod tests {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");
@@ -1014,6 +1033,7 @@ mod tests {
             output: Some(json!({"verdict": "approved", "score": 9})),
             lease_recoveries: 1,
             capacity_wait_kind: Some(ProviderKind::new("claude_subscription")),
+            worker_tags: vec!["gpu".to_string(), "region:eu".to_string()],
         };
 
         let json = serde_json::to_string(&run).expect("serialize");
@@ -1046,6 +1066,7 @@ mod tests {
         assert_eq!(back.lease_recoveries, run.lease_recoveries);
         assert_eq!(back.capacity_wait_kind, run.capacity_wait_kind);
         assert_eq!(back.priority, 7);
+        assert_eq!(back.worker_tags, run.worker_tags);
     }
 
     #[test]
@@ -1082,16 +1103,19 @@ mod tests {
             output: Some(json!("set")),
             lease_recoveries: 2,
             capacity_wait_kind: None,
+            worker_tags: vec!["gpu".to_string()],
         };
         let mut raw = serde_json::to_value(&run).expect("serialize");
         raw.as_object_mut().expect("object").remove("output");
         raw.as_object_mut()
             .expect("object")
             .remove("lease_recoveries");
+        raw.as_object_mut().expect("object").remove("worker_tags");
 
         let back: Run = serde_json::from_value(raw).expect("deserialize");
         assert!(back.output.is_none());
         assert_eq!(back.lease_recoveries, 0);
+        assert!(back.worker_tags.is_empty());
     }
 
     #[test]
@@ -1126,6 +1150,7 @@ mod tests {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         };
         let mut value = serde_json::to_value(&without_cap).expect("serialize");
         value
@@ -1204,6 +1229,7 @@ mod tests {
                 ConcurrencyLimit::new("tenant:42", 5),
             ],
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         };
 
         let json = serde_json::to_string(&new_run).expect("serialize");

@@ -329,6 +329,42 @@ mod tests {
     }
 
     #[test]
+    fn parse_run_create_with_repeated_worker_tags() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "run",
+            "create",
+            "deploy",
+            "--worker-tag",
+            "gpu",
+            "--worker-tag",
+            "region:eu",
+        ]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create { worker_tags, .. } = &args.command else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(
+            worker_tags,
+            &vec!["gpu".to_string(), "region:eu".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_run_create_without_worker_tags() {
+        let cli = parse(&["ironflow-cli", "run", "create", "deploy"]);
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected Run command");
+        };
+        let RunCommands::Create { worker_tags, .. } = &args.command else {
+            panic!("expected Create subcommand");
+        };
+        assert!(worker_tags.is_empty());
+    }
+
+    #[test]
     fn parse_run_create_rejects_a_malformed_concurrency_limit() {
         let result = Cli::try_parse_from([
             "ironflow-cli",

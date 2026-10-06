@@ -340,6 +340,7 @@ impl StatsHistoryFilter {
             created_by_user_id: self.created_by_user_id,
             priority: None,
             concurrency_group: None,
+            eligible_for: None,
         }
     }
 }

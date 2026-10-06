@@ -6,7 +6,7 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::entities::{ConcurrencyLimitError, RunStatus};
+use crate::entities::{ConcurrencyLimitError, RunStatus, WorkerTagError};
 
 /// Errors produced by [`RunStore`](crate::store::RunStore) operations.
 ///
@@ -84,6 +84,10 @@ pub enum StoreError {
     #[error("invalid concurrency limit: {0}")]
     InvalidConcurrencyLimit(#[from] ConcurrencyLimitError),
 
+    /// The worker tags of a run are invalid.
+    #[error("invalid worker tag: {0}")]
+    InvalidWorkerTag(#[from] WorkerTagError),
+
     /// The requested schedule does not exist.
     #[error("schedule not found: {0}")]
     ScheduleNotFound(Uuid),
@@ -159,6 +163,15 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "invalid concurrency limit: concurrency group must not be empty"
+        );
+    }
+
+    #[test]
+    fn invalid_worker_tag_display() {
+        let err = StoreError::from(WorkerTagError::Empty);
+        assert_eq!(
+            err.to_string(),
+            "invalid worker tag: worker tag must not be empty"
         );
     }
 

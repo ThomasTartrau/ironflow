@@ -10,7 +10,8 @@ use crate::entities::{
     NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run,
     RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
     StatsHistoryFilter, Step, StepApproval, StepDependency, StepStatus, StepUpdate, TriggerKind,
-    User, validate_concurrency_limits, validate_priority,
+    User, WorkerCapabilities, normalize_worker_tags, validate_concurrency_limits,
+    validate_priority, validate_worker_tags,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -141,6 +142,11 @@ fn run_matches_filter(run: &Run, filter: &RunFilter, steps: &HashMap<Uuid, Step>
     {
         return false;
     }
+    if let Some(ref caps) = filter.eligible_for
+        && !caps.can_take(&run.workflow_name, &run.worker_tags)
+    {
+        return false;
+    }
     true
 }
 
@@ -153,6 +159,7 @@ pub(super) fn insert_run(state: &mut State, req: NewRun) -> Result<RunCreation, 
     validate_concurrency_limits(&req.concurrency_limits)?;
     // Mirrors the CHECK constraint of the PostgreSQL column.
     validate_priority(req.priority).map_err(StoreError::Database)?;
+    validate_worker_tags(&req.worker_tags)?;
     let now = Utc::now();
 
     if let Some(ref key) = req.idempotency_key
@@ -217,6 +224,7 @@ pub(super) fn insert_run(state: &mut State, req: NewRun) -> Result<RunCreation, 
         output: None,
         lease_recoveries: 0,
         capacity_wait_kind: None,
+        worker_tags: normalize_worker_tags(req.worker_tags),
     };
 
     if let Some(key) = req.idempotency_key {
@@ -411,7 +419,11 @@ impl RunStore for InMemoryStore {
         })
     }
 
-    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
+    fn pick_next_pending_for(
+        &self,
+        lease: Option<LeaseRequest>,
+        capabilities: Option<WorkerCapabilities>,
+    ) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let mut state = self.state.write().await;
             let now = Utc::now();
@@ -424,10 +436,17 @@ impl RunStore for InMemoryStore {
             // concurrency group are skipped, so they never block younger runs.
             // The group check and the transition below happen under the same
             // write lock, so concurrent pickers cannot overshoot a limit.
+            // Runs the worker cannot take (unregistered workflow, missing tag)
+            // are skipped the same way.
             let oldest_id = state
                 .runs
                 .values()
                 .filter(|r| is_due(r, now) && !is_blocked(r, &state.runs))
+                .filter(|r| {
+                    capabilities
+                        .as_ref()
+                        .is_none_or(|c| c.can_take(&r.workflow_name, &r.worker_tags))
+                })
                 .min_by_key(|r| (Reverse(r.priority), r.created_at))
                 .map(|r| r.id);
 
@@ -2712,6 +2731,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -2734,6 +2754,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -2756,6 +2777,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -2776,6 +2798,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -2798,6 +2821,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()

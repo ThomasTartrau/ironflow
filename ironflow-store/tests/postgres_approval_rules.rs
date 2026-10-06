@@ -87,6 +87,7 @@ async fn gate(store: &PostgresStore) -> Step {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("create run")

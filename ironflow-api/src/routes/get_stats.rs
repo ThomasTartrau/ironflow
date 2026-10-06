@@ -46,6 +46,7 @@ pub async fn get_stats(
         created_by_user_id: params.created_by,
         priority: None,
         concurrency_group: params.concurrency_group,
+        eligible_for: None,
     };
     let stats = state.store.get_stats(filter).await?;
 
@@ -155,6 +156,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -176,6 +178,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -205,6 +208,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -234,6 +238,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -372,6 +377,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -391,6 +397,7 @@ mod tests {
                 priority: 0,
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .unwrap()
@@ -459,6 +466,7 @@ mod tests {
                     priority: 0,
                     concurrency_limits: Vec::new(),
                     max_cost_usd: None,
+                    worker_tags: Vec::new(),
                 })
                 .await
                 .unwrap();

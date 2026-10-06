@@ -19,6 +19,7 @@ use crate::entities::{
     ConcurrencyGroupBacklog, LeaseRequest, NewRun, NewStep, NewStepDependency, Page, PurgePolicy,
     PurgeableRun, ReapedRun, Run, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate,
     StatsHistoryBucket, StatsHistoryFilter, Step, StepApproval, StepDependency, StepUpdate,
+    WorkerCapabilities,
 };
 use crate::error::StoreError;
 use crate::log_store::LogStore;
@@ -84,6 +85,7 @@ pub const STEP_INTERRUPTED_ERROR: &str = "interrupted: worker lease lost";
 ///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
+///     worker_tags: Vec::new(),
 /// }).await?.into_run();
 ///
 /// let fetched = store.get_run(run.id).await?;
@@ -196,7 +198,29 @@ pub trait RunStore: Send + Sync {
     /// group never exceeds its limit.
     ///
     /// Returns `None` if no pending runs are available.
-    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>>;
+    ///
+    /// Equivalent to [`pick_next_pending_for`](Self::pick_next_pending_for)
+    /// with no worker capabilities: every run is eligible.
+    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
+        self.pick_next_pending_for(lease, None)
+    }
+
+    /// Atomically pick the oldest pending run the worker can take and
+    /// transition it to `Running`.
+    ///
+    /// Same contract as [`pick_next_pending`](Self::pick_next_pending), with
+    /// worker routing on top: when `capabilities` is `Some`, a run is only
+    /// eligible when [`WorkerCapabilities::can_take`] accepts its workflow name
+    /// and its [`Run::worker_tags`]. An ineligible run is skipped and never
+    /// blocks younger runs. `None` keeps the legacy behavior of a worker that
+    /// sends no capabilities: every run is eligible.
+    ///
+    /// Returns `None` if no eligible pending run is available.
+    fn pick_next_pending_for(
+        &self,
+        lease: Option<LeaseRequest>,
+        capabilities: Option<WorkerCapabilities>,
+    ) -> StoreFuture<'_, Option<Run>>;
 
     /// Extend the worker lease on a run and return the new expiry.
     ///
@@ -492,6 +516,7 @@ pub trait RunStore: Send + Sync {
 ///     priority: 0,
 ///     concurrency_limits: Vec::new(),
 ///     max_cost_usd: None,
+///     worker_tags: Vec::new(),
 /// }).await?.into_run();
 /// let _users = store.count_users().await?;
 /// # Ok(())

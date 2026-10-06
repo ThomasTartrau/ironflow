@@ -27,6 +27,7 @@
 //!     priority: 0,
 //!     concurrency_limits: Vec::new(),
 //!     max_cost_usd: None,
+//!     worker_tags: Vec::new(),
 //! }).await?.into_run();
 //!
 //! assert_eq!(run.status.state, RunStatus::Pending);
@@ -258,6 +259,7 @@ mod tests {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         }
     }
 

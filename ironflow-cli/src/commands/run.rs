@@ -80,6 +80,10 @@ pub enum RunCommands {
             value_parser = value_parser!(i16).range(-100..=100)
         )]
         priority: Option<i16>,
+        /// Tag a worker must carry to take the run, added to the ones the
+        /// workflow requires. Repeat the flag to require several tags.
+        #[arg(long = "worker-tag", value_name = "TAG")]
+        worker_tags: Vec<String>,
     },
     /// List runs with optional filters.
     List {
@@ -279,6 +283,7 @@ pub async fn execute(
             concurrency_key,
             concurrency_limits,
             priority,
+            worker_tags,
         } => {
             validate_max_cost(*max_cost)?;
             let payload_value = resolve_payload(payload.as_deref(), payload_file.as_ref())?;
@@ -296,6 +301,7 @@ pub async fn execute(
                 .concurrency_key(concurrency_key.clone())
                 .concurrency_limits(concurrency_limits.clone())
                 .priority(priority.map(i32::from))
+                .worker_tags(worker_tags.clone())
                 .try_into()
                 .context("failed to build CreateRunRequest")?;
 

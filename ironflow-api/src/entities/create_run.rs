@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use ironflow_store::models::{
     ConcurrencyLimit, MAX_CONCURRENCY_KEY_LEN, MAX_IDEMPOTENCY_KEY_LEN,
-    validate_concurrency_limits, validate_priority,
+    validate_concurrency_limits, validate_priority, validate_worker_tags,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -29,6 +29,7 @@ use serde_json::Value;
 ///     concurrency_key: Some("issue:12".to_string()),
 ///     priority: None,
 ///     concurrency_limits: Vec::new(),
+///     worker_tags: vec!["gpu".to_string()],
 /// };
 /// assert_eq!(req.workflow, "deploy");
 /// ```
@@ -89,6 +90,15 @@ pub struct CreateRunRequest {
     /// is at least 1. Empty means no limit.
     #[serde(default)]
     pub concurrency_limits: Vec<ConcurrencyLimit>,
+    /// Tags a worker must carry to take this run, added to the ones the
+    /// workflow requires.
+    ///
+    /// The run stays pending until a worker carrying all of them asks for
+    /// work. Each tag is 1 to 64 bytes of ASCII letters, digits and
+    /// `- _ . : / =`; at most 32 tags. Empty means only the workflow's own
+    /// requirements apply.
+    #[serde(default)]
+    pub worker_tags: Vec<String>,
 }
 
 impl CreateRunRequest {
@@ -99,8 +109,8 @@ impl CreateRunRequest {
     /// Returns a human-readable message when `max_cost_usd` is negative, or
     /// when `concurrency_key` is blank or longer than
     /// [`MAX_CONCURRENCY_KEY_LEN`] bytes, or when `concurrency_limits` holds an
-    /// empty or too long group, a zero limit or a group listed twice. Also when
-    /// `priority` is outside `-100..=100`.
+    /// empty or too long group, a zero limit or a group listed twice, or when a
+    /// worker tag is invalid. Also when `priority` is outside `-100..=100`.
     ///
     /// # Examples
     ///
@@ -118,6 +128,7 @@ impl CreateRunRequest {
     ///     concurrency_key: None,
     ///     priority: None,
     ///     concurrency_limits: Vec::new(),
+    ///     worker_tags: Vec::new(),
     /// };
     /// assert!(req.validate().is_err());
     /// ```
@@ -142,7 +153,8 @@ impl CreateRunRequest {
             validate_priority(priority)?;
         }
         validate_concurrency_limits(&self.concurrency_limits)
-            .map_err(|e| format!("concurrency_limits: {e}"))
+            .map_err(|e| format!("concurrency_limits: {e}"))?;
+        validate_worker_tags(&self.worker_tags).map_err(|e| format!("worker_tags: {e}"))
     }
 }
 
@@ -242,6 +254,7 @@ mod tests {
             concurrency_key: None,
             priority: None,
             concurrency_limits: Vec::new(),
+            worker_tags: Vec::new(),
         }
     }
 
@@ -512,5 +525,42 @@ mod tests {
             .validate()
             .expect_err("over-long group must be rejected");
         assert!(err.contains("255 bytes"), "{err}");
+    }
+
+    #[test]
+    fn worker_tags_default_to_empty_when_absent() {
+        let req: CreateRunRequest = from_str(r#"{"workflow":"deploy"}"#).expect("deserialize");
+        assert!(req.worker_tags.is_empty());
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn worker_tags_parse_from_json_and_validate() {
+        let req: CreateRunRequest =
+            from_str(r#"{"workflow":"transcode","worker_tags":["gpu","region:eu"]}"#)
+                .expect("deserialize");
+        assert_eq!(
+            req.worker_tags,
+            vec!["gpu".to_string(), "region:eu".to_string()]
+        );
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_worker_tags() {
+        let invalid = [
+            vec![String::new()],
+            vec!["two words".to_string()],
+            vec!["a".repeat(65)],
+            (0..33).map(|i| format!("tag-{i}")).collect(),
+        ];
+        for worker_tags in invalid {
+            let req = CreateRunRequest {
+                worker_tags: worker_tags.clone(),
+                ..request(None)
+            };
+            let err = req.validate().expect_err("invalid tags must be rejected");
+            assert!(err.starts_with("worker_tags: "), "{worker_tags:?}: {err}");
+        }
     }
 }

@@ -483,6 +483,7 @@ async fn seed_runs(store: &dyn Store, users: &[SeededUser]) -> anyhow::Result<Ve
                 priority: SEED_PRIORITIES[index % SEED_PRIORITIES.len()],
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await?;
         let run = creation.into_run();

@@ -9,8 +9,8 @@ use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{
-    Assignee, NewRun, NewStep, Run, RunActor, RunFilter, StepKind, StepStatus, StepUpdate,
-    TriggerKind, step_trace_id,
+    Assignee, NewRun, NewStep, Run, RunActor, RunFilter, RunStatus, StepKind, StepStatus,
+    StepUpdate, TriggerKind, step_trace_id,
 };
 use ironflow_store::store::RunStore;
 use schemars::JsonSchema;
@@ -134,6 +134,7 @@ async fn context_skip_creates_skipped_step() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -204,6 +205,7 @@ async fn child_run_of_parent_authored_by(created_by: Option<RunActor>) -> Run {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create parent run")
@@ -248,6 +250,110 @@ async fn child_run_of_an_unattributed_parent_has_no_author() {
     let child = child_run_of_parent_authored_by(None).await;
 
     assert!(child.created_by.is_none());
+}
+
+struct GpuSubWorkflow;
+
+impl TypedWorkflow for GpuSubWorkflow {
+    type Input = ();
+}
+
+impl WorkflowHandler for GpuSubWorkflow {
+    fn name(&self) -> &str {
+        "gpu-sub"
+    }
+
+    fn required_worker_tags(&self) -> Vec<String> {
+        vec!["gpu".to_string()]
+    }
+
+    fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> crate::handler::HandlerFuture<'a> {
+        Box::pin(async move { Ok(()) })
+    }
+}
+
+/// Run a parent whose context carries `worker_tags` and calls
+/// [`GpuSubWorkflow`]. Returns the step outcome and the child run, if any.
+async fn run_gpu_child(worker_tags: Option<Vec<String>>) -> (Result<(), EngineError>, Option<Run>) {
+    let store = Arc::new(InMemoryStore::new());
+    let parent = store
+        .create_run(NewRun {
+            workflow_name: "parent".to_string(),
+            trigger: TriggerKind::Api,
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            created_by: None,
+            idempotency_key: None,
+            concurrency_key: None,
+            priority: 0,
+            concurrency_limits: Vec::new(),
+            max_cost_usd: None,
+            worker_tags: Vec::new(),
+        })
+        .await
+        .expect("failed to create parent run")
+        .into_run();
+
+    let resolver: HandlerResolver = Arc::new(|name: &str| match name {
+        "gpu-sub" => Some(Arc::new(GpuSubWorkflow) as Arc<dyn WorkflowHandler>),
+        _ => None,
+    });
+    let mut ctx = WorkflowContext::with_handler_resolver(
+        parent.id,
+        "parent".to_string(),
+        store.clone(),
+        create_test_provider(),
+        resolver,
+    );
+    if let Some(tags) = worker_tags {
+        ctx.set_worker_tags(Arc::new(tags));
+    }
+
+    let result = ctx.workflow(&GpuSubWorkflow, ()).await.map(|_| ());
+    let runs = store
+        .list_runs(RunFilter::default(), 1, 10)
+        .await
+        .expect("failed to list runs");
+    let child = runs
+        .items
+        .into_iter()
+        .find(|r| r.workflow_name == "gpu-sub");
+    (result, child)
+}
+
+#[tokio::test]
+async fn sub_workflow_requiring_missing_worker_tag_fails_with_clear_error() {
+    let (result, child) = run_gpu_child(Some(vec!["arm".to_string()])).await;
+
+    let Err(EngineError::InvalidWorkflow(message)) = result else {
+        panic!("expected an invalid workflow error, got {result:?}");
+    };
+    assert_eq!(
+        message,
+        "sub-workflow 'gpu-sub' requires worker tags [gpu] that this worker does not carry"
+    );
+    assert!(child.is_none(), "no child run is created");
+}
+
+#[tokio::test]
+async fn sub_workflow_whose_worker_tags_are_carried_runs() {
+    let (result, child) = run_gpu_child(Some(vec!["gpu".to_string(), "arm".to_string()])).await;
+
+    assert!(result.is_ok(), "{result:?}");
+    let child = child.expect("child run was created");
+    assert_eq!(child.worker_tags, vec!["gpu".to_string()]);
+    assert_eq!(child.status.state, RunStatus::Completed);
+}
+
+#[tokio::test]
+async fn sub_workflow_worker_tags_are_not_checked_outside_a_worker() {
+    let (result, child) = run_gpu_child(None).await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert!(child.is_some());
 }
 
 #[tokio::test]
@@ -308,6 +414,7 @@ async fn context_approval_first_execution_returns_error() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -365,6 +472,7 @@ async fn context_approval_replay_returns_ok() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -458,6 +566,7 @@ async fn context_load_replay_steps_loads_completed_steps() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -554,6 +663,7 @@ async fn context_load_replay_steps_keeps_the_oldest_completed_step_on_position_c
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -668,6 +778,7 @@ async fn context_load_replay_steps_populates_replay_wave_steps() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -753,6 +864,7 @@ async fn context_load_replay_steps_includes_skipped_steps() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -821,6 +933,7 @@ async fn context_payload_returns_run_payload() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -887,6 +1000,7 @@ async fn context_last_step_ids_tracks_executed_steps() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -932,6 +1046,7 @@ async fn context_with_run() -> (Arc<InMemoryStore>, WorkflowContext) {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -1076,6 +1191,7 @@ async fn when_applies_the_predicate_to_the_payload() {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")
@@ -1158,6 +1274,7 @@ async fn context_with_replayed_step_at_position_zero(
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .expect("failed to create run")

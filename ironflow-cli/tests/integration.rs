@@ -145,6 +145,7 @@ async fn seed_awaiting_approval_run(store: &Arc<dyn Store>) -> Uuid {
             priority: 0,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         })
         .await
         .unwrap()
@@ -335,6 +336,7 @@ async fn run_create_and_get() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -357,6 +359,63 @@ async fn run_create_and_get() {
 }
 
 #[tokio::test]
+async fn run_create_with_worker_tags_sends_them() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
+            concurrency_key: None,
+            priority: None,
+            concurrency_limits: Vec::new(),
+            worker_tags: vec!["region:eu".to_string(), "gpu".to_string()],
+        },
+    };
+    commands::run::execute(&client, &args, false, false)
+        .await
+        .unwrap();
+
+    let runs = client.list_runs().await.unwrap();
+    assert_eq!(runs.data.len(), 1);
+    assert_eq!(
+        runs.data[0].worker_tags,
+        vec!["gpu".to_string(), "region:eu".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn run_create_with_invalid_worker_tag_fails() {
+    let (base_url, token) = spawn_server().await;
+    let client = make_client(&base_url, &token);
+
+    let args = RunArgs {
+        command: RunCommands::Create {
+            workflow: "deploy".to_string(),
+            payload: None,
+            payload_file: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost: None,
+            concurrency_key: None,
+            concurrency_limits: Vec::new(),
+            priority: None,
+            worker_tags: vec!["not a tag".to_string()],
+        },
+    };
+    let result = commands::run::execute(&client, &args, false, false).await;
+    assert!(result.is_err());
+
+    let runs = client.list_runs().await.unwrap();
+    assert!(runs.data.is_empty());
+}
+
+#[tokio::test]
 async fn run_create_unknown_workflow() {
     let (base_url, token) = spawn_server().await;
     let client = make_client(&base_url, &token);
@@ -372,6 +431,7 @@ async fn run_create_unknown_workflow() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -394,6 +454,7 @@ async fn run_create_invalid_payload() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -417,6 +478,7 @@ async fn run_create_non_object_payload() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -532,6 +594,7 @@ async fn run_reject_refuses_a_run_that_is_not_awaiting_approval() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &create, false, false)
@@ -613,6 +676,7 @@ async fn run_create_from_payload_file() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -636,6 +700,7 @@ async fn run_create_from_missing_file() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -661,6 +726,7 @@ async fn run_create_with_idempotency_key_creates_one_run() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
 
@@ -694,6 +760,7 @@ async fn run_create_without_idempotency_key_creates_several_runs() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
 
@@ -723,6 +790,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &first, false, false)
@@ -740,6 +808,7 @@ async fn run_create_with_a_conflicting_idempotency_key_errors() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &conflicting, false, false).await;
@@ -763,6 +832,7 @@ async fn run_create_with_an_empty_idempotency_key_errors() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
 
@@ -789,6 +859,7 @@ async fn run_create_with_a_held_concurrency_key_errors() {
             concurrency_key: Some("issue:12".to_string()),
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -826,6 +897,7 @@ async fn run_create_with_concurrency_limits_joins_the_groups() {
                 limit: 1,
             }],
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     // A saturated group holds runs back at pick time, never at creation.
@@ -880,6 +952,7 @@ async fn run_create_with_priority_and_list_by_priority() {
                 concurrency_key: None,
                 concurrency_limits: Vec::new(),
                 priority,
+                worker_tags: Vec::new(),
             },
         };
         commands::run::execute(&client, &args, true, false)
@@ -934,6 +1007,7 @@ async fn run_create_with_a_zero_concurrency_limit_errors() {
                 limit: 0,
             }],
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -959,6 +1033,7 @@ async fn run_create_with_max_cost_reaches_the_api() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
@@ -985,6 +1060,7 @@ async fn run_create_rejects_negative_max_cost_before_calling_the_api() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -1011,6 +1087,7 @@ async fn run_create_rejects_non_finite_max_cost() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     let result = commands::run::execute(&client, &args, false, false).await;
@@ -1614,6 +1691,7 @@ async fn audit_log_list_filters_by_run() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &create, false, false)
@@ -1812,6 +1890,7 @@ async fn run_create_accepts_zero_max_cost() {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             priority: None,
+            worker_tags: Vec::new(),
         },
     };
     commands::run::execute(&client, &args, false, false)
