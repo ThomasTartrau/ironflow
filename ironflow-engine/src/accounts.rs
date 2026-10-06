@@ -1397,6 +1397,7 @@ mod tests {
                     concurrency_key: None,
                     concurrency_limits: Vec::new(),
                     max_cost_usd: None,
+                    worker_tags: Vec::new(),
                 })
                 .await
                 .unwrap()

@@ -153,6 +153,47 @@ fn provider() -> Arc<dyn AgentProvider> {
 }
 ```
 
+## Workers with different capabilities
+
+A worker only takes runs of the workflows it registered. When workers differ by host (a
+GPU, a region, network access), give each one tags in `worker/src/main.rs`; a run is only
+handed to a worker carrying every tag it requires:
+
+```diff
+  let mut builder = WorkerBuilder::new(&api_url, &worker_token)
+      .provider(provider)
++     .tags(["gpu", "region:eu"])
+      .concurrency(concurrency)
+```
+
+The workflow declares the tags all its runs require:
+
+```rust,no_run
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+
+struct Transcode;
+
+impl WorkflowHandler for Transcode {
+    fn name(&self) -> &str {
+        "transcode"
+    }
+
+    fn required_worker_tags(&self) -> Vec<String> {
+        vec!["gpu".into()]
+    }
+
+    fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move { Ok(()) })
+    }
+}
+```
+
+A caller adds tags to one run with `ironflow-cli run create transcode --worker-tag
+region:eu` (or `worker_tags` in `POST /api/v1/runs`). A tag is 1 to 64 ASCII letters,
+digits or `- _ . : / =`; `build()` rejects an invalid one. A run no running worker can
+take stays `pending`: the dashboard and `ironflow-cli run get` warn about it.
+
 ## Production checklist
 
 The server refuses to boot without `JWT_SECRET` and `WORKER_TOKEN` (>= 32 bytes, never

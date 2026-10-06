@@ -71,6 +71,10 @@ pub enum RunCommands {
             value_parser = parse_concurrency_limit
         )]
         concurrency_limits: Vec<ConcurrencyLimit>,
+        /// Tag a worker must carry to take the run, added to the ones the
+        /// workflow requires. Repeat the flag to require several tags.
+        #[arg(long = "worker-tag", value_name = "TAG")]
+        worker_tags: Vec<String>,
     },
     /// List runs with optional filters.
     List {
@@ -262,6 +266,7 @@ pub async fn execute(
             max_cost,
             concurrency_key,
             concurrency_limits,
+            worker_tags,
         } => {
             validate_max_cost(*max_cost)?;
             let payload_value = resolve_payload(payload.as_deref(), payload_file.as_ref())?;
@@ -278,6 +283,7 @@ pub async fn execute(
                 .max_cost_usd(*max_cost)
                 .concurrency_key(concurrency_key.clone())
                 .concurrency_limits(concurrency_limits.clone())
+                .worker_tags(worker_tags.clone())
                 .try_into()
                 .context("failed to build CreateRunRequest")?;
 

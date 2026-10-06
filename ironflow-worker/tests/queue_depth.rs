@@ -1,7 +1,7 @@
 //! A worker polling the API publishes `ironflow_worker_queue_depth`: the number
-//! of `Pending` runs, and `ironflow_worker_queue_blocked_runs`: the due runs
-//! held back by each saturated concurrency group, both read from the API server
-//! that owns the store.
+//! of `Pending` runs it can take, and `ironflow_worker_queue_blocked_runs`: the
+//! due runs held back by each saturated concurrency group, both read from the
+//! API server that owns the store.
 //!
 //! Everything is real: the router built by `create_router` served over TCP, an
 //! `InMemoryStore` and a `Worker` polling that API. The API and the worker share
@@ -22,7 +22,9 @@ use ironflow_api::state::AppState;
 use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::metric_names::{WORKER_QUEUE_BLOCKED_RUNS, WORKER_QUEUE_DEPTH};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
+use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::{Engine, ExecutionMode};
+use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{ConcurrencyLimit, NewRun, RunFilter, RunStatus, TriggerKind};
@@ -61,6 +63,7 @@ fn future_run(workflow: &str) -> NewRun {
         concurrency_key: None,
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }
 
@@ -79,6 +82,7 @@ fn grouped_run() -> NewRun {
         concurrency_key: None,
         concurrency_limits: vec![ConcurrencyLimit::new("repo:acme", 1)],
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }
 
@@ -122,10 +126,26 @@ async fn serve_api(store: Arc<InMemoryStore>) -> (String, impl Fn() -> String) {
     (format!("http://{addr}"), move || prometheus.render())
 }
 
+/// A workflow that does nothing: registered so the worker counts its runs,
+/// since a worker only counts the runs it can take.
+struct Noop(&'static str);
+
+impl WorkflowHandler for Noop {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 /// Start a single-slot worker polling the API at `api_url`.
 fn spawn_worker(api_url: &str, worker_id: &str) -> JoinHandle<()> {
     let worker = WorkerBuilder::new(api_url, "test-worker-token")
         .provider(Arc::new(ClaudeCodeProvider::new()))
+        .register(Noop("queued"))
+        .register(Noop("deploy"))
         .worker_id(worker_id)
         .concurrency(1)
         .poll_interval(Duration::from_millis(20))

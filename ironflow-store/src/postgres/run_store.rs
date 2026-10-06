@@ -7,7 +7,8 @@ use crate::entities::{
     ConcurrencyGroupBacklog, ConcurrencyLimit, IDEMPOTENCY_WINDOW, LeaseRequest, NewRun, NewStep,
     NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run, RunActor,
     RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket, StatsHistoryFilter,
-    Step, StepApproval, StepDependency, StepUpdate, validate_concurrency_limits,
+    Step, StepApproval, StepDependency, StepUpdate, WorkerCapabilities, normalize_worker_tags,
+    validate_concurrency_limits, validate_worker_tags,
 };
 use crate::error::StoreError;
 use crate::store::{LEASE_EXPIRED_ERROR, RunStore, StoreFuture};
@@ -43,7 +44,12 @@ const CONCURRENCY_GROUP_LOCK_PREFIX: &str = "ironflow:concurrency_group:";
 /// sub-workflow runs (`trigger.kind = 'workflow'`) execute inside their
 /// parent's slot. Each candidate is compared against its own limit.
 ///
-/// Binds: `$1` the ids of runs to skip (`uuid[]`).
+/// Worker routing filters run in the same SELECT, before the row lock: a run
+/// the worker cannot take is never selected, so it never blocks younger runs.
+///
+/// Binds: `$1` the ids of runs to skip (`uuid[]`), `$2` the workflows the
+/// worker registered (`text[]`, `NULL` for any), `$3` the tags the worker
+/// carries (`text[]`, `NULL` for a worker that sends no capabilities).
 const PICK_CANDIDATE_SQL: &str = r#"
     WITH running AS (
         SELECT g->>'group' AS group_name, COUNT(*) AS n
@@ -61,6 +67,8 @@ const PICK_CANDIDATE_SQL: &str = r#"
     WHERE ast.name IN ('pending', 'retrying')
       AND (r.scheduled_at IS NULL OR r.scheduled_at <= NOW())
       AND r.id <> ALL($1::uuid[])
+      AND ($2::text[] IS NULL OR r.workflow_name = ANY($2::text[]))
+      AND ($3::text[] IS NULL OR r.worker_tags <@ $3::text[])
       AND NOT EXISTS (
           SELECT 1
           FROM jsonb_to_recordset(r.concurrency_limits) AS cl("group" text, "limit" bigint)
@@ -151,6 +159,13 @@ pub(super) fn build_run_filter_conditions(filter: &RunFilter) -> (String, u32) {
         ));
         bind_idx += 1;
     }
+    if filter.eligible_for.is_some() {
+        conditions.push(format!(
+            "(${bind_idx}::text[] IS NULL OR r.workflow_name = ANY(${bind_idx}::text[]))"
+        ));
+        conditions.push(format!("r.worker_tags <@ ${}::text[]", bind_idx + 1));
+        bind_idx += 2;
+    }
     if let Some(has_steps) = filter.has_steps {
         let steps_condition = if has_steps {
             "EXISTS (SELECT 1 FROM ironflow.steps s WHERE s.run_id = r.id)"
@@ -199,6 +214,10 @@ pub(super) fn bind_run_filter_params<'q>(
     if let Some(ref group) = filter.concurrency_group {
         query = query.bind(group.as_str());
     }
+    if let Some(ref caps) = filter.eligible_for {
+        query = query.bind(caps.workflows.as_deref());
+        query = query.bind(caps.tags.as_slice());
+    }
     if filter.has_steps.is_some() {
         query = query.bind(run_status_to_db_str(&RunStatus::Completed));
         query = query.bind(run_status_to_db_str(&RunStatus::Cancelled));
@@ -217,6 +236,7 @@ pub(super) async fn insert_run(
     req: NewRun,
 ) -> Result<RunCreation, StoreError> {
     validate_concurrency_limits(&req.concurrency_limits)?;
+    validate_worker_tags(&req.worker_tags)?;
 
     let id = Uuid::now_v7();
     let now = Utc::now();
@@ -309,10 +329,11 @@ pub(super) async fn insert_run(
     let created_by_user_id = req.created_by.as_ref().map(RunActor::user_id);
     let created_by_api_key_id = req.created_by.as_ref().and_then(RunActor::api_key_id);
     let concurrency_limits_json = to_value(&req.concurrency_limits)?;
+    let worker_tags = normalize_worker_tags(req.worker_tags.clone());
     let inserted = sqlx::query(
                 r#"
-                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key, concurrency_limits)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key, concurrency_limits, worker_tags)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
                 "#,
             )
@@ -333,6 +354,7 @@ pub(super) async fn insert_run(
             .bind(now)
             .bind(req.concurrency_key.as_deref())
             .bind(&concurrency_limits_json)
+            .bind(&worker_tags)
             .execute(&mut *tx)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -638,9 +660,17 @@ impl RunStore for PostgresStore {
         Box::pin(self.active_descendants(run_id))
     }
 
-    fn pick_next_pending(&self, lease: Option<LeaseRequest>) -> StoreFuture<'_, Option<Run>> {
+    fn pick_next_pending_for(
+        &self,
+        lease: Option<LeaseRequest>,
+        capabilities: Option<WorkerCapabilities>,
+    ) -> StoreFuture<'_, Option<Run>> {
         Box::pin(async move {
             let now = Utc::now();
+            let (workflows, tags) = match capabilities {
+                Some(caps) => (caps.workflows, Some(caps.tags)),
+                None => (None, None),
+            };
             // Candidates found saturated after taking their group locks. They are
             // skipped for the rest of this call so the next eligible run is tried.
             let mut excluded: Vec<Uuid> = Vec::new();
@@ -661,6 +691,8 @@ impl RunStore for PostgresStore {
                 // queue. Locking `sm` is what makes the pick exclusive.
                 let Some(run_row) = sqlx::query(PICK_CANDIDATE_SQL)
                     .bind(&excluded)
+                    .bind(&workflows)
+                    .bind(&tags)
                     .fetch_optional(&mut *tx)
                     .await
                     .map_err(|e| StoreError::Database(e.to_string()))?

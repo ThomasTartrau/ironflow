@@ -254,6 +254,9 @@ mod tests {
                     if let Some(limits) = body.get("concurrency_limits") {
                         data["concurrency_limits"] = limits.clone();
                     }
+                    if let Some(tags) = body.get("worker_tags") {
+                        data["worker_tags"] = tags.clone();
+                    }
                     (StatusCode::CREATED, Json(json!({ "data": data })))
                 }),
             )
@@ -638,6 +641,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -661,6 +665,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -683,6 +688,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -703,6 +709,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -723,6 +730,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -743,6 +751,7 @@ mod tests {
             max_cost_usd: Some(2.5),
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -763,6 +772,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -783,6 +793,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: Some("issue:12".to_string()),
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -803,6 +814,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -823,6 +835,7 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: Some(vec!["repo:acme=2".to_string(), "env=prod=1".to_string()]),
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -849,12 +862,55 @@ mod tests {
             max_cost_usd: None,
             concurrency_key: None,
             concurrency_limits: None,
+            worker_tags: None,
         };
 
         let result = tool.run(&client).await.unwrap();
         let parsed = extract_json(&result);
 
         assert!(parsed.get("concurrency_limits").is_none());
+    }
+
+    #[tokio::test]
+    async fn create_run_forwards_the_worker_tags() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: None,
+            concurrency_limits: None,
+            worker_tags: Some(vec!["gpu".to_string(), "region:eu".to_string()]),
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert_eq!(parsed["worker_tags"], json!(["gpu", "region:eu"]));
+    }
+
+    #[tokio::test]
+    async fn create_run_omits_the_worker_tags_when_absent() {
+        let addr = start_server(api_router()).await;
+        let client = client_for(addr);
+        let tool = CreateRunTool {
+            workflow: "deploy".to_string(),
+            payload: None,
+            max_retries: None,
+            idempotency_key: None,
+            max_cost_usd: None,
+            concurrency_key: None,
+            concurrency_limits: None,
+            worker_tags: None,
+        };
+
+        let result = tool.run(&client).await.unwrap();
+        let parsed = extract_json(&result);
+
+        assert!(parsed.get("worker_tags").is_none());
     }
 
     #[tokio::test]
@@ -870,6 +926,7 @@ mod tests {
                 max_cost_usd: None,
                 concurrency_key: None,
                 concurrency_limits: Some(vec![entry.to_string()]),
+                worker_tags: None,
             };
 
             let err = tool.run(&client).await.unwrap_err();

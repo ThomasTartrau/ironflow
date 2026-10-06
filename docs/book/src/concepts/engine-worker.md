@@ -103,6 +103,48 @@ execute inside their parent's slot and are not counted. The
 `ironflow_worker_queue_blocked_runs{group}` gauge reports the pending runs each
 saturated group holds back.
 
+## Routing runs to workers
+
+A worker only takes the runs it can execute. When it polls, it sends the
+workflows it registered and the tags it carries; the store hands out the oldest
+pending run whose workflow is in that list and whose required tags are all
+carried by the worker. Other runs stay `Pending` for a better-suited worker,
+and the next one in the queue goes ahead.
+
+Tags describe the host: hardware, region, network access.
+
+```rust,ignore
+let worker = WorkerBuilder::new(&api_url, &worker_token)
+    .provider(Arc::new(ClaudeCodeProvider::new()))
+    .register(Box::new(Transcode))
+    .tags(["gpu", "region:eu"])
+    .build()?;
+```
+
+A run requires the tags its handler declares with
+[`required_worker_tags`](workflow-handler.md#worker-tags), plus the ones given
+at creation: `EnqueueOptions::worker_tags`, `worker_tags` in
+`POST /api/v1/runs`, `ironflow run create --worker-tag gpu` or the
+`worker_tags` argument of the MCP `create_run` tool. A tag is 1 to 64 ASCII
+letters, digits or `- _ . : / =`, at most 32 per worker or run; `build()`
+rejects an invalid one. Retrying a run keeps its tags; replaying it adds the
+current handler's tags to the original ones.
+
+A worker that sends no capabilities (released before this routing) still takes
+every run, so workers can be upgraded one at a time. The
+`ironflow_worker_queue_depth` gauge of a worker counts only the runs it can
+take.
+
+A run no worker can take waits in silence. While a run is `pending` or
+`retrying`, `GET /api/v1/runs/{id}` returns `worker_routing`: the workers seen
+recently by this API process and how many of them could take the run. The
+dashboard and `ironflow run get` warn when none was seen, or when none is
+eligible.
+
+Inside a worker, a `ctx.workflow(..)` step refuses a child whose required tags
+the worker does not carry, since the child would run in its parent's slot on
+the wrong host.
+
 ## Lease & Reaper
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.

@@ -26,7 +26,7 @@ use ironflow_core::provider::LABEL_ROOT_RUN_ID;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
     NewRun, NewStep, ProviderKind, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus,
-    StepUpdate, TriggerKind, step_trace_id,
+    StepUpdate, TriggerKind, normalize_worker_tags, step_trace_id,
 };
 
 use crate::config::{WorkflowOptions, WorkflowStepConfig};
@@ -403,6 +403,10 @@ impl WorkflowContext {
             )?;
         }
 
+        // A child runs on the worker that runs its parent: refuse it here
+        // rather than run it on a host missing what it requires.
+        self.check_child_worker_tags(handler)?;
+
         // Guard check: verify limits before creating the step.
         if let (Some(guard_config), Some(guard_state)) = (&self.guard_config, &self.guard_state) {
             let state = guard_state
@@ -600,6 +604,28 @@ impl WorkflowContext {
         Ok(SubWorkflowOutcome::Completed(output))
     }
 
+    /// Refuse a child whose required worker tags are not all carried by the
+    /// worker running this context.
+    ///
+    /// No check is made outside a tagged worker (API or local mode).
+    fn check_child_worker_tags(&self, handler: &dyn WorkflowHandler) -> Result<(), EngineError> {
+        let Some(carried) = &self.worker_tags else {
+            return Ok(());
+        };
+        let missing: Vec<String> = normalize_worker_tags(handler.required_worker_tags())
+            .into_iter()
+            .filter(|tag| !carried.contains(tag))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(EngineError::InvalidWorkflow(format!(
+            "sub-workflow '{}' requires worker tags [{}] that this worker does not carry",
+            handler.name(),
+            missing.join(", ")
+        )))
+    }
+
     /// Record a sub-workflow invocation while planning, expanding the child
     /// handler into the same plan when the depth limit allows it.
     ///
@@ -788,7 +814,7 @@ impl WorkflowContext {
                 (child_run_id, child_run.cost_usd, child_run.duration_ms)
             }
             None => {
-                let child_run_id = match self.create_child_run(config).await {
+                let child_run_id = match self.create_child_run(config, handler.as_ref()).await {
                     Ok(id) => id,
                     Err(EngineError::ConcurrencyConflict { key, run_id }) => {
                         return Ok(ChildOutcome::Conflict(ConcurrencyConflict::new(
@@ -861,6 +887,7 @@ impl WorkflowContext {
             run_created_at: None,
             plan: None,
             output: None,
+            worker_tags: self.worker_tags.clone(),
         };
 
         // A re-entered child replays its completed steps and is served the
@@ -999,7 +1026,11 @@ impl WorkflowContext {
     /// The child inherits the parent labels and author, and is linked to its
     /// parent and to the root of the chain by two labels, so a suspended child
     /// can be found and resumed like a top-level run.
-    async fn create_child_run(&self, config: &WorkflowStepConfig) -> Result<Uuid, EngineError> {
+    async fn create_child_run(
+        &self,
+        config: &WorkflowStepConfig,
+        handler: &dyn WorkflowHandler,
+    ) -> Result<Uuid, EngineError> {
         // Whoever triggered the parent workflow is accountable for its children.
         let parent = self.store.get_run(self.run_id).await?;
         let (mut labels, parent_author) =
@@ -1027,6 +1058,8 @@ impl WorkflowContext {
                 concurrency_limits: Vec::new(),
                 // The child shares the parent's cap; it does not get its own budget.
                 max_cost_usd: self.max_cost_usd,
+                // Recorded for display: the child runs on its parent's worker.
+                worker_tags: normalize_worker_tags(handler.required_worker_tags()),
             })
             .await?
             .into_run();

@@ -83,6 +83,7 @@ impl WorkflowContext {
             run_created_at: None,
             plan: None,
             output: None,
+            worker_tags: None,
         }
     }
 
@@ -133,6 +134,7 @@ impl WorkflowContext {
             run_created_at: None,
             plan: None,
             output: None,
+            worker_tags: None,
         }
     }
 
@@ -227,6 +229,14 @@ impl WorkflowContext {
     /// ```
     pub fn set_step_interceptor(&mut self, interceptor: Arc<dyn StepInterceptor>) {
         self.interceptor = Some(interceptor);
+    }
+
+    /// Declare the worker tags carried by the process running this context.
+    ///
+    /// Wired by the [`Engine`](crate::engine::Engine) from
+    /// [`Engine::set_worker_tags`](crate::engine::Engine::set_worker_tags).
+    pub(crate) fn set_worker_tags(&mut self, tags: Arc<Vec<String>>) {
+        self.worker_tags = Some(tags);
     }
 
     /// The step interceptor attached to this context, if any.

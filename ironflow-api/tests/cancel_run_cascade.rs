@@ -125,6 +125,7 @@ impl App {
                 concurrency_key: key.map(str::to_string),
                 concurrency_limits: Vec::new(),
                 max_cost_usd: None,
+                worker_tags: Vec::new(),
             })
             .await
             .expect("create run")

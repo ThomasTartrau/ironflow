@@ -30,6 +30,7 @@ use crate::reaper::Reaper;
 use crate::schedule_sync::{repair_unscheduled_schedules, sync_handler_schedules};
 use crate::schedule_ticker::ScheduleTicker;
 use crate::waker::Waker;
+use crate::worker_registry::WorkerRegistry;
 
 /// Global application state.
 ///
@@ -87,6 +88,9 @@ pub struct AppState {
     pub blob_store: Option<Arc<dyn BlobStore>>,
     /// Registered Provider Account kinds, by id.
     pub account_kinds: Arc<HashMap<&'static str, Arc<dyn AccountKind>>>,
+    /// Workers that recently asked for a run, with what they can take. Read
+    /// by the run detail route to flag a queued run no worker can take.
+    pub worker_registry: WorkerRegistry,
     /// Prometheus metrics handle (only when `prometheus` feature is enabled).
     #[cfg(feature = "prometheus")]
     pub prometheus_handle: PrometheusHandle,
@@ -143,6 +147,7 @@ impl AppState {
             event_bus: None,
             blob_store: None,
             account_kinds: Arc::new(default_account_kinds()),
+            worker_registry: WorkerRegistry::new(),
             #[cfg(feature = "prometheus")]
             prometheus_handle: Self::global_prometheus_handle(),
         }

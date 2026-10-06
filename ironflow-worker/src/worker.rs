@@ -18,9 +18,12 @@ use ironflow_core::metric_names::{WORKER_ACTIVE, WORKER_LEASES_LOST_TOTAL, WORKE
 use ironflow_core::provider::AgentProvider;
 use ironflow_engine::accounts::{AccountAwareProvider, DEFAULT_MAX_CAPACITY_WAIT};
 use ironflow_engine::engine::{Engine, chain_root};
+use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::WorkflowHandler;
 use ironflow_engine::log_sender::LogReceiver;
-use ironflow_store::entities::{LeaseRequest, RunStatus};
+use ironflow_store::entities::{
+    LeaseRequest, RunStatus, WorkerCapabilities, normalize_worker_tags, validate_worker_tags,
+};
 use ironflow_store::error::StoreError;
 use ironflow_store::store::Store;
 #[cfg(feature = "prometheus")]
@@ -86,6 +89,7 @@ pub struct WorkerBuilder {
     max_consecutive_panics: u32,
     panic_cooldown: Duration,
     lease_ttl: Duration,
+    tags: Vec<String>,
     lease_refresh_interval: Duration,
     #[cfg(feature = "heartbeat")]
     heartbeat_url: Option<String>,
@@ -112,6 +116,7 @@ impl WorkerBuilder {
             panic_cooldown: DEFAULT_PANIC_COOLDOWN,
             lease_ttl: DEFAULT_LEASE_TTL,
             lease_refresh_interval: DEFAULT_LEASE_REFRESH_INTERVAL,
+            tags: Vec::new(),
             #[cfg(feature = "heartbeat")]
             heartbeat_url: None,
             #[cfg(feature = "heartbeat")]
@@ -314,6 +319,37 @@ impl WorkerBuilder {
         self
     }
 
+    /// Declare tags this worker carries, adding to any set before.
+    ///
+    /// The worker only picks runs whose required tags (from
+    /// [`WorkflowHandler::required_worker_tags`] and the run's own
+    /// `worker_tags`) are all in this list, and only runs of the workflows it
+    /// registered. A run requiring a tag no worker carries stays pending.
+    /// Defaults to no tag: the worker only takes runs that require none.
+    ///
+    /// Each tag is 1 to 64 bytes of ASCII letters, digits and `- _ . : / =`,
+    /// at most 32 tags; [`build`](Self::build) rejects anything else.
+    /// Surrounding whitespace and duplicates are dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() {
+    /// let builder = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .tags(["gpu", "region:eu"]);
+    /// # }
+    /// ```
+    pub fn tags<I, S>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tags.extend(tags.into_iter().map(Into::into));
+        self
+    }
+
     /// Set how long a lease stays valid without a refresh.
     ///
     /// Once it expires, the API reaper requeues the run for another worker.
@@ -409,11 +445,15 @@ impl WorkerBuilder {
     /// # Errors
     ///
     /// Returns [`WorkerError::Internal`] if no provider has been set.
-    /// Returns [`WorkerError::Engine`] if a handler registration fails.
+    /// Returns [`WorkerError::Engine`] if a handler registration fails, or
+    /// wrapping [`EngineError::InvalidWorkerTag`] if a tag set with
+    /// [`tags`](Self::tags) is invalid.
     pub fn build(self) -> Result<Worker, WorkerError> {
         let provider = self
             .provider
             .ok_or_else(|| WorkerError::Internal("WorkerBuilder: provider is required".into()))?;
+        validate_worker_tags(&self.tags).map_err(EngineError::InvalidWorkerTag)?;
+        let tags = normalize_worker_tags(self.tags);
 
         let store: Arc<dyn Store> = Arc::new(ApiRunStore::new(&self.api_url, &self.worker_token));
         let strategy = self
@@ -434,6 +474,8 @@ impl WorkerBuilder {
                 .register_boxed(handler)
                 .map_err(WorkerError::Engine)?;
         }
+        let capabilities = WorkerCapabilities::new(registered_workflows(&engine), tags.clone());
+        engine.set_worker_tags(tags);
 
         let (log_sender, log_receiver) = ironflow_engine::log_sender::channel();
         engine.set_log_sender(log_sender);
@@ -457,6 +499,7 @@ impl WorkerBuilder {
             api_url: self.api_url,
             worker_token: self.worker_token,
             worker_id: self.worker_id,
+            capabilities,
             log_receiver: Mutex::new(Some(log_receiver)),
             concurrency: self.concurrency,
             poll_interval: self.poll_interval,
@@ -481,6 +524,7 @@ pub struct Worker {
     api_url: String,
     worker_token: String,
     worker_id: String,
+    capabilities: WorkerCapabilities,
     log_receiver: Mutex<Option<LogReceiver>>,
     concurrency: usize,
     poll_interval: Duration,
@@ -540,6 +584,29 @@ impl PoisonPillTracker {
 }
 
 impl Worker {
+    /// What this worker asks the API for: the workflows it registered,
+    /// sorted, and the tags it carries, sorted and deduplicated.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
+    /// use ironflow_worker::WorkerBuilder;
+    ///
+    /// # fn example() -> Result<(), ironflow_worker::WorkerError> {
+    /// let worker = WorkerBuilder::new("http://localhost:3000", "token")
+    ///     .provider(Arc::new(ClaudeCodeProvider::new()))
+    ///     .tags(["gpu"])
+    ///     .build()?;
+    /// assert_eq!(worker.capabilities().tags, vec!["gpu".to_string()]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn capabilities(&self) -> &WorkerCapabilities {
+        &self.capabilities
+    }
+
     /// Run the worker loop until a shutdown signal (SIGTERM/SIGINT) is received.
     ///
     /// On shutdown, the worker stops picking new runs and waits for all
@@ -615,7 +682,8 @@ impl Worker {
         }
 
         #[cfg(feature = "prometheus")]
-        let mut queue_depth = QueueDepthGauge::new(&self.api_url, &self.worker_token);
+        let mut queue_depth =
+            QueueDepthGauge::new(&self.api_url, &self.worker_token, &self.capabilities);
 
         while !shutdown.is_cancelled() {
             // Drain outcome channel to update poison pill tracker
@@ -650,10 +718,13 @@ impl Worker {
             let run = self
                 .engine
                 .store()
-                .pick_next_pending(Some(LeaseRequest {
-                    worker_id: self.worker_id.clone(),
-                    ttl: self.lease_ttl,
-                }))
+                .pick_next_pending_for(
+                    Some(LeaseRequest {
+                        worker_id: self.worker_id.clone(),
+                        ttl: self.lease_ttl,
+                    }),
+                    Some(self.capabilities.clone()),
+                )
                 .await;
 
             match run {
@@ -842,6 +913,29 @@ impl Worker {
     }
 }
 
+/// Sorted names of the workflows registered on `engine`, sent to the API so
+/// the worker is only handed runs it can execute.
+///
+/// The names travel as one comma-separated query parameter: if one contains a
+/// comma it cannot be sent, so `None` is returned (any workflow) with a
+/// warning, and tags alone route the runs.
+fn registered_workflows(engine: &Engine) -> Option<Vec<String>> {
+    let mut names: Vec<String> = engine
+        .handler_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if let Some(name) = names.iter().find(|name| name.contains(',')) {
+        warn!(
+            workflow = %name,
+            "workflow name contains a comma: the worker will not filter runs by workflow"
+        );
+        return None;
+    }
+    names.sort();
+    Some(names)
+}
+
 /// Outcome of a single run execution, used for poison pill tracking.
 enum RunOutcome {
     /// Run completed successfully.
@@ -1017,9 +1111,13 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use ironflow_core::account_strategy::Priority;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay_decision::RecordReplayDecisionProvider;
+    use ironflow_engine::context::WorkflowContext;
+    use ironflow_engine::handler::HandlerFuture;
+    use ironflow_store::entities::{MAX_WORKER_TAGS, WorkerTagError};
 
     #[test]
     fn builder_new_creates_default_config() {
@@ -1186,6 +1284,110 @@ mod tests {
         let builder = WorkerBuilder::new("http://localhost:3000", "token").provider(provider);
         let result = builder.build();
         assert!(result.is_ok());
+    }
+
+    struct Named(&'static str);
+
+    impl WorkflowHandler for Named {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn tagged_builder() -> WorkerBuilder {
+        WorkerBuilder::new("http://localhost:3000", "token")
+            .provider(Arc::new(ClaudeCodeProvider::new()))
+    }
+
+    #[test]
+    fn builder_tags_default_to_empty() {
+        let worker = tagged_builder().build().unwrap();
+        assert!(worker.capabilities().tags.is_empty());
+        let engine_tags = worker.engine.worker_tags();
+        assert!(
+            engine_tags.is_some_and(<[String]>::is_empty),
+            "{engine_tags:?}"
+        );
+    }
+
+    #[test]
+    fn builder_tags_are_normalized_and_given_to_the_engine() {
+        let worker = tagged_builder()
+            .tags(["region:eu", " gpu ", "gpu"])
+            .build()
+            .unwrap();
+        let expected = vec!["gpu".to_string(), "region:eu".to_string()];
+        assert_eq!(worker.capabilities().tags, expected);
+        assert_eq!(worker.engine.worker_tags(), Some(expected.as_slice()));
+    }
+
+    #[test]
+    fn builder_tags_extend_previous_ones() {
+        let worker = tagged_builder()
+            .tags(["gpu"])
+            .tags(vec!["arm".to_string()])
+            .build()
+            .unwrap();
+        assert_eq!(
+            worker.capabilities().tags,
+            vec!["arm".to_string(), "gpu".to_string()]
+        );
+    }
+
+    #[test]
+    fn builder_tags_capabilities_list_registered_workflows_sorted() {
+        let worker = tagged_builder()
+            .register(Named("deploy"))
+            .register(Named("build"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            worker.capabilities().workflows,
+            Some(vec!["build".to_string(), "deploy".to_string()])
+        );
+    }
+
+    #[test]
+    fn builder_tags_capabilities_without_handlers_take_no_workflow() {
+        let worker = tagged_builder().build().unwrap();
+        assert_eq!(worker.capabilities().workflows, Some(Vec::new()));
+    }
+
+    #[test]
+    fn builder_tags_workflow_name_with_comma_disables_workflow_filter() {
+        let worker = tagged_builder()
+            .register(Named("deploy"))
+            .register(Named("build,test"))
+            .tags(["gpu"])
+            .build()
+            .unwrap();
+        assert_eq!(worker.capabilities().workflows, None);
+        assert_eq!(worker.capabilities().tags, vec!["gpu".to_string()]);
+    }
+
+    #[test]
+    fn builder_rejects_invalid_tags() {
+        let invalid: [&[&str]; 3] = [&["bad tag"], &[""], &["gpu", "  "]];
+        for tags in invalid {
+            let result = tagged_builder().tags(tags.iter().copied()).build();
+            let Err(WorkerError::Engine(EngineError::InvalidWorkerTag(_))) = result else {
+                panic!("tags {tags:?} must be rejected");
+            };
+        }
+    }
+
+    #[test]
+    fn builder_rejects_too_many_tags() {
+        let tags = (0..=MAX_WORKER_TAGS).map(|i| format!("tag-{i}"));
+        let result = tagged_builder().tags(tags).build();
+        let Err(WorkerError::Engine(EngineError::InvalidWorkerTag(err))) = result else {
+            panic!("too many tags must be rejected");
+        };
+        assert!(matches!(err, WorkerTagError::TooMany { .. }), "{err:?}");
     }
 
     #[test]
