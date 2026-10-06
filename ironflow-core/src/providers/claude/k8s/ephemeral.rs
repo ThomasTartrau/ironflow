@@ -2186,10 +2186,6 @@ impl AgentProvider for K8sEphemeralProvider {
             .map(|_| ClaudeSubscriptionKind::ID)
     }
 
-    fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
-        true
-    }
-
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(async move {
             let created = self.create_pod(config).await?;
@@ -2565,12 +2561,6 @@ mod tests {
     #[should_panic(expected = "sessions_volume claim name must not be empty")]
     fn sessions_volume_empty_claim_panics() {
         let _ = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("");
-    }
-
-    #[test]
-    fn supports_sessions_for_session_id_is_true() {
-        let provider = K8sEphemeralProvider::sandboxed("img:v1");
-        assert!(provider.supports_sessions_for(&AgentConfig::new("hi")));
     }
 
     #[test]

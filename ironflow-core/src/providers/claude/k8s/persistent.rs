@@ -570,10 +570,6 @@ impl AgentProvider for K8sPersistentProvider {
         Box::pin(self.invoke_inner(config, None))
     }
 
-    fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
-        true
-    }
-
     fn invoke_with_logs<'a>(
         &'a self,
         config: &'a AgentConfig,

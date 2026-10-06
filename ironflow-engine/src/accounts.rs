@@ -643,10 +643,6 @@ impl AgentProvider for AccountAwareProvider {
     fn account_kind_for(&self, config: &AgentConfig) -> Option<&'static str> {
         self.inner.account_kind_for(config)
     }
-
-    fn supports_sessions_for(&self, config: &AgentConfig) -> bool {
-        self.inner.supports_sessions_for(config)
-    }
 }
 
 #[cfg(test)]

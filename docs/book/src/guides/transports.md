@@ -85,9 +85,8 @@ read:
 
 When the session is gone, the step does not fail: it logs
 `session <uuid> not found, restarting the agent from scratch` and runs the
-original prompt again in a session of the same id. A provider that cannot pin a
-session (the HTTP model APIs) skips all of this, and an interrupted step starts
-over as before. A step that sets `resume` or `session_id` itself is left alone.
+original prompt again in a session of the same id. A step that sets `resume`
+or `session_id` itself is left alone.
 
 Each resume writes the system log line
 `agent step resumed from session <uuid>` on the step and publishes an

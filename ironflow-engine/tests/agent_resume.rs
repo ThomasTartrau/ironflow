@@ -46,7 +46,6 @@ const WORKER: &str = "worker-that-dies";
 /// and can pretend that the session it is asked to resume does not exist.
 struct ResumeProvider {
     hang: AtomicBool,
-    sessions: bool,
     missing_session: bool,
     first_error: Mutex<Option<AgentError>>,
     calls: AtomicU32,
@@ -57,7 +56,6 @@ impl ResumeProvider {
     fn new() -> Self {
         Self {
             hang: AtomicBool::new(true),
-            sessions: true,
             missing_session: false,
             first_error: Mutex::new(None),
             calls: AtomicU32::new(0),
@@ -90,10 +88,6 @@ impl AgentProvider for ResumeProvider {
             }
             Ok(AgentOutput::new(json!("done")))
         })
-    }
-
-    fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
-        self.sessions
     }
 }
 
@@ -377,39 +371,6 @@ async fn agent_resume_restarts_from_scratch_when_the_session_is_gone() {
         assert_eq!(records.len(), 2, "steps: {records:?}");
         assert_eq!(records[1].status.state, StepStatus::Completed);
         assert_eq!(records[1].session_id.as_deref(), Some(session_id.as_str()));
-    })
-    .await
-    .expect("test timed out");
-}
-
-#[tokio::test]
-async fn agent_resume_is_skipped_for_a_provider_without_sessions() {
-    timeout(TEST_TIMEOUT, async {
-        let store = Arc::new(InMemoryStore::new());
-        let provider = Arc::new(ResumeProvider {
-            sessions: false,
-            ..ResumeProvider::new()
-        });
-        let engine = engine_with(
-            &store,
-            &provider,
-            AgentWorkflow::single(review_config()),
-            None,
-        );
-
-        let run_id = crash_then_finish(&engine, &store, &provider, 1).await;
-
-        let seen = provider.seen();
-        assert_eq!(seen.len(), 2, "configs: {seen:?}");
-        for config in &seen {
-            assert_eq!(config.prompt, "review the code");
-            assert_eq!(config.session_id, None);
-            assert_eq!(config.resume_session_id, None);
-        }
-
-        let records = steps_named(&store, run_id, "review").await;
-        assert_eq!(records.len(), 2, "steps: {records:?}");
-        assert!(records.iter().all(|s| s.session_id.is_none()));
     })
     .await
     .expect("test timed out");

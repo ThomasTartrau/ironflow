@@ -143,11 +143,6 @@ impl AgentProvider for ProviderRouter {
         self.resolve(config).account_kind_for(config)
     }
 
-    /// Whether the provider this config is routed to supports sessions.
-    fn supports_sessions_for(&self, config: &AgentConfig) -> bool {
-        self.resolve(config).supports_sessions_for(config)
-    }
-
     /// Release the run on the fallback and on every routed provider: any of
     /// them may have started something for it. A failure does not stop the
     /// others; the first one is returned once all have been asked.
@@ -175,9 +170,6 @@ mod tests {
     use super::*;
     use crate::error::AgentError;
     use crate::provider::AgentOutput;
-    use crate::providers::claude::ClaudeCodeProvider;
-    use crate::providers::http::adapter::HttpAgentProvider;
-    use crate::providers::http::anthropic::adapter::AnthropicApiAdapter;
 
     struct CountingProvider {
         name: &'static str,
@@ -282,18 +274,6 @@ mod tests {
             router.account_kind_for(&AgentConfig::new("x").model("sonnet")),
             Some("kind_a")
         );
-    }
-
-    #[test]
-    fn router_supports_sessions_for_session_id_follows_the_routed_provider() {
-        let router = ProviderRouter::new(Arc::new(ClaudeCodeProvider::new())).route(
-            ProviderMatcher::ModelPrefix("claude-api-".into()),
-            Arc::new(HttpAgentProvider::new(AnthropicApiAdapter::new(
-                "test-key".to_string(),
-            ))),
-        );
-        assert!(router.supports_sessions_for(&AgentConfig::new("x").model("sonnet")));
-        assert!(!router.supports_sessions_for(&AgentConfig::new("x").model("claude-api-sonnet")));
     }
 
     /// Provider journaling the runs it is asked to release.

@@ -292,10 +292,6 @@ mod tests {
                 }
             })
         }
-
-        fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
-            true
-        }
     }
 
     const SID: &str = "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d";

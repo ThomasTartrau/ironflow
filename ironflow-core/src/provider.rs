@@ -1861,27 +1861,6 @@ pub trait AgentProvider: Send + Sync {
     fn account_kind_for(&self, _config: &AgentConfig) -> Option<&'static str> {
         self.account_kind()
     }
-
-    /// Whether this provider can create and resume Claude Code sessions for
-    /// this `config`.
-    ///
-    /// When `true`, the provider honours [`AgentConfig::session_id`] and
-    /// [`AgentConfig::resume_session_id`], and the engine fixes a session id
-    /// before an agent step launches so the step can resume after an
-    /// interruption. Defaults to `false` (HTTP providers, fixtures).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ironflow_core::providers::claude::ClaudeCodeProvider;
-    /// use ironflow_core::provider::{AgentConfig, AgentProvider};
-    ///
-    /// let provider = ClaudeCodeProvider::new();
-    /// assert!(provider.supports_sessions_for(&AgentConfig::new("hi")));
-    /// ```
-    fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
-        false
-    }
 }
 
 // The decision abstraction lives beside `AgentProvider`: re-exported here so

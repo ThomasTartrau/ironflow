@@ -28,8 +28,8 @@ impl WorkflowContext {
     /// step resumes it with its resume prompt, [`DEFAULT_RESUME_PROMPT`] when
     /// the author set none. Otherwise the step gets a new session id.
     ///
-    /// Does nothing for a step that is not an agent step, for a provider that
-    /// cannot pin a session, or when the author already set a session.
+    /// Does nothing for a step that is not an agent step, or when the author
+    /// already set a session.
     pub(super) async fn assign_agent_session(
         &self,
         config: &mut StepConfig,
@@ -40,10 +40,7 @@ impl WorkflowContext {
         let StepConfig::Agent(agent_config) = config else {
             return Ok(());
         };
-        if agent_config.resume_session_id.is_some()
-            || agent_config.session_id.is_some()
-            || !self.provider.supports_sessions_for(agent_config)
-        {
+        if agent_config.resume_session_id.is_some() || agent_config.session_id.is_some() {
             return Ok(());
         }
 

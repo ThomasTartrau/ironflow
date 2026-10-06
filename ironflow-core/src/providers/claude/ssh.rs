@@ -566,10 +566,6 @@ impl AgentProvider for SshProvider {
         Some(ClaudeSubscriptionKind::ID)
     }
 
-    fn supports_sessions_for(&self, _config: &AgentConfig) -> bool {
-        true
-    }
-
     fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
         Box::pin(self.invoke_inner(config, None))
     }
