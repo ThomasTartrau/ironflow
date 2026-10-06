@@ -12,7 +12,7 @@ use crate::entities::{
     SendSignalRequest, SetSecretRequest, SignInRequest, SignalDeliveryResponse, SignalResponse,
     StatsHistoryBucketResponse, StatsHistoryResponse, StatsResponse, StepAccountResponse,
     StepResponse, UpdateProviderAccountRequest, UpdateRoleRequest, UpdateScheduleRequest,
-    UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
+    UpdateUserGroupsRequest, UserGroupsResponse, UserResponse, WorkerRouting,
 };
 use crate::routes::api_keys::available_scopes::ScopeEntry;
 use crate::routes::api_keys::create::{CreateApiKeyRequest, CreateApiKeyResponse};
@@ -151,6 +151,7 @@ mod with_signup {
             schemas(
                 RunResponse,
                 RunDetailResponse,
+                WorkerRouting,
                 CancelRunResponse,
                 StepResponse,
                 StepAccountResponse,
@@ -355,6 +356,7 @@ mod without_signup {
             schemas(
                 RunResponse,
                 RunDetailResponse,
+                WorkerRouting,
                 CancelRunResponse,
                 StepResponse,
                 StepAccountResponse,

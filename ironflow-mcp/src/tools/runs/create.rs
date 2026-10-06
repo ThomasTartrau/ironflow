@@ -42,6 +42,12 @@ pub struct CreateRunTool {
     /// are running; until then it stays pending. Each group is at most 255
     /// bytes and listed once; N is at least 1.
     pub concurrency_limits: Option<Vec<String>>,
+    /// Optional tags a worker must carry to pick the run (for example "gpu" or
+    /// "region:eu"). Only a worker started with every one of them takes it;
+    /// until such a worker polls, the run stays pending. Added to the tags the
+    /// workflow requires. Each tag is at most 64 characters among letters,
+    /// digits and "-_.:/="; at most 32 tags.
+    pub worker_tags: Option<Vec<String>>,
 }
 
 impl CreateRunTool {
@@ -69,6 +75,9 @@ impl CreateRunTool {
                 .map(concurrency_limit_json)
                 .collect::<Result<Vec<Value>, CallToolError>>()?;
             body["concurrency_limits"] = Value::Array(limits);
+        }
+        if let Some(tags) = &self.worker_tags {
+            body["worker_tags"] = json!(tags);
         }
 
         let run: Value = match &self.idempotency_key {

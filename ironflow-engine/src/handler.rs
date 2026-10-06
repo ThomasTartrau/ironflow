@@ -606,6 +606,36 @@ pub trait WorkflowHandler: Send + Sync {
         None
     }
 
+    /// Worker tags every run of this workflow requires.
+    ///
+    /// A run is only handed to a worker that carries all of these tags (see
+    /// `WorkerBuilder::tags` in `ironflow-worker`). Tags given at run creation
+    /// are merged with this list. The default is empty: any worker that
+    /// registered the workflow may take the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ironflow_engine::handler::{WorkflowHandler, HandlerFuture};
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// struct Transcode;
+    ///
+    /// impl WorkflowHandler for Transcode {
+    ///     fn name(&self) -> &str { "transcode" }
+    ///     fn required_worker_tags(&self) -> Vec<String> {
+    ///         vec!["gpu".into()]
+    ///     }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(Transcode.required_worker_tags(), vec!["gpu".to_string()]);
+    /// ```
+    fn required_worker_tags(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Check whether a run carrying `run_version` can be replayed by this
     /// handler without `force`.
     ///
@@ -720,7 +750,11 @@ pub trait WorkflowHandler: Send + Sync {
     ) -> RunCreatorFuture<'a> {
         use tracing::{Instrument, info_span};
 
-        let new_run = opts.build(self.name(), self.version(), self.default_max_cost_usd());
+        let new_run = opts.worker_tags(self.required_worker_tags()).build(
+            self.name(),
+            self.version(),
+            self.default_max_cost_usd(),
+        );
         let span = info_span!("handler.create_run", workflow = %self.name());
         Box::pin(creator.create_run(new_run).instrument(span))
     }
@@ -817,6 +851,10 @@ impl<T: WorkflowHandler + ?Sized> WorkflowHandler for Box<T> {
 
     fn guard_config(&self) -> Option<WorkflowGuardConfig> {
         (**self).guard_config()
+    }
+
+    fn required_worker_tags(&self) -> Vec<String> {
+        (**self).required_worker_tags()
     }
 
     fn is_version_compatible(&self, run_version: Option<&str>) -> bool {

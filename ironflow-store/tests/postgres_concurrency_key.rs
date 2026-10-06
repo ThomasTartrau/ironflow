@@ -48,6 +48,7 @@ fn new_run(key: &str) -> NewRun {
         concurrency_key: Some(key.to_string()),
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
+        worker_tags: Vec::new(),
     }
 }
 

@@ -28,6 +28,7 @@ import { StepTimeline } from "./_components/StepTimeline";
 import { AttemptSelector } from "./_components/AttemptSelector";
 import { listAttempts, resolveShownAttempt } from "./_components/attempts";
 import { capacityWaitLabel } from "./_components/capacity-wait";
+import { workerRoutingWarning } from "./_components/worker-routing";
 import { LogStreamPanel } from "./_components/LogStreamPanel";
 import { CostBudgetCard } from "./_components/CostBudgetCard";
 import { Breadcrumb } from "@/app/components/Breadcrumb";
@@ -94,7 +95,7 @@ function isEmptyPayload(payload: unknown): boolean {
 }
 
 export function Component() {
-	const { run, steps, payload, active_descendant_count } =
+	const { run, steps, payload, active_descendant_count, worker_routing } =
 		useLoaderData() as RunDetailResponse;
 	// Absent from a server older than the field.
 	const activeDescendantCount = active_descendant_count ?? 0;
@@ -123,6 +124,7 @@ export function Component() {
 	const signalName = waitingSignal?.input?.name;
 	const waitingSignalName = typeof signalName === "string" ? signalName : null;
 	const capacityWait = capacityWaitLabel(run);
+	const routingWarning = workerRoutingWarning(run.status, worker_routing);
 
 	useDocumentMeta({
 		title: `${run.workflow_name} · Run ${run.id.slice(0, 8)}`,
@@ -170,6 +172,15 @@ export function Component() {
 						{ label: `Run ${run.id.slice(0, 8)}` },
 					]}
 				/>
+
+				{routingWarning && (
+					<div
+						role="status"
+						className="p-4 rounded-[var(--radius)] border border-amber-400/30 bg-amber-400/10 text-sm text-amber-700 dark:text-amber-300"
+					>
+						{routingWarning}
+					</div>
+				)}
 
 				<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
 					{run.scheduled_at && !run.started_at ? (
@@ -250,6 +261,25 @@ export function Component() {
 									className="font-mono text-xs gap-1"
 								>
 									{limit.group} ({limit.limit})
+								</Badge>
+							))}
+						</div>
+					</div>
+				)}
+
+				{run.worker_tags && run.worker_tags.length > 0 && (
+					<div className="flex items-center gap-2">
+						<span className="text-sm font-medium text-muted-foreground">
+							Tags worker
+						</span>
+						<div className="flex flex-wrap gap-1.5">
+							{run.worker_tags.map((tag) => (
+								<Badge
+									key={tag}
+									variant="secondary"
+									className="font-mono text-xs gap-1"
+								>
+									{tag}
 								</Badge>
 							))}
 						</div>

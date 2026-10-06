@@ -1,14 +1,30 @@
 //! `GET /api/v1/internal/runs/pending-count` — Number of runs waiting for a worker.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::IntoResponse;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use ironflow_store::entities::{ConcurrencyGroupBacklog, RunFilter, RunStatus};
 
+use crate::entities::parse_worker_capabilities;
 use crate::error::ApiError;
 use crate::response::ok;
 use crate::state::AppState;
+
+/// Query parameters for [`count_pending_runs`].
+///
+/// The same `workflows` and `tags` a worker sends to the pick route. Absent,
+/// every pending run is counted.
+#[derive(Debug, Deserialize)]
+pub struct PendingCountQuery {
+    /// Comma-separated workflow names the worker registered. Absent means
+    /// any workflow.
+    #[serde(default)]
+    pub workflows: Option<String>,
+    /// Comma-separated tags the worker carries. An empty value means none.
+    #[serde(default)]
+    pub tags: Option<String>,
+}
 
 /// Queue depth as seen by the store.
 #[derive(Serialize)]
@@ -22,13 +38,26 @@ struct PendingCount {
 ///
 /// A worker has no store of its own: it reads these counts to publish
 /// `ironflow_worker_queue_depth` and `ironflow_worker_queue_blocked_runs`.
+///
+/// When the worker sends its capabilities, `pending_runs` only counts the runs
+/// it can take, so a worker does not scale on a queue it cannot drain.
+/// `blocked_by_group` stays the count for every worker: a saturated group
+/// holds back runs whoever would take them.
+///
+/// # Errors
+///
+/// Returns [`ApiError::BadRequest`] if a tag is invalid.
 pub async fn count_pending_runs(
     State(state): State<AppState>,
+    Query(query): Query<PendingCountQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let eligible_for =
+        parse_worker_capabilities(query.workflows.as_deref(), query.tags.as_deref())?;
     let stats = state
         .store
         .get_stats(RunFilter {
             status: Some(RunStatus::Pending),
+            eligible_for,
             ..RunFilter::default()
         })
         .await?;
@@ -96,6 +125,7 @@ mod tests {
             concurrency_key: None,
             concurrency_limits: Vec::new(),
             max_cost_usd: None,
+            worker_tags: Vec::new(),
         }
     }
 
@@ -106,6 +136,85 @@ mod tests {
             None => builder,
         };
         builder.body(Body::empty()).unwrap()
+    }
+
+    async fn pending_runs_for(state: &AppState, query: &str) -> (StatusCode, JsonValue) {
+        let app = create_router(state.clone(), RouterConfig::default());
+        let req = Request::builder()
+            .uri(format!("/api/v1/internal/runs/pending-count?{query}"))
+            .header("authorization", "Bearer test-worker-token")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let status = resp.status();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, from_slice(&body).unwrap())
+    }
+
+    fn tagged_run(workflow: &str, tags: &[&str]) -> NewRun {
+        NewRun {
+            workflow_name: workflow.to_string(),
+            worker_tags: tags.iter().map(|t| (*t).to_string()).collect(),
+            ..new_run()
+        }
+    }
+
+    #[tokio::test]
+    async fn count_pending_runs_with_tags_counts_only_runs_the_worker_can_take() {
+        let state = test_state();
+        state
+            .store
+            .create_run(tagged_run("transcode", &["gpu"]))
+            .await
+            .unwrap();
+        state
+            .store
+            .create_run(tagged_run("transcode", &[]))
+            .await
+            .unwrap();
+        state
+            .store
+            .create_run(tagged_run("build", &[]))
+            .await
+            .unwrap();
+
+        let (status, json) = pending_runs_for(&state, "workflows=transcode&tags=").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["data"]["pending_runs"], 1);
+
+        let (_, json) = pending_runs_for(&state, "workflows=transcode&tags=gpu").await;
+        assert_eq!(json["data"]["pending_runs"], 2);
+
+        let (_, json) = pending_runs_for(&state, "tags=gpu").await;
+        assert_eq!(json["data"]["pending_runs"], 3);
+    }
+
+    #[tokio::test]
+    async fn count_pending_runs_without_tags_counts_every_pending_run() {
+        let state = test_state();
+        state
+            .store
+            .create_run(tagged_run("transcode", &["gpu"]))
+            .await
+            .unwrap();
+        state
+            .store
+            .create_run(tagged_run("build", &[]))
+            .await
+            .unwrap();
+
+        let (status, json) = pending_runs_for(&state, "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["data"]["pending_runs"], 2);
+    }
+
+    #[tokio::test]
+    async fn count_pending_runs_rejects_invalid_tag() {
+        let (status, json) = pending_runs_for(&test_state(), "tags=bad%2Ftag%20x").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json["error"]["code"], "BAD_REQUEST");
+        let message = json["error"]["message"].as_str().unwrap();
+        assert!(message.contains("bad/tag x"), "{message}");
     }
 
     #[tokio::test]
