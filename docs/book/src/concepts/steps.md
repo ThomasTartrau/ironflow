@@ -73,6 +73,9 @@ let verdict = ctx
     .await?;
 ```
 
+To read the `environment_id` or `account_id` of a typed step as well, call
+`ctx.agent_with_meta(..)`: it returns an `AgentReply` with the typed `answer` next to them.
+
 Tools are an enum: `.allow_tool(Tool::Bash)`, `Tool::Custom("mcp__server__tool".into())`
 for anything else. Tools and structured output are mutually exclusive.
 

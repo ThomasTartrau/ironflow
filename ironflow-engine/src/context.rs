@@ -87,6 +87,8 @@ use crate::plan::SharedPlanRecorder;
 /// ```
 pub use ironflow_store::entities::PARENT_RUN_ID_LABEL;
 
+pub use steps::agent::AgentReply;
+
 /// Callback type for resolving workflow handlers by name.
 pub(crate) type HandlerResolver =
     Arc<dyn Fn(&str) -> Option<Arc<dyn WorkflowHandler>> + Send + Sync>;

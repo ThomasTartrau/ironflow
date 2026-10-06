@@ -273,6 +273,10 @@ if let Some(environment) = clone.environment_id.as_deref() {
 }
 ```
 
+A structured step (`.output::<T>()`) answers with `T`, which hides the id from
+`ctx.agent`. Use `ctx.agent_with_meta`: its `AgentReply` holds the typed `answer`, the
+`environment_id` and the `account_id`. A replayed step returns the same ids.
+
 The claim carries the ironflow labels with `app.kubernetes.io/component=environment`,
 the run and step labels of the step that created it, and the
 `ironflow.io/expires-at` annotation. Every use pushes the expiry `ttl` forward
