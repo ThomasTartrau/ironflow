@@ -7,9 +7,11 @@ use rust_decimal::Decimal;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use ironflow_core::operations::agent::Agent;
+use ironflow_core::error::OperationError;
+use ironflow_core::operations::agent::{Agent, AgentResult};
 use ironflow_core::pricing::{CostBreakdown, StaticPricing, spawn_log};
 use ironflow_core::provider::{AgentConfig, AgentProvider, LogSink};
+use ironflow_core::providers::claude::is_session_not_found;
 use ironflow_store::entities::StepKind;
 
 use crate::error::EngineError;
@@ -42,6 +44,58 @@ impl<'a> AgentExecutor<'a> {
         self.log_sender = Some(sender);
         self
     }
+
+    fn emit_system(&self, line: &str) {
+        if let Some(ref sender) = self.log_sender {
+            sender.emit(LogStream::System, line);
+        }
+    }
+
+    async fn run_agent(
+        &self,
+        config: AgentConfig,
+        provider: &Arc<dyn AgentProvider>,
+    ) -> Result<AgentResult, OperationError> {
+        let mut agent = Agent::from_config(config);
+        if let Some(ref sender) = self.log_sender {
+            agent = agent.log_sink(Arc::new(sender.clone()) as Arc<dyn LogSink>);
+        }
+        agent.run(provider.as_ref()).await
+    }
+
+    /// Resume `session_id` with `resume_prompt`. When the session does not
+    /// exist anymore (ephemeral HOME, other machine, other `cwd`), run the
+    /// original prompt from scratch in a session of the same id: the step
+    /// never fails because its session is gone.
+    async fn resume(
+        &self,
+        provider: &Arc<dyn AgentProvider>,
+        session_id: &str,
+        resume_prompt: &str,
+    ) -> Result<AgentResult, OperationError> {
+        info!(session_id, "agent step resumed from session");
+        self.emit_system(&format!("agent step resumed from session {session_id}"));
+
+        let mut resumed = self.config.clone();
+        resumed.prompt = resume_prompt.to_string();
+        match self.run_agent(resumed, provider).await {
+            Err(OperationError::Agent(ref err)) if is_session_not_found(err) => {
+                warn!(
+                    session_id,
+                    error = %err,
+                    "session not found, restarting the agent from scratch"
+                );
+                self.emit_system(&format!(
+                    "session {session_id} not found, restarting the agent from scratch"
+                ));
+                let mut fresh = self.config.clone();
+                fresh.resume_session_id = None;
+                fresh.session_id = Some(session_id.to_string());
+                self.run_agent(fresh, provider).await
+            }
+            other => other,
+        }
+    }
 }
 
 impl StepExecutor for AgentExecutor<'_> {
@@ -66,11 +120,12 @@ impl StepExecutor for AgentExecutor<'_> {
             );
         }
 
-        let mut agent = Agent::from_config(self.config.clone());
-        if let Some(ref sender) = self.log_sender {
-            agent = agent.log_sink(Arc::new(sender.clone()) as Arc<dyn LogSink>);
-        }
-        let result = agent.run(provider.as_ref()).await?;
+        let result = match (&self.config.resume_session_id, &self.config.resume_prompt) {
+            (Some(session_id), Some(resume_prompt)) => {
+                self.resume(provider, session_id, resume_prompt).await?
+            }
+            _ => self.run_agent(self.config.clone(), provider).await?,
+        };
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let cost = Decimal::try_from(result.cost_usd().unwrap_or(0.0)).unwrap_or(Decimal::ZERO);
@@ -177,9 +232,10 @@ impl StepExecutor for AgentExecutor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use ironflow_core::error::AgentError;
     use ironflow_core::operations::agent::PermissionMode;
     use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture};
     use serde_json::json;
@@ -197,6 +253,132 @@ mod tests {
         fn invoke<'a>(&'a self, _config: &'a AgentConfig) -> InvokeFuture<'a> {
             Box::pin(async move { Ok(self.output.clone()) })
         }
+    }
+
+    /// Provider recording every config it receives, failing a resume with
+    /// `resume_error` when set.
+    struct SessionProvider {
+        seen: Mutex<Vec<AgentConfig>>,
+        resume_error: Option<String>,
+    }
+
+    impl SessionProvider {
+        fn new(resume_error: Option<&str>) -> Arc<Self> {
+            Arc::new(Self {
+                seen: Mutex::new(Vec::new()),
+                resume_error: resume_error.map(String::from),
+            })
+        }
+
+        fn seen(&self) -> Vec<AgentConfig> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl AgentProvider for SessionProvider {
+        fn invoke<'a>(&'a self, config: &'a AgentConfig) -> InvokeFuture<'a> {
+            Box::pin(async move {
+                self.seen.lock().unwrap().push(config.clone());
+                match (&config.resume_session_id, &self.resume_error) {
+                    (Some(_), Some(stderr)) => Err(AgentError::ProcessFailed {
+                        exit_code: 1,
+                        stderr: stderr.clone(),
+                    }),
+                    _ => {
+                        let mut output = AgentOutput::new(json!("ok"));
+                        output.cost_usd = Some(0.02);
+                        Ok(output)
+                    }
+                }
+            })
+        }
+    }
+
+    const SID: &str = "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d";
+
+    #[tokio::test]
+    async fn agent_resume_executor_sends_resume_prompt() {
+        timeout(Duration::from_secs(10), async {
+            let recorder = SessionProvider::new(None);
+            let provider: Arc<dyn AgentProvider> = recorder.clone();
+            let config = budget_config().resume(SID).resume_prompt("go on");
+
+            AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect("resumed step succeeds");
+
+            let seen = recorder.seen();
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].prompt, "go on");
+            assert_eq!(seen[0].resume_session_id.as_deref(), Some(SID));
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_resume_executor_falls_back_when_session_is_missing() {
+        timeout(Duration::from_secs(10), async {
+            let recorder =
+                SessionProvider::new(Some("No conversation found with session ID: 0192f0c1"));
+            let provider: Arc<dyn AgentProvider> = recorder.clone();
+            let config = budget_config().resume(SID).resume_prompt("go on");
+
+            AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect("a missing session never fails the step");
+
+            let seen = recorder.seen();
+            assert_eq!(seen.len(), 2);
+            assert_eq!(seen[1].prompt, "hi");
+            assert_eq!(seen[1].resume_session_id, None);
+            assert_eq!(seen[1].session_id.as_deref(), Some(SID));
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_resume_executor_propagates_other_errors() {
+        timeout(Duration::from_secs(10), async {
+            let recorder = SessionProvider::new(Some("permission denied"));
+            let provider: Arc<dyn AgentProvider> = recorder.clone();
+            let config = budget_config().resume(SID).resume_prompt("go on");
+
+            let err = AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect_err("other errors are not masked");
+
+            assert!(err.to_string().contains("permission denied"), "{err}");
+            assert_eq!(recorder.seen().len(), 1);
+        })
+        .await
+        .expect("test timed out");
+    }
+
+    #[tokio::test]
+    async fn agent_resume_executor_leaves_user_resume_alone() {
+        timeout(Duration::from_secs(10), async {
+            let recorder = SessionProvider::new(None);
+            let provider: Arc<dyn AgentProvider> = recorder.clone();
+            // A user-set resume without resume prompt keeps the original prompt.
+            let config = budget_config().resume(SID);
+
+            AgentExecutor::new(&config)
+                .execute(&provider)
+                .await
+                .expect("step succeeds");
+
+            let seen = recorder.seen();
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].prompt, "hi");
+            assert_eq!(seen[0].resume_session_id.as_deref(), Some(SID));
+        })
+        .await
+        .expect("test timed out");
     }
 
     fn budget_config() -> AgentConfig {

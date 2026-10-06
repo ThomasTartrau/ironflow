@@ -379,6 +379,17 @@ mod tests {
     }
 
     #[test]
+    fn hash_config_ignores_session_id() {
+        // The engine draws a fresh session id per step: hashing it would
+        // never match a recorded fixture again.
+        let config1 = AgentConfig::new("Review").session_id("sid-1");
+        let config2 = AgentConfig::new("Review").session_id("sid-2");
+        let plain = AgentConfig::new("Review");
+        assert_eq!(hash_config(&config1), hash_config(&config2));
+        assert_eq!(hash_config(&config1), hash_config(&plain));
+    }
+
+    #[test]
     fn test_hash_config_format() {
         let config = AgentConfig::new("Test");
         let hash = hash_config(&config);

@@ -297,6 +297,33 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 }
 ```
 
+### Interrupted step
+
+When the worker running an agent step loses its lease, the next execution of the step
+resumes the Claude Code session it was running in instead of starting over. The engine
+sends `DEFAULT_RESUME_PROMPT`, or the step's own `resume_prompt`, in place of the prompt.
+A session that is gone (other machine, ephemeral pod without `sessions_volume`) falls
+back to the original prompt. HTTP providers start over. A step retry (`retry_policy`)
+sends the original prompt into the same session.
+
+```rust,no_run
+use ironflow_engine::config::{AgentStepConfig, Tool};
+use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::error::EngineError;
+
+async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
+    ctx.agent(
+        "review",
+        AgentStepConfig::new("Review the diff in /workspace and write REVIEW.md.")
+            .allow_tool(Tool::Read)
+            .max_budget_usd(0.50)
+            .resume_prompt("You were interrupted. Finish REVIEW.md where you stopped."),
+    )
+    .await?;
+    Ok(())
+}
+```
+
 ## Approval
 
 ```rust,no_run

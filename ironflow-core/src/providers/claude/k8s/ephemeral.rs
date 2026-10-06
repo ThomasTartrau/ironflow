@@ -362,6 +362,7 @@ pub struct K8sEphemeralProvider {
     auth_proxy_url: Option<String>,
     auth_proxy_admin_key: Option<String>,
     environment: Option<EnvironmentVolume>,
+    sessions_claim: Option<String>,
 }
 
 /// Apply a Kubernetes `runtimeClassName` onto a built pod.
@@ -422,6 +423,7 @@ impl K8sEphemeralProvider {
             auth_proxy_url: None,
             auth_proxy_admin_key: None,
             environment: None,
+            sessions_claim: None,
         }
     }
 
@@ -555,6 +557,40 @@ impl K8sEphemeralProvider {
     pub fn run_as_user(mut self, uid: i64) -> Self {
         assert!(uid > 0, "run_as_user must be greater than 0");
         self.sandbox_mut("run_as_user").run_as_user = uid;
+        self
+    }
+
+    /// Keep Claude Code sessions on a PersistentVolumeClaim so an agent step
+    /// interrupted with its pod can resume its session in a new pod.
+    ///
+    /// `HOME` of a sandboxed pod is an `emptyDir`: without this volume the
+    /// sessions die with the pod and an interrupted step restarts from
+    /// scratch. The claim is mounted read-write at
+    /// [`SESSIONS_MOUNT_PATH`](super::common::SESSIONS_MOUNT_PATH)
+    /// (`~/.claude/projects`). Use a `ReadWriteMany` claim, or make sure the
+    /// next pod lands on the same node. Claude Code keys sessions by working
+    /// directory, so the steps must keep the same `cwd`. Claude profiles
+    /// copied into `~/.claude/projects` are refused.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider was not built with [`sandboxed`](Self::sandboxed),
+    /// or if `claim_name` is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("claude-sessions");
+    /// ```
+    pub fn sessions_volume(mut self, claim_name: &str) -> Self {
+        assert!(
+            !claim_name.is_empty(),
+            "sessions_volume claim name must not be empty"
+        );
+        self.sandbox_mut("sessions_volume");
+        self.sessions_claim = Some(claim_name.to_string());
         self
     }
 
@@ -1680,6 +1716,7 @@ impl K8sEphemeralProvider {
                 step_pvc_volumes: &step_pvc_volumes,
                 managed_settings_configmap: merged.managed_settings_configmap.as_deref(),
                 claude_profiles: &self.claude_profiles,
+                sessions_claim: self.sessions_claim.as_deref(),
                 annotations: Some(&annotations),
             },
         });
@@ -2502,6 +2539,31 @@ mod tests {
     }
 
     #[test]
+    fn sessions_volume_builder_stores_claim_for_session_id() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("claude-sessions");
+        assert_eq!(provider.sessions_claim.as_deref(), Some("claude-sessions"));
+        assert!(
+            K8sEphemeralProvider::sandboxed("img:v1")
+                .sessions_claim
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "sessions_volume requires a provider built with K8sEphemeralProvider::sandboxed"
+    )]
+    fn sessions_volume_on_non_sandboxed_panics() {
+        let _ = K8sEphemeralProvider::new("img:v1").sessions_volume("claude-sessions");
+    }
+
+    #[test]
+    #[should_panic(expected = "sessions_volume claim name must not be empty")]
+    fn sessions_volume_empty_claim_panics() {
+        let _ = K8sEphemeralProvider::sandboxed("img:v1").sessions_volume("");
+    }
+
+    #[test]
     #[should_panic(expected = "run_as_user must be greater than 0")]
     fn run_as_user_zero_panics() {
         let _ = K8sEphemeralProvider::sandboxed("img:v1").run_as_user(0);
@@ -2881,6 +2943,7 @@ mod tests {
                 step_pvc_volumes: &config.pod.pvc_volumes,
                 managed_settings_configmap: None,
                 claude_profiles: &provider.claude_profiles,
+                sessions_claim: provider.sessions_claim.as_deref(),
                 annotations: None,
             },
         })

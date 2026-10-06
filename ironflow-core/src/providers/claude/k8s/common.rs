@@ -32,6 +32,13 @@ pub const SANDBOX_UID: i64 = 10001;
 /// Home directory of the sandboxed agent, backed by an `emptyDir`.
 pub const SANDBOX_HOME: &str = "/home/claude";
 
+/// Directory Claude Code stores its sessions in (`~/.claude/projects`),
+/// where the sessions volume of a sandboxed pod is mounted.
+///
+/// Claude Code keys each session by the working directory under
+/// `<cwd-slug>/`, so a session only resumes from the same `cwd`.
+pub const SESSIONS_MOUNT_PATH: &str = "/home/claude/.claude/projects";
+
 /// Directory Claude Code reads `managed-settings.json` from on Linux.
 pub const MANAGED_SETTINGS_DIR: &str = "/etc/claude-code";
 
@@ -80,6 +87,10 @@ pub struct PodHardening<'a> {
     /// ConfigMaps holding a Claude profile, the n-th mounted read-only at
     /// [`profile_mount_path`]`(n)`.
     pub claude_profiles: &'a [ClaudeProfile],
+    /// PersistentVolumeClaim mounted read-write at [`SESSIONS_MOUNT_PATH`]
+    /// so Claude Code sessions outlive the pod. Only rendered with a sandbox,
+    /// after the `HOME` mount it is nested in.
+    pub sessions_claim: Option<&'a str>,
     /// Annotations written into the pod metadata.
     pub annotations: Option<&'a BTreeMap<String, String>>,
 }
@@ -516,6 +527,22 @@ fn validate_hardening(config: &PodConfig<'_>) -> Result<(), AgentError> {
         .map(|(_, mount)| mount.trim_end_matches('/'))
         .collect();
 
+    if config.hardening.sessions_claim.is_some() {
+        seen.insert(SESSIONS_MOUNT_PATH);
+        // The profile copy would write into the persistent sessions volume.
+        if let Some(profile) = config
+            .hardening
+            .claude_profiles
+            .iter()
+            .find(|p| p.subdir == "projects" || p.subdir.starts_with("projects/"))
+        {
+            return Err(hardening_error(format!(
+                "claude profile subdir '{}' overlaps the sessions volume at '{SESSIONS_MOUNT_PATH}'",
+                profile.subdir
+            )));
+        }
+    }
+
     for volume in config.hardening.step_pvc_volumes {
         volume
             .validate()
@@ -757,6 +784,17 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
             "emptyDir": { "sizeLimit": sandbox.home_size_limit }
         }));
         main_mounts_json.push(json!({ "name": "ironflow-home", "mountPath": SANDBOX_HOME }));
+        // Nested in HOME: the mount must follow the HOME mount.
+        if let Some(claim_name) = hardening.sessions_claim {
+            volumes_json.push(json!({
+                "name": "ironflow-sessions",
+                "persistentVolumeClaim": { "claimName": claim_name }
+            }));
+            main_mounts_json.push(json!({
+                "name": "ironflow-sessions",
+                "mountPath": SESSIONS_MOUNT_PATH
+            }));
+        }
         volumes_json.push(json!({
             "name": "ironflow-tmp",
             "emptyDir": { "sizeLimit": sandbox.tmp_size_limit }
@@ -1854,6 +1892,96 @@ mod tests {
         assert!(pvc_mount.get("subPath").is_none());
         let cm_mount = find_by_name(mounts, "ro-2").unwrap();
         assert_eq!(cm_mount["subPath"], "rules.md");
+    }
+
+    #[test]
+    fn sessions_mount_path_is_under_sandbox_home() {
+        assert_eq!(
+            SESSIONS_MOUNT_PATH,
+            format!("{SANDBOX_HOME}/.claude/projects")
+        );
+    }
+
+    #[test]
+    fn build_pod_spec_sessions_volume_mounted_after_home() {
+        let sandbox = SandboxSettings::default();
+        let pod = pod_json(&hardened_config(PodHardening {
+            sessions_claim: Some("claude-sessions"),
+            ..sandboxed(&sandbox)
+        }));
+        let volume = find_by_name(&pod["spec"]["volumes"], "ironflow-sessions").unwrap();
+        assert_eq!(
+            volume["persistentVolumeClaim"]["claimName"],
+            "claude-sessions"
+        );
+        let mounts = pod["spec"]["containers"][0]["volumeMounts"]
+            .as_array()
+            .unwrap();
+        let position = |name: &str| mounts.iter().position(|m| m["name"] == name).unwrap();
+        let sessions = &mounts[position("ironflow-sessions")];
+        assert_eq!(sessions["mountPath"], SESSIONS_MOUNT_PATH);
+        assert!(sessions.get("readOnly").is_none());
+        assert!(position("ironflow-home") < position("ironflow-sessions"));
+    }
+
+    #[test]
+    fn build_pod_spec_without_sessions_volume_has_none() {
+        let sandbox = SandboxSettings::default();
+        let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+        assert!(find_by_name(&pod["spec"]["volumes"], "ironflow-sessions").is_none());
+    }
+
+    #[test]
+    fn validate_hardening_rejects_step_pvc_at_sessions_mount() {
+        let sandbox = SandboxSettings::default();
+        let step_pvcs = vec![step_pvc("other", SESSIONS_MOUNT_PATH, None, false)];
+        let config = hardened_config(PodHardening {
+            sessions_claim: Some("claude-sessions"),
+            step_pvc_volumes: &step_pvcs,
+            ..sandboxed(&sandbox)
+        });
+        assert!(hardening_err(&config).contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_hardening_rejects_projects_profile_with_sessions_volume() {
+        let sandbox = SandboxSettings::default();
+        for subdir in ["projects", "projects/demo"] {
+            let profiles = vec![ClaudeProfile {
+                configmap: "profile".to_string(),
+                subdir: subdir.to_string(),
+            }];
+            let config = hardened_config(PodHardening {
+                sessions_claim: Some("claude-sessions"),
+                claude_profiles: &profiles,
+                ..sandboxed(&sandbox)
+            });
+            assert!(
+                hardening_err(&config).contains("overlaps the sessions volume"),
+                "subdir {subdir} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_hardening_accepts_other_profiles_with_sessions_volume() {
+        let sandbox = SandboxSettings::default();
+        let profiles = vec![
+            ClaudeProfile {
+                configmap: "root".to_string(),
+                subdir: String::new(),
+            },
+            ClaudeProfile {
+                configmap: "rules".to_string(),
+                subdir: "projects-rules".to_string(),
+            },
+        ];
+        let config = hardened_config(PodHardening {
+            sessions_claim: Some("claude-sessions"),
+            claude_profiles: &profiles,
+            ..sandboxed(&sandbox)
+        });
+        assert!(build_pod_spec(&config).is_ok());
     }
 
     #[test]

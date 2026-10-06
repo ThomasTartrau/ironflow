@@ -160,6 +160,10 @@ pub struct StepResponse {
     /// workspace.
     #[serde(default)]
     pub environment_id: Option<String>,
+    /// Claude Code session the agent step ran in, if any. A step interrupted
+    /// by a lost lease resumes it on its next execution.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 impl StepResponse {
@@ -240,6 +244,7 @@ impl StepResponse {
             account_id: step.account_id,
             account: None,
             environment_id: step.environment_id,
+            session_id: step.session_id,
         }
     }
 }
@@ -360,6 +365,22 @@ mod tests {
         let body = serde_json::to_value(StepResponse::from(step)).expect("serialize");
 
         assert_eq!(body["environment_id"], "ironflow-env-0192f0c1");
+    }
+
+    #[tokio::test]
+    async fn session_id_is_null_by_default() {
+        let body = serde_json::to_value(StepResponse::from(step().await)).expect("serialize");
+        assert!(body["session_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn session_id_is_carried_from_the_stored_step() {
+        let mut step = step().await;
+        step.session_id = Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string());
+
+        let body = serde_json::to_value(StepResponse::from(step)).expect("serialize");
+
+        assert_eq!(body["session_id"], "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d");
     }
 
     #[tokio::test]

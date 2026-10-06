@@ -3799,6 +3799,11 @@
             "format": "uuid",
             "type": "string"
           },
+          "session_id": {
+            "description": "Claude Code session the agent step ran in, if any. A step interrupted\nby a lost lease resumes it on its next execution.",
+            "nullable": true,
+            "type": "string"
+          },
           "started_at": {
             "description": "When execution started.",
             "format": "date-time",
@@ -4342,6 +4347,37 @@
         ],
         "type": "object"
       },
+      "WorkflowAgentStepResumedEvent": {
+        "description": "Payload of the `WorkflowEvent::AgentStepResumed` workflow event.\n\nPublished when an agent step interrupted by a lost lease is re-executed\non the Claude Code session of the interrupted attempt instead of starting\nfrom scratch.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowAgentStepResumedEvent;\nuse chrono::Utc;\n\nlet payload = WorkflowAgentStepResumedEvent {\n    step_name: \"review\".to_string(),\n    step_index: 2,\n    session_id: \"0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d\".to_string(),\n    timestamp: Utc::now(),\n};\nassert_eq!(payload.step_index, 2);\n```",
+        "properties": {
+          "session_id": {
+            "description": "Claude Code session the step resumes.",
+            "type": "string"
+          },
+          "step_index": {
+            "description": "Zero-based position in the workflow.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_name": {
+            "description": "Human-readable step name.",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "When the step resumed.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_name",
+          "step_index",
+          "session_id",
+          "timestamp"
+        ],
+        "type": "object"
+      },
       "WorkflowAgentStepTokensUsedEvent": {
         "description": "Payload of the `WorkflowEvent::AgentStepTokensUsed` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowAgentStepTokensUsedEvent;\nuse rust_decimal::Decimal;\n\nlet payload = WorkflowAgentStepTokensUsedEvent {\n    step_name: \"review\".to_string(),\n    tokens: 15_000,\n    cost_usd: Decimal::new(42, 4),\n};\nassert_eq!(payload.tokens, 15_000);\n```",
         "properties": {
@@ -4606,6 +4642,29 @@
               }
             ],
             "description": "Token usage report for an agent step."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowAgentStepResumedEvent",
+                "description": "An interrupted agent step resumed its Claude Code session."
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "agent_step_resumed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "An interrupted agent step resumed its Claude Code session."
           }
         ]
       },

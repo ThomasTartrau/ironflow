@@ -34,6 +34,11 @@ use crate::state::AppState;
 /// id already recorded on the step cannot be replaced by another one.
 /// Anything else is refused with `400 Bad Request` before the store is
 /// touched.
+///
+/// `session_id` is the Claude Code session the engine pins before an agent
+/// step launches. The step must be an agent step and the id a UUID, the only
+/// form the CLI accepts, and a session already recorded on the step cannot
+/// be replaced by another one.
 pub async fn update_step(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -52,6 +57,14 @@ pub async fn update_step(
             .await?
             .ok_or(ApiError::StepNotFound(id))?;
         check_environment_id(&step, environment_id)?;
+    }
+    if let Some(session_id) = update.session_id.as_deref() {
+        let step = state
+            .store
+            .get_step(id)
+            .await?
+            .ok_or(ApiError::StepNotFound(id))?;
+        check_session_id(&step, session_id)?;
     }
 
     state.store.update_step(id, update).await?;
@@ -143,6 +156,33 @@ fn check_environment_id(step: &Step, environment_id: &str) -> Result<(), ApiErro
     {
         return Err(ApiError::BadRequest(format!(
             "step {} already ran in environment '{recorded}'",
+            step.id
+        )));
+    }
+    Ok(())
+}
+
+/// Refuse a `session_id` the engine cannot have produced for `step`.
+///
+/// # Errors
+///
+/// Returns [`ApiError::BadRequest`] when `step` is not an agent step, when
+/// `session_id` is not a UUID, or when `step` already recorded another
+/// session.
+fn check_session_id(step: &Step, session_id: &str) -> Result<(), ApiError> {
+    if step.kind != StepKind::Agent {
+        return Err(ApiError::BadRequest(format!(
+            "session_id is only recorded on agent steps, step {} is {}",
+            step.id, step.kind
+        )));
+    }
+    Uuid::parse_str(session_id)
+        .map_err(|e| ApiError::BadRequest(format!("session_id must be a UUID: {e}")))?;
+    if let Some(recorded) = step.session_id.as_deref()
+        && recorded != session_id
+    {
+        return Err(ApiError::BadRequest(format!(
+            "step {} already runs in session '{recorded}'",
             step.id
         )));
     }
@@ -274,6 +314,7 @@ mod tests {
             clear_approval_deadline: false,
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         let req = Request::builder()
@@ -551,6 +592,7 @@ mod tests {
             clear_approval_deadline: false,
             account_id: None,
             environment_id: None,
+            session_id: None,
         };
 
         let req = Request::builder()
@@ -723,6 +765,96 @@ mod tests {
         let state = test_state();
 
         let status = put_update(&state, Uuid::now_v7(), &completed_in("ironflow-env-x")).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    const SESSION_ID: &str = "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d";
+
+    fn session(session_id: &str) -> StepUpdate {
+        StepUpdate {
+            session_id: Some(session_id.to_string()),
+            ..StepUpdate::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_step_records_the_session_id_from_the_worker() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+
+        let status = put_update(&state, step.id, &session(SESSION_ID)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.session_id.as_deref(), Some(SESSION_ID));
+        assert_eq!(stored.status.state, StepStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn session_id_on_a_non_agent_step_is_refused() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Shell).await;
+
+        let status = put_update(&state, step.id, &session(SESSION_ID)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert!(stored.session_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_id_that_is_not_a_uuid_is_refused() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+
+        for bad in ["", "session", "../../etc/passwd", "0192f0c1-7d2e-7a4b-9c3d"] {
+            let status = put_update(&state, step.id, &session(bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "accepted {bad:?}");
+        }
+
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert!(stored.session_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn recorded_session_id_cannot_be_replaced() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+        assert_eq!(
+            put_update(&state, step.id, &session(SESSION_ID)).await,
+            StatusCode::OK
+        );
+
+        let other = "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6e";
+        let status = put_update(&state, step.id, &session(other)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.session_id.as_deref(), Some(SESSION_ID));
+    }
+
+    #[tokio::test]
+    async fn recorded_session_id_can_be_sent_again() {
+        let state = test_state();
+        let step = running_step(&state, StepKind::Agent).await;
+        assert_eq!(
+            put_update(&state, step.id, &session(SESSION_ID)).await,
+            StatusCode::OK
+        );
+
+        let status = put_update(&state, step.id, &session(SESSION_ID)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let stored = state.store.get_step(step.id).await.unwrap().unwrap();
+        assert_eq!(stored.session_id.as_deref(), Some(SESSION_ID));
+    }
+
+    #[tokio::test]
+    async fn session_id_for_an_unknown_step_is_not_found() {
+        let state = test_state();
+
+        let status = put_update(&state, Uuid::now_v7(), &session(SESSION_ID)).await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
     }

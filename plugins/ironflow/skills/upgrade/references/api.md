@@ -315,3 +315,23 @@ or a retry loop around agent steps, can match the typed variant or drop the loop
 - let triage = AgentStepConfig::new("Triage the incident");
 + let triage = AgentStepConfig::new("Triage the incident").fail_fast_on_capacity();
 ```
+
+## agent-session-resume
+- kind: behavior
+- since: ironflow-core after 4.10.0, ironflow-engine after 2.49.0 (#168)
+
+An agent step interrupted by a lost worker lease no longer starts over on the next
+execution: on a Claude Code transport it resumes the session it was running in, with
+`DEFAULT_RESUME_PROMPT` or the step's `.resume_prompt(..)`, and keeps the work already
+done. A missing session (other machine, ephemeral pod) falls back to the original prompt.
+Code that re-ran the whole agent by hand after an interruption, or wrote a "check what is
+already done" preamble in the prompt for that case, can drop it and set a resume prompt.
+A sandboxed `K8sEphemeralProvider` keeps sessions across pods with `.sessions_volume(claim)`.
+A `retry_policy` retry of an agent step now sends the original prompt into the session
+the failed try created, so the agent sees what that try did.
+
+```diff
+- let review = AgentStepConfig::new("Review the diff. If a review is already half written, finish it.");
++ let review = AgentStepConfig::new("Review the diff.")
++     .resume_prompt("You were interrupted. Finish the review where you stopped.");
+```

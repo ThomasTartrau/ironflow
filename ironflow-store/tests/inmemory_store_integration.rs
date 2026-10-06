@@ -2227,6 +2227,44 @@ async fn update_step_records_environment_id_and_keeps_it_on_later_updates() {
     );
 }
 
+#[tokio::test]
+async fn update_step_records_session_id_and_keeps_it_on_later_updates() {
+    let store = InMemoryStore::new();
+    let run = store.create_run(new_run("wf")).await.unwrap().into_run();
+    let step = store
+        .create_step(new_step(run.id, "agent", 0))
+        .await
+        .unwrap();
+    assert_eq!(step.session_id, None);
+
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                session_id: Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string()),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .update_step(
+            step.id,
+            StepUpdate {
+                duration_ms: Some(10),
+                ..StepUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let listed = store.list_steps(run.id).await.unwrap();
+    assert_eq!(
+        listed[0].session_id.as_deref(),
+        Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d")
+    );
+}
+
 // ─── Capacity wait ──────────────────────────────────────────────
 
 /// Create a run sleeping until `wake_at` on `kind` capacity, when given.

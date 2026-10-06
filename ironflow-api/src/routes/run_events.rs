@@ -33,6 +33,7 @@ where
                 WorkflowEvent::APPROVAL_REQUIRED,
                 WorkflowEvent::INPUT_REQUIRED,
                 WorkflowEvent::AGENT_STEP_TOKENS_USED,
+                WorkflowEvent::AGENT_STEP_RESUMED,
             ];
 
             let kinds: Vec<String> = raw
@@ -160,8 +161,8 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::{
-        Event, WorkflowEvent, WorkflowEventBus, WorkflowStepCompletedEvent,
-        WorkflowStepStartedEvent,
+        Event, WorkflowAgentStepResumedEvent, WorkflowEvent, WorkflowEventBus,
+        WorkflowStepCompletedEvent, WorkflowStepStartedEvent,
     };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{NewRun, TriggerKind};
@@ -396,6 +397,49 @@ mod tests {
         let text = read_until_contains(&mut reader, "step_completed", Duration::from_secs(5)).await;
 
         assert!(text.contains("step_completed"));
+        assert!(!text.contains("event: step_started"));
+    }
+
+    #[tokio::test]
+    async fn filters_by_agent_step_resumed_event_type() {
+        let (state, bus) = test_state_with_bus();
+        let run_id = create_run(&state).await;
+        let (addr, auth) = start_sse_server(state).await;
+
+        let mut reader = connect_sse(
+            &addr,
+            &format!("/{run_id}/events?types=agent_step_resumed"),
+            &auth,
+        )
+        .await;
+        wait_for_response_headers(&mut reader).await;
+
+        bus.publish(
+            run_id,
+            WorkflowEvent::StepStarted(WorkflowStepStartedEvent {
+                step_name: "review".to_string(),
+                step_index: 0,
+                timestamp: Utc::now(),
+            }),
+        );
+        bus.publish(
+            run_id,
+            WorkflowEvent::AgentStepResumed(WorkflowAgentStepResumedEvent {
+                step_name: "review".to_string(),
+                step_index: 0,
+                session_id: "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string(),
+                timestamp: Utc::now(),
+            }),
+        );
+
+        let text = read_until_contains(
+            &mut reader,
+            "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d",
+            Duration::from_secs(5),
+        )
+        .await;
+
+        assert!(text.contains("event: agent_step_resumed"));
         assert!(!text.contains("event: step_started"));
     }
 

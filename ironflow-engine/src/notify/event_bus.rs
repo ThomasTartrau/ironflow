@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! - [`WorkflowEvent`] -- granular step-level events (started, completed,
-//!   failed, approval, human input, token usage).
+//!   failed, approval, human input, token usage, agent session resume).
 //! - [`WorkflowEventBus`] -- per-run broadcast channels with subscribe /
 //!   publish / remove lifecycle.
 //!
@@ -214,6 +214,39 @@ pub struct WorkflowAgentStepTokensUsedEvent {
     pub cost_usd: Decimal,
 }
 
+/// Payload of the `WorkflowEvent::AgentStepResumed` workflow event.
+///
+/// Published when an agent step interrupted by a lost lease is re-executed
+/// on the Claude Code session of the interrupted attempt instead of starting
+/// from scratch.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_engine::notify::WorkflowAgentStepResumedEvent;
+/// use chrono::Utc;
+///
+/// let payload = WorkflowAgentStepResumedEvent {
+///     step_name: "review".to_string(),
+///     step_index: 2,
+///     session_id: "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string(),
+///     timestamp: Utc::now(),
+/// };
+/// assert_eq!(payload.step_index, 2);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WorkflowAgentStepResumedEvent {
+    /// Human-readable step name.
+    pub step_name: String,
+    /// Zero-based position in the workflow.
+    pub step_index: u32,
+    /// Claude Code session the step resumes.
+    pub session_id: String,
+    /// When the step resumed.
+    pub timestamp: DateTime<Utc>,
+}
+
 /// A granular step-level event for real-time workflow monitoring.
 ///
 /// Unlike [`Event`](super::Event) which covers the full system lifecycle
@@ -262,6 +295,9 @@ pub enum WorkflowEvent {
 
     /// Token usage report for an agent step.
     AgentStepTokensUsed(WorkflowAgentStepTokensUsedEvent),
+
+    /// An interrupted agent step resumed its Claude Code session.
+    AgentStepResumed(WorkflowAgentStepResumedEvent),
 }
 
 impl WorkflowEvent {
@@ -277,6 +313,8 @@ impl WorkflowEvent {
     pub const INPUT_REQUIRED: &'static str = "input_required";
     /// Event type constant for [`AgentStepTokensUsed`](WorkflowEvent::AgentStepTokensUsed).
     pub const AGENT_STEP_TOKENS_USED: &'static str = "agent_step_tokens_used";
+    /// Event type constant for [`AgentStepResumed`](WorkflowEvent::AgentStepResumed).
+    pub const AGENT_STEP_RESUMED: &'static str = "agent_step_resumed";
 
     /// Returns the event type as a static string (e.g. `"step_started"`).
     ///
@@ -302,6 +340,7 @@ impl WorkflowEvent {
             WorkflowEvent::ApprovalRequired(_) => Self::APPROVAL_REQUIRED,
             WorkflowEvent::InputRequired(_) => Self::INPUT_REQUIRED,
             WorkflowEvent::AgentStepTokensUsed(_) => Self::AGENT_STEP_TOKENS_USED,
+            WorkflowEvent::AgentStepResumed(_) => Self::AGENT_STEP_RESUMED,
         }
     }
 }
@@ -557,6 +596,12 @@ mod tests {
                 tokens: 15000,
                 cost_usd: Decimal::new(42, 4),
             }),
+            WorkflowEvent::AgentStepResumed(WorkflowAgentStepResumedEvent {
+                step_name: "review".to_string(),
+                step_index: 5,
+                session_id: "0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string(),
+                timestamp: Utc::now(),
+            }),
         ];
 
         for event in &cases {
@@ -731,6 +776,15 @@ mod tests {
                     cost_usd: Decimal::ZERO,
                 }),
                 "agent_step_tokens_used",
+            ),
+            (
+                WorkflowEvent::AgentStepResumed(WorkflowAgentStepResumedEvent {
+                    step_name: "s".to_string(),
+                    step_index: 0,
+                    session_id: "sid".to_string(),
+                    timestamp: Utc::now(),
+                }),
+                "agent_step_resumed",
             ),
         ];
 

@@ -145,6 +145,10 @@ pub struct Step {
     /// to `Agent::resume_environment` to continue in the same workspace.
     #[serde(default)]
     pub environment_id: Option<String>,
+    /// Claude Code session the agent step ran in, fixed before the agent
+    /// launched. The engine resumes it when the step was interrupted.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 /// Request to create a new step.
@@ -253,6 +257,9 @@ pub struct StepUpdate {
     /// Persistent environment the agent step ran in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment_id: Option<String>,
+    /// Claude Code session the agent step runs in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -328,6 +335,7 @@ mod tests {
             }],
             account_id: Some(Uuid::now_v7()),
             environment_id: Some("ironflow-env-0a1b2c".to_string()),
+            session_id: Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string()),
         };
 
         let json = serde_json::to_string(&step).expect("serialize");
@@ -354,6 +362,7 @@ mod tests {
         assert_eq!(back.output_tokens, step.output_tokens);
         assert_eq!(back.account_id, step.account_id);
         assert_eq!(back.environment_id, step.environment_id);
+        assert_eq!(back.session_id, step.session_id);
         assert_eq!(back.approval_deadline_at, step.approval_deadline_at);
         assert_eq!(back.approval_stage, step.approval_stage);
         assert_eq!(back.approval_assignee, step.approval_assignee);
@@ -398,6 +407,7 @@ mod tests {
         assert!(step.approval_requirement.is_none());
         assert!(step.approvals.is_empty());
         assert!(step.environment_id.is_none());
+        assert!(step.session_id.is_none());
     }
 
     #[test]
@@ -421,6 +431,7 @@ mod tests {
         assert!(update.approval_requirement.is_none());
         assert!(!update.clear_approval_deadline);
         assert!(update.environment_id.is_none());
+        assert!(update.session_id.is_none());
     }
 
     #[test]
@@ -445,6 +456,7 @@ mod tests {
             clear_approval_deadline: false,
             account_id: Some(Uuid::now_v7()),
             environment_id: Some("ironflow-env-0a1b2c".to_string()),
+            session_id: Some("0192f0c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d".to_string()),
         };
 
         let json = serde_json::to_string(&update).expect("serialize");
@@ -455,6 +467,7 @@ mod tests {
         assert_eq!(back.duration_ms, update.duration_ms);
         assert_eq!(back.account_id, update.account_id);
         assert_eq!(back.environment_id, update.environment_id);
+        assert_eq!(back.session_id, update.session_id);
         assert_eq!(back.cost_usd, update.cost_usd);
         assert_eq!(back.input_tokens, update.input_tokens);
         assert_eq!(back.cache_read_input_tokens, update.cache_read_input_tokens);

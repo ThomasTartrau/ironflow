@@ -40,8 +40,8 @@ use ironflow_engine::notify::{
     ProviderAccountUsageUpdatedEvent, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent,
     RunFailedEvent, RunStatusChangedEvent, SignalAwaitedEvent, SignalReceivedEvent,
     StepCompletedEvent, StepFailedEvent, UserSignedInEvent, UserSignedOutEvent, UserSignedUpEvent,
-    WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent, WorkflowEvent,
-    WorkflowInputRequiredEvent, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
+    WorkflowAgentStepResumedEvent, WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent,
+    WorkflowEvent, WorkflowInputRequiredEvent, WorkflowStepCompletedEvent, WorkflowStepFailedEvent,
     WorkflowStepStartedEvent,
 };
 use ironflow_store::entities::{
@@ -233,6 +233,7 @@ mod with_signup {
                 WorkflowApprovalRequiredEvent,
                 WorkflowInputRequiredEvent,
                 WorkflowAgentStepTokensUsedEvent,
+                WorkflowAgentStepResumedEvent,
                 AuditLogEntry,
                 ListAuditLogsQuery,
                 LogEntry,
@@ -436,6 +437,7 @@ mod without_signup {
                 WorkflowApprovalRequiredEvent,
                 WorkflowInputRequiredEvent,
                 WorkflowAgentStepTokensUsedEvent,
+                WorkflowAgentStepResumedEvent,
                 AuditLogEntry,
                 ListAuditLogsQuery,
                 LogEntry,

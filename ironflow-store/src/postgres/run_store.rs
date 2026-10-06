@@ -1442,6 +1442,7 @@ impl RunStore for PostgresStore {
             push_set!("output_tokens", update.output_tokens);
             push_set!("account_id", update.account_id);
             push_set!("environment_id", update.environment_id);
+            push_set!("session_id", update.session_id);
             push_set!("started_at", update.started_at);
             push_set!("completed_at", update.completed_at);
             push_set!("debug_messages", update.debug_messages);
@@ -1496,6 +1497,9 @@ impl RunStore for PostgresStore {
             }
             if let Some(ref environment_id) = update.environment_id {
                 query = query.bind(environment_id);
+            }
+            if let Some(ref session_id) = update.session_id {
+                query = query.bind(session_id);
             }
             if let Some(started) = update.started_at {
                 query = query.bind(started);

@@ -23,6 +23,7 @@ pub mod docker;
 #[cfg(feature = "transport-k8s")]
 pub mod k8s;
 
+pub use common::is_session_not_found;
 pub use local::ClaudeCodeProvider;
 
 #[cfg(feature = "transport-ssh")]
