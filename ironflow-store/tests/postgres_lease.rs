@@ -16,8 +16,10 @@ use std::collections::{HashMap, HashSet};
 use std::env::var;
 use std::time::Duration;
 
+use chrono::{SubsecRound, TimeDelta, Utc};
 use ironflow_store::entities::{
-    LeaseRequest, NewRun, NewStep, RunStatus, StepKind, TriggerKind, step_trace_id,
+    LeaseRequest, LeaseUpdate, NewRun, NewStep, RunStatus, RunUpdate, StepKind, TriggerKind,
+    step_trace_id,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::postgres::PostgresStore;
@@ -407,4 +409,110 @@ async fn terminal_transition_clears_the_lease() {
     let after = store.get_run(picked.id).await.unwrap().unwrap();
     assert!(after.worker_id.is_none());
     assert!(after.lease_expires_at.is_none());
+}
+
+#[tokio::test]
+#[ignore]
+async fn update_run_lease_set_with_running_status_attaches_lease() {
+    let _serial = SERIAL.lock().await;
+    let store = get_store().await;
+    drain_pending(&store).await;
+    let run = store
+        .create_run(new_run("lease-transfer", 3))
+        .await
+        .unwrap()
+        .into_run();
+    // Whole seconds: PostgreSQL keeps microseconds, chrono keeps nanoseconds.
+    let expires_at = Utc::now().trunc_subsecs(0) + TimeDelta::seconds(60);
+
+    store
+        .update_run(
+            run.id,
+            RunUpdate {
+                status: Some(RunStatus::Running),
+                lease: Some(LeaseUpdate::Set {
+                    worker_id: "worker-1".to_string(),
+                    expires_at,
+                }),
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let after = store.get_run(run.id).await.unwrap().unwrap();
+    assert_eq!(after.status.state, RunStatus::Running);
+    assert_eq!(after.worker_id.as_deref(), Some("worker-1"));
+    assert_eq!(after.lease_expires_at, Some(expires_at));
+    store
+        .renew_lease(run.id, lease("worker-1", 90))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn update_run_lease_release_keeps_run_running_without_lease() {
+    let _serial = SERIAL.lock().await;
+    let store = get_store().await;
+    drain_pending(&store).await;
+    store.create_run(new_run("lease-release", 3)).await.unwrap();
+    let picked = store
+        .pick_next_pending(Some(lease("worker-1", 90)))
+        .await
+        .unwrap()
+        .unwrap();
+
+    store
+        .update_run(
+            picked.id,
+            RunUpdate {
+                lease: Some(LeaseUpdate::Release),
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let after = store.get_run(picked.id).await.unwrap().unwrap();
+    assert_eq!(after.status.state, RunStatus::Running);
+    assert!(after.worker_id.is_none());
+    assert!(after.lease_expires_at.is_none());
+    let err = store
+        .renew_lease(picked.id, lease("worker-1", 90))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StoreError::LeaseLost { .. }));
+}
+
+#[tokio::test]
+#[ignore]
+async fn update_run_lease_none_leaves_lease_untouched() {
+    let _serial = SERIAL.lock().await;
+    let store = get_store().await;
+    drain_pending(&store).await;
+    store
+        .create_run(new_run("lease-untouched", 3))
+        .await
+        .unwrap();
+    let picked = store
+        .pick_next_pending(Some(lease("worker-1", 90)))
+        .await
+        .unwrap()
+        .unwrap();
+
+    store
+        .update_run(
+            picked.id,
+            RunUpdate {
+                duration_ms: Some(1500),
+                ..RunUpdate::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let after = store.get_run(picked.id).await.unwrap().unwrap();
+    assert_eq!(after.worker_id.as_deref(), Some("worker-1"));
+    assert_eq!(after.lease_expires_at, picked.lease_expires_at);
 }

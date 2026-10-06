@@ -26,8 +26,8 @@ use ironflow_core::metric_names::{
 use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    ConcurrencyLimit, NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter, RunStatus,
-    RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate, TriggerKind,
+    ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter,
+    RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate, TriggerKind,
     validate_concurrency_limits,
 };
 use ironflow_store::store::Store;
@@ -267,8 +267,23 @@ fn chain_label(run: &Run, key: &str) -> Option<Uuid> {
 /// The root run of the chain a sub-workflow child run belongs to.
 ///
 /// Resuming a child resumes this root instead: the root replays its steps
-/// and re-enters the same child run through its open `Workflow` step.
-pub(crate) fn chain_root(run: &Run) -> Option<Uuid> {
+/// and re-enters the same child run through its open `Workflow` step. The
+/// worker uses it to follow its lease from a child to the root it resumed.
+///
+/// `None` when `run` is not a sub-workflow child run.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ironflow_engine::engine::chain_root;
+/// use ironflow_store::entities::Run;
+/// use uuid::Uuid;
+///
+/// fn lease_target(run: &Run) -> Uuid {
+///     chain_root(run).unwrap_or(run.id)
+/// }
+/// ```
+pub fn chain_root(run: &Run) -> Option<Uuid> {
     chain_label(run, LABEL_ROOT_RUN_ID)
 }
 
@@ -1176,7 +1191,7 @@ impl Engine {
             .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
 
         if let Some(root_run_id) = chain_root(&run) {
-            return self.resume_chain(run_id, root_run_id).await;
+            return self.resume_chain(run, root_run_id).await;
         }
 
         let handler = self
@@ -1287,7 +1302,7 @@ impl Engine {
             .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
 
         if let Some(root_run_id) = chain_root(&run) {
-            return self.resume_chain(run_id, root_run_id).await;
+            return self.resume_chain(run, root_run_id).await;
         }
 
         self.resume_loaded_run(run).await
@@ -1300,11 +1315,20 @@ impl Engine {
     /// resumed; its replay re-enters the child. A root that is not suspended
     /// (already running, or finished) cannot take the child back: the child
     /// is failed.
+    ///
+    /// When the child holds a worker lease (it was picked by a worker), the
+    /// lease is transferred to the root in the same update that moves it to
+    /// `Running`, then released on the child: the worker keeps renewing the
+    /// root it now executes, and the reaper recovers the root if that worker
+    /// dies. A child without a lease (inline execution, API-side resume)
+    /// leaves the root without one, as before.
     async fn resume_chain(
         &self,
-        child_run_id: Uuid,
+        child: Run,
         root_run_id: Uuid,
     ) -> Result<WorkflowResult, EngineError> {
+        let child_run_id = child.id;
+        let lease = child.worker_id.zip(child.lease_expires_at);
         let root = self
             .store
             .get_run(root_run_id)
@@ -1313,16 +1337,14 @@ impl Engine {
 
         match root.status.state {
             RunStatus::AwaitingApproval | RunStatus::Pending => {
-                self.store
-                    .update_run_status(root_run_id, RunStatus::Running)
+                self.move_root_to_running(root_run_id, lease.as_ref())
                     .await?;
             }
             RunStatus::Sleeping => {
                 self.store
                     .update_run_status(root_run_id, RunStatus::Pending)
                     .await?;
-                self.store
-                    .update_run_status(root_run_id, RunStatus::Running)
+                self.move_root_to_running(root_run_id, lease.as_ref())
                     .await?;
             }
             other => {
@@ -1343,9 +1365,22 @@ impl Engine {
             }
         }
 
+        if lease.is_some() {
+            self.store
+                .update_run(
+                    child_run_id,
+                    RunUpdate {
+                        lease: Some(LeaseUpdate::Release),
+                        ..RunUpdate::default()
+                    },
+                )
+                .await?;
+        }
+
         info!(
             run_id = %child_run_id,
             root_run_id = %root_run_id,
+            lease_transferred = lease.is_some(),
             "child run resumed through its root run"
         );
 
@@ -1355,6 +1390,41 @@ impl Engine {
             .await?
             .ok_or(EngineError::Store(StoreError::RunNotFound(root_run_id)))?;
         self.resume_loaded_run(root).await
+    }
+
+    /// Move the suspended root run of a chain to `Running`.
+    ///
+    /// With `lease`, the root takes the worker lease of the child that
+    /// resumes it, atomically with the transition, so it is never `Running`
+    /// without an owner.
+    async fn move_root_to_running(
+        &self,
+        root_run_id: Uuid,
+        lease: Option<&(String, DateTime<Utc>)>,
+    ) -> Result<(), EngineError> {
+        match lease {
+            Some((worker_id, expires_at)) => {
+                self.store
+                    .update_run(
+                        root_run_id,
+                        RunUpdate {
+                            status: Some(RunStatus::Running),
+                            lease: Some(LeaseUpdate::Set {
+                                worker_id: worker_id.clone(),
+                                expires_at: *expires_at,
+                            }),
+                            ..RunUpdate::default()
+                        },
+                    )
+                    .await?;
+            }
+            None => {
+                self.store
+                    .update_run_status(root_run_id, RunStatus::Running)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     /// Resume `run`, already loaded and already `Running`.

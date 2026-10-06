@@ -142,6 +142,14 @@ pub trait RunStore: Send + Sync {
 
     /// Apply a partial update to a run.
     ///
+    /// [`RunUpdate::lease`] is applied in the same transaction as the status
+    /// transition, after it: `status: Running` with
+    /// [`LeaseUpdate::Set`](crate::entities::LeaseUpdate::Set) leaves the run
+    /// `Running` and owned by that worker, so it is never `Running` without a
+    /// lease in between. [`LeaseUpdate::Release`](crate::entities::LeaseUpdate::Release)
+    /// drops the lease without touching the status. An explicit lease change
+    /// wins over the clearing that a transition out of `Running` does.
+    ///
     /// # Errors
     ///
     /// Returns [`StoreError::RunNotFound`] if the run does not exist.
@@ -212,6 +220,8 @@ pub trait RunStore: Send + Sync {
     /// cleared, then goes back to `Pending` — or to `Failed` with
     /// [`LEASE_EXPIRED_ERROR`] once more than `max_retries` recoveries happened.
     /// Runs without a lease are never touched.
+    /// A root run resumed through its sub-workflow child carries the lease the
+    /// child held (see [`RunUpdate::lease`]), so it is recovered like any run.
     ///
     /// [`Run::retry_count`], and so the attempt number of the steps created
     /// afterwards, is left unchanged: a requeued run resumes in the same attempt
