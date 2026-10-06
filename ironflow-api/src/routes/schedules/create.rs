@@ -81,8 +81,7 @@ pub async fn create_schedule(
         policy.timezone = parse_timezone(timezone).map_err(ApiError::BadRequest)?;
     }
 
-    let next =
-        next_trigger(&req.cron_expression, policy.timezone).map_err(ApiError::BadRequest)?;
+    let next = next_trigger(&req.cron_expression, policy.timezone).map_err(ApiError::BadRequest)?;
 
     let schedule = state
         .store

@@ -193,6 +193,7 @@ impl ScheduleStore for InMemoryStore {
 #[cfg(test)]
 mod tests {
     use chrono::TimeDelta;
+    use chrono_tz::Tz;
     use serde_json::json;
 
     use crate::entities::{

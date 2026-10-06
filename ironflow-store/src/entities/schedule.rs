@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use chrono_tz::Tz;
 use strum::{AsRefStr, Display, EnumString, IntoStaticStr};
 use uuid::Uuid;
 
