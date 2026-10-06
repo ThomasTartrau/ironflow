@@ -121,6 +121,8 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::SignalWaiting { .. }
         // Not a failure: a child run suspended and the run waits with it.
         | EngineError::ChildSuspended { .. }
+        // Deliberate: a retry would start again the child the user stopped.
+        | EngineError::ChildRunCancelled { .. }
         | EngineError::InvalidSignal(_)
         // Deterministic: replaying reproduces the same position divergence or
         // the same incompatible handler version.

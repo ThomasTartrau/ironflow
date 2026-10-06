@@ -173,6 +173,10 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .route("/runs/{id}/logs", post(internal::push_logs::push_logs))
         .route("/runs/{id}/lease", post(internal::renew_lease::renew_lease))
         .route(
+            "/runs/{id}/descendants",
+            get(internal::list_descendants::list_descendants),
+        )
+        .route(
             "/runs/{id}/artifacts",
             get(internal::list_artifacts::list_artifacts),
         )

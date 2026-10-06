@@ -13,6 +13,7 @@ pub mod create_step_dependencies;
 pub mod get_run;
 pub mod get_secret;
 pub mod list_artifacts;
+pub mod list_descendants;
 pub mod pick_next_run;
 pub mod provider_accounts;
 pub mod push_logs;

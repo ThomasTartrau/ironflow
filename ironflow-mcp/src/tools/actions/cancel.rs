@@ -7,10 +7,10 @@ use serde_json::Value;
 
 use crate::client::ApiClient;
 
-/// Cancel a running workflow execution.
+/// Cancel a running workflow execution and the sub-workflow runs below it.
 #[mcp_tool(
     name = "cancel_run",
-    description = "Cancel an in-progress workflow execution. Only works on runs that are not yet in a terminal state (pending, running, retrying, awaiting_approval)."
+    description = "Cancel an in-progress workflow execution together with every sub-workflow run below it that is still active. Only works on runs that are not yet finished (pending, running, retrying, awaiting_approval, sleeping); cancelling an already cancelled run is accepted. The result is the cancelled run plus `cancelled_descendants`, the ids of the sub-runs cancelled with it. Cancelling a sub-run directly makes its parent fail, unless the parent tolerates the failure."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct CancelRunTool {

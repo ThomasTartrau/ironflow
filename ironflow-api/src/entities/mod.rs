@@ -35,7 +35,7 @@ pub use provider_account::{
     ListProviderAccountsQuery, ProviderAccountResponse, ProviderAccountTestResponse,
     ProviderAccountUsageResponse, UpdateProviderAccountRequest, UsageQuery,
 };
-pub use run::{ListRunsQuery, RunDetailResponse, RunResponse};
+pub use run::{CancelRunResponse, ListRunsQuery, RunDetailResponse, RunResponse};
 pub use schedule::{CreateScheduleRequest, ScheduleResponse, UpdateScheduleRequest};
 pub use secret::{
     KeyVersionsResponse, RotateSecretsRequest, RotateSecretsResponse, SecretResponse,

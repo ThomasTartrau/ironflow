@@ -23,6 +23,7 @@ mod artifact_store;
 mod audit_log_store;
 #[cfg(feature = "secret-store")]
 mod auth_proxy_grant_store;
+mod descendants;
 mod helpers;
 mod log_store;
 mod provider_account_store;

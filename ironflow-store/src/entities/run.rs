@@ -145,6 +145,30 @@ pub struct Run {
 /// ```
 pub const IDEMPOTENCY_WINDOW: TimeDelta = TimeDelta::hours(24);
 
+/// Label set on every child run of a sub-workflow step, holding the id of the
+/// run that started it.
+///
+/// The root of the chain is recorded under `ironflow.io/root-run-id`. Both are
+/// set on the child run when it is created, so a suspended child can be
+/// listed by label and resumed through its root, and the descendants of a run
+/// can be found by [`RunStore::list_active_descendants`](crate::store::RunStore::list_active_descendants).
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use ironflow_store::entities::{PARENT_RUN_ID_LABEL, RunFilter};
+/// use uuid::Uuid;
+///
+/// let parent = Uuid::now_v7();
+/// let children = RunFilter {
+///     labels: Some(HashMap::from([(PARENT_RUN_ID_LABEL.to_string(), parent.to_string())])),
+///     ..RunFilter::default()
+/// };
+/// assert!(children.labels.is_some());
+/// ```
+pub const PARENT_RUN_ID_LABEL: &str = "ironflow.io/parent-run-id";
+
 /// Maximum accepted length of an idempotency key, in bytes.
 ///
 /// # Examples

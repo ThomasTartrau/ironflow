@@ -1647,7 +1647,10 @@ impl Engine {
     ///
     /// Either way, steps left non-terminal by the failed attempt are closed via
     /// [`fail_orphaned_steps`](Self::fail_orphaned_steps) so they are never
-    /// confused with the next attempt's steps.
+    /// confused with the next attempt's steps, and the sub-workflow runs it
+    /// left non-terminal are cancelled by
+    /// [`cancel_descendants`](Self::cancel_descendants) (a failure there is
+    /// logged, not returned).
     ///
     /// Callers pass `retryable` explicitly rather than an error value, because
     /// the worker classifies failures it observes from the outside (a timeout, a
@@ -1732,6 +1735,9 @@ impl Engine {
         let status = update.status.unwrap_or(RunStatus::Failed);
         self.store.update_run(run_id, update).await?;
         self.fail_orphaned_steps(run_id, error).await?;
+        // The attempt is over: a retry starts new children, and nothing drives
+        // those this attempt left running.
+        self.cancel_descendants_of_stopped_run(run_id, error).await;
 
         Ok(status)
     }

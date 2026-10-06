@@ -174,6 +174,25 @@ completed steps (a child that already completed is not run again) and
 re-enters the same child run, which picks up where it stopped. Rejecting an
 approval gate inside the child fails the child and every ancestor.
 
+### Cancellation and stopped parents
+
+A child only runs inside its parent's execution, so no child outlives its
+parent:
+
+- `POST /api/v1/runs/:id/cancel` cancels the run and every sub-workflow run
+  below it that has not finished. Their open steps are closed and their
+  concurrency keys released; the response lists them in
+  `cancelled_descendants`. `GET /api/v1/runs/:id` gives the count beforehand
+  in `active_descendant_count`.
+- A parent that fails, schedules a retry (a timeout, a panic, a handler error)
+  or runs out of lease recoveries cancels the children its attempt left
+  running. A retry starts new children.
+- Cancelling a child directly ends the parent's `Workflow` step with the
+  child's `Cancelled` status. A suspended chain is woken for it. Without
+  `allow_failure` the step and the parent fail with `ChildRunCancelled`, never
+  retried; with it the step completes with a `Cancelled` output and the parent
+  ends as `Warning`.
+
 ## Approval steps
 
 ```rust,ignore

@@ -124,6 +124,25 @@ pub struct RunDetailResponse {
     pub steps: Vec<StepResponse>,
     /// Input payload that triggered this run.
     pub payload: serde_json::Value,
+    /// Sub-workflow runs below this run, at any depth, that are not finished:
+    /// cancelling the run cancels them too.
+    pub active_descendant_count: u64,
+}
+
+/// Response of `POST /api/v1/runs/:id/cancel`: the cancelled run, with the
+/// sub-workflow runs cancelled along with it.
+///
+/// The run's fields stay at the top level, as before the descendants were
+/// listed, so existing clients read the same document.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Serialize)]
+pub struct CancelRunResponse {
+    /// The cancelled run.
+    #[serde(flatten)]
+    pub run: RunResponse,
+    /// Sub-workflow runs below it that this request cancelled, oldest first.
+    /// Empty when none was still active.
+    pub cancelled_descendants: Vec<Uuid>,
 }
 
 /// Query parameters for listing runs.

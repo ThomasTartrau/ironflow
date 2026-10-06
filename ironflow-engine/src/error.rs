@@ -298,6 +298,29 @@ pub enum EngineError {
         cause: Box<EngineError>,
     },
 
+    /// The child run of a `Workflow` step was cancelled (`POST /runs/:id/cancel`
+    /// on the child itself), while it ran or while its chain was suspended.
+    ///
+    /// The step fails with this error and so does the parent, unless the step
+    /// tolerates the failure with `allow_failure`: it then completes with a
+    /// `Cancelled` [`SubWorkflowOutput`](crate::executor::SubWorkflowOutput).
+    /// Not retried: a new attempt would start a child the user just stopped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// let err = EngineError::ChildRunCancelled { run_id: Uuid::nil() };
+    /// assert!(err.to_string().contains("cancelled"));
+    /// ```
+    #[error("child run {run_id} was cancelled")]
+    ChildRunCancelled {
+        /// The cancelled child run.
+        run_id: Uuid,
+    },
+
     /// A signal could not be delivered because it is malformed (empty name or
     /// key).
     #[error("invalid signal: {0}")]

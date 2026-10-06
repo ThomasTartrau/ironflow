@@ -93,11 +93,10 @@ function isEmptyPayload(payload: unknown): boolean {
 }
 
 export function Component() {
-	const { run, steps, payload } = useLoaderData() as {
-		run: RunResponse;
-		steps: StepResponse[];
-		payload: unknown;
-	};
+	const { run, steps, payload, active_descendant_count } =
+		useLoaderData() as RunDetailResponse;
+	// Absent from a server older than the field.
+	const activeDescendantCount = active_descendant_count ?? 0;
 	const active = isRunActive(run.status);
 	const nowMs = useLiveClock({ enabled: active, intervalMs: 500 });
 	const liveDurationMs = computeLiveDurationMs(run, nowMs);
@@ -140,7 +139,11 @@ export function Component() {
 				<div className="flex items-center gap-2">
 					<StatusBadge status={run.status} awaitingKind={awaitingStep?.kind} />
 					<TriggerBadge trigger={run.trigger} />
-					<RunActions run={run} awaitingInput={awaitingInput} />
+					<RunActions
+						run={run}
+						awaitingInput={awaitingInput}
+						activeDescendantCount={activeDescendantCount}
+					/>
 					{waitingSignalName && (
 						<span className="text-xs text-muted-foreground">
 							waiting for signal {waitingSignalName}
