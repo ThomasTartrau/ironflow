@@ -63,6 +63,7 @@ interface ScheduleResponse {
 	disabled_at: string | null;
 	last_triggered_at: string | null;
 	next_trigger_at: string | null;
+	last_error: string | null;
 	created_by_user_id: string | null;
 	created_at: string;
 	updated_at: string;
@@ -277,13 +278,34 @@ export function Component() {
 										)}
 									</TableCell>
 									<TableCell>
-										<Badge
-											variant={s.disabled_at === null ? "default" : "secondary"}
-											className="cursor-pointer"
-											onClick={() => toggleEnabled(s)}
-										>
-											{s.disabled_at === null ? "Active" : "Paused"}
-										</Badge>
+										{s.disabled_at !== null && s.last_error !== null ? (
+											<TooltipProvider>
+												<Tooltip>
+													<TooltipTrigger
+														render={
+															<Badge
+																variant="destructive"
+																className="cursor-pointer"
+																onClick={() => toggleEnabled(s)}
+															>
+																Disabled
+															</Badge>
+														}
+													/>
+													<TooltipContent>{s.last_error}</TooltipContent>
+												</Tooltip>
+											</TooltipProvider>
+										) : (
+											<Badge
+												variant={
+													s.disabled_at === null ? "default" : "secondary"
+												}
+												className="cursor-pointer"
+												onClick={() => toggleEnabled(s)}
+											>
+												{s.disabled_at === null ? "Active" : "Paused"}
+											</Badge>
+										)}
 									</TableCell>
 									<TableCell className="text-right space-x-1">
 										<TooltipProvider>

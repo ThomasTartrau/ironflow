@@ -58,6 +58,16 @@ pub enum ScheduleCommands {
     },
 }
 
+/// `active`, `paused` by a user, or `disabled: <reason>` when Ironflow
+/// disabled the schedule on an error.
+fn schedule_state(s: &ScheduleResponse) -> String {
+    match (&s.disabled_at, &s.last_error) {
+        (None, _) => "active".to_string(),
+        (Some(_), Some(error)) => format!("disabled: {error}"),
+        (Some(_), None) => "paused".to_string(),
+    }
+}
+
 fn schedules_table(schedules: &[ScheduleResponse]) -> Table {
     let mut table = Table::new();
     table.set_content_arrangement(ContentArrangement::Dynamic);
@@ -76,11 +86,7 @@ fn schedules_table(schedules: &[ScheduleResponse]) -> Table {
             s.workflow_name.clone(),
             s.cron_expression.clone(),
             source.to_string(),
-            if s.disabled_at.is_none() {
-                "active".to_string()
-            } else {
-                "paused".to_string()
-            },
+            schedule_state(s),
             s.next_trigger_at
                 .as_ref()
                 .map(|d| d.to_string())
@@ -166,5 +172,53 @@ pub async fn execute(client: &IronflowClient, args: &ScheduleArgs, json_mode: bo
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{from_value, json};
+
+    use super::*;
+
+    fn schedule(disabled_at: Option<&str>, last_error: Option<&str>) -> ScheduleResponse {
+        from_value(json!({
+            "id": "01a10fdb-f467-7982-826b-0c99470c7264",
+            "workflow_name": "deploy",
+            "cron_expression": "0 0 30 2 *",
+            "inputs": {},
+            "source": "api",
+            "disabled_at": disabled_at,
+            "last_triggered_at": null,
+            "next_trigger_at": null,
+            "last_error": last_error,
+            "created_by_user_id": null,
+            "created_at": "2026-10-06T08:00:00Z",
+            "updated_at": "2026-10-06T08:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn schedule_state_shows_why_ironflow_disabled_a_schedule() {
+        let s = schedule(
+            Some("2026-10-06T08:00:00Z"),
+            Some("cannot compute next trigger"),
+        );
+        assert_eq!(schedule_state(&s), "disabled: cannot compute next trigger");
+        assert!(
+            schedules_table(&[s])
+                .to_string()
+                .contains("disabled: cannot compute next trigger")
+        );
+    }
+
+    #[test]
+    fn schedule_state_tells_a_user_pause_from_an_active_schedule() {
+        assert_eq!(
+            schedule_state(&schedule(Some("2026-10-06T08:00:00Z"), None)),
+            "paused"
+        );
+        assert_eq!(schedule_state(&schedule(None, None)), "active");
     }
 }

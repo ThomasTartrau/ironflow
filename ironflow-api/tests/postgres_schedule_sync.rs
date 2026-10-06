@@ -18,10 +18,13 @@ use std::env::var;
 use std::sync::Arc;
 
 use ironflow_api::schedule_sync::sync_handler_schedules;
+use ironflow_api::state::AppState;
+use ironflow_auth::jwt::JwtConfig;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+use ironflow_engine::notify::Event;
 use ironflow_engine::prelude::CronSchedule;
 use ironflow_store::entities::{NewSchedule, NewUser, ScheduleSource};
 use ironflow_store::postgres::PostgresStore;
@@ -29,6 +32,7 @@ use ironflow_store::schedule_store::ScheduleStore;
 use ironflow_store::store::Store;
 use ironflow_store::user_store::UserStore;
 use serde_json::json;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 async fn get_store() -> PostgresStore {
@@ -110,6 +114,66 @@ async fn sync_creates_handler_schedule_without_fk_violation() {
         synced.created_by_user_id, None,
         "handler schedules have no human author"
     );
+}
+
+/// #173: server startup repairs the active schedules an earlier release left
+/// without next trigger, which never fired again.
+#[tokio::test]
+#[ignore]
+async fn startup_repairs_active_schedules_without_next_trigger() {
+    let store: Arc<dyn Store> = Arc::new(get_store().await);
+    let suffix = Uuid::now_v7().simple();
+    let mut broken = Vec::new();
+    for (label, cron) in [("hourly", "0 * * * *"), ("leap", "0 0 30 2 *")] {
+        let schedule = store
+            .create_schedule(NewSchedule {
+                workflow_name: format!("{label}-{suffix}"),
+                cron_expression: cron.to_string(),
+                inputs: json!({}),
+                source: ScheduleSource::Api,
+                created_by_user_id: None,
+                next_trigger_at: None,
+            })
+            .await
+            .expect("seed active schedule without next trigger");
+        broken.push(schedule.id);
+    }
+
+    let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+    let (event_sender, _) = broadcast::channel::<Event>(1);
+    let state = AppState::new(
+        store.clone(),
+        Arc::new(engine),
+        Arc::new(JwtConfig {
+            secret: "test-startup-repair".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        }),
+        "test-worker-token".to_string(),
+        event_sender,
+    );
+
+    let shutdown = state.spawn_background_tasks().await;
+    shutdown.cancel();
+
+    let hourly = store
+        .find_schedule_by_id(broken[0])
+        .await
+        .expect("find")
+        .expect("exists");
+    assert!(hourly.is_active());
+    assert!(hourly.next_trigger_at.is_some(), "{hourly:?}");
+
+    let leap = store
+        .find_schedule_by_id(broken[1])
+        .await
+        .expect("find")
+        .expect("exists");
+    assert!(!leap.is_active(), "never active without next trigger");
+    let error = leap.last_error.expect("disable reason stored");
+    assert!(error.contains("cannot compute next trigger"), "{error}");
 }
 
 /// A schedule created with no author persists NULL and reads back as `None`.

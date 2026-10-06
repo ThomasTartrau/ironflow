@@ -2,12 +2,15 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::entities::{NewSchedule, Page, Schedule, ScheduleSource, ScheduleUpdate};
+use crate::entities::{
+    NewSchedule, Page, Schedule, ScheduleFiring, ScheduleNext, ScheduleSource, ScheduleUpdate,
+};
 use crate::error::StoreError;
 use crate::schedule_store::ScheduleStore;
 use crate::store::StoreFuture;
 
 use super::PostgresStore;
+use super::run_store::insert_run;
 
 struct ScheduleRow {
     id: Uuid,
@@ -18,6 +21,7 @@ struct ScheduleRow {
     disabled_at: Option<DateTime<Utc>>,
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
+    last_error: Option<String>,
     created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -34,6 +38,7 @@ impl From<ScheduleRow> for Schedule {
             disabled_at: row.disabled_at,
             last_triggered_at: row.last_triggered_at,
             next_trigger_at: row.next_trigger_at,
+            last_error: row.last_error,
             created_by_user_id: row.created_by_user_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -50,6 +55,7 @@ struct ScheduleRowWithTotal {
     disabled_at: Option<DateTime<Utc>>,
     last_triggered_at: Option<DateTime<Utc>>,
     next_trigger_at: Option<DateTime<Utc>>,
+    last_error: Option<String>,
     created_by_user_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -67,6 +73,7 @@ impl From<ScheduleRowWithTotal> for Schedule {
             disabled_at: row.disabled_at,
             last_triggered_at: row.last_triggered_at,
             next_trigger_at: row.next_trigger_at,
+            last_error: row.last_error,
             created_by_user_id: row.created_by_user_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -88,7 +95,7 @@ impl ScheduleStore for PostgresStore {
                      next_trigger_at, created_by_user_id, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id, workflow_name, cron_expression, inputs, source,
-                    disabled_at, last_triggered_at, next_trigger_at,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
                     created_by_user_id, created_at, updated_at
                 "#,
                 id,
@@ -115,7 +122,7 @@ impl ScheduleStore for PostgresStore {
                 ScheduleRow,
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
-                    disabled_at, last_triggered_at, next_trigger_at,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
                     created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
@@ -137,7 +144,7 @@ impl ScheduleStore for PostgresStore {
                 ScheduleRowWithTotal,
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
-                    disabled_at, last_triggered_at, next_trigger_at,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
                     created_by_user_id, created_at, updated_at,
                     COUNT(*) OVER () as "total_count!: i64"
                 FROM ironflow.schedules
@@ -169,7 +176,7 @@ impl ScheduleStore for PostgresStore {
                 ScheduleRow,
                 r#"
                 SELECT id, workflow_name, cron_expression, inputs, source,
-                    disabled_at, last_triggered_at, next_trigger_at,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
                     created_by_user_id, created_at, updated_at
                 FROM ironflow.schedules
                 WHERE id = $1
@@ -195,6 +202,10 @@ impl ScheduleStore for PostgresStore {
                 Some(v) => v,
                 None => existing.last_triggered_at,
             };
+            let last_error = match update.last_error {
+                Some(v) => v,
+                None => existing.last_error,
+            };
             let now = Utc::now();
 
             let row = sqlx::query_as!(
@@ -206,10 +217,11 @@ impl ScheduleStore for PostgresStore {
                     disabled_at = $4,
                     next_trigger_at = $5,
                     last_triggered_at = $6,
-                    updated_at = $7
+                    last_error = $7,
+                    updated_at = $8
                 WHERE id = $1
                 RETURNING id, workflow_name, cron_expression, inputs, source,
-                    disabled_at, last_triggered_at, next_trigger_at,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
                     created_by_user_id, created_at, updated_at
                 "#,
                 id,
@@ -218,6 +230,7 @@ impl ScheduleStore for PostgresStore {
                 disabled_at,
                 next_trigger_at,
                 last_triggered_at,
+                last_error,
                 now,
             )
             .fetch_one(&self.pool)
@@ -242,29 +255,19 @@ impl ScheduleStore for PostgresStore {
         })
     }
 
-    fn claim_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
+    fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>> {
         Box::pin(async move {
             let rows = sqlx::query_as!(
                 ScheduleRow,
                 r#"
-                WITH due AS (
-                    SELECT id
-                    FROM ironflow.schedules
-                    WHERE disabled_at IS NULL
-                      AND next_trigger_at IS NOT NULL
-                      AND next_trigger_at <= NOW()
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE ironflow.schedules s
-                SET last_triggered_at = NOW(),
-                    next_trigger_at = NULL,
-                    updated_at = NOW()
-                FROM due
-                WHERE s.id = due.id
-                RETURNING s.id, s.workflow_name, s.cron_expression,
-                    s.inputs, s.source,
-                    s.disabled_at, s.last_triggered_at, s.next_trigger_at,
-                    s.created_by_user_id, s.created_at, s.updated_at
+                SELECT id, workflow_name, cron_expression, inputs, source,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
+                    created_by_user_id, created_at, updated_at
+                FROM ironflow.schedules
+                WHERE disabled_at IS NULL
+                  AND next_trigger_at IS NOT NULL
+                  AND next_trigger_at <= NOW()
+                ORDER BY next_trigger_at
                 "#,
             )
             .fetch_all(&self.pool)
@@ -272,6 +275,90 @@ impl ScheduleStore for PostgresStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
             Ok(rows.into_iter().map(Schedule::from).collect())
+        })
+    }
+
+    fn fire_due_schedule(
+        &self,
+        id: Uuid,
+        occurrence: DateTime<Utc>,
+        next: ScheduleNext,
+    ) -> StoreFuture<'_, Option<ScheduleFiring>> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            // SKIP LOCKED: an instance firing this occurrence holds the row, so
+            // this one steps aside instead of waiting to find it fired.
+            let row = sqlx::query_as!(
+                ScheduleRow,
+                r#"
+                SELECT id, workflow_name, cron_expression, inputs, source,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
+                    created_by_user_id, created_at, updated_at
+                FROM ironflow.schedules
+                WHERE id = $1
+                  AND disabled_at IS NULL
+                  AND next_trigger_at = $2
+                FOR UPDATE SKIP LOCKED
+                "#,
+                id,
+                occurrence,
+            )
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let schedule = Schedule::from(row);
+
+            let mut new_run = schedule.new_run(None);
+            new_run.idempotency_key = Some(Schedule::occurrence_key(id, occurrence));
+            // Dropping `tx` on error rolls back the run: the schedule stays due.
+            let run = insert_run(&mut tx, self.get_run_lifecycle_machine_id(), new_run).await?;
+
+            let (next_trigger_at, error) = match next {
+                ScheduleNext::At(at) => (Some(at), None),
+                ScheduleNext::Disable { error } => (None, Some(error)),
+            };
+            let now = Utc::now();
+
+            let row = sqlx::query_as!(
+                ScheduleRow,
+                r#"
+                UPDATE ironflow.schedules
+                SET last_triggered_at = $2,
+                    updated_at = $2,
+                    next_trigger_at = $3,
+                    disabled_at = CASE WHEN $4::text IS NULL THEN disabled_at ELSE $2 END,
+                    last_error = COALESCE($4::text, last_error)
+                WHERE id = $1
+                RETURNING id, workflow_name, cron_expression, inputs, source,
+                    disabled_at, last_triggered_at, next_trigger_at, last_error,
+                    created_by_user_id, created_at, updated_at
+                "#,
+                id,
+                now,
+                next_trigger_at,
+                error,
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            tx.commit()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(Some(ScheduleFiring {
+                schedule: Schedule::from(row),
+                run,
+            }))
         })
     }
 }

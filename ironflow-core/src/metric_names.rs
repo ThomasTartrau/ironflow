@@ -85,6 +85,11 @@ pub const RUNS_REAPED_TOTAL: &str = "ironflow_runs_reaped_total";
 /// Counter: runs purged by the retention policy (labels: workflow, reason).
 pub const RUNS_PURGED_TOTAL: &str = "ironflow_runs_purged_total";
 
+// ── Schedule metrics ───────────────────────────────────────────────
+/// Counter: schedule occurrences that failed to fire, or schedules disabled
+/// because their next trigger cannot be computed (labels: schedule).
+pub const SCHEDULE_FIRE_ERRORS_TOTAL: &str = "ironflow_schedule_fire_errors_total";
+
 // ── API metrics ────────────────────────────────────────────────────
 /// Counter: total API requests (labels: method, path, status).
 pub const API_REQUESTS_TOTAL: &str = "ironflow_api_requests_total";

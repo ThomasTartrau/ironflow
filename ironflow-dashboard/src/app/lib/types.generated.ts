@@ -869,8 +869,10 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/**
-		 * Resume a schedule (clear disabled_at).
-		 * @description # Errors
+		 * Resume a schedule (clear `disabled_at` and `last_error`).
+		 * @description The next trigger time is recomputed from the cron expression.
+		 *
+		 *     # Errors
 		 *
 		 *     - 401 if not authenticated
 		 *     - 404 if the schedule does not exist
@@ -3423,13 +3425,18 @@ export interface components {
 			/** @description JSON payload passed to the workflow. */
 			inputs: unknown;
 			/**
+			 * @description Why Ironflow disabled the schedule on its own (e.g. its next trigger
+			 *     cannot be computed). `None` when paused by a user or never disabled.
+			 */
+			last_error?: string | null;
+			/**
 			 * Format: date-time
 			 * @description When the schedule last created a run.
 			 */
 			last_triggered_at?: string | null;
 			/**
 			 * Format: date-time
-			 * @description When the schedule will next fire.
+			 * @description When the schedule will next fire. Always set on an active schedule.
 			 */
 			next_trigger_at?: string | null;
 			/** @description Where this schedule was created (`handler` or `api`). */

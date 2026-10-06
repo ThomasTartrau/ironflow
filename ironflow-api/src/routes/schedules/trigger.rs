@@ -11,7 +11,6 @@ use ironflow_store::entities::RunActor;
 use crate::entities::ScheduleResponse;
 use crate::error::ApiError;
 use crate::response::ok;
-use crate::schedule_ticker::new_run_from_schedule;
 use crate::state::AppState;
 
 /// Trigger a schedule manually, creating a run immediately.
@@ -48,12 +47,9 @@ pub async fn trigger_schedule(
 
     let _run = state
         .store
-        .create_run(new_run_from_schedule(
-            &schedule,
-            Some(RunActor::User {
-                user_id: auth.user_id,
-            }),
-        ))
+        .create_run(schedule.new_run(Some(RunActor::User {
+            user_id: auth.user_id,
+        })))
         .await?;
 
     Ok((StatusCode::CREATED, ok(ScheduleResponse::from(schedule))))

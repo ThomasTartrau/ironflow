@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use serde_json::to_value;
-use sqlx::Row;
+use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::entities::{
@@ -206,49 +206,48 @@ pub(super) fn bind_run_filter_params<'q>(
     query
 }
 
-impl RunStore for PostgresStore {
-    fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
-        Box::pin(async move {
-            validate_concurrency_limits(&req.concurrency_limits)?;
+/// Insert a run inside `tx`, honouring its idempotency and concurrency keys.
+///
+/// The caller commits. On error it drops `tx`, which rolls back everything
+/// written here. Shared by [`RunStore::create_run`] and the schedule firing,
+/// which creates the run in the same transaction as the schedule update.
+pub(super) async fn insert_run(
+    tx: &mut Transaction<'_, Postgres>,
+    fsm_machine_id: Uuid,
+    req: NewRun,
+) -> Result<RunCreation, StoreError> {
+    validate_concurrency_limits(&req.concurrency_limits)?;
 
-            let id = Uuid::now_v7();
-            let now = Utc::now();
-            let trigger_json = serde_json::to_value(&req.trigger)?;
-            let window_start = now - IDEMPOTENCY_WINDOW;
+    let id = Uuid::now_v7();
+    let now = Utc::now();
+    let trigger_json = serde_json::to_value(&req.trigger)?;
+    let window_start = now - IDEMPOTENCY_WINDOW;
+    let tx: &mut PgConnection = tx;
 
-            // Get cached run_lifecycle FSM abstract machine ID
-            let fsm_machine_id = self.get_run_lifecycle_machine_id();
-
-            let mut tx = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            // Release the key from a run that outlived the idempotency window, so
-            // the unique index does not reject a legitimate reuse. No-op when the
-            // key is absent or still within its window.
-            if let Some(ref key) = req.idempotency_key {
-                sqlx::query!(
-                    r#"
+    // Release the key from a run that outlived the idempotency window, so
+    // the unique index does not reject a legitimate reuse. No-op when the
+    // key is absent or still within its window.
+    if let Some(ref key) = req.idempotency_key {
+        sqlx::query!(
+            r#"
                     UPDATE ironflow.runs
                     SET idempotency_key = NULL, updated_at = $3
                     WHERE idempotency_key = $1 AND created_at <= $2
                     "#,
-                    key,
-                    window_start,
-                    now,
-                )
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
+            key,
+            window_start,
+            now,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+    }
 
-            if let Some(ref key) = req.concurrency_key {
-                // Serialize every creation using this key until commit or rollback.
-                // Run status lives in lib_fsm, so no unique index can express
-                // "one non-terminal run per key".
-                sqlx::query_scalar!(
+    if let Some(ref key) = req.concurrency_key {
+        // Serialize every creation using this key until commit or rollback.
+        // Run status lives in lib_fsm, so no unique index can express
+        // "one non-terminal run per key".
+        sqlx::query_scalar!(
                     r#"SELECT TRUE as "locked!" FROM (SELECT pg_advisory_xact_lock(hashtextextended($1, 0))) AS l"#,
                     key,
                 )
@@ -256,27 +255,23 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-                // A replayed request must resolve to its own run, not conflict
-                // with it.
-                if let Some(ref idempotency_key) = req.idempotency_key {
-                    let existing = sqlx::query(RUN_BY_IDEMPOTENCY_KEY_SQL)
-                        .bind(idempotency_key)
-                        .bind(window_start)
-                        .fetch_optional(&mut *tx)
-                        .await
-                        .map_err(|e| StoreError::Database(e.to_string()))?;
-                    if let Some(row) = existing {
-                        let run = row_to_run(&row)?;
-                        tx.commit()
-                            .await
-                            .map_err(|e| StoreError::Database(e.to_string()))?;
-                        return Ok(RunCreation::Existing(run));
-                    }
-                }
+        // A replayed request must resolve to its own run, not conflict
+        // with it.
+        if let Some(ref idempotency_key) = req.idempotency_key {
+            let existing = sqlx::query(RUN_BY_IDEMPOTENCY_KEY_SQL)
+                .bind(idempotency_key)
+                .bind(window_start)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            if let Some(row) = existing {
+                return Ok(RunCreation::Existing(row_to_run(&row)?));
+            }
+        }
 
-                let terminal = terminal_run_state_names();
+        let terminal = terminal_run_state_names();
 
-                let holder = sqlx::query_scalar!(
+        let holder = sqlx::query_scalar!(
                     r#"
                     SELECT r.id FROM ironflow.runs r
                     JOIN lib_fsm.state_machine sm ON sm.state_machine__id = r.state_machine__id
@@ -291,33 +286,30 @@ impl RunStore for PostgresStore {
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
 
-                if let Some(run_id) = holder {
-                    tx.rollback()
-                        .await
-                        .map_err(|e| StoreError::Database(e.to_string()))?;
-                    return Err(StoreError::ConcurrencyConflict {
-                        key: key.clone(),
-                        run_id,
-                    });
-                }
-            }
+        if let Some(run_id) = holder {
+            return Err(StoreError::ConcurrencyConflict {
+                key: key.clone(),
+                run_id,
+            });
+        }
+    }
 
-            // Create FSM instance at initial state (pending)
-            let state_machine_id = sqlx::query_scalar!(
-                r#"SELECT lib_fsm.state_machine_create($1) as "state_machine__id!""#,
-                fsm_machine_id,
-            )
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
+    // Create FSM instance at initial state (pending)
+    let state_machine_id = sqlx::query_scalar!(
+        r#"SELECT lib_fsm.state_machine_create($1) as "state_machine__id!""#,
+        fsm_machine_id,
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| StoreError::Database(format!("failed to create FSM instance: {e}")))?;
 
-            // Insert run with FSM reference. A concurrent insert holding the same
-            // key wins the unique index and this one becomes a no-op.
-            let labels_json = serde_json::to_value(&req.labels).unwrap_or_default();
-            let created_by_user_id = req.created_by.as_ref().map(RunActor::user_id);
-            let created_by_api_key_id = req.created_by.as_ref().and_then(RunActor::api_key_id);
-            let concurrency_limits_json = to_value(&req.concurrency_limits)?;
-            let inserted = sqlx::query(
+    // Insert run with FSM reference. A concurrent insert holding the same
+    // key wins the unique index and this one becomes a no-op.
+    let labels_json = serde_json::to_value(&req.labels).unwrap_or_default();
+    let created_by_user_id = req.created_by.as_ref().map(RunActor::user_id);
+    let created_by_api_key_id = req.created_by.as_ref().and_then(RunActor::api_key_id);
+    let concurrency_limits_json = to_value(&req.concurrency_limits)?;
+    let inserted = sqlx::query(
                 r#"
                 INSERT INTO ironflow.runs (id, workflow_name, state_machine__id, trigger, payload, max_retries, handler_version, labels, scheduled_at, created_by_user_id, created_by_api_key_id, idempotency_key, max_cost_usd, created_at, updated_at, concurrency_key, concurrency_limits)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
@@ -345,38 +337,28 @@ impl RunStore for PostgresStore {
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            if inserted.rows_affected() == 0 {
-                // Lost the race: another transaction already bound this key.
-                let key = req.idempotency_key.as_deref().ok_or_else(|| {
-                    StoreError::Database(
-                        "insert affected no row without an idempotency key".to_string(),
-                    )
-                })?;
+    if inserted.rows_affected() == 0 {
+        // Lost the race: another transaction already bound this key.
+        let key = req.idempotency_key.as_deref().ok_or_else(|| {
+            StoreError::Database("insert affected no row without an idempotency key".to_string())
+        })?;
 
-                let row = sqlx::query(RUN_BY_IDEMPOTENCY_KEY_SQL)
-                    .bind(key)
-                    .bind(window_start)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(|e| StoreError::Database(e.to_string()))?
-                    .ok_or_else(|| {
-                        StoreError::Database(
-                            "idempotency key conflict resolved to no run".to_string(),
-                        )
-                    })?;
+        let row = sqlx::query(RUN_BY_IDEMPOTENCY_KEY_SQL)
+            .bind(key)
+            .bind(window_start)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .ok_or_else(|| {
+                StoreError::Database("idempotency key conflict resolved to no run".to_string())
+            })?;
 
-                let run = row_to_run(&row)?;
+        return Ok(RunCreation::Existing(row_to_run(&row)?));
+    }
 
-                tx.commit()
-                    .await
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-
-                return Ok(RunCreation::Existing(run));
-            }
-
-            // Fetch the inserted run with FSM state
-            let row = sqlx::query(
-                r#"
+    // Fetch the inserted run with FSM state
+    let row = sqlx::query(
+        r#"
                 SELECT r.*, ast.name as state_name, cu.username as created_by_username,
                        ck.name as created_by_api_key_name
                 FROM ironflow.runs r
@@ -386,19 +368,28 @@ impl RunStore for PostgresStore {
                 LEFT JOIN iam.api_keys ck ON ck.id = r.created_by_api_key_id
                 WHERE r.id = $1
                 "#,
-            )
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| StoreError::Database(e.to_string()))?;
 
-            let run = row_to_run(&row)?;
+    Ok(RunCreation::Created(row_to_run(&row)?))
+}
 
+impl RunStore for PostgresStore {
+    fn create_run(&self, req: NewRun) -> StoreFuture<'_, RunCreation> {
+        Box::pin(async move {
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let creation = insert_run(&mut tx, self.get_run_lifecycle_machine_id(), req).await?;
             tx.commit()
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            Ok(RunCreation::Created(run))
+            Ok(creation)
         })
     }
 
