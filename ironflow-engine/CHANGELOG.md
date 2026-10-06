@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.48.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.48.3...ironflow-engine-v2.48.4) - 2026-10-06
 ## [2.48.3](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.48.2...ironflow-engine-v2.48.3) - 2026-10-06
 
 ### Fixed
