@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::entities::{
     AccountWindowStatus, NewProviderAccount, NewProviderAccountObservation, Page, ProviderAccount,
     ProviderAccountCandidate, ProviderAccountUpdate, ProviderAccountUsagePoint,
-    ProviderAccountWindow,
+    ProviderAccountWindow, ProviderKind,
 };
 use crate::error::StoreError;
 use crate::provider_account_store::ProviderAccountStore;
@@ -75,7 +75,7 @@ impl PostgresStore {
     /// Make every run sleeping on capacity for `kind` due now, so the run
     /// waker resumes it on its next tick: a new, re-enabled or renewed account
     /// may have the capacity it waits for.
-    async fn wake_capacity_sleepers(&self, kind: &str) -> Result<(), StoreError> {
+    async fn wake_capacity_sleepers(&self, kind: &ProviderKind) -> Result<(), StoreError> {
         query(
             r#"
             UPDATE ironflow.runs r
@@ -87,7 +87,7 @@ impl PostgresStore {
               AND r.capacity_wait_kind = $1
             "#,
         )
-        .bind(kind)
+        .bind(kind.as_str())
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -151,7 +151,7 @@ impl ProviderAccountStore for PostgresStore {
             })?;
             let account = ProviderAccount::from(row);
             if account.enabled {
-                self.wake_capacity_sleepers(&account.kind).await?;
+                self.wake_capacity_sleepers(&ProviderKind::new(account.kind.as_str())).await?;
             }
             Ok(account)
         })
@@ -334,7 +334,7 @@ impl ProviderAccountStore for PostgresStore {
             .ok_or(StoreError::ProviderAccountNotFound(id))?;
             let account = ProviderAccount::from(row);
             if renewed && account.enabled {
-                self.wake_capacity_sleepers(&account.kind).await?;
+                self.wake_capacity_sleepers(&ProviderKind::new(account.kind.as_str())).await?;
             }
             Ok(account)
         })

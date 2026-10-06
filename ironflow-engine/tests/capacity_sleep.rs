@@ -24,7 +24,7 @@ use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::wake::RunWaker;
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{NewRun, RunStatus, RunUpdate, StepStatus, TriggerKind};
+use ironflow_store::models::{NewRun, ProviderKind, RunStatus, RunUpdate, StepStatus, TriggerKind};
 use ironflow_store::store::{RunStore, Store};
 
 /// Test timeout for bodies that touch the store or spawn processes.
@@ -151,7 +151,7 @@ async fn capacity_wait_puts_the_run_to_sleep_until_wake_at() {
         let run = result.run;
         assert_eq!(run.status.state, RunStatus::Sleeping);
         assert_eq!(run.scheduled_at, Some(wake_at));
-        assert_eq!(run.capacity_wait_kind.as_deref(), Some(KIND));
+        assert_eq!(run.capacity_wait_kind, Some(ProviderKind::from(KIND)));
 
         let steps = engine.store().list_steps(run.id).await.unwrap();
         let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();

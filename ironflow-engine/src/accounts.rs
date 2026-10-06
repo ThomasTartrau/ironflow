@@ -653,7 +653,8 @@ mod tests {
     use ironflow_core::providers::router::{ProviderMatcher, ProviderRouter};
     use ironflow_store::crypto::KeyRing;
     use ironflow_store::entities::{
-        NewProviderAccount, NewRun, RunStatus, RunUpdate, TriggerKind, provider_account_secret_key,
+        NewProviderAccount, NewRun, ProviderKind, RunStatus, RunUpdate, TriggerKind,
+        provider_account_secret_key,
     };
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::provider_account_store::ProviderAccountStore;
@@ -1410,7 +1411,7 @@ mod tests {
                     RunUpdate {
                         status: Some(RunStatus::Sleeping),
                         scheduled_at: Some(far),
-                        capacity_wait_kind: Some(kind.to_string()),
+                        capacity_wait_kind: Some(ProviderKind::from(kind)),
                         ..RunUpdate::default()
                     },
                 )
@@ -1427,7 +1428,7 @@ mod tests {
         assert!(woken.scheduled_at.is_some_and(|at| at <= now));
         let untouched = store.get_run(runs[1]).await.unwrap().unwrap();
         assert_eq!(untouched.scheduled_at, Some(far));
-        assert_eq!(untouched.capacity_wait_kind.as_deref(), Some("other_kind"));
+        assert_eq!(untouched.capacity_wait_kind, Some(ProviderKind::from("other_kind")));
     }
 
     #[test]

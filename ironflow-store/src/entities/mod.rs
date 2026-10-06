@@ -48,7 +48,7 @@ pub use page::Page;
 pub use provider_account::{
     AccountWindowStatus, NewAccountWindow, NewProviderAccount, NewProviderAccountObservation,
     PROVIDER_ACCOUNT_SECRET_PREFIX, ProviderAccount, ProviderAccountCandidate,
-    ProviderAccountUpdate, ProviderAccountUsagePoint, ProviderAccountWindow,
+    ProviderAccountUpdate, ProviderAccountUsagePoint, ProviderAccountWindow, ProviderKind,
     provider_account_secret_key,
 };
 pub use run::{

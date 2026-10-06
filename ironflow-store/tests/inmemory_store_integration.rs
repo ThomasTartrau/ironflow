@@ -2247,7 +2247,7 @@ async fn capacity_sleeper(
             RunUpdate {
                 status: Some(RunStatus::Sleeping),
                 scheduled_at: Some(wake_at),
-                capacity_wait_kind: kind.map(str::to_string),
+                capacity_wait_kind: kind.map(ProviderKind::from),
                 ..RunUpdate::default()
             },
         )
@@ -2264,7 +2264,7 @@ async fn capacity_wait_kind_is_kept_while_sleeping_and_cleared_after() {
     let run_id = capacity_sleeper(&store, wake_at, Some(kind)).await;
 
     let run = store.get_run(run_id).await.unwrap().unwrap();
-    assert_eq!(run.capacity_wait_kind.as_deref(), Some(kind));
+    assert_eq!(run.capacity_wait_kind, Some(ProviderKind::from(kind)));
 
     store
         .update_run(

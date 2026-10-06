@@ -103,7 +103,7 @@ step wins:
 
 ```rust,ignore
 // Fail fast instead of waiting.
-let urgent = AgentStepConfig::new("Triage the incident").max_capacity_wait(Duration::ZERO);
+let urgent = AgentStepConfig::new("Triage the incident").fail_fast_on_capacity();
 
 let worker = WorkerBuilder::new(&api_url, &worker_token)
     .provider(Arc::new(ClaudeCodeProvider::new()))

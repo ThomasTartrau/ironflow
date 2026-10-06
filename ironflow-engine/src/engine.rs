@@ -26,7 +26,7 @@ use ironflow_core::metric_names::{
 use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, Run, RunActor, RunCreation, RunFilter,
+    ConcurrencyLimit, LeaseUpdate, NewRun, NewSignal, ProviderKind, Run, RunActor, RunCreation, RunFilter,
     RunStatus, RunUpdate, SignalInsert, SignalStepResolution, StepStatus, StepUpdate, TriggerKind,
     validate_concurrency_limits,
 };
@@ -2149,7 +2149,7 @@ impl Engine {
                             cost_usd: Some(ctx.total_cost_usd()),
                             duration_ms: Some(total_duration),
                             scheduled_at: Some(wake_at),
-                            capacity_wait_kind: Some(kind.clone()),
+                            capacity_wait_kind: Some(ProviderKind::new(kind.as_str())),
                             ..RunUpdate::default()
                         },
                     )

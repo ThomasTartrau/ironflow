@@ -87,7 +87,7 @@ run logs name the profile with the tools it exposed.
 With [Provider Accounts](provider-accounts.md), `.account("perso-max")` pins a step to one
 account and `.account_pool("team")` to the accounts carrying a tag. When none of them has
 capacity, the run sleeps until the next reset and the step runs again from the start, up to
-`.max_capacity_wait(..)` (6 hours by default, `Duration::ZERO` fails fast); see
+`.max_capacity_wait(..)` (6 hours by default, `.fail_fast_on_capacity()` fails fast); see
 [When every account is limited](provider-accounts.md#when-every-account-is-limited).
 
 ## Sub-workflow steps

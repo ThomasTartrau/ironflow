@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::entities::{
     NewProviderAccount, NewProviderAccountObservation, Page, ProviderAccount,
     ProviderAccountCandidate, ProviderAccountUpdate, ProviderAccountUsagePoint,
-    ProviderAccountWindow, RunStatus, StepStatus,
+    ProviderAccountWindow, ProviderKind, RunStatus, StepStatus,
 };
 use crate::error::StoreError;
 use crate::memory::{InMemoryStore, State};
@@ -63,10 +63,10 @@ fn running_steps(state: &State, now: DateTime<Utc>) -> HashMap<Uuid, u32> {
 /// Make every run sleeping on capacity for `kind` due now, so the run waker
 /// resumes it on its next tick: a new, re-enabled or renewed account may have
 /// the capacity it waits for.
-fn wake_capacity_sleepers(state: &mut State, kind: &str, now: DateTime<Utc>) {
+fn wake_capacity_sleepers(state: &mut State, kind: &ProviderKind, now: DateTime<Utc>) {
     for run in state.runs.values_mut() {
         if run.status.state == RunStatus::Sleeping
-            && run.capacity_wait_kind.as_deref() == Some(kind)
+            && run.capacity_wait_kind.as_ref() == Some(kind)
         {
             run.scheduled_at = Some(now);
             run.updated_at = now;
@@ -102,7 +102,7 @@ impl ProviderAccountStore for InMemoryStore {
             };
             state.provider_accounts.insert(account.id, account.clone());
             if account.enabled {
-                wake_capacity_sleepers(&mut state, &account.kind, now);
+                wake_capacity_sleepers(&mut state, &ProviderKind::new(account.kind.as_str()), now);
             }
             Ok(account)
         })
@@ -220,7 +220,7 @@ impl ProviderAccountStore for InMemoryStore {
             let account = account.clone();
             let renewed = update.enabled == Some(true) || update.auth_failed_at == Some(None);
             if renewed && account.enabled {
-                wake_capacity_sleepers(&mut state, &account.kind, now);
+                wake_capacity_sleepers(&mut state, &ProviderKind::new(account.kind.as_str()), now);
             }
             Ok(account)
         })

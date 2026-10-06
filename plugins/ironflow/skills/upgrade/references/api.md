@@ -302,7 +302,7 @@ fails it over to the next account, and a rate limit on the worker's own token sl
 the same way. A step can target `.account(name)` (never fails over, unknown name gives
 `AgentError::AccountNotFound`) or `.account_pool(tag)`. Code that matched the old stderr,
 or a retry loop around agent steps, can match the typed variant or drop the loop;
-`Duration::ZERO` restores the fail-fast behavior, per step or on the worker.
+`.fail_fast_on_capacity()` restores the fail-fast behavior per step (`Duration::ZERO` on the worker).
 
 ```diff
 - Err(EngineError::Operation(OperationError::Agent(AgentError::ProcessFailed { stderr, .. })))
@@ -313,5 +313,5 @@ or a retry loop around agent steps, can match the typed variant or drop the loop
 
 ```diff
 - let triage = AgentStepConfig::new("Triage the incident");
-+ let triage = AgentStepConfig::new("Triage the incident").max_capacity_wait(Duration::ZERO);
++ let triage = AgentStepConfig::new("Triage the incident").fail_fast_on_capacity();
 ```

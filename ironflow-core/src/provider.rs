@@ -1068,6 +1068,25 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
         self
     }
 
+    /// Fail the step at once when every targeted account is rate limited.
+    ///
+    /// Explicit form of [`max_capacity_wait`](Self::max_capacity_wait) with
+    /// `Duration::ZERO`: the step fails with [`AgentError::NoCapacity`] instead
+    /// of putting the run to sleep, whatever the worker default is.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// let config = AgentConfig::new("review").fail_fast_on_capacity();
+    /// assert_eq!(config.max_capacity_wait, Some(Duration::ZERO));
+    /// ```
+    pub fn fail_fast_on_capacity(self) -> Self {
+        self.max_capacity_wait(Duration::ZERO)
+    }
+
     /// Run the step under the Provider Account named `name`, and only it.
     ///
     /// No failover: when the account is rate limited the run waits (bounded

@@ -11,7 +11,7 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::{FsmState, RunActor, RunStatus, TriggerKind};
+use super::{FsmState, ProviderKind, RunActor, RunStatus, TriggerKind};
 
 /// A workflow execution record.
 ///
@@ -135,7 +135,7 @@ pub struct Run {
     /// Account was rate limited; `None` in every other state. Adding,
     /// re-enabling or renewing an account of that kind wakes the run early.
     #[serde(default)]
-    pub capacity_wait_kind: Option<String>,
+    pub capacity_wait_kind: Option<ProviderKind>,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -736,7 +736,7 @@ pub struct RunUpdate {
     ///
     /// Applied only with `status: Some(Sleeping)`; any other status clears it.
     #[serde(default)]
-    pub capacity_wait_kind: Option<String>,
+    pub capacity_wait_kind: Option<ProviderKind>,
 }
 
 /// Retention policy for purging old runs.
@@ -941,7 +941,7 @@ mod tests {
             lease_expires_at: Some(now),
             output: Some(json!({"verdict": "approved", "score": 9})),
             lease_recoveries: 1,
-            capacity_wait_kind: Some("claude_subscription".to_string()),
+            capacity_wait_kind: Some(ProviderKind::new("claude_subscription")),
         };
 
         let json = serde_json::to_string(&run).expect("serialize");

@@ -1,5 +1,7 @@
 //! Provider Account entities: AI provider accounts, their usage windows and history.
 
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
@@ -24,6 +26,71 @@ pub const PROVIDER_ACCOUNT_SECRET_PREFIX: &str = "accounts/";
 /// ```
 pub fn provider_account_secret_key(id: Uuid) -> String {
     format!("{PROVIDER_ACCOUNT_SECRET_PREFIX}{id}/credential")
+}
+
+/// Identifier of a Provider Account kind (e.g. `claude_subscription`).
+///
+/// Kinds are an open registry (custom kinds can be registered), so this is a
+/// newtype rather than a closed enum. It keeps a kind from being mixed up with
+/// an account name or any other string.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::entities::ProviderKind;
+///
+/// let kind = ProviderKind::new("claude_subscription");
+/// assert_eq!(kind.as_str(), "claude_subscription");
+/// assert_eq!(kind.to_string(), "claude_subscription");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProviderKind(String);
+
+impl ProviderKind {
+    /// Wrap a kind identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_store::entities::ProviderKind;
+    ///
+    /// assert_eq!(ProviderKind::new("claude_subscription").as_str(), "claude_subscription");
+    /// ```
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self(kind.into())
+    }
+
+    /// The kind identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_store::entities::ProviderKind;
+    ///
+    /// assert_eq!(ProviderKind::new("x").as_str(), "x");
+    /// ```
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ProviderKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for ProviderKind {
+    fn from(kind: &str) -> Self {
+        Self::new(kind)
+    }
+}
+
+impl From<String> for ProviderKind {
+    fn from(kind: String) -> Self {
+        Self(kind)
+    }
 }
 
 /// Status of a usage window, as reported by the provider.

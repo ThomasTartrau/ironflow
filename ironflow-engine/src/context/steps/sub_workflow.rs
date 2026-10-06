@@ -25,7 +25,7 @@ use uuid::Uuid;
 use ironflow_core::provider::LABEL_ROOT_RUN_ID;
 use ironflow_store::error::StoreError;
 use ironflow_store::models::{
-    NewRun, NewStep, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
+    NewRun, NewStep, ProviderKind, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
     TriggerKind, step_trace_id,
 };
 
@@ -1070,7 +1070,7 @@ impl WorkflowContext {
             EngineError::CapacitySleeping { kind, wake_at, .. } => RunUpdate {
                 status: Some(RunStatus::Sleeping),
                 scheduled_at: Some(*wake_at),
-                capacity_wait_kind: Some(kind.clone()),
+                capacity_wait_kind: Some(ProviderKind::new(kind.as_str())),
                 ..totals
             },
             EngineError::SignalWaiting {

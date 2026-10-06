@@ -469,7 +469,7 @@ impl PostgresStore {
         // The kind only means something while the run sleeps on capacity:
         // any other status change clears it.
         let capacity_wait_kind = match update.status {
-            Some(RunStatus::Sleeping) => update.capacity_wait_kind.as_deref(),
+            Some(RunStatus::Sleeping) => update.capacity_wait_kind.as_ref(),
             _ => None,
         };
         if update.status.is_some() {
@@ -517,7 +517,7 @@ impl PostgresStore {
             query = query.bind(worker_id).bind(*expires_at);
         }
         if let Some(kind) = capacity_wait_kind {
-            query = query.bind(kind);
+            query = query.bind(kind.as_str());
         }
 
         query = query.bind(id);
