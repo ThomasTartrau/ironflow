@@ -53,6 +53,7 @@ plugins/ironflow/
                    changes.sh (changelog between two Cargo.lock), scan.sh (catalogue grep)
   agents/
     workflow-reviewer.md
+  evals/           one directory per eval case (prompt.md + graders/), run by claude plugin eval
 ```
 
 ## Keeping the plugin honest
@@ -61,6 +62,43 @@ The project template is scaffolded and compiled against the workspace by
 `scripts/check-plugin-template.sh`. Every Rust snippet in the skills is compiled as a
 doctest by `examples/plugin-tests`. Both run in CI, so a change to the Ironflow API that
 breaks a skill breaks the pipeline.
+
+Three merge request jobs guard the plugin:
+
+- `check-plugin-template` scaffolds and builds the project template.
+- `check-plugin-doctests` runs `cargo test -p ironflow-plugin-tests --doc`. A skill snippet
+  that calls a renamed or removed API (for example `ctx.agent()`) fails the job. Every
+  Markdown file that contains a `rust` block must be attached as a module in
+  `examples/plugin-tests/src/lib.rs`.
+- `eval-plugin-skills` runs the eval suite in `evals/` with `claude plugin eval`. The job
+  appears only on a merge request that touches `plugins/ironflow/`, and it is manual and
+  non-blocking: start it from the pipeline before merging a change to a skill. The HTML
+  report and `aggregate-result.json` are exposed on the merge request as "Plugin eval
+  report" for one week, even when the job fails.
+
+### Evals
+
+Each directory under `evals/` is one case: a `prompt.md` phrased the way a user would ask,
+and graders under `graders/`. Every Ironflow case checks that the right skill fired
+(`tool_used: Skill`) and greps the reply for the API the skill teaches; `unrelated-request`
+checks that no skill fires on a request that is not about Ironflow. Prefer `regex` and
+`tool_used` graders, which are free and deterministic, and keep `llm` graders for what a
+pattern cannot express. Format reference: <https://code.claude.com/docs/en/plugin-evals>.
+
+Run the suite locally from `plugins/ironflow`. Each case runs three times with the plugin
+and three times without it, and the summary shows what the plugin adds (`Δ`):
+
+```bash
+claude plugin eval .
+claude plugin eval . --case workflow-handler --runs 1 --ablation none   # iterate on one case
+```
+
+The CI job fails when a case scores below `0.8` with the plugin loaded. It pins the CLI
+(`CLAUDE_CODE_VERSION`), the model under test (`EVAL_MODEL`) and the judge
+(`EVAL_JUDGE_MODEL`) in its variables, so a model rollout is never mistaken for a plugin
+regression; bump them deliberately. It authenticates with a Claude subscription through
+`CLAUDE_CODE_OAUTH_TOKEN`: generate it with `claude setup-token` and add it as a masked
+CI/CD variable. Without it the job stops with that instruction.
 
 The upgrade catalogue (`skills/upgrade/references/`) is written by hand: a change that
 breaks, deprecates or changes the behavior of code an Ironflow user writes adds an entry

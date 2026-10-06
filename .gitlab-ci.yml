@@ -421,6 +421,64 @@ check-plugin-template:
   script:
     - scripts/check-plugin-template.sh
 
+# Every Rust snippet of the Claude Code plugin skills is a doctest of examples/plugin-tests.
+# plugins/ironflow has no Cargo.toml, so this crate is the way to compile them.
+check-plugin-doctests:
+  extends: [.only-mr, .sccache]
+  stage: test
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  <<: *rust-debug-cache
+  needs: []
+  variables:
+    RUSTFLAGS: "-D warnings"
+  script:
+    - cargo test -p ironflow-plugin-tests --doc
+
+# Runs the eval suite of the Claude Code plugin (plugins/ironflow/evals) with
+# `claude plugin eval`. Offered only when the plugin changes, started by hand and never
+# blocking: every run spends Claude subscription usage, and model answers are not
+# deterministic enough to gate a merge. Authenticates with the masked CI/CD variable
+# CLAUDE_CODE_OAUTH_TOKEN, generated with `claude setup-token`.
+eval-plugin-skills:
+  stage: test
+  image: node:22
+  needs: []
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TITLE =~ /^chore: release/'
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - plugins/ironflow/**/*
+      when: manual
+      allow_failure: true
+  variables:
+    CLAUDE_CODE_VERSION: "2.1.292"
+    EVAL_MODEL: claude-sonnet-5-5
+    EVAL_JUDGE_MODEL: claude-haiku-4-5-20251001
+  script:
+    - |
+      if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+        echo "CLAUDE_CODE_OAUTH_TOKEN is not set. Generate it with 'claude setup-token' and add it"
+        echo "as a masked CI/CD variable in Settings > CI/CD > Variables."
+        exit 1
+      fi
+    - npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+    - claude plugin eval plugins/ironflow
+      --trust-plugin
+      --no-publish
+      --model "${EVAL_MODEL}"
+      --judge-model "${EVAL_JUDGE_MODEL}"
+      --threshold 0.8
+      --max-cost-usd 5
+      --concurrency 4
+      --output-dir plugin-eval
+  artifacts:
+    expose_as: Plugin eval report
+    paths:
+      - plugin-eval/
+    when: always
+    expire_in: 1 week
+
 check-openapi-types:
   extends: .only-mr
   stage: test
