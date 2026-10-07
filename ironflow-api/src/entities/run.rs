@@ -38,6 +38,8 @@ pub struct RunResponse {
     pub retry_count: u32,
     /// Maximum allowed retries.
     pub max_retries: u32,
+    /// Number of times the run was requeued after its worker lost its lease. Separate from `retry_count`: it does not consume `max_retries`.
+    pub lease_recoveries: u32,
     /// Aggregated cost in USD.
     #[cfg_attr(feature = "openapi", schema(value_type = f64))]
     pub cost_usd: Decimal,
@@ -114,6 +116,7 @@ impl From<Run> for RunResponse {
             error: run.error,
             retry_count: run.retry_count,
             max_retries: run.max_retries,
+            lease_recoveries: run.lease_recoveries,
             cost_usd: run.cost_usd,
             duration_ms: run.duration_ms,
             created_at: run.created_at,
@@ -275,4 +278,68 @@ pub(crate) fn parse_label_param(raw: &Option<String>) -> Option<HashMap<String, 
         }
         if map.is_empty() { None } else { Some(map) }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use ironflow_store::models::FsmState;
+    use serde_json::json;
+
+    use super::*;
+
+    fn run_with_lease_recoveries(lease_recoveries: u32) -> Run {
+        let now = Utc::now();
+        Run {
+            id: Uuid::now_v7(),
+            workflow_name: "deploy".to_string(),
+            status: FsmState::new(RunStatus::Running, Uuid::now_v7()),
+            trigger: TriggerKind::Manual,
+            payload: json!({}),
+            error: None,
+            retry_count: 0,
+            max_retries: 1,
+            cost_usd: Decimal::ZERO,
+            duration_ms: 0,
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            completed_at: None,
+            handler_version: None,
+            labels: HashMap::new(),
+            scheduled_at: None,
+            created_by: None,
+            created_by_label: None,
+            idempotency_key: None,
+            concurrency_key: None,
+            priority: 0,
+            concurrency_limits: Vec::new(),
+            max_cost_usd: None,
+            worker_id: None,
+            lease_expires_at: None,
+            output: None,
+            lease_recoveries,
+            capacity_wait_kind: None,
+            resume_status: None,
+            worker_tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn run_response_exposes_the_lease_recoveries() {
+        let response = RunResponse::from(run_with_lease_recoveries(2));
+
+        assert_eq!(response.lease_recoveries, 2);
+        let value = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(value["lease_recoveries"], 2);
+    }
+
+    #[test]
+    fn run_response_reports_zero_lease_recoveries_for_a_fresh_run() {
+        let response = RunResponse::from(run_with_lease_recoveries(0));
+
+        assert_eq!(response.lease_recoveries, 0);
+        let value = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(value["lease_recoveries"], 0);
+    }
 }

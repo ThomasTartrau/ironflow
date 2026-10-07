@@ -213,6 +213,11 @@ export function Component() {
 						value={`${run.retry_count} / ${run.max_retries}`}
 						icon={RotateCcw}
 					/>
+					<StatCard
+						label="Lease recoveries"
+						value={run.lease_recoveries}
+						icon={RotateCcw}
+					/>
 					{run.handler_version && (
 						<StatCard label="Version" value={run.handler_version} icon={Tag} />
 					)}

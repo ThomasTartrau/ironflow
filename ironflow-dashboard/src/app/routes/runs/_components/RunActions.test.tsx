@@ -36,6 +36,7 @@ function runFixture(overrides: Partial<RunResponse> = {}): RunResponse {
 		trigger: { kind: "manual" },
 		retry_count: 0,
 		max_retries: 0,
+		lease_recoveries: 0,
 		cost_usd: 0,
 		duration_ms: 0,
 		created_at: "2026-01-01T00:00:00Z",

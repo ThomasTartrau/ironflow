@@ -20,6 +20,7 @@ fn deserialize_run_response() {
         "labels": {"env": "prod"},
         "error": null,
         "max_retries": 0,
+        "lease_recoveries": 3,
         "retry_count": 0,
         "payload": {},
         "scheduled_at": null,
@@ -34,6 +35,7 @@ fn deserialize_run_response() {
     let run: RunResponse = serde_json::from_str(json).unwrap();
     assert_eq!(run.workflow_name, "deploy");
     assert_eq!(run.duration_ms, 12345);
+    assert_eq!(run.lease_recoveries, 3);
     assert_eq!(run.created_by.kind, CreatedByKind::User);
     assert_eq!(run.created_by.label, "alice");
     assert!(run.created_by.id.is_some());
@@ -54,6 +56,7 @@ fn deserialize_run_response_with_api_key_author() {
         "labels": {},
         "error": null,
         "max_retries": 0,
+        "lease_recoveries": 0,
         "retry_count": 0,
         "payload": {},
         "scheduled_at": null,
@@ -85,6 +88,7 @@ fn deserialize_run_response_with_nullable_fields() {
         "labels": {},
         "error": "step 2 failed",
         "max_retries": 0,
+        "lease_recoveries": 0,
         "retry_count": 0,
         "payload": {"key": "value"},
         "scheduled_at": null,

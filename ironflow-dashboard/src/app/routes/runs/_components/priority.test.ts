@@ -17,6 +17,7 @@ function run(id: string, priority?: number): RunResponse {
 		error: null,
 		retry_count: 0,
 		max_retries: 0,
+		lease_recoveries: 0,
 		cost_usd: 0,
 		duration_ms: 0,
 		created_at: now,

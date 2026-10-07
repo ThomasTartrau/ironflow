@@ -239,6 +239,8 @@ The interrupted step really runs twice, so make it idempotent: a deploy, a
 payment or a notification must tolerate a second call.
 
 Lease recoveries are counted in `lease_recoveries`, apart from `retry_count`.
+The counter is exposed in the run API, the SDK, `ironflow run get` and the
+dashboard run page.
 A run can be recovered `max_retries` times. One more lost lease fails the run
 with `worker lease expired`, and its open steps are failed with the same error;
 the sub-workflow runs it left running are cancelled. A requeued run keeps its
