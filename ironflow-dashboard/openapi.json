@@ -8760,7 +8760,8 @@
         "required": [
           "name",
           "description",
-          "sub_workflows"
+          "sub_workflows",
+          "priority"
         ],
         "properties": {
           "category": {
@@ -8813,6 +8814,11 @@
             ],
             "format": "date-time",
             "description": "When the workflow was paused: its queued runs are not picked up until\nit is resumed. Omitted when the workflow is not paused."
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Default queue priority of the runs of this workflow, from -100 to 100.\nClamped like the run creation path. Always present, 0 when the handler\ndeclares none."
           },
           "schedule": {
             "type": [

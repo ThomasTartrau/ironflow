@@ -6,6 +6,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::{MAX_PRIORITY, MIN_PRIORITY};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
@@ -65,6 +66,10 @@ pub struct WorkflowDetailResponse {
     /// it is resumed. Omitted when the workflow is not paused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paused_at: Option<DateTime<Utc>>,
+    /// Default queue priority of the runs of this workflow, from -100 to 100.
+    /// Clamped like the run creation path. Always present, 0 when the handler
+    /// declares none.
+    pub priority: i16,
 }
 
 /// Get details about a registered workflow.
@@ -129,6 +134,7 @@ pub async fn get_workflow(
         schedule: info.schedule.map(|s| s.as_str().to_string()),
         default_max_cost_usd: info.default_max_cost_usd,
         paused_at,
+        priority: info.priority.clamp(MIN_PRIORITY, MAX_PRIORITY),
     }))
 }
 
@@ -440,6 +446,94 @@ mod tests {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json_val: JsonValue = serde_json::from_slice(&body).unwrap();
         assert!(json_val["data"]["schedule"].is_null());
+    }
+
+    struct PrioritizedWorkflow {
+        name: &'static str,
+        priority: i16,
+    }
+    impl WorkflowHandler for PrioritizedWorkflow {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn priority(&self) -> i16 {
+            self.priority
+        }
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    fn test_state_with_priorities() -> AppState {
+        let store = Arc::new(InMemoryStore::new());
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine.register(DescribedWorkflow).unwrap();
+        for (name, priority) in [
+            ("prio-workflow", 50),
+            ("extreme-workflow", 500),
+            ("abyss-workflow", -500),
+        ] {
+            engine
+                .register(PrioritizedWorkflow { name, priority })
+                .unwrap();
+        }
+        let jwt_config = Arc::new(ironflow_auth::jwt::JwtConfig {
+            secret: "test-secret".to_string(),
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 604800,
+            cookie_domain: None,
+            cookie_secure: false,
+        });
+        let (event_sender, _) = broadcast::channel::<Event>(1);
+        AppState::new(
+            store,
+            Arc::new(engine),
+            jwt_config,
+            "test-worker-token".to_string(),
+            event_sender,
+        )
+    }
+
+    async fn get_workflow_json(uri: &str) -> JsonValue {
+        let state = test_state_with_priorities();
+        let auth_header = create_user_auth_header(&state, "testuser", false).await;
+        let app = Router::new()
+            .route("/{name}", get(get_workflow))
+            .with_state(state);
+
+        let req = Request::builder()
+            .uri(uri)
+            .header("authorization", auth_header)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_workflow_returns_handler_priority() {
+        let json_val = get_workflow_json("/prio-workflow").await;
+        assert_eq!(json_val["data"]["priority"], 50);
+    }
+
+    #[tokio::test]
+    async fn get_workflow_priority_defaults_to_zero() {
+        let json_val = get_workflow_json("/my-workflow").await;
+        assert!(json_val["data"].get("priority").is_some());
+        assert_eq!(json_val["data"]["priority"], 0);
+    }
+
+    #[tokio::test]
+    async fn get_workflow_priority_is_clamped() {
+        let json_val = get_workflow_json("/extreme-workflow").await;
+        assert_eq!(json_val["data"]["priority"], 100);
+
+        let json_val = get_workflow_json("/abyss-workflow").await;
+        assert_eq!(json_val["data"]["priority"], -100);
     }
 
     #[tokio::test]

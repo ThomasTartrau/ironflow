@@ -5036,6 +5036,13 @@ export interface components {
 			 *     it is resumed. Omitted when the workflow is not paused.
 			 */
 			paused_at?: string | null;
+			/**
+			 * Format: int32
+			 * @description Default queue priority of the runs of this workflow, from -100 to 100.
+			 *     Clamped like the run creation path. Always present, 0 when the handler
+			 *     declares none.
+			 */
+			priority: number;
 			/** @description Optional 6-field cron expression for automatic execution. */
 			schedule?: string | null;
 			/** @description Optional Rust source code of the handler. */
