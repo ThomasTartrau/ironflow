@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.46.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.45.5...ironflow-store-v2.46.0) - 2026-10-07
+
+### Added
+
+- #177 relay proxied secrets through the auth proxy with per-secret host allowlists
+
+
+### Fixed
+
+- CI on MR !501 (attempt 1)
+
 ## [2.45.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.45.4...ironflow-store-v2.45.5) - 2026-10-07
 
 ### Fixed
