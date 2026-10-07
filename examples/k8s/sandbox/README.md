@@ -66,6 +66,29 @@ kubectl apply -f managed-settings.yaml          # managed-settings presets
   policy on the proxy pods; do not add 5432 to `networkpolicy-auth-proxy.yaml`,
   which selects the agent pods.
 
+### Proxied secrets
+
+`proxied_secret` (on the provider or the step) keeps other secrets, such as a
+GitHub or GitLab token, out of the agent pod too. For a secret with `env:
+"GITLAB_TOKEN"`, the pod gets an opaque token in `GITLAB_TOKEN` and the relay
+base `<proxy>/r` in `GITLAB_TOKEN_URL`; it calls
+`$GITLAB_TOKEN_URL/gitlab.com/api/v4/...` with the token, and the proxy
+injects the real secret if `gitlab.com` is in the secret's host allowlist (403
+otherwise).
+
+- A `basic` secret also sets the git config of the pod (`GIT_CONFIG_COUNT`,
+  `GIT_CONFIG_KEY_n`, `GIT_CONFIG_VALUE_n`): `https://<host>/` is rewritten to
+  `<proxy>/r/<host>/` for each exact host of the allowlist, so `git clone
+  https://gitlab.com/...` goes through the proxy unchanged. Wildcard hosts get
+  no rewrite.
+- The proxy pods need egress to every allowlisted host: uncomment and adjust
+  the proxied secrets `toFQDNs` rule in section (b) of
+  `cilium-egress-auth-proxy.yaml`. The agent pods then no longer need the
+  `gitlab` egress profile.
+- The proxy counts `/r/` requests in
+  `ironflow_auth_proxy_requests_total{secret, result}`, served at `/metrics`
+  on port 8080.
+
 Check that an agent pod holds no secret while it runs:
 
 ```sh

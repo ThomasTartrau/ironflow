@@ -1,12 +1,13 @@
-//! Log hygiene of the proxy: no token or credential ever reaches the logs.
+//! Log hygiene of the proxy: no token, credential or secret ever reaches the
+//! logs.
 //!
-//! This test lives alone in its binary on purpose. A process-global subscriber
-//! is the only capture that parallel tests cannot disturb (a thread-local
-//! subscriber races with the callsite interest cache of sibling tests).
-//! `set_global_default` succeeds once per process: never add another test here.
+//! These tests share one process-global JSON subscriber, installed once by
+//! [`captured`]. A global subscriber is the only capture that parallel tests
+//! cannot disturb (a thread-local subscriber races with the callsite interest
+//! cache of sibling tests). Every test asserts on values only it produces.
 
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::serve;
@@ -28,6 +29,7 @@ use ironflow_core::auth_proxy::{AuthProxyRegistry, CredentialKind, ProxyCredenti
 
 const ADMIN_KEY: &str = "0123456789abcdef0123456789abcdef";
 const OAUTH: &str = "sk-ant-oat01-test";
+const SECRET: &str = "ghp_test";
 
 fn now() -> u64 {
     SystemTime::now()
@@ -36,9 +38,13 @@ fn now() -> u64 {
         .as_secs()
 }
 
-/// Start the proxy relaying to `upstream` and return its base URL.
+/// Start the proxy relaying the Anthropic API and every `/r/` host to
+/// `upstream`, and return its base URL.
 async fn start_proxy(upstream: &str) -> String {
-    let config = AuthProxyConfig::new(ADMIN_KEY).with_upstream(Url::parse(upstream).unwrap());
+    let upstream = Url::parse(upstream).unwrap();
+    let config = AuthProxyConfig::new(ADMIN_KEY)
+        .with_upstream(upstream.clone())
+        .with_secret_upstream(upstream);
     let state = AuthProxyState::with_registry(config, AuthProxyRegistry::default()).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -49,7 +55,7 @@ async fn start_proxy(upstream: &str) -> String {
     format!("http://{addr}")
 }
 
-/// Log sink shared between the subscriber and the test.
+/// Log sink shared between the subscriber and the tests.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);
 
@@ -78,15 +84,25 @@ impl<'a> MakeWriter<'a> for Captured {
     }
 }
 
+/// The capture of the global JSON subscriber, installed on first use.
+fn captured() -> &'static Captured {
+    static CAPTURED: OnceLock<Captured> = OnceLock::new();
+    CAPTURED.get_or_init(|| {
+        let captured = Captured::default();
+        let subscriber = tracing_fmt()
+            .json()
+            .with_writer(captured.clone())
+            .with_max_level(Level::INFO)
+            .with_ansi(false)
+            .finish();
+        set_global_default(subscriber).expect("global subscriber installed once");
+        captured
+    })
+}
+
 #[tokio::test]
 async fn logs_never_contain_token_or_credential() {
-    let captured = Captured::default();
-    let subscriber = tracing_fmt()
-        .with_writer(captured.clone())
-        .with_max_level(Level::INFO)
-        .with_ansi(false)
-        .finish();
-    set_global_default(subscriber).expect("global subscriber installed once");
+    let captured = captured();
 
     timeout(Duration::from_secs(10), async {
         let upstream = MockServer::start().await;
@@ -102,7 +118,7 @@ async fn logs_never_contain_token_or_credential() {
             run_id: "run-1".to_string(),
             step: "review".to_string(),
             expires_at: now() + 600,
-            credential: ProxyCredential::new(CredentialKind::OauthToken, OAUTH.to_string()),
+            credential: ProxyCredential::new(CredentialKind::OauthToken, OAUTH.to_string()).into(),
         };
         let issued = http
             .post(format!("{base}/admin/v1/tokens"))
@@ -141,6 +157,77 @@ async fn logs_never_contain_token_or_credential() {
         assert!(!logs.contains(OAUTH), "{logs}");
         assert!(!logs.contains("ifap_unknown_token_value"), "{logs}");
         assert!(!logs.contains(ADMIN_KEY), "{logs}");
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn secret_relay_logs_result_and_never_the_secret() {
+    let captured = captured();
+
+    timeout(Duration::from_secs(10), async {
+        let upstream = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&upstream)
+            .await;
+        let base = start_proxy(&upstream.uri()).await;
+        let http = Client::new();
+
+        let issued = http
+            .post(format!("{base}/admin/v1/tokens"))
+            .bearer_auth(ADMIN_KEY)
+            .json(&json!({
+                "run_id": "run-2",
+                "step": "publish",
+                "expires_at": now() + 600,
+                "credential": {
+                    "name": "GITHUB_TOKEN",
+                    "value": SECRET,
+                    "injection": "bearer",
+                    "hosts": ["api.github.com"],
+                }
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(issued.status(), StatusCode::CREATED);
+        let body: Value = issued.json().await.unwrap();
+        let id = body["id"].as_str().unwrap().to_string();
+        let token = body["token"].as_str().unwrap().to_string();
+
+        let relayed = http
+            .get(format!("{base}/r/api.github.com/user?per_page=5"))
+            .bearer_auth(&token)
+            .header("x-trace", "header-value-never-logged")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(relayed.status(), StatusCode::OK);
+        let refused = http
+            .get(format!("{base}/r/gitlab.com/user"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let logs = captured.text();
+        assert!(logs.contains("secret relay"), "{logs}");
+        assert!(logs.contains(r#""result":"relayed""#), "{logs}");
+        assert!(logs.contains(r#""result":"forbidden_host""#), "{logs}");
+        assert!(logs.contains(r#""secret":"GITHUB_TOKEN""#), "{logs}");
+        assert!(logs.contains(r#""host":"api.github.com""#), "{logs}");
+        assert!(logs.contains(r#""host":"gitlab.com""#), "{logs}");
+        assert!(logs.contains(r#""upstream_status":200"#), "{logs}");
+        assert!(logs.contains(r#""run_id":"run-2""#), "{logs}");
+        assert!(logs.contains(&id[..12]), "{logs}");
+        assert!(!logs.contains(&token), "{logs}");
+        assert!(!logs.contains(SECRET), "{logs}");
+        assert!(!logs.contains("per_page"), "{logs}");
+        assert!(!logs.contains("header-value-never-logged"), "{logs}");
     })
     .await
     .expect("test timed out");

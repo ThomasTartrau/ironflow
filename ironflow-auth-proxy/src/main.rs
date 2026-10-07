@@ -13,12 +13,15 @@
 //!   rest. Required with `IRONFLOW_AUTH_PROXY_DATABASE_URL`.
 //! * `RUST_LOG` (default `info`) - log filter. Logs are JSON.
 //!
-//! The upstream is always `https://api.anthropic.com`.
+//! Upstreams: `https://api.anthropic.com` for the Anthropic API (`/v1/`), and
+//! for `/r/<host>/` the https hosts allowlisted by the grant of each proxied
+//! secret. Prometheus metrics are served on `GET /metrics` of the same port.
 
 use std::env::var;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -87,8 +90,15 @@ async fn main() -> ExitCode {
         }
     };
 
+    let metrics = match PrometheusBuilder::new().install_recorder() {
+        Ok(handle) => handle,
+        Err(e) => {
+            error!(error = %e, "cannot install the Prometheus recorder");
+            return ExitCode::FAILURE;
+        }
+    };
     let state = match AuthProxyState::with_registry(AuthProxyConfig::new(&admin_key), registry) {
-        Ok(state) => state,
+        Ok(state) => state.with_metrics(metrics),
         Err(e) => {
             error!(error = %e, "cannot build the upstream HTTP client");
             return ExitCode::FAILURE;

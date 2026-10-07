@@ -250,6 +250,32 @@ hand. `ctx.agent_with_meta` returns the typed `answer` with `environment_id` and
 + let environment = reply.environment_id.clone();   // reply.answer is the Triage
 ```
 
+## proxied-secret
+- kind: adopt
+- since: ironflow-core after 4.11.0 (#177)
+- detect: `env_from_secret\("[A-Z_]*TOKEN"`
+
+An agent step on `K8sEphemeralProvider` with the auth proxy that gets a GitHub or GitLab
+token through `env_from_secret` hands the real token to the pod: anything running in the
+agent container can read it. `proxied_secret` (on the step, or on the provider for every
+step) keeps it in the auth proxy instead. The pod receives an opaque token in `<env>` and
+the relay base `<proxy>/r` in `<env>_URL`; the proxy injects the real secret only for the
+hosts of the allowlist. A `SecretInjection::Basic` secret also rewrites `https://<host>/`
+for git, so `git clone` works unchanged. The proxy pods need egress to those hosts.
+Section: Agent.
+
+```diff
+  let config = AgentStepConfig::new("Open the merge request")
+-     .env_from_secret("GITLAB_TOKEN", "gitlab-bot", "token");
++     .proxied_secret(ProxiedSecret {
++         name: "GITLAB_TOKEN".to_string(),
++         env: "GITLAB_TOKEN".to_string(),
++         value: var("GITLAB_TOKEN")?,   // read by the worker, never sent to the pod
++         injection: SecretInjection::Basic { username: "oauth2".to_string() },
++         hosts: vec!["gitlab.com".to_string()],
++     });
+```
+
 ## schedule-policies
 - kind: adopt
 - since: ironflow-engine after 2.51.2 (#174)

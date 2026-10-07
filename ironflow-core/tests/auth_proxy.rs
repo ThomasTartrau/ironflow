@@ -10,7 +10,8 @@ use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use ironflow_core::auth_proxy::{
-    AuthProxyClient, AuthProxyError, CredentialKind, ProxyCredential, TokenRequest,
+    AuthProxyClient, AuthProxyError, CredentialKind, HostPattern, ProxyCredential,
+    SecretCredential, SecretInjection, TokenRequest,
 };
 
 const ADMIN_KEY: &str = "0123456789abcdef0123456789abcdef";
@@ -21,7 +22,7 @@ fn request() -> TokenRequest {
         run_id: "run-1".to_string(),
         step: "review".to_string(),
         expires_at: 1_700_000_600,
-        credential: ProxyCredential::new(CredentialKind::OauthToken, CREDENTIAL.to_string()),
+        credential: ProxyCredential::new(CredentialKind::OauthToken, CREDENTIAL.to_string()).into(),
     }
 }
 
@@ -51,6 +52,50 @@ async fn auth_proxy_client_issue_sends_admin_bearer_and_grant() {
         let issued = client.issue(&request()).await.unwrap();
         assert_eq!(issued.id, "abc123");
         assert_eq!(issued.token, "ifap_xyz");
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn auth_proxy_client_issue_sends_secret_credential() {
+    timeout(Duration::from_secs(10), async {
+        let server = MockServer::start().await;
+        let issued = json!({"id": "def456", "token": "ifap_secret"});
+        Mock::given(method("POST"))
+            .and(path("/admin/v1/tokens"))
+            .and(body_partial_json(json!({
+                "run_id": "run-1",
+                "credential": {
+                    "name": "GITLAB_TOKEN",
+                    "value": "glpat-client-test",
+                    "injection": "private_token",
+                    "hosts": ["gitlab.com", "*.example.org"]
+                }
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(issued))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let hosts = vec![
+            HostPattern::parse("gitlab.com").unwrap(),
+            HostPattern::parse("*.example.org").unwrap(),
+        ];
+        let request = TokenRequest {
+            credential: SecretCredential::new(
+                "GITLAB_TOKEN".to_string(),
+                "glpat-client-test".to_string(),
+                SecretInjection::PrivateToken,
+                hosts,
+            )
+            .into(),
+            ..request()
+        };
+        let client = AuthProxyClient::new(&server.uri(), ADMIN_KEY);
+        let issued = client.issue(&request).await.unwrap();
+        assert_eq!(issued.id, "def456");
+        assert_eq!(issued.token, "ifap_secret");
     })
     .await
     .expect("test timed out");

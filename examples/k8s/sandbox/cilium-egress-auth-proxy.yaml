@@ -3,7 +3,9 @@
 # Use INSTEAD of cilium-egress-anthropic.yaml: the agent pods no longer reach
 # api.anthropic.com, only the auth proxy, which alone holds the credential
 # and alone reaches the API. The per-profile policies (gitlab below) are
-# unchanged and stay additive.
+# unchanged and stay additive. With proxied secrets (the GitLab token held by
+# the proxy, git and the API reached through /r/), the agent pods no longer
+# need the gitlab profile: open gitlab.com on the proxy pods instead, in (b).
 #
 # (a) Agent pods: DNS, and the auth proxy pods on 8080.
 apiVersion: cilium.io/v2
@@ -68,6 +70,7 @@ spec:
               protocol: TCP
 ---
 # (b) The auth proxy pods: egress to DNS and api.anthropic.com:443 only, plus
+# the hosts of the proxied secrets (commented-out rule below), plus
 # PostgreSQL on 5432 with the shared registry (commented-out rule below);
 # ingress on 8080 only from the agent pods and from the worker. Adjust the
 # worker selector to the namespace and labels the worker runs under.
@@ -110,6 +113,17 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+    # Proxied secrets: every host in the allowlist of a proxied secret must be
+    # opened here for the proxy pods, else the relay answers 502. Wildcard
+    # allowlist entries map to matchPattern.
+    # - toFQDNs:
+    #     - matchName: api.github.com
+    #     - matchName: gitlab.com
+    #   toPorts:
+    #     - ports:
+    #         - port: "443"
+    #           protocol: TCP
+    #
     # Shared PostgreSQL registry (IRONFLOW_AUTH_PROXY_DATABASE_URL set in
     # auth-proxy.yaml): uncomment ONE of the two rules below, else the proxy
     # times out at startup. Not needed with the in-memory registry. If the

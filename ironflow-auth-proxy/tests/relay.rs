@@ -73,7 +73,7 @@ impl Proxy {
             run_id: "run-1".to_string(),
             step: "review".to_string(),
             expires_at: now() + 600,
-            credential: ProxyCredential::new(kind, value.to_string()),
+            credential: ProxyCredential::new(kind, value.to_string()).into(),
         };
         let resp = self
             .http
@@ -159,7 +159,7 @@ async fn expired_token_returns_401() {
             run_id: "run-1".to_string(),
             step: "review".to_string(),
             expires_at: issued_at + 90,
-            credential: ProxyCredential::new(CredentialKind::OauthToken, OAUTH.to_string()),
+            credential: ProxyCredential::new(CredentialKind::OauthToken, OAUTH.to_string()).into(),
         };
         let issued = proxy
             .state

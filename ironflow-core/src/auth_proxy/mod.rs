@@ -8,6 +8,12 @@
 //! request to `api.anthropic.com`. At the end of the step the worker revokes
 //! the token; its expiry is the backstop.
 //!
+//! Proxied secrets ([`ProxiedSecret`]) extend this to other credentials: the
+//! pod receives an opaque token per secret and sends its requests to
+//! `<proxy>/r/<host>/<path>`. The proxy checks `<host>` against the secret's
+//! allowlist ([`HostPattern`]), injects the real secret as configured by
+//! [`SecretInjection`] and relays to `https://<host>/<path>`.
+//!
 //! This module holds what both sides share:
 //!
 //! * [`AuthProxyRegistry`] - the opaque token registry (proxy side);
@@ -17,6 +23,9 @@
 //!   [`downstream_headers`] - the relay policy (proxy side);
 //! * [`resolve_credential`] / [`ProxyCredential`] - which credential the
 //!   worker hands to the proxy;
+//! * [`GrantCredential`], [`SecretCredential`], [`is_relay_path`],
+//!   [`secret_upstream_headers`] - proxied secrets and their relay under
+//!   [`RELAY_PREFIX`];
 //! * [`AuthProxyClient`] - the admin client the worker uses to issue and
 //!   revoke tokens.
 //!
@@ -35,7 +44,7 @@
 //!             run_id: "run-1".to_string(),
 //!             step: "review".to_string(),
 //!             expires_at: 1_000 + 600,
-//!             credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+//!             credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()).into(),
 //!         },
 //!         1_000,
 //!     )
@@ -52,6 +61,7 @@ mod client;
 mod credential;
 mod policy;
 mod registry;
+mod secret;
 
 use std::time::Duration;
 
@@ -62,14 +72,19 @@ pub use client::AuthProxyClient;
 pub use credential::{CredentialKind, ProxyCredential, resolve_credential};
 pub use policy::{
     downstream_headers, error_body, extract_opaque_token, is_allowed_method, is_allowed_path,
-    upstream_headers,
+    is_relay_method, is_relay_path, secret_upstream_headers, upstream_headers,
 };
 pub use registry::{
     AuthProxyRegistry, Grant, IssuedToken, TokenRejection, TokenRequest, admin_key_matches,
     token_id,
 };
+pub use secret::{
+    GrantCredential, HostPattern, ProxiedSecret, SecretCredential, SecretInjection,
+    is_valid_request_host,
+};
 
-/// The only upstream the proxy binary relays to.
+/// The upstream of the Claude relay (`/v1/`). Proxied secrets (under
+/// [`RELAY_PREFIX`]) reach their own allowlisted https hosts.
 pub const DEFAULT_UPSTREAM: &str = "https://api.anthropic.com";
 
 /// Environment variable holding the admin key shared by the worker and the proxy.
@@ -89,6 +104,13 @@ pub const POD_TOKEN_ENV: &str = "ANTHROPIC_AUTH_TOKEN";
 
 /// Environment variable carrying the proxy URL in the agent pod.
 pub const POD_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
+
+/// Path prefix of the proxied secret relay: `<proxy>/r/<host>/<path>`.
+pub const RELAY_PREFIX: &str = "/r";
+
+/// Suffix of the pod environment variable carrying the relay base URL of a
+/// proxied secret: `<env>_URL`.
+pub const SECRET_URL_SUFFIX: &str = "_URL";
 
 /// Errors of the auth proxy. No variant ever carries a credential or token value.
 ///

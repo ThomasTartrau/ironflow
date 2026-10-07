@@ -11,6 +11,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
+use crate::auth_proxy::ProxiedSecret;
+
 /// Pod label carrying the id of the run that created the pod.
 ///
 /// Stamped by the engine on every agent step. Together with [`LABEL_STEP`] it
@@ -607,6 +609,22 @@ pub(crate) fn upsert_secret_env(list: &mut Vec<SecretEnvVar>, entry: SecretEnvVa
     match list.iter_mut().find(|e| e.name == entry.name) {
         Some(existing) => *existing = entry,
         None => list.push(entry),
+    }
+}
+
+/// Add `secret` to `list`, replacing in place an entry with the same `env`.
+///
+/// # Panics
+///
+/// Panics when [`ProxiedSecret::validate`] refuses `secret`. The message
+/// never carries the secret value.
+pub(crate) fn upsert_proxied_secret(list: &mut Vec<ProxiedSecret>, secret: ProxiedSecret) {
+    if let Err(e) = secret.validate() {
+        panic!("invalid proxied secret: {e}");
+    }
+    match list.iter_mut().find(|e| e.env == secret.env) {
+        Some(existing) => *existing = secret,
+        None => list.push(secret),
     }
 }
 

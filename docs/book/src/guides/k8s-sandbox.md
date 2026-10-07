@@ -119,6 +119,75 @@ registry):
 {{#include ../../../../examples/k8s/sandbox/cilium-egress-auth-proxy.yaml}}
 ```
 
+### Proxied secrets
+
+The same proxy keeps other secrets out of the pod: a GitHub token, a GitLab
+token, any API key. `proxied_secret` declares one on the provider (every step)
+or on a step, a step entry replacing a provider entry with the same `env`:
+
+```rust,ignore
+use std::env::var;
+
+use ironflow_core::auth_proxy::{ProxiedSecret, SecretInjection};
+
+let provider = K8sEphemeralProvider::sandboxed(&image)
+    .auth_proxy("http://ironflow-auth-proxy.ironflow-system")
+    .proxied_secret(ProxiedSecret {
+        name: "GITHUB_TOKEN".to_string(),
+        env: "GITHUB_TOKEN".to_string(),
+        value: var("GITHUB_TOKEN")?,
+        injection: SecretInjection::Bearer,
+        hosts: vec!["api.github.com".to_string()],
+    });
+
+let config = AgentConfig::new("Open the merge request").proxied_secret(ProxiedSecret {
+    name: "GITLAB_TOKEN".to_string(),
+    env: "GITLAB_TOKEN".to_string(),
+    value: var("GITLAB_TOKEN")?,
+    injection: SecretInjection::Basic { username: "oauth2".to_string() },
+    hosts: vec!["gitlab.com".to_string()],
+});
+```
+
+The worker issues one opaque token per secret, bound to the run and the step
+like the Claude token and revoked with it. The pod receives the token in
+`<env>` and the relay base `<proxy>/r` in `<env>_URL`, never the value, and
+calls `$<env>_URL/<host>/<path>` presenting the token as `Authorization:
+Bearer`, `x-api-key`, `Private-Token` or the password of `Authorization:
+Basic`. The proxy strips it and injects the real secret:
+
+| Injection | Header sent to `https://<host>` |
+|-----------|---------------------------------|
+| `SecretInjection::Bearer` | `Authorization: Bearer <secret>` |
+| `SecretInjection::PrivateToken` | `Private-Token: <secret>` (GitLab API) |
+| `SecretInjection::XApiKey` | `x-api-key: <secret>` |
+| `SecretInjection::Header(name)` | `<name>: <secret>` |
+| `SecretInjection::Basic { username }` | `Authorization: Basic base64(<username>:<secret>)` |
+
+- **Allowlist.** `hosts` holds exact host names or a leading wildcard
+  (`*.example.com` matches `api.example.com`, not `example.com`). No regex, no
+  port, no IP address; the proxy only speaks https upstream. A host outside the
+  list, a path with `..`, `//` or percent-encoding, a Claude token on `/r/` and
+  a secret token on the Anthropic API get a 403; an unknown, expired or revoked
+  token a 401. The query string is relayed untouched.
+- **git.** A `Basic` secret also sets the git config of the pod through
+  `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`: for each
+  exact host, `https://<host>/` is rewritten to `<proxy>/r/<host>/`, so `git
+  clone https://gitlab.com/group/repo.git` works unchanged. A step setting a
+  `GIT_CONFIG_*` variable itself is refused, as is a proxied `<env>` or
+  `<env>_URL` the pod already receives.
+- **Redirects** are returned to the pod with their `Location`, never followed:
+  the secret never travels to another host.
+- **Logs and metrics.** Each `/r/` request logs `host`, `secret` (the name),
+  `run_id`, `step`, the short token id, `result` and `upstream_status`, never
+  the token, the secret, a header or the query string. The counter
+  `ironflow_auth_proxy_requests_total{secret, result}` is served at `/metrics`
+  on the proxy port.
+- **Egress.** The proxy pods need egress to every allowlisted host: uncomment
+  the proxied secrets `toFQDNs` rule in section (b) of
+  `cilium-egress-auth-proxy.yaml`. The agent pods then no longer need the
+  `gitlab` egress profile.
+
 ## Per-step settings
 
 A step adds to or overrides the provider's settings through its
@@ -438,4 +507,20 @@ the proxy refuses an unknown token:
 kubectl -n ironflow-agents exec <pod> -- env | grep -c 'sk-ant'   # 0
 kubectl -n ironflow-agents exec <pod> -- sh -c \
   'curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer invalide" "$ANTHROPIC_BASE_URL/v1/messages"'   # 401
+```
+
+With proxied secrets, the pod holds the opaque token only, and a host outside
+the allowlist is refused:
+
+```sh
+kubectl -n ironflow-agents exec <pod> -- sh -c 'echo "$GITHUB_TOKEN" | cut -c1-5'   # ifap_
+kubectl -n ironflow-agents exec <pod> -- sh -c \
+  'curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GITHUB_TOKEN" "$GITHUB_TOKEN_URL/example.com/"'   # 403
+```
+
+The relay and the metric are covered by the proxy test suites:
+
+```sh
+cargo test -p ironflow-auth-proxy --test relay_secrets
+cargo test -p ironflow-auth-proxy --test metrics
 ```
