@@ -635,10 +635,12 @@ mod tests {
         let (broken, healthy) = with_local_recorder(&recorder, || {
             runtime.block_on(async {
                 let (store, broken) = store_with_due_schedule("0 0 30 2 *").await;
+                // A yearly cron: no later occurrence can fall between the due
+                // one and the tick and be counted as superseded.
                 let healthy = store
                     .create_schedule(NewSchedule {
                         workflow_name: "deploy".to_string(),
-                        cron_expression: "* * * * *".to_string(),
+                        cron_expression: "0 0 1 1 *".to_string(),
                         inputs: json!({}),
                         source: ScheduleSource::Api,
                         priority: 0,

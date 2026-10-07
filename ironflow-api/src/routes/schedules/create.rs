@@ -25,9 +25,10 @@ use crate::state::AppState;
 /// - 400 if `priority` is outside `-100..=100`
 /// - 400 if `catchup_max` is outside `1..=1000` or `catchup_window_secs` is
 ///   outside `60..=2592000`
-/// - 400 if `timezone` is not an IANA timezone name
 /// - 400 if the workflow is not registered
 /// - 401 if not authenticated
+/// - 422 if `timezone` is not an IANA timezone name, or `catchup` or `overlap`
+///   is not a known policy
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -37,8 +38,9 @@ use crate::state::AppState;
         request_body(content = CreateScheduleRequest, description = "Schedule definition"),
         responses(
             (status = 201, description = "Schedule created", body = ScheduleResponse),
-            (status = 400, description = "Invalid input, cron, priority, catch-up or timezone"),
-            (status = 401, description = "Unauthorized")
+            (status = 400, description = "Invalid input, cron, priority or catch-up bounds"),
+            (status = 401, description = "Unauthorized"),
+            (status = 422, description = "Unknown timezone, catch-up or overlap policy")
         ),
         security(("Bearer" = []))
     )
@@ -330,7 +332,11 @@ mod tests {
         let resp = app.oneshot(req).await.expect("request");
         let status = resp.status();
         let bytes = resp.into_body().collect().await.expect("body").to_bytes();
-        (status, from_slice(&bytes).expect("json"))
+        // A body axum's `Json` extractor rejects comes back as plain text, not
+        // as the JSON error envelope: keep it readable in assertion messages.
+        let val = from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        (status, val)
     }
 
     #[tokio::test]
@@ -432,7 +438,7 @@ mod tests {
             "timezone": "Mars/Olympus",
         }))
         .await;
-        assert!(status.is_client_error(), "{status} {val}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{val}");
     }
 
     #[tokio::test]
@@ -465,12 +471,12 @@ mod tests {
 
     #[tokio::test]
     async fn create_schedule_rejects_unknown_catchup_value() {
-        let (status, _) = post_schedule(json!({
+        let (status, val) = post_schedule(json!({
             "workflow_name": "deploy",
             "cron_expression": "0 9 * * *",
             "catchup": "sometimes",
         }))
         .await;
-        assert!(status.is_client_error(), "{status}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{val}");
     }
 }
