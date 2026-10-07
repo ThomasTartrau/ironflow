@@ -58,6 +58,10 @@ The timer is cleared the moment the gate resolves -- approved, rejected, or
 escalated -- so a gate is never escalated after a human answered it. A deadline
 fires at most once, even with several API instances running.
 
+The deadline keeps running while the run is
+[paused](engine-worker.md#pausing-runs-and-workflows): the policy fires during
+the pause and only changes the state the run resumes to.
+
 `with_timeout_seconds` is the legacy spelling: it is now *enforced*, as a
 deadline with an implicit `AutoReject` policy. Setting both keeps the explicit
 `with_deadline`.

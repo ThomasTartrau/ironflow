@@ -268,13 +268,20 @@ state it was paused from in `resume_status`:
   touches a paused run;
 - an approval, a human input or a signal the run waits for can still be
   resolved while it is paused. The decision is recorded and only changes the
-  state the run resumes to; a rejection fails the run.
+  state the run resumes to; a rejection fails the run;
+- the SLA deadline of an approval gate keeps running during the pause. When it
+  expires, the escalator applies the gate's policy as usual: `AutoApprove`
+  records the approval and the run resumes to `Pending`, `AutoReject` fails
+  the run, `Notify` and `Escalate` re-arm the timer. The run stays `Paused`
+  until an operator resumes it, and a deadline that expired during the pause
+  has already been escalated by then.
 
 `POST /api/v1/runs/{id}/resume` (`Engine::resume_paused_run`) puts every run
 back in the state it was paused from. A run paused while it executed goes
 back to `Pending` and replays: finished steps are skipped and the interrupted
 step is executed again, like a run resumed after a lost lease. A `Sleeping`
-run whose deadline passed during the pause goes back to `Pending`. A paused
+run whose deadline passed during the pause goes back to `Pending`. A run
+resumed to `AwaitingApproval` keeps the gate's current deadline. A paused
 run can also be cancelled.
 
 Only a root run is paused or resumed: the API answers 400 for a sub-workflow
