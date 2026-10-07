@@ -98,6 +98,10 @@ export function Component() {
 							<p className="text-sm font-mono">{workflow.version}</p>
 						</div>
 						<div className="rounded-[var(--radius)] border p-3">
+							<p className="text-xs text-muted-foreground mb-1">Priority</p>
+							<p className="text-sm font-mono">{workflow.priority}</p>
+						</div>
+						<div className="rounded-[var(--radius)] border p-3">
 							<p className="text-xs text-muted-foreground mb-1">Recent runs</p>
 							<p className="text-sm">{recentRuns.length}</p>
 						</div>

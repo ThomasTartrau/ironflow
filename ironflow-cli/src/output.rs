@@ -527,6 +527,7 @@ pub fn workflow_detail_table(detail: &WorkflowDetailResponse) -> Table {
         Cell::new("Version"),
         Cell::new(detail.version.as_deref().unwrap_or("-")),
     ]);
+    table.add_row(vec![Cell::new("Priority"), Cell::new(detail.priority)]);
     if let Some(paused_at) = &detail.paused_at {
         table.add_row(vec![
             Cell::new("Paused since"),
@@ -1247,7 +1248,7 @@ mod tests {
     use ironflow_sdk::types::{
         ApiKeyScope, ConditionResponse, CreatedBy, CreatedByKind, EventKind, TriggerKind,
     };
-    use serde_json::{Map, Value, json};
+    use serde_json::{Map, Value, from_value, json};
 
     use super::*;
 
@@ -1536,6 +1537,24 @@ mod tests {
         let output = run_detail_table(&detail).to_string();
         assert!(output.contains("Priority"), "row missing from:\n{output}");
         assert!(output.contains("64"), "priority missing from:\n{output}");
+    }
+
+    #[test]
+    fn workflow_detail_table_shows_the_priority() {
+        let detail: WorkflowDetailResponse = from_value(json!({
+            "name": "prio-workflow",
+            "description": "A workflow",
+            "source_code": null,
+            "sub_workflows": [],
+            "category": null,
+            "version": null,
+            "priority": -40,
+        }))
+        .unwrap();
+
+        let output = workflow_detail_table(&detail).to_string();
+        assert!(output.contains("Priority"), "row missing from:\n{output}");
+        assert!(output.contains("-40"), "priority missing from:\n{output}");
     }
 
     #[test]
