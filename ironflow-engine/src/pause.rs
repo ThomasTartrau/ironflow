@@ -201,6 +201,11 @@ impl Engine {
     /// task, and so is a queued sub-workflow run whose root still waits.
     /// [`Event::RunStatusChanged`] is published for every run resumed.
     ///
+    /// Under [`ExecutionMode::Local`], an execution still inside its step when
+    /// the run is resumed is not doubled: the run goes back to `Running` and
+    /// that execution carries on, and the background task waits for it to end
+    /// before deciding whether anything is left to restart.
+    ///
     /// # Errors
     ///
     /// - [`EngineError::Store`] with [`StoreError::RunNotFound`] for an
@@ -279,10 +284,12 @@ impl Engine {
 
         if self.execution_mode() == ExecutionMode::Local {
             if target == RunStatus::Pending {
+                self.continue_in_flight_execution(run_id).await?;
                 self.spawn_local_resume(run_id);
             } else {
                 // The root waits on its chain: the queued child resumes it.
                 for child_id in queued_descendants {
+                    self.continue_in_flight_execution(child_id).await?;
                     self.spawn_local_resume(child_id);
                 }
             }
@@ -292,6 +299,22 @@ impl Engine {
             run: self.load_run(run_id).await?,
             resumed_descendants,
         })
+    }
+
+    /// Hand a run just queued to `Pending` back to the execution still
+    /// running it in this process, if any.
+    ///
+    /// That execution does not see the pause at a step boundary once the run
+    /// left `Paused`, so the run must be `Running` for it to carry on as a
+    /// legitimate run.
+    async fn continue_in_flight_execution(&self, run_id: Uuid) -> Result<(), EngineError> {
+        if self.is_executing(run_id) {
+            self.store()
+                .update_run_status(run_id, RunStatus::Running)
+                .await?;
+            debug!(run_id = %run_id, "execution still in flight, run continues");
+        }
+        Ok(())
     }
 
     /// Pause a registered workflow: its queued runs are no longer picked up.

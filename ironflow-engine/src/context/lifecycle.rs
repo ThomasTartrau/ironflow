@@ -525,9 +525,9 @@ impl WorkflowContext {
                 let debug_messages_json = output.debug_messages_json();
 
                 let completed_at = Utc::now();
-                self.store
-                    .update_step(
-                        step.id,
+                let step_id = self
+                    .complete_step(
+                        &step,
                         StepUpdate {
                             status: Some(StepStatus::Completed),
                             output: Some(output.output.clone()),
@@ -582,7 +582,7 @@ impl WorkflowContext {
                     }
                 }
 
-                self.last_step_ids = vec![step.id];
+                self.last_step_ids = vec![step_id];
 
                 Ok(output)
             }
@@ -815,6 +815,67 @@ impl WorkflowContext {
             .await?;
 
         Ok(())
+    }
+
+    /// Record the completion of `step`, finished by the handler in flight.
+    ///
+    /// A pause interrupts the steps running at that time, so a step whose
+    /// run was paused then resumed before it ended can no longer be
+    /// completed. The work is done and the execution carries on: it is
+    /// recorded as a new completed step at the same position, next to the
+    /// interrupted record. A run still paused keeps the interrupted step, the
+    /// resume executes it again.
+    ///
+    /// Returns the id of the step that holds the completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store error when the completion cannot be persisted.
+    async fn complete_step(&self, step: &Step, update: StepUpdate) -> Result<Uuid, EngineError> {
+        let err = match self.store.update_step(step.id, update.clone()).await {
+            Ok(()) => return Ok(step.id),
+            Err(err) => err,
+        };
+
+        let interrupted = self
+            .store
+            .list_steps(self.run_id)
+            .await?
+            .into_iter()
+            .any(|s| {
+                s.id == step.id
+                    && s.status.state == StepStatus::Failed
+                    && s.error.as_deref() == Some(STEP_INTERRUPTED_ERROR)
+            });
+        let resumed = self
+            .store
+            .get_run(self.run_id)
+            .await?
+            .is_some_and(|run| run.status.state != RunStatus::Paused);
+        if !(interrupted && resumed) {
+            return Err(err.into());
+        }
+
+        let recorded = self
+            .store
+            .create_step(NewStep {
+                run_id: self.run_id,
+                trace_id: step.trace_id,
+                name: step.name.clone(),
+                kind: step.kind.clone(),
+                position: step.position,
+                input: step.input.clone(),
+                is_error_handler: false,
+            })
+            .await?;
+        self.start_step(recorded.id, Utc::now()).await?;
+        self.store.update_step(recorded.id, update).await?;
+        info!(
+            run_id = %self.run_id,
+            step = %step.name,
+            "step finished after its run was paused and resumed, completion recorded again"
+        );
+        Ok(recorded.id)
     }
 
     /// Stop before a new step when an operator paused the run.
