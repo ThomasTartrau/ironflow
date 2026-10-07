@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.51.8](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.51.7...ironflow-engine-v2.51.8) - 2026-10-07
+
+### Fixed
+
+- #186 keep the SLA of an approval gate running while its run is paused
+
 ## [2.51.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.51.4...ironflow-engine-v2.51.5) - 2026-10-07
 ## [2.51.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.51.3...ironflow-engine-v2.51.4) - 2026-10-07
 ## [2.51.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.51.1...ironflow-engine-v2.51.2) - 2026-10-06
