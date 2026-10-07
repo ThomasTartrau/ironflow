@@ -24,10 +24,15 @@ use ironflow_core::auth_proxy::{
 use ironflow_store::crypto::KeyRing;
 use ironflow_store::postgres::PostgresStore;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Row, query};
+use sqlx::{PgPool, Row, query, raw_sql};
 use uuid::Uuid;
 
 const CREDENTIAL: &str = "sk-ant-oat01-postgres-test";
+
+/// Up script of the migration that added proxied secrets. It shipped in 2.46.0
+/// under a version shared with another migration (#190); a database that
+/// recorded it under the wrong version replays it on objects already there.
+const SECRETS_UP: &str = include_str!("../migrations/20261008110000_add_auth_proxy_secrets.up.sql");
 
 /// The raw columns of a run's grant.
 const RAW_ROW: &str =
@@ -371,6 +376,30 @@ async fn secret_grant_round_trips_encrypted() {
     assert!(!text.contains(&issued.token), "{text}");
 
     restarted.revoke_run(&run_id).await.expect("cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires a live PostgreSQL database"]
+async fn secrets_migration_replays_on_a_database_that_already_ran_it() {
+    // Every migration applied, the secrets one included.
+    store_with_key(0xaa).await;
+    let pool = raw_pool().await;
+
+    raw_sql(SECRETS_UP)
+        .execute(&pool)
+        .await
+        .expect("replay the secrets migration");
+
+    let checks: i64 = query(
+        "SELECT COUNT(*) AS count FROM pg_constraint \
+         WHERE conrelid = 'ironflow.auth_proxy_grants'::regclass \
+         AND conname = 'auth_proxy_grants_secret_spec_check'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count constraints")
+    .get("count");
+    assert_eq!(checks, 1, "the secret_spec check survives the replay once");
 }
 
 #[tokio::test]

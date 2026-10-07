@@ -33,7 +33,7 @@ reached `main` (#113).
 
 ## When you write a migration
 
-- Create it with `sqlx migrate add -r <name> --source ironflow-store/migrations`.
+- Create it with the sqlx CLI, never with a version written by hand: see `migrations.md`.
 - Never `SELECT ... INTO STRICT` a state that no earlier migration creates. Grep the
   migrations for its `abstract_state_create` call first.
 - Never edit a migration that has run anywhere: sqlx checks its checksum. The one

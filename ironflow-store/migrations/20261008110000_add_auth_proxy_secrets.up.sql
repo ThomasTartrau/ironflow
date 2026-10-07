@@ -5,6 +5,7 @@
 ALTER TABLE ironflow.auth_proxy_grants DROP CONSTRAINT IF EXISTS auth_proxy_grants_credential_kind_check;
 ALTER TABLE ironflow.auth_proxy_grants ADD CONSTRAINT auth_proxy_grants_credential_kind_check CHECK (credential_kind IN ('oauth_token', 'api_key', 'secret'));
 ALTER TABLE ironflow.auth_proxy_grants ADD COLUMN IF NOT EXISTS secret_spec JSONB NULL;
+ALTER TABLE ironflow.auth_proxy_grants DROP CONSTRAINT IF EXISTS auth_proxy_grants_secret_spec_check;
 ALTER TABLE ironflow.auth_proxy_grants ADD CONSTRAINT auth_proxy_grants_secret_spec_check CHECK ((credential_kind = 'secret') = (secret_spec IS NOT NULL));
 -- Tombstones of revoked grants, kept until the grant would have expired, so a
 -- revoked token is told apart from an unknown one. No credential is kept.
