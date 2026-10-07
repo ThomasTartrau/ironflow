@@ -118,9 +118,9 @@ impl WorkflowContext {
                 self.total_duration_ms += duration_ms;
 
                 let completed_at = Utc::now();
-                self.store
-                    .update_step(
-                        step.id,
+                let step_id = self
+                    .complete_step(
+                        &step,
                         StepUpdate {
                             status: Some(StepStatus::Completed),
                             output: Some(output_value.clone()),
@@ -140,7 +140,7 @@ impl WorkflowContext {
                     "operation step completed"
                 );
 
-                self.last_step_ids = vec![step.id];
+                self.last_step_ids = vec![step_id];
 
                 Ok(StepOutput {
                     output: output_value,
@@ -154,7 +154,7 @@ impl WorkflowContext {
                     debug_messages: None,
                     // An operation declares no output; its record is what
                     // `put_artifact` attaches bytes to.
-                    artifacts: StepArtifacts::new(name, Some(step.id), &[]),
+                    artifacts: StepArtifacts::new(name, Some(step_id), &[]),
                     account_id: None,
                     environment_id: None,
                 })

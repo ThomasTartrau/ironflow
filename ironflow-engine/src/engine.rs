@@ -15,6 +15,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use rust_decimal::Decimal;
 use serde_json::{Value, to_value};
 use tokio::spawn;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -231,6 +232,43 @@ pub struct Engine {
     step_interceptor: Option<Arc<dyn StepInterceptor>>,
     execution_mode: ExecutionMode,
     worker_tags: Option<Arc<Vec<String>>>,
+    active_runs: ActiveRuns,
+}
+
+/// Per-run lock of the executions running in this process.
+type ActiveRuns = Arc<Mutex<HashMap<Uuid, Arc<AsyncMutex<()>>>>>;
+
+/// Marks a run as executing in this process until it is dropped.
+///
+/// Holds the run's lock, so a resume of the same run waits for the execution
+/// to end ([`Engine::wait_until_idle`]) instead of replaying it in parallel.
+struct ActiveRunGuard {
+    runs: ActiveRuns,
+    run_id: Uuid,
+    entry: Arc<AsyncMutex<()>>,
+    lock: Option<OwnedMutexGuard<()>>,
+}
+
+impl Drop for ActiveRunGuard {
+    fn drop(&mut self) {
+        self.lock.take();
+        prune_active_run(&self.runs, self.run_id, &self.entry);
+    }
+}
+
+/// Remove the lock of `run_id` from `runs` once nobody holds or awaits it.
+///
+/// `entry` is the caller's own clone: the map plus that clone make two
+/// references, any more is a waiter that still needs the lock in the map.
+fn prune_active_run(runs: &ActiveRuns, run_id: Uuid, entry: &Arc<AsyncMutex<()>>) {
+    let mut runs = runs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let unused = runs
+        .get(&run_id)
+        .is_some_and(|current| Arc::ptr_eq(current, entry))
+        && Arc::strong_count(entry) == 2;
+    if unused {
+        runs.remove(&run_id);
+    }
 }
 
 /// Validate a workflow category path.
@@ -340,7 +378,52 @@ impl Engine {
             step_interceptor: None,
             execution_mode: ExecutionMode::default(),
             worker_tags: None,
+            active_runs: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Mark `run_id` as executing in this process, waiting for a previous
+    /// execution of the same run to end first.
+    async fn track_execution(&self, run_id: Uuid) -> ActiveRunGuard {
+        let entry = {
+            let mut runs = self
+                .active_runs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Arc::clone(runs.entry(run_id).or_default())
+        };
+        let lock = Arc::clone(&entry).lock_owned().await;
+        ActiveRunGuard {
+            runs: Arc::clone(&self.active_runs),
+            run_id,
+            entry,
+            lock: Some(lock),
+        }
+    }
+
+    /// Wait until no execution of `run_id` is running in this process.
+    async fn wait_until_idle(&self, run_id: Uuid) {
+        let entry = {
+            let runs = self
+                .active_runs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            runs.get(&run_id).map(Arc::clone)
+        };
+        if let Some(entry) = entry {
+            drop(Arc::clone(&entry).lock_owned().await);
+            prune_active_run(&self.active_runs, run_id, &entry);
+        }
+    }
+
+    /// Whether an execution of `run_id` is running in this process.
+    pub(crate) fn is_executing(&self, run_id: Uuid) -> bool {
+        let runs = self
+            .active_runs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        runs.get(&run_id)
+            .is_some_and(|entry| entry.try_lock().is_err())
     }
 
     /// Wire a [`DecisionProvider`] backend for `ctx.decision(...)` steps.
@@ -1283,6 +1366,8 @@ impl Engine {
             return self.resume_chain(run, root_run_id).await;
         }
 
+        let _active = self.track_execution(run_id).await;
+
         let handler = self
             .handlers
             .get(&run.workflow_name)
@@ -1519,6 +1604,7 @@ impl Engine {
     /// Resume `run`, already loaded and already `Running`.
     async fn resume_loaded_run(&self, run: Run) -> Result<WorkflowResult, EngineError> {
         let run_id = run.id;
+        let _active = self.track_execution(run_id).await;
         let handler = self
             .handlers
             .get(&run.workflow_name)
@@ -1778,16 +1864,50 @@ impl Engine {
     /// Used under [`ExecutionMode::Local`], where no worker would pick the
     /// run up. The state change already happened, so a failed resume is
     /// logged, not rolled back.
+    ///
+    /// The task first waits for the execution of the run still in flight in
+    /// this process, if any: a run paused then resumed while a step runs
+    /// would otherwise be replayed next to the execution that has not
+    /// noticed the pause yet. Once it is gone, the run is read again:
+    /// `Pending` is started, `Running` was left unfinished by the previous
+    /// execution and is resumed as is, any other status means the previous
+    /// execution finished the run or it was taken elsewhere, and nothing is
+    /// done.
     pub(crate) fn spawn_local_resume(self: &Arc<Self>, run_id: Uuid) {
         let engine = Arc::clone(self);
         spawn(async move {
-            if let Err(err) = engine
-                .store
-                .update_run_status(run_id, RunStatus::Running)
-                .await
-            {
-                error!(run_id = %run_id, error = %err, "failed to restart a woken run");
-                return;
+            engine.wait_until_idle(run_id).await;
+            let run = match engine.store.get_run(run_id).await {
+                Ok(Some(run)) => run,
+                Ok(None) => {
+                    error!(run_id = %run_id, "run to restart not found");
+                    return;
+                }
+                Err(err) => {
+                    error!(run_id = %run_id, error = %err, "failed to load a run to restart");
+                    return;
+                }
+            };
+            match run.status.state {
+                RunStatus::Pending => {
+                    if let Err(err) = engine
+                        .store
+                        .update_run_status(run_id, RunStatus::Running)
+                        .await
+                    {
+                        error!(run_id = %run_id, error = %err, "failed to restart a woken run");
+                        return;
+                    }
+                }
+                RunStatus::Running => {}
+                status => {
+                    info!(
+                        run_id = %run_id,
+                        status = %status,
+                        "run no longer waiting to restart, resume skipped"
+                    );
+                    return;
+                }
             }
             if let Err(err) = engine.resume_run(run_id).await {
                 error!(run_id = %run_id, error = %err, "failed to resume a woken run");
@@ -2074,6 +2194,25 @@ impl Engine {
                 run_id = %run_id,
                 outcome = ?result.err().map(|err| err.to_string()),
                 "run paused, execution stopped"
+            );
+            return Ok(WorkflowResult {
+                run,
+                steps: ctx.step_results().to_vec(),
+            });
+        }
+
+        // The pause stopped this execution but the run was resumed since: the
+        // resume continues or restarts it, so nothing is recorded here.
+        if matches!(result, Err(EngineError::RunPaused { .. })) {
+            let run = self
+                .store
+                .get_run(run_id)
+                .await?
+                .ok_or(EngineError::Store(StoreError::RunNotFound(run_id)))?;
+            info!(
+                run_id = %run_id,
+                status = %run.status.state,
+                "run resumed after the pause, execution stopped"
             );
             return Ok(WorkflowResult {
                 run,

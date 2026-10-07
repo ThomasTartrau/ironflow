@@ -284,6 +284,11 @@ run whose deadline passed during the pause goes back to `Pending`. A run
 resumed to `AwaitingApproval` keeps the gate's current deadline. A paused
 run can also be cancelled.
 
+Under `ExecutionMode::Local`, a run resumed while its previous execution is
+still inside a step is not executed twice: that execution carries on, and the
+background restart waits for it before deciding whether anything is left to
+replay.
+
 Only a root run is paused or resumed: the API answers 400 for a sub-workflow
 run, a run already finished, or (on resume) a run that is not paused.
 
