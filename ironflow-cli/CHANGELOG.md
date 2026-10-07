@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.60](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.59...ironflow-cli-v0.1.60) - 2026-10-07
+
+### Added
+
+- #185 expose the handler priority in GET /workflows/{name}
+
 ## [0.1.59](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.58...ironflow-cli-v0.1.59) - 2026-10-07
 
 ### Added
