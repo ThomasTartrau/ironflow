@@ -617,6 +617,15 @@
         ],
         "description": "Response of `POST /api/v1/runs/:id/cancel`: the cancelled run, with the\nsub-workflow runs cancelled along with it.\n\nThe run's fields stay at the top level, as before the descendants were\nlisted, so existing clients read the same document."
       },
+      "CatchupPolicy": {
+        "description": "What a schedule does with the occurrences it missed while no server was\nfiring it (downtime, a long deploy, a stalled ticker).\n\n# Examples\n\n```\nuse ironflow_store::entities::CatchupPolicy;\n\nassert_eq!(CatchupPolicy::default(), CatchupPolicy::Latest);\nassert_eq!(CatchupPolicy::All.as_ref(), \"all\");\n\nlet parsed: CatchupPolicy = \"skip\".parse().unwrap();\nassert_eq!(parsed, CatchupPolicy::Skip);\n```",
+        "enum": [
+          "latest",
+          "all",
+          "skip"
+        ],
+        "type": "string"
+      },
       "ChangePasswordRequest": {
         "description": "Change password request body.",
         "properties": {
@@ -955,6 +964,25 @@
       "CreateScheduleRequest": {
         "description": "Create schedule request body.",
         "properties": {
+          "catchup": {
+            "$ref": "#/components/schemas/CatchupPolicy",
+            "description": "What the schedule does with the occurrences it missed while no server\nfired it: `latest` (default) runs the most recent one, `all` runs each\nof them, `skip` runs none.",
+            "nullable": true
+          },
+          "catchup_max": {
+            "description": "Most runs created to catch up under `catchup = all`, from 1 to 1000.\nDefaults to 10.",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "catchup_window_secs": {
+            "description": "How far back, in seconds, a missed occurrence is still caught up, from\n60 to 2592000 (30 days). Defaults to 86400 (one day).",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
           "cron_expression": {
             "description": "Cron expression (6-field format, e.g. `\"0 */5 * * * *\"`).",
             "type": "string"
@@ -962,11 +990,21 @@
           "inputs": {
             "description": "JSON payload for the workflow. Defaults to `{}`."
           },
+          "overlap": {
+            "$ref": "#/components/schemas/OverlapPolicy",
+            "description": "What the schedule does when an occurrence comes while one of its runs\nis still active: `allow` (default) starts another run, `skip` drops the\noccurrence.",
+            "nullable": true
+          },
           "priority": {
             "description": "Queue priority given to every run the schedule creates, from -100 to\n100. Defaults to the priority the workflow handler declares.\n\nA higher priority run is picked first by workers. A running run is\nnever preempted, and a low priority run is not aged.",
             "format": "int32",
             "nullable": true,
             "type": "integer"
+          },
+          "timezone": {
+            "description": "IANA timezone the cron expression is evaluated in, e.g.\n`\"Europe/Paris\"`. Defaults to `\"UTC\"`.",
+            "nullable": true,
+            "type": "string"
           },
           "workflow_name": {
             "description": "Name of the workflow to trigger.",
@@ -1479,6 +1517,29 @@
               }
             ],
             "description": "A signal was received."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleOccurrencesMissedEvent",
+                "description": "A cron schedule dropped occurrences instead of starting a run for them.\n\nEmitted by the schedule ticker once per schedule, tick and reason."
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "schedule_occurrences_missed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A cron schedule dropped occurrences instead of starting a run for them.\n\nEmitted by the schedule ticker once per schedule, tick and reason."
           }
         ]
       },
@@ -1504,7 +1565,8 @@
           "provider_account.updated",
           "provider_account.usage_updated",
           "signal_awaited",
-          "signal_received"
+          "signal_received",
+          "schedule_occurrences_missed"
         ],
         "type": "string"
       },
@@ -2005,6 +2067,14 @@
           "created_at"
         ],
         "type": "object"
+      },
+      "OverlapPolicy": {
+        "description": "What a schedule does when an occurrence comes while one of its runs is\nstill active.\n\n# Examples\n\n```\nuse ironflow_store::entities::OverlapPolicy;\n\nassert_eq!(OverlapPolicy::default(), OverlapPolicy::Allow);\nassert_eq!(OverlapPolicy::Skip.as_ref(), \"skip\");\n\nlet parsed: OverlapPolicy = \"allow\".parse().unwrap();\nassert_eq!(parsed, OverlapPolicy::Allow);\n```",
+        "enum": [
+          "allow",
+          "skip"
+        ],
+        "type": "string"
       },
       "PlanWorkflowRequest": {
         "description": "Request body for building a workflow execution plan.",
@@ -2920,9 +2990,85 @@
         ],
         "type": "object"
       },
+      "ScheduleMissReason": {
+        "description": "Why an occurrence of a schedule created no run.\n\n# Examples\n\n```\nuse ironflow_store::entities::ScheduleMissReason;\n\nlet reason = ScheduleMissReason::Overlap;\nassert_eq!(reason.to_string(), \"overlap\");\nassert_eq!(serde_json::to_string(&reason).unwrap(), \"\\\"overlap\\\"\");\n```",
+        "enum": [
+          "outside_window",
+          "catchup_max",
+          "superseded",
+          "catchup_skip",
+          "overlap"
+        ],
+        "type": "string"
+      },
+      "ScheduleOccurrencesMissedEvent": {
+        "description": "Payload of the `Event::ScheduleOccurrencesMissed` event.\n\nA cron schedule skipped some of its occurrences: the server was down\nlonger than the catch-up window allows, the catch-up policy dropped them,\nor the previous run was still active under an overlap `skip` policy.\n\n# Examples\n\n```\nuse chrono::{TimeDelta, Utc};\nuse ironflow_engine::notify::ScheduleOccurrencesMissedEvent;\nuse ironflow_store::models::ScheduleMissReason;\nuse uuid::Uuid;\n\nlet now = Utc::now();\nlet payload = ScheduleOccurrencesMissedEvent {\n    schedule_id: Uuid::now_v7(),\n    workflow_name: \"nightly-report\".to_string(),\n    reason: ScheduleMissReason::OutsideWindow,\n    count: 3,\n    first: now - TimeDelta::hours(3),\n    last: now - TimeDelta::hours(1),\n    at: now,\n};\nassert_eq!(payload.count, 3);\n```",
+        "properties": {
+          "at": {
+            "description": "When the ticker noticed the miss.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "count": {
+            "description": "Number of missed occurrences.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first": {
+            "description": "Earliest missed occurrence.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "last": {
+            "description": "Latest missed occurrence.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ScheduleMissReason",
+            "description": "Why the occurrences were not run."
+          },
+          "schedule_id": {
+            "description": "Schedule that missed the occurrences.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "workflow_name": {
+            "description": "Workflow the schedule starts.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "workflow_name",
+          "reason",
+          "count",
+          "first",
+          "last",
+          "at"
+        ],
+        "type": "object"
+      },
       "ScheduleResponse": {
         "description": "Schedule list/detail response.",
         "properties": {
+          "catchup": {
+            "$ref": "#/components/schemas/CatchupPolicy",
+            "description": "What the schedule does with the occurrences it missed while no server\nfired it."
+          },
+          "catchup_max": {
+            "description": "Most runs created to catch up under `catchup = all`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "catchup_window_secs": {
+            "description": "How far back, in seconds, a missed occurrence is still caught up.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "created_at": {
             "description": "When the schedule was created.",
             "format": "date-time",
@@ -2969,6 +3115,10 @@
             "nullable": true,
             "type": "string"
           },
+          "overlap": {
+            "$ref": "#/components/schemas/OverlapPolicy",
+            "description": "What the schedule does when an occurrence comes while one of its runs\nis still active."
+          },
           "priority": {
             "description": "Queue priority given to every run the schedule creates, from -100 to 100.",
             "format": "int32",
@@ -2977,6 +3127,10 @@
           "source": {
             "$ref": "#/components/schemas/ScheduleSource",
             "description": "Where this schedule was created (`handler` or `api`)."
+          },
+          "timezone": {
+            "description": "IANA timezone the cron expression is evaluated in.",
+            "type": "string"
           },
           "updated_at": {
             "description": "When the schedule was last updated.",
@@ -2995,6 +3149,11 @@
           "inputs",
           "source",
           "priority",
+          "catchup",
+          "catchup_max",
+          "catchup_window_secs",
+          "overlap",
+          "timezone",
           "created_at",
           "updated_at"
         ],
@@ -3956,6 +4115,18 @@
               },
               "schedule": {
                 "description": "The cron expression that fired.",
+                "type": "string"
+              },
+              "schedule_id": {
+                "description": "Schedule that created the run. `None` on runs created before it\nwas recorded.",
+                "format": "uuid",
+                "nullable": true,
+                "type": "string"
+              },
+              "scheduled_for": {
+                "description": "Occurrence the run covers. `None` for a manual trigger of the\nschedule and on older runs.",
+                "format": "date-time",
+                "nullable": true,
                 "type": "string"
               }
             },
@@ -6801,7 +6972,7 @@
         ]
       },
       "post": {
-        "description": "# Errors\n\n- 400 if validation fails or cron expression is invalid\n- 400 if `priority` is outside `-100..=100`\n- 400 if the workflow is not registered\n- 401 if not authenticated",
+        "description": "# Errors\n\n- 400 if validation fails or cron expression is invalid\n- 400 if `priority` is outside `-100..=100`\n- 400 if `catchup_max` is outside `1..=1000` or `catchup_window_secs` is\n  outside `60..=2592000`\n- 400 if the workflow is not registered\n- 401 if not authenticated\n- 422 if `timezone` is not an IANA timezone name, or `catchup` or `overlap`\n  is not a known policy",
         "operationId": "create_schedule",
         "requestBody": {
           "content": {
@@ -6826,10 +6997,13 @@
             "description": "Schedule created"
           },
           "400": {
-            "description": "Invalid input"
+            "description": "Invalid input, cron, priority or catch-up bounds"
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Unknown timezone, catch-up or overlap policy"
           }
         },
         "security": [
@@ -6974,7 +7148,7 @@
     },
     "/api/v1/schedules/{id}/resume": {
       "post": {
-        "description": "The next trigger time is recomputed from the cron expression.\n\n# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "description": "The next trigger time is recomputed from the cron expression in the\nschedule timezone. Occurrences that fell during the pause are never caught\nup, whatever the catch-up policy.\n\n# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
         "operationId": "resume_schedule",
         "parameters": [
           {
@@ -7019,7 +7193,7 @@
     },
     "/api/v1/schedules/{id}/trigger": {
       "post": {
-        "description": "# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist",
+        "description": "The run carries the schedule id and no `scheduled_for` occurrence.\n\n# Errors\n\n- 401 if not authenticated\n- 404 if the schedule does not exist\n- 409 if the schedule has `overlap = skip` and one of its runs is still\n  active",
         "operationId": "trigger_schedule",
         "parameters": [
           {
@@ -7049,6 +7223,9 @@
           },
           "404": {
             "description": "Schedule not found"
+          },
+          "409": {
+            "description": "Overlap skip: a run of the schedule is still active"
           }
         },
         "security": [

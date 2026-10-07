@@ -26,14 +26,19 @@ use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
 use ironflow_engine::prelude::CronSchedule;
-use ironflow_store::entities::{NewSchedule, NewUser, ScheduleSource};
+use ironflow_store::entities::{NewSchedule, NewUser, SchedulePolicy, ScheduleSource};
 use ironflow_store::postgres::PostgresStore;
 use ironflow_store::schedule_store::ScheduleStore;
 use ironflow_store::store::Store;
 use ironflow_store::user_store::UserStore;
 use serde_json::json;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
+
+/// Serializes the tests that run a startup sync: the sync deletes every handler
+/// schedule whose workflow its own engine does not register, so two running
+/// concurrently delete each other's rows.
+static SYNC_LOCK: Mutex<()> = Mutex::const_new(());
 
 async fn get_store() -> PostgresStore {
     let url = var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -85,6 +90,7 @@ impl WorkflowHandler for NamedScheduled {
 #[tokio::test]
 #[ignore]
 async fn sync_creates_handler_schedule_without_fk_violation() {
+    let _sync_guard = SYNC_LOCK.lock().await;
     let store = get_store().await;
     let store: Arc<dyn Store> = Arc::new(store);
     let wf_name = format!("nightly-{}", Uuid::now_v7().simple());
@@ -121,6 +127,7 @@ async fn sync_creates_handler_schedule_without_fk_violation() {
 #[tokio::test]
 #[ignore]
 async fn startup_repairs_active_schedules_without_next_trigger() {
+    let _sync_guard = SYNC_LOCK.lock().await;
     let store: Arc<dyn Store> = Arc::new(get_store().await);
     let suffix = Uuid::now_v7().simple();
     let mut broken = Vec::new();
@@ -134,6 +141,7 @@ async fn startup_repairs_active_schedules_without_next_trigger() {
                 priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("seed active schedule without next trigger");
@@ -195,6 +203,7 @@ async fn create_schedule_with_none_persists_null() {
             priority: 0,
             created_by_user_id: None,
             next_trigger_at: None,
+            policy: SchedulePolicy::default(),
         })
         .await
         .expect("create with None must not violate the FK");
@@ -228,6 +237,7 @@ async fn create_schedule_with_some_round_trips_the_author() {
             priority: 0,
             created_by_user_id: Some(user_id),
             next_trigger_at: None,
+            policy: SchedulePolicy::default(),
         })
         .await
         .expect("create with a real author");
@@ -258,6 +268,7 @@ async fn create_schedule_with_unknown_author_is_rejected() {
             priority: 0,
             created_by_user_id: Some(Uuid::now_v7()),
             next_trigger_at: None,
+            policy: SchedulePolicy::default(),
         })
         .await;
 

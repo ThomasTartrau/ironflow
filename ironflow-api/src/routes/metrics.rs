@@ -109,6 +109,10 @@
 //! # Alert: a schedule failed to fire, or was disabled because its next
 //! # trigger cannot be computed (`last_error` on the schedule says why)
 //! sum by (schedule) (increase(ironflow_schedule_fire_errors_total[15m])) > 0
+//!
+//! # Alert: a schedule dropped occurrences (downtime past the catch-up window,
+//! # catch-up policy, or overlap with a still-active run)
+//! sum by (schedule) (increase(ironflow_schedule_missed_total[1h])) > 0
 //! ```
 
 use axum::extract::State;

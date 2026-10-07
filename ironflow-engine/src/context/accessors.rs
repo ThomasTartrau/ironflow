@@ -18,7 +18,7 @@ use ironflow_core::decision::DecisionProvider;
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::trace_context::WorkflowTraceContext;
 use ironflow_store::error::StoreError;
-use ironflow_store::models::Step;
+use ironflow_store::models::{Step, TriggerKind};
 use ironflow_store::store::Store;
 #[cfg(feature = "secret-store")]
 use ironflow_store::workflow_secrets::ScopedSecretStore;
@@ -583,6 +583,44 @@ impl WorkflowContext {
             .await?
             .ok_or(EngineError::Store(StoreError::RunNotFound(self.run_id)))?;
         Ok(run.payload)
+    }
+
+    /// Access the trigger that started this run.
+    ///
+    /// A run fired by a cron schedule carries
+    /// [`TriggerKind::Cron`] with the schedule id and the occurrence it
+    /// stands for, so a caught-up run knows which slot it covers. In plan
+    /// mode no run record exists and this returns [`TriggerKind::Manual`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Store`] if the run is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ironflow_engine::context::WorkflowContext;
+    /// # use ironflow_engine::error::EngineError;
+    /// use ironflow_store::models::TriggerKind;
+    ///
+    /// # async fn example(ctx: &WorkflowContext) -> Result<(), EngineError> {
+    /// if let TriggerKind::Cron { schedule_id, scheduled_for, .. } = ctx.trigger().await? {
+    ///     println!("schedule {schedule_id:?} occurrence {scheduled_for:?}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn trigger(&self) -> Result<TriggerKind, EngineError> {
+        if self.plan.is_some() {
+            return Ok(TriggerKind::Manual);
+        }
+
+        let run = self
+            .store
+            .get_run(self.run_id)
+            .await?
+            .ok_or(EngineError::Store(StoreError::RunNotFound(self.run_id)))?;
+        Ok(run.trigger)
     }
 
     /// Deserialize the run payload into a typed input struct.

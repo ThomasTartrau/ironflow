@@ -7,6 +7,7 @@ use super::*;
 use chrono::{TimeDelta, Utc};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::record_replay::RecordReplayProvider;
+use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{
     Assignee, NewRun, NewStep, Run, RunActor, RunFilter, RunStatus, StepKind, StepStatus,
@@ -962,6 +963,71 @@ async fn context_payload_returns_error_for_nonexistent_run() {
     let result = ctx.payload().await;
 
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn trigger_exposes_the_cron_occurrence() {
+    let store = Arc::new(InMemoryStore::new());
+    let provider = create_test_provider();
+    let schedule_id = Uuid::now_v7();
+    let occurrence = Utc::now() - TimeDelta::hours(2);
+    let trigger = TriggerKind::Cron {
+        schedule: "0 * * * *".to_string(),
+        schedule_id: Some(schedule_id),
+        scheduled_for: Some(occurrence),
+    };
+
+    let run = store
+        .create_run(NewRun {
+            created_by: None,
+            workflow_name: "test".to_string(),
+            trigger: trigger.clone(),
+            payload: json!({}),
+            max_retries: 0,
+            handler_version: None,
+            labels: Default::default(),
+            scheduled_at: None,
+            idempotency_key: None,
+            concurrency_key: None,
+            priority: 0,
+            concurrency_limits: Vec::new(),
+            max_cost_usd: None,
+            worker_tags: Vec::new(),
+        })
+        .await
+        .expect("failed to create run")
+        .into_run();
+
+    let ctx = WorkflowContext::new(run.id, "test".to_string(), store, provider);
+    let read = ctx.trigger().await.expect("failed to get trigger");
+
+    assert_eq!(read, trigger);
+    match read {
+        TriggerKind::Cron {
+            schedule_id: read_id,
+            scheduled_for,
+            ..
+        } => {
+            assert_eq!(read_id, Some(schedule_id));
+            assert_eq!(scheduled_for, Some(occurrence));
+        }
+        other => panic!("expected a cron trigger, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn trigger_on_unknown_run_is_an_error() {
+    let store = Arc::new(InMemoryStore::new());
+    let provider = create_test_provider();
+    let run_id = Uuid::now_v7();
+
+    let ctx = WorkflowContext::new(run_id, "test".to_string(), store, provider);
+    let result = ctx.trigger().await;
+
+    assert!(matches!(
+        result,
+        Err(EngineError::Store(StoreError::RunNotFound(id))) if id == run_id
+    ));
 }
 
 #[tokio::test]

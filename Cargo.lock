@@ -1257,6 +1257,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf 0.12.1",
+ "serde",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3497,10 +3508,11 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "ironflow-api"
-version = "2.49.0"
+version = "2.49.1"
 dependencies = [
  "axum",
  "chrono",
+ "chrono-tz",
  "croner 2.2.0",
  "dashmap",
  "futures-util",
@@ -3561,7 +3573,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth"
-version = "2.4.65"
+version = "2.4.66"
 dependencies = [
  "argon2 0.5.3",
  "axum",
@@ -3584,7 +3596,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth-proxy"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "axum",
  "ironflow-core",
@@ -3677,12 +3689,13 @@ dependencies = [
 
 [[package]]
 name = "ironflow-engine"
-version = "2.51.2"
+version = "2.51.3"
 dependencies = [
  "async-trait",
  "axum",
  "bytes",
  "chrono",
+ "chrono-tz",
  "croner 3.0.1",
  "futures-util",
  "glob",
@@ -3998,7 +4011,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-runtime"
-version = "2.4.87"
+version = "2.4.88"
 dependencies = [
  "async-nats",
  "axum",
@@ -4062,12 +4075,13 @@ dependencies = [
 
 [[package]]
 name = "ironflow-store"
-version = "2.45.2"
+version = "2.45.3"
 dependencies = [
  "aes-gcm 0.10.3",
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "chrono-tz",
  "glob",
  "hkdf 0.12.4",
  "ironflow-core",
@@ -4110,7 +4124,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-worker"
-version = "2.25.3"
+version = "2.25.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -5477,12 +5491,30 @@ dependencies = [
 
 [[package]]
 name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared 0.12.1",
+]
+
+[[package]]
+name = "phf"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
 dependencies = [
- "phf_shared",
+ "phf_shared 0.13.1",
  "serde",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+dependencies = [
+ "siphasher",
 ]
 
 [[package]]
@@ -7983,7 +8015,7 @@ dependencies = [
  "log",
  "parking_lot",
  "percent-encoding",
- "phf",
+ "phf 0.13.1",
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",

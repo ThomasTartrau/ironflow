@@ -20,7 +20,9 @@ use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 use ironflow_engine::notify::Event;
-use ironflow_store::entities::{NewSchedule, NewUser, ScheduleSource, ScheduleUpdate};
+use ironflow_store::entities::{
+    NewSchedule, NewUser, SchedulePolicy, ScheduleSource, ScheduleUpdate,
+};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
 use serde_json::{Value, json};
@@ -86,6 +88,7 @@ async fn state_with_schedule_disabled_on_error(
             priority: 0,
             created_by_user_id: Some(user.id),
             next_trigger_at: None,
+            policy: SchedulePolicy::default(),
         })
         .await
         .expect("create schedule");

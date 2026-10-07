@@ -3,7 +3,9 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::entities::{NewSchedule, Page, Schedule, ScheduleFiring, ScheduleNext, ScheduleUpdate};
+use crate::entities::{
+    NewSchedule, Page, Schedule, ScheduleFiring, ScheduleFiringPlan, ScheduleUpdate,
+};
 use crate::store::StoreFuture;
 
 /// Async storage abstraction for workflow schedules.
@@ -45,27 +47,36 @@ pub trait ScheduleStore: Send + Sync {
     /// [`fire_due_schedule`](Self::fire_due_schedule).
     fn list_due_schedules(&self) -> StoreFuture<'_, Vec<Schedule>>;
 
-    /// Fire one due occurrence of a schedule, atomically.
+    /// Fire a due schedule, atomically.
     ///
     /// In a single transaction: lock the schedule if it is still active and
-    /// its `next_trigger_at` still equals `occurrence`, create its run (built
-    /// by [`Schedule::new_run`](crate::entities::Schedule::new_run), with the
-    /// idempotency key [`Schedule::occurrence_key`](crate::entities::Schedule::occurrence_key)),
-    /// set `last_triggered_at` and apply `next`. Either all of it is written,
-    /// or nothing is and the schedule stays due.
+    /// its `next_trigger_at` still equals `due`, then, for each occurrence of
+    /// `plan.occurrences` in order, create its run, built by
+    /// [`Schedule::new_run`](crate::entities::Schedule::new_run) with the
+    /// idempotency key [`Schedule::occurrence_key`](crate::entities::Schedule::occurrence_key).
+    /// An occurrence refused with
+    /// [`StoreError::ConcurrencyConflict`](crate::error::StoreError::ConcurrencyConflict)
+    /// (a run of the schedule is still active under
+    /// [`OverlapPolicy::Skip`](crate::entities::OverlapPolicy::Skip)) writes
+    /// nothing and is reported in [`ScheduleFiring::overlapped`]. Then apply
+    /// `plan.next`, and set `last_triggered_at` when at least one run was
+    /// created or replayed.
     ///
-    /// Returns `None` when the occurrence is no longer due: another instance
-    /// fired it (or holds its lock), or the schedule was paused, rescheduled
-    /// or deleted since it was listed.
+    /// Either all of it is written, or nothing is and the schedule stays due.
+    ///
+    /// Returns `None` when the schedule is no longer due at `due`: another
+    /// instance fired it (or holds its lock), or the schedule was paused,
+    /// rescheduled or deleted since it was listed.
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError`](crate::error::StoreError) when the run or the
-    /// schedule cannot be written. Nothing is written in that case.
+    /// Returns [`StoreError`](crate::error::StoreError) when a run or the
+    /// schedule cannot be written, for any reason other than a concurrency
+    /// conflict. Nothing is written in that case.
     fn fire_due_schedule(
         &self,
         id: Uuid,
-        occurrence: DateTime<Utc>,
-        next: ScheduleNext,
+        due: DateTime<Utc>,
+        plan: ScheduleFiringPlan,
     ) -> StoreFuture<'_, Option<ScheduleFiring>>;
 }
