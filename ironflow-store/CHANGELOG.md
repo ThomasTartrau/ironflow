@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.46.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.46.0...ironflow-store-v2.46.1) - 2026-10-07
+
+### Fixed
+
+- #190 serialise the auth proxy tests that purge expired rows
+
+- #190 give the auth proxy secrets migration its own version
+
 ## [2.46.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.45.5...ironflow-store-v2.46.0) - 2026-10-07
 
 ### Added
