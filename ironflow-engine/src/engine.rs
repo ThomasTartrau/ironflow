@@ -979,6 +979,12 @@ impl Engine {
     /// Returns [`EngineError::InvalidWorkflow`] if no handler is registered
     /// with that name. Returns [`EngineError`] if execution fails.
     ///
+    /// When the workflow is paused (see [`Engine::pause_workflow`]) the run is
+    /// created and left `Pending`, with no steps: the returned
+    /// `WorkflowResult.run.status.state` is `Pending`. The hold applies in
+    /// every execution mode; [`Engine::resume_workflow`] runs the held run
+    /// under [`ExecutionMode::Local`].
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -1038,6 +1044,14 @@ impl Engine {
 
         let run_id = run.id;
         info!(run_id = %run_id, handler_version = run.handler_version.as_deref().unwrap_or(""), "run created");
+
+        if self.is_workflow_paused(handler_name).await? {
+            info!(run_id = %run_id, workflow = %handler_name, "workflow paused, run left pending");
+            return Ok(WorkflowResult {
+                run,
+                steps: Vec::new(),
+            });
+        }
 
         self.store
             .update_run_status(run_id, RunStatus::Running)
