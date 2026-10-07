@@ -276,25 +276,71 @@ check-auth-proxy-image:
   - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
   - release-plz --version
 
-.pnpm-install: &pnpm-install
-  before_script:
-    - corepack enable
-    - cd ironflow-dashboard
-    # The runner reaches registry.npmjs.org through a 10s connect timeout that
-    # fires often enough to redden pipelines. Retry the download instead of
-    # failing the job on the first miss; a warm COREPACK_HOME skips it entirely.
-    - for attempt in 1 2 3; do corepack prepare --activate && break || sleep 10; done
-    - pnpm install || { pnpm approve-builds msw && pnpm install --frozen-lockfile; }
+.pnpm-install-script: &pnpm-install-script
+  - corepack enable
+  - cd ironflow-dashboard
+  # The runner reaches registry.npmjs.org through a 10s connect timeout that
+  # fires often enough to redden pipelines. Retry the download instead of
+  # failing the job on the first miss; a warm COREPACK_HOME skips it entirely.
+  - for attempt in 1 2 3; do corepack prepare --activate && break || sleep 10; done
+  - pnpm install || { pnpm approve-builds msw && pnpm install --frozen-lockfile; }
 
-# Validation jobs run only on MR pipelines.
-# Code is already validated before reaching main -- no need to re-check.
+.pnpm-install: &pnpm-install
+  before_script: *pnpm-install-script
+
+# Merges the MR's target branch into the checkout before the checks, so an MR
+# pipeline validates the code as it will be once merged, not the branch tip
+# alone. Two MRs green on their own shipped two migrations with the same version
+# in ironflow-store 2.46.0 (#190). An MR behind main needs no rebase: rerunning
+# its pipeline merges the current main. No-op outside an MR pipeline.
+.merge-target-branch: &merge-target-branch
+  - sh ci/merge-target-branch.sh
+
+# Validation jobs run on MR pipelines, after merging the target branch.
+# unit-tests and postgres-tests also run on main: an MR pipeline gone stale
+# because main moved after it ran is caught there, before release-plz publishes.
 # Release MRs from release-plz only bump Cargo.toml + CHANGELOG, no code changes --
 # skip validation to save CI time (dashboard-build still runs to satisfy MWPS).
+# A job's own before_script replaces the template's instead of extending it, so
+# the jobs that need another setup step extend .only-mr-sccache or .only-mr-pnpm,
+# which keep the merge first.
 .only-mr:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TITLE =~ /^chore: release/'
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - *merge-target-branch
+
+.only-mr-sccache:
+  extends: [.only-mr, .sccache]
+  before_script:
+    - *merge-target-branch
+    - *sccache-start
+
+.only-mr-pnpm:
+  extends: .only-mr
+  before_script:
+    - *merge-target-branch
+    - *pnpm-install-script
+
+# Rules of a validation job that also gates the publication on main.
+.mr-and-main:
+  rules:
+    - !reference [.only-mr, rules]
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Black-box tests of ci/merge-target-branch.sh, when it changes.
+merge-target-branch-tests:
+  stage: check
+  image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - ci/merge-target-branch.sh
+        - ci/tests/merge-target-branch.test.sh
+  script:
+    - sh ci/tests/merge-target-branch.test.sh
 
 cargo-fmt:
   extends: .only-mr
@@ -307,7 +353,7 @@ cargo-fmt:
     - cargo fmt --all -- --check
 
 cargo-clippy:
-  extends: [.only-mr, .sccache]
+  extends: .only-mr-sccache
   stage: check
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -324,7 +370,7 @@ cargo-clippy:
 # `cargo package` builds the crate in isolation (as crates.io would), so it's
 # the only way to actually catch this drift before it ships.
 sqlx-cache-check:
-  extends: [.only-mr, .sccache]
+  extends: .only-mr-sccache
   stage: check
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -336,10 +382,10 @@ sqlx-cache-check:
     - cargo package -p ironflow-core -p ironflow-store --features ironflow-store/store-postgres,ironflow-store/secret-store,ironflow-store/openapi
 
 dashboard-check:
-  extends: .only-mr
+  extends: .only-mr-pnpm
   stage: check
   image: node:22
-  <<: [*dashboard-cache, *pnpm-install]
+  <<: *dashboard-cache
   script:
     - pnpm run lint
     - pnpm tsc -b --noEmit
@@ -362,7 +408,7 @@ mdbook-build:
     - mdbook build
 
 unit-tests:
-  extends: [.only-mr, .sccache]
+  extends: [.only-mr-sccache, .mr-and-main]
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -373,7 +419,7 @@ unit-tests:
     - cargo nextest run --profile ci --workspace --exclude ironflow-example-server --features "$IRONFLOW_FEATURES"
 
 doc-tests:
-  extends: [.only-mr, .sccache]
+  extends: .only-mr-sccache
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -386,11 +432,13 @@ doc-tests:
 # The PostgreSQL suites: the `#[ignore]` tests that need a database. The
 # in-memory store accepts whatever the Rust types allow, so migrations and the
 # SQL state machines are only exercised here. Without this job, a migration that
-# failed on every blank database reached main (#113).
+# failed on every blank database reached main (#113). It also runs on main, before
+# release-plz: two migrations with the same version, each green in its own MR,
+# were published in 2.46.0 (#190).
 # Durability is off: postgres_fsm creates databases and replays every migration,
 # and with an fsync per commit on the runner's shared disk it hit its 60s timeout.
 postgres-tests:
-  extends: [.only-mr, .sccache]
+  extends: [.only-mr-sccache, .mr-and-main]
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -411,7 +459,7 @@ postgres-tests:
 # The Claude Code plugin ships a project template (plugins/ironflow/skills/setup/assets).
 # Scaffold it against this checkout and make sure it builds and its tests pass.
 check-plugin-template:
-  extends: [.only-mr, .sccache]
+  extends: .only-mr-sccache
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -424,7 +472,7 @@ check-plugin-template:
 # Every Rust snippet of the Claude Code plugin skills is a doctest of examples/plugin-tests.
 # plugins/ironflow has no Cargo.toml, so this crate is the way to compile them.
 check-plugin-doctests:
-  extends: [.only-mr, .sccache]
+  extends: .only-mr-sccache
   stage: test
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -480,12 +528,12 @@ eval-plugin-skills:
     expire_in: 1 week
 
 check-openapi-types:
-  extends: .only-mr
+  extends: .only-mr-pnpm
   stage: test
   image: node:22
   needs:
     - dashboard-check
-  <<: [*dashboard-cache, *pnpm-install]
+  <<: *dashboard-cache
   script:
     - pnpm generate:types
     - git diff --exit-code src/app/lib/types.generated.ts
@@ -507,7 +555,7 @@ dashboard-build:
     expire_in: 1 hour
 
 cargo-check-dashboard:
-  extends: [.only-mr, .sccache]
+  extends: .only-mr-sccache
   stage: build
   image: ${CI_REGISTRY_IMAGE}/ci-rust:${CI_RUST_IMAGE_TAG}
   <<: *rust-debug-cache
@@ -535,7 +583,8 @@ build-release:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $RELEASE_COMMIT != "true"
 
-# release-plz-update creates the release MR. Only on regular main commits.
+# release-plz-update creates the release MR. Only on regular main commits, and
+# only when main passes unit-tests and postgres-tests.
 release-plz-update:
   extends: .sccache
   stage: release
@@ -543,6 +592,8 @@ release-plz-update:
   <<: *rust-release-cache
   needs:
     - build-release
+    - unit-tests
+    - postgres-tests
   variables:
     GIT_DEPTH: 0
   before_script:
@@ -588,6 +639,9 @@ release-plz-release:
     - job: build-release
       optional: true
     - dashboard-build
+    # A broken main publishes nothing.
+    - unit-tests
+    - postgres-tests
   variables:
     GIT_DEPTH: 0
   before_script:

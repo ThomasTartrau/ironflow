@@ -9,7 +9,7 @@ use std::fs::read_dir;
 use std::path::Path;
 
 #[test]
-fn every_migration_version_belongs_to_a_single_migration() {
+fn migrations_have_unique_versions() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
     let mut names_by_version: HashMap<String, Vec<String>> = HashMap::new();
 
