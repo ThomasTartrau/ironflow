@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.45.5](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.45.4...ironflow-store-v2.45.5) - 2026-10-07
+
+### Fixed
+
+- CI on MR !496 (attempt 1)
+
 ## [2.45.4](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.45.3...ironflow-store-v2.45.4) - 2026-10-07
 ## [2.45.2](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.45.1...ironflow-store-v2.45.2) - 2026-10-06
 ## [2.45.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-store-v2.45.0...ironflow-store-v2.45.1) - 2026-10-06

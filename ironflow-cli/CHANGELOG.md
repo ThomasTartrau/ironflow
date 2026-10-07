@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.59](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.58...ironflow-cli-v0.1.59) - 2026-10-07
+
+### Added
+
+- #172 pause and resume a run or a whole workflow
+
+
+### Fixed
+
+- #172 drop redundant paused field and regenerate OpenAPI snapshots
+
 ## [0.1.58](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.57...ironflow-cli-v0.1.58) - 2026-10-07
 
 ### Added
