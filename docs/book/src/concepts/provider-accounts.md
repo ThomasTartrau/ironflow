@@ -90,7 +90,7 @@ step pinned with `.account(..)` has no other account and does not fail over.
 When no targeted account is available, the run is not failed: it goes
 `Sleeping` until the earliest window reset, and the step runs again from the
 start when the run wakes. The run shows the provider kind it waits for
-(`capacity_wait_kind` in the API, a line in `ironflow run get <id>`, a note in the
+(`capacity_wait_kind` in the API, a line in `ironflow-cli run get <id>`, a note in the
 dashboard) and its wake-up time in `scheduled_at`. Adding an account of that
 kind, re-enabling one or renewing its token wakes the run right away. An
 account that is only saturated (`max_concurrency` reached) is tried again

@@ -356,7 +356,7 @@ MCP) resumes it: the handler is replayed from the top. Rejection fails the run. 
 survives an API or worker restart. `on_timeout` says what happens when it fires;
 without one, an expired deadline auto-rejects. `assigned_to` takes an `Assignee`
 (`Assignee::user("alice")` or `Assignee::group("sre-oncall")`) recording who is
-expected to answer; it shows up in the API, the dashboard and `ironflow run steps`.
+expected to answer; it shows up in the API, the dashboard and `ironflow-cli run steps`.
 The assignee is advisory (notification/audit), not an authorization check.
 
 | `EscalationPolicy` | On expiry |
@@ -493,8 +493,8 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 
 The step is stored with kind `human_input` and the JSON schema of `T` in its input; the
 run moves to `AwaitingApproval` (the same status as an approval gate). Answer or refuse
-it through the API, the dashboard (a form on the run page), `ironflow run input <run>
-<step> --value '{..}'` / `ironflow run reject-input <run> <step> --reason ..`, or the
+it through the API, the dashboard (a form on the run page), `ironflow-cli run input <run>
+<step> --value '{..}'` / `ironflow-cli run reject-input <run> <step> --reason ..`, or the
 MCP tools `submit_input` / `reject_input`:
 
 | Route | Effect |
@@ -891,7 +891,7 @@ the wave that already completed are replayed; only the others run again.
 ## Conditions
 
 Branching is plain Rust `if`/`else`. `ctx.when` and `ctx.when_dynamic` make a
-branch visible to `ironflow run plan` without changing what the handler does.
+branch visible to `ironflow-cli run plan` without changing what the handler does.
 
 ```rust,no_run
 use ironflow_engine::config::ShellConfig;

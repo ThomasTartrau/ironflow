@@ -7,1412 +7,159 @@
 </picture>
 
 [![pipeline status](https://img.shields.io/gitlab/pipeline-status/ThomasTartrau%2Fironflow?branch=main&style=for-the-badge&logo=gitlab&logoColor=white)](https://gitlab.com/ThomasTartrau/ironflow/-/pipelines)
-[![ironflow-core](https://img.shields.io/crates/v/ironflow-core.svg?style=for-the-badge&logo=rust&logoColor=white&label=core)](https://crates.io/crates/ironflow-core)
-[![ironflow-cli](https://img.shields.io/crates/v/ironflow-cli.svg?style=for-the-badge&logo=rust&logoColor=white&label=cli)](https://crates.io/crates/ironflow-cli)
+[![ironflow-core](https://img.shields.io/crates/v/ironflow-core.svg?style=for-the-badge&logo=rust&logoColor=white&label=crates.io)](https://crates.io/crates/ironflow-core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-1.94+-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 
-**A workflow orchestration platform where workflows are imperative Rust code - no YAML, no DSL.**
+**Write your automations in Rust. Ironflow runs them, remembers every step,<br>
+keeps AI agents on a budget, and waits for a human "yes" when you ask it to.**
 
-*REST API • Background workers • Web dashboard • CLI • Rust SDK • MCP server*
-
-[Quick Start](#-quick-start) •
-[Architecture](#%EF%B8%8F-architecture) •
-[Features](#-features) •
-[Providers](#-agent-providers) •
-[Interfaces](#-interfaces)
+[Documentation](https://ironflow-023e1b.gitlab.io/) •
+[Try it in 5 minutes](#try-it-in-5-minutes) •
+[Examples](examples/ironflow-workflows/src)
 
 </div>
 
 ---
 
-## What is Ironflow?
+## What is it for?
 
-Ironflow runs workflows written as plain `async` Rust functions. A workflow declares its steps -
-shell commands, HTTP calls, AI agents, sub-workflows, human approval gates - and the engine
-persists every one of them, tracks cost and duration, and exposes the result over a REST API.
+You have a task made of several steps: run a command, call an API, ask an AI to write
+something, wait for a colleague to check it, then publish. Today it lives in a shell
+script, a CI job, or someone's head.
 
-It ships as two things you can use independently:
+With Ironflow you write that task once, as a normal Rust function. Then you start it from a
+button, a command, a webhook or a timer, and Ironflow:
 
-- **A library.** Add `ironflow-core` to a binary and compose operations directly. No server, no
-  database.
-- **A platform.** Run the API server, one or more workers, and the dashboard. Workflows are
-  triggered from the CLI, the REST API, a webhook, or a cron schedule; runs are persisted in
-  Postgres, streamed live over SSE, and paused on approval gates until a human clicks approve.
+- **runs each step** and writes down what happened: output, duration, cost;
+- **pauses** when a human has to approve, and picks up where it stopped once they click;
+- **caps what AI agents spend**, step by step;
+- **shows everything live** in a web dashboard, so you see which step is running and why one
+  failed.
 
----
-
-## 🏗️ Architecture
-
-| Crate | Version | Role |
-|---|---|---|
-| [`ironflow-core`](https://crates.io/crates/ironflow-core) | ![](https://img.shields.io/crates/v/ironflow-core.svg?label=) | Operations (Shell, Http, Agent), agent providers, tracker, parallelism, dry-run |
-| [`ironflow-store`](https://crates.io/crates/ironflow-store) | ![](https://img.shields.io/crates/v/ironflow-store.svg?label=) | Storage trait plus Postgres and in-memory backends, encrypted secrets |
-| [`ironflow-engine`](https://crates.io/crates/ironflow-engine) | ![](https://img.shields.io/crates/v/ironflow-engine.svg?label=) | Workflow orchestration, FSM-driven run lifecycle, outbound notifications |
-| [`ironflow-artifacts`](https://crates.io/crates/ironflow-artifacts) | ![](https://img.shields.io/crates/v/ironflow-artifacts.svg?label=) | Blob storage for files produced by steps, with a local filesystem backend |
-| [`ironflow-auth`](https://crates.io/crates/ironflow-auth) | ![](https://img.shields.io/crates/v/ironflow-auth.svg?label=) | JWT issuing and verification, Argon2 password hashing, axum extractors |
-| [`ironflow-api`](https://crates.io/crates/ironflow-api) | ![](https://img.shields.io/crates/v/ironflow-api.svg?label=) | REST API: runs, workflows, stats, audit logs, secrets, API keys, SSE |
-| [`ironflow-worker`](https://crates.io/crates/ironflow-worker) | ![](https://img.shields.io/crates/v/ironflow-worker.svg?label=) | Background worker that polls the API and executes workflow handlers |
-| [`ironflow-runtime`](https://crates.io/crates/ironflow-runtime) | ![](https://img.shields.io/crates/v/ironflow-runtime.svg?label=) | Standalone daemon: webhook endpoints (axum) and trigger sources |
-| [`ironflow-types`](https://crates.io/crates/ironflow-types) | ![](https://img.shields.io/crates/v/ironflow-types.svg?label=) | Shared API envelope types (`ApiResponse`, `ErrorEnvelope`) |
-| [`ironflow-sdk`](https://crates.io/crates/ironflow-sdk) | ![](https://img.shields.io/crates/v/ironflow-sdk.svg?label=) | Type-safe Rust client, types generated from the OpenAPI spec |
-| [`ironflow-cli`](https://crates.io/crates/ironflow-cli) | ![](https://img.shields.io/crates/v/ironflow-cli.svg?label=) | `ironflow-cli` command: create runs, list workflows, stream logs, show stats |
-| [`ironflow-mcp`](https://crates.io/crates/ironflow-mcp) | ![](https://img.shields.io/crates/v/ironflow-mcp.svg?label=) | MCP server exposing runs, workflows and approvals to AI assistants |
-| `ironflow-dashboard` | - | React + Vite web UI, embedded into `ironflow-api` or served separately |
-
-How they fit together at runtime:
-
-```text
-   CLI ─┐
-   SDK ─┤
-   MCP ─┼──▶  ironflow-api  ──▶  ironflow-store  ◀──  ironflow-worker
-Webhook ─┤     (REST + SSE)       (Postgres)            (engine + providers)
-   Cron ─┘          │                                          │
-                    ▼                                          ▼
-              ironflow-dashboard                     Claude Code / SSH / Docker
-                                                     K8s / Anthropic / OpenAI ...
+```mermaid
+flowchart LR
+    T["Button, CLI,<br/>webhook or cron"] --> R["Run"]
+    R --> S1["Step: shell"]
+    S1 --> S2["Step: AI agent"]
+    S2 --> A{"Human approval"}
+    A -->|approved| S3["Step: publish"]
+    A -->|rejected| X["Run stops"]
+    R -.-> D["Dashboard:<br/>live steps, logs, cost"]
 ```
 
-The API owns persistence and never executes anything. Workers poll the API for pending runs,
-execute the workflow handler locally, and stream steps and logs back. Scaling out means starting
-more workers.
+Things people build with it:
 
-`ironflow-runtime` is a separate, lighter path: a standalone daemon with webhook
-endpoints and trigger sources that calls `ironflow-core` operations directly,
-without a store or an API.
+- **AI code review**: a merge request opens, an agent reviews the diff, comments are posted back.
+- **Deploy with a gate**: build and test, then wait for a release manager before production.
+- **Alert to fix**: an error alert arrives, an agent proposes a patch, the tests run, a merge
+  request is opened for a human to read.
 
----
+## What a workflow looks like
 
-## ⚡ Quick Start
-
-### As a library
-
-```bash
-cargo add ironflow-core tokio --features tokio/full
-```
+A workflow is a Rust type with one async function. Each `ctx.*` call is a step that Ironflow
+records. There is no YAML and no special language: `if`, `for`, `match` and `?` work as usual.
 
 ```rust,no_run
-use ironflow_core::prelude::*;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ClaudeCodeProvider::new();
-
-    // Run a shell command
-    let files = Shell::new("ls -la src/").await?;
-
-    // Feed the output into an agent
-    let review = Agent::new()
-        .prompt(&format!("Review these source files:\n{}", files.stdout()))
-        .model(Model::SONNET)
-        .max_budget_usd(0.10)
-        .run(&provider)
-        .await?;
-
-    println!("{}", review.text());
-    Ok(())
-}
-```
-
-### As a platform
-
-The workspace ships a runnable server and worker, preloaded with a dozen example workflows.
-Requires Rust 1.94+, Node 22+ with pnpm for the dashboard, and, for agent steps, the
-[Claude Code CLI](https://docs.claude.com/en/docs/claude-code).
-
-```bash
-git clone https://gitlab.com/ThomasTartrau/ironflow.git
-cd ironflow
-```
-
-Build the dashboard first - the API embeds `ironflow-dashboard/dist/` at compile time:
-
-```bash
-cd ironflow-dashboard && pnpm install && pnpm build && cd ..
-```
-
-```bash
-# Terminal 1 - API + embedded dashboard on http://localhost:3000
-# Development mode generates the secrets and logs the worker token.
-IRONFLOW_ENV=development cargo run -p ironflow-example-server
-```
-
-```bash
-# Terminal 2 - worker polling the API, with the token the server logged
-WORKER_TOKEN=<token from the server log> cargo run -p ironflow-example-worker
-```
-
-Open <http://localhost:3000>, create an account, and trigger a workflow from the UI. To drive it
-from the terminal instead, generate a key under **API keys**:
-
-```bash
-cargo install ironflow-cli
-
-export IRONFLOW_URL=http://localhost:3000
-export IRONFLOW_API_KEY=irfl_...
-
-ironflow-cli workflow list
-ironflow-cli run create ci-pipeline
-ironflow-cli logs <run-id>
-```
-
-The example server uses the in-memory store, so runs are lost on restart. Switch to Postgres by
-setting `DATABASE_URL` and enabling the `store-postgres` feature - migrations live in
-`ironflow-store/migrations/`.
-
----
-
-## ✨ Features
-
-### Step types
-
-| Kind | Method | Description |
-|------|--------|-------------|
-| Shell | `ctx.shell()` | Command with timeout, working directory, environment |
-| HTTP | `ctx.http()` | Request with headers, JSON body, timeout |
-| Agent | `ctx.agent()` | AI invocation with budget cap and structured output |
-| Sub-workflow | `ctx.workflow()` | Run another handler as a step, cost included in the parent |
-| Approval | `ctx.approval()` | Human gate: the run pauses until approved or rejected |
-| Custom | `ctx.operation()` | Your own `Operation` implementation (GitLab, Slack, Gmail, ...) |
-
-A workflow is a `WorkflowHandler` implementation. Control flow is plain Rust - `if`, `for`, `?` -
-not a DAG description language:
-
-```rust,no_run
-use ironflow_engine::config::{ApprovalConfig, ShellConfig, StepConfig};
+use ironflow_engine::config::{AgentStepConfig, ApprovalConfig, ShellConfig};
 use ironflow_engine::context::WorkflowContext;
 use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
 
-struct Deploy;
+struct ReleaseNotes;
 
-impl WorkflowHandler for Deploy {
+impl WorkflowHandler for ReleaseNotes {
     fn name(&self) -> &str {
-        "deploy"
+        "release-notes"
     }
 
     fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
         Box::pin(async move {
-            ctx.shell("build", ShellConfig::new("cargo build --release"))
+            // 1. Run a command.
+            let commits = ctx
+                .shell("commits", ShellConfig::new("git log --oneline v1.0..HEAD"))
                 .await?;
 
-            // Fan out: these three run concurrently, `true` means fail fast
-            let checks = ctx
-                .parallel(
-                    vec![
-                        ("test", StepConfig::Shell(ShellConfig::new("cargo test"))),
-                        ("lint", StepConfig::Shell(ShellConfig::new("cargo clippy"))),
-                        ("audit", StepConfig::Shell(ShellConfig::new("cargo audit"))),
-                    ],
-                    true,
-                )
+            // 2. Ask an AI agent, with a spending cap.
+            let prompt = format!("Write release notes for:\n{}", commits.stdout());
+            let notes = ctx
+                .agent("write-notes", AgentStepConfig::new(&prompt).max_budget_usd(0.50))
                 .await?;
 
-            if checks.is_empty() {
-                return Ok(());
-            }
-
-            // The run suspends here until a human approves it
-            ctx.approval("gate", ApprovalConfig::new("Ship to production?"))
+            // 3. Stop here until a human approves in the dashboard, the CLI or the API.
+            ctx.approval("review", ApprovalConfig::new("Publish these release notes?"))
                 .await?;
 
-            ctx.shell("deploy", ShellConfig::new("./deploy.sh")).await?;
+            // 4. Publish. The agent text is passed as an argument, never parsed by a shell.
+            ctx.shell("publish", ShellConfig::exec("./publish.sh", &[notes.text()]))
+                .await?;
             Ok(())
         })
     }
 }
 ```
 
-### Triggers
+## Try it in 5 minutes
 
-| Trigger | Source |
-|---------|--------|
-| `Manual` | CLI or a direct programmatic call |
-| `Api` | `POST /api/v1/runs` |
-| `Webhook { path }` | Incoming webhook, authenticated per route |
-| `Cron { schedule }` | Cron expression declared by the handler via `schedule()` |
-| `Retry { parent_run_id }` | Retry of a previously failed run |
-| `Workflow` | Invoked as a sub-workflow step by a parent run |
-
-Runs also carry an optional `scheduled_at`: set it at creation and the run stays pending until
-that timestamp.
-
-### Idempotent runs
-
-`POST /api/v1/runs` accepts an optional `Idempotency-Key` header. Replaying the
-same key returns the run it already created instead of starting a second one -
-protection against webhook replays and client retries on network timeouts.
-
-| Situation | Response |
-|-----------|----------|
-| No header | `201 Created`, a new run every time |
-| Key unknown | `201 Created` with the new run |
-| Key known, same workflow and payload | `200 OK` with the original run |
-| Key known, different workflow or payload | `409 IDEMPOTENCY_KEY_CONFLICT` |
-
-Rules:
-
-- A key is at most **255 printable ASCII characters** and must not be empty.
-- A key is **global**, not scoped per workflow: reusing one across two workflows
-  is a conflict. Prefix it (`github:...`) to keep sources apart.
-- A key stays bound for **24 hours**. Past that window it is released and the
-  next call with it creates a new run.
-- The run returned on replay is the original one **whatever its state**, including
-  `failed` or `cancelled`. Use `POST /api/v1/runs/:id/retry` to re-execute
-  deliberately; a retry never inherits the key.
-- Only the workflow and the payload decide replay versus conflict. Labels are
-  merged with the handler defaults server-side and are not compared.
+You need [Rust 1.94+](https://rustup.rs), [Node 22+ with pnpm](https://pnpm.io/installation)
+for the dashboard, and, for agent steps, the
+[Claude Code CLI](https://docs.claude.com/en/docs/claude-code).
 
 ```bash
-# Same key twice: one run, second call answers 200.
-curl -X POST https://ironflow.example.com/api/v1/runs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Idempotency-Key: github:8f4e2a10" \
-  -H "Content-Type: application/json" \
-  -d '{"workflow": "deploy", "payload": {"env": "prod"}}'
+git clone https://gitlab.com/ThomasTartrau/ironflow.git
+cd ironflow
+(cd ironflow-dashboard && pnpm install && pnpm build)
 ```
 
-A conflict names the run holding the key:
-
-```json
-{
-  "error": {
-    "code": "IDEMPOTENCY_KEY_CONFLICT",
-    "message": "idempotency key already used with a different request",
-    "details": { "run_id": "0199c3f0-..." }
-  }
-}
-```
-
-SDK, CLI and MCP all carry the key:
-
-```rust,no_run
-use ironflow_sdk::IronflowClient;
-use ironflow_sdk::types::CreateRunRequest;
-
-# async fn example(request: &CreateRunRequest) -> Result<(), Box<dyn std::error::Error>> {
-let client = IronflowClient::new("http://localhost:3000", "irfl_...");
-client.create_run_idempotent(request, "github:8f4e2a10").await?;
-# Ok(())
-# }
-```
+Start the server. It hosts the API and the dashboard on <http://localhost:3000> and comes with a
+dozen example workflows:
 
 ```bash
-ironflow run create deploy --payload '{"env":"prod"}' \
-  --idempotency-key github:8f4e2a10
+IRONFLOW_ENV=development cargo run -p ironflow-example-server
 ```
 
-With the `prometheus` feature, `ironflow_run_idempotency_total{outcome}` counts
-`created`, `replayed` and `conflict` outcomes.
-
-### Exclusive runs
-
-`POST /api/v1/runs` also accepts an optional `concurrency_key` in the body. While a
-run that holds the same key is not terminal (pending, running, sleeping, retrying,
-awaiting approval), a second creation is refused with `409 CONCURRENCY_CONFLICT`
-naming that run. The key is released when the holder completes, fails, ends with a
-warning or is cancelled. Use it to keep one active run per issue, branch or tenant.
+In a second terminal, start a worker: the process that actually runs the steps. Copy the token
+the server printed (`start workers with WORKER_TOKEN=...`):
 
 ```bash
-curl -X POST https://ironflow.example.com/api/v1/runs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"workflow": "fix-issue", "payload": {"issue": 12}, "concurrency_key": "issue:12"}'
+WORKER_TOKEN=<token from the server> cargo run -p ironflow-example-worker
 ```
 
-```json
-{
-  "error": {
-    "code": "CONCURRENCY_CONFLICT",
-    "message": "concurrency key \"issue:12\" is held by active run 0199c3f0-...",
-    "details": { "key": "issue:12", "run_id": "0199c3f0-..." }
-  }
-}
-```
+Open <http://localhost:3000>, create an account, pick **deploy-approval** and click **Run**.
+Watch the steps go by, then approve the gate. Runs are kept in memory, so they disappear when the
+server stops; the [Quick Start](https://ironflow-023e1b.gitlab.io/getting-started/quick-start.html)
+shows the next steps (CLI, Postgres, your own workflow).
 
-- A key is at most **255 bytes** and must not be empty. It is global, like an
-  idempotency key: prefix it to keep sources apart.
-- An idempotent replay (same `Idempotency-Key`, same request) is answered before the
-  exclusivity check, so it returns the original run instead of a conflict.
-- A retry (`POST /api/v1/runs/:id/retry`) inherits the key and answers `409` if an
-  active run took it since.
-- The CLI takes `--concurrency-key issue:12` and the MCP `create_run` tool a
-  `concurrency_key` argument.
+> **Using Claude Code?** Install the [Ironflow plugin](plugins/ironflow/README.md) and run
+> `/ironflow setup`: it scaffolds a project with a server, a worker, a first workflow and its test.
 
-A sub-workflow takes the key through `ctx.workflow_with`; a conflict completes the
-step with the run holding the key instead of failing the parent (see the mdBook,
-*Steps*).
+## Is Ironflow for you?
 
-### Run concurrency groups
-
-A concurrency key refuses a second run. A concurrency group queues it instead:
-`POST /api/v1/runs` accepts an optional `concurrency_limits` list, and a run that joins
-a group with a limit of `N` is only started while fewer than `N` runs of that group are
-running. The others stay `pending` and start as slots free up. Use it to cap the runs
-that hit the same repository, tenant or environment, whatever the worker count.
-
-```bash
-curl -X POST https://ironflow.example.com/api/v1/runs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"workflow": "fix-issue", "payload": {"issue": 12},
-       "concurrency_limits": [{"group": "repo:acme", "limit": 2}]}'
-```
-
-- A run may join several groups; it starts only once every one of them has a free slot.
-  Each run carries its own limit, read when it is picked.
-- A blocked run does not hold up the queue: a worker skips it and picks the next pending
-  run whose groups are free.
-- Only root runs take a slot. A sub-workflow runs inside its parent's slot and carries no
-  group of its own.
-- A group is at most **255 bytes** and must not be empty; a limit is at least `1`; a group
-  appears once per run. Otherwise the call answers `400`.
-- Retries and replays keep the groups of the original run.
-- `GET /api/v1/runs` and `GET /api/v1/stats` take `concurrency_group=repo:acme` to list
-  the runs of a group.
-- The CLI takes `--concurrency-limit repo:acme=2` (repeat it for several groups) and
-  `ironflow run list --concurrency-group repo:acme`; the MCP `create_run` tool takes
-  `concurrency_limits: ["repo:acme=2"]`.
-- With the `prometheus` feature, `ironflow_worker_queue_blocked_runs{group}` counts the
-  pending runs a saturated group holds back.
-
-### Run priority
-
-Every run has a queue priority from `-100` to `100`, `0` by default. Workers pick the
-pending run with the highest priority first, then the oldest among equal priorities.
-A delayed run still waits for its `scheduled_at`, and concurrency groups still apply.
-
-```bash
-curl -X POST https://ironflow.example.com/api/v1/runs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"workflow": "hotfix", "payload": {}, "priority": 80}'
-```
-
-- A handler sets the default priority of its runs with `fn priority(&self) -> i16`
-  (clamped to the range); the body, `EnqueueOptions::priority` or a schedule's
-  `priority` override it. A sub-workflow takes `WorkflowOptions::priority`.
-- A priority outside the range answers `400`.
-- Retries and replays keep the priority of the original run.
-- **No preemption**: a running run keeps its worker until it finishes.
-- **No aging**: a waiting run never moves up. A steady flow of higher priority runs can
-  delay a low priority one indefinitely.
-- `GET /api/v1/runs?priority=80` lists the runs of one priority. The CLI takes
-  `ironflow run create --priority 80` and `ironflow run list --priority 80`, the MCP
-  `create_run` and `list_runs` tools a `priority` argument, and the dashboard shows a
-  sortable Priority column and a priority filter.
-
-### Artifacts
-
-Steps produce text and JSON outputs by default. When a step produces *files*, declare them and
-they are persisted with their size, MIME type and SHA-256, then made available to later steps and
-to the dashboard.
-
-```rust,no_run
-use ironflow_engine::config::ShellConfig;
-use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::error::EngineError;
-
-async fn release(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
-    // Produce: every glob match becomes an artifact named after the file.
-    let build = ctx
-        .shell(
-            "build",
-            ShellConfig::new("cargo build --release && ./gen-report")
-                .dir("/app")
-                .output("target/report.html")
-                .output("target/*.log"),
-        )
-        .await?;
-
-    // The producing step hands out the handle; a name it did not declare fails here.
-    let report = build.artifact("report.html")?;
-
-    // Consume: the file is written into the working directory before the command runs.
-    ctx.shell(
-        "publish",
-        ShellConfig::new("./publish report.html").dir("/app").input(&report),
-    )
-    .await?;
-    Ok(())
-}
-```
-
-`ctx.put_artifact(&step_output, ..)` and `ctx.get_artifact(&handle)` cover custom operations and
-agent steps, which have no working directory to collect from.
-
-| Behaviour | Rule |
+| Good fit | Not a good fit |
 |---|---|
-| Declared output matched no file | The step fails, unless the step had already failed for another reason |
-| Step failed but produced files | The files are still collected - they are usually what you need to debug |
-| Input resolution | Same run and attempt, steps positioned before the consumer, closest producer wins |
-| Retry | Each attempt owns its artifacts; nothing is overwritten |
-| Sub-workflow | A child run never sees its parent's artifacts - pass what it needs through the payload |
-| Name validation | `^[A-Za-z0-9._][A-Za-z0-9._-]{0,254}$`; the storage key is derived from UUIDs only |
+| You write Rust, or are happy to | You want to draw workflows without code |
+| Your steps mix commands, HTTP calls and AI agents | You only need a cron job that runs one script |
+| You need a human to approve some steps | You need a hosted service: Ironflow is self-hosted |
+| You want to see the cost of every AI call | |
 
-Download one with `GET /api/v1/runs/{id}/steps/{step_id}/artifacts/{name}`, or from the artifact
-list on the step in the dashboard.
+Workflows are written in Rust, but anything can start them: the dashboard, the
+[CLI](https://ironflow-023e1b.gitlab.io/reference/interfaces.html#cli), the REST API, a
+webhook, a cron schedule, or an AI assistant through the MCP server.
 
-Artifacts stay off until `ARTIFACTS_DIR` is set on the API server: the artifact routes then answer
-`501` and a step that declares one fails with an explicit error, while everything else is
-unaffected. `LocalBlobStore` writes to the API server's filesystem, so a multi-replica deployment
-needs a shared volume. Workers hold no storage credential - they stream artifact bytes through the
-internal API.
+## Learn more
 
-### Platform capabilities
-
-| | |
+| I want to... | Read |
 |---|---|
-| **🔀 DAG and parallelism** - `ctx.parallel()` with fail-fast or collect-all semantics | **✋ Human approval** - runs suspend, resume by replaying completed steps from cache |
-| **🔐 Encrypted secrets** - AES-GCM at rest, resolved at step execution time | **🔑 Scoped API keys** - `workflows_read`, `runs_read`, `runs_write`, `runs_manage`, `stats_read`, `admin` |
-| **📜 Audit logs** - every mutating action recorded with actor and target | **📡 Live streaming** - step and log events over SSE, consumed by the dashboard and `ironflow logs` |
-| **🔔 Outbound notifications** - webhook and Betterstack subscribers with retry | **📊 Prometheus metrics** - shell, HTTP, agent, webhook and cron counters |
-| **💰 Budget control** - per-step `max_budget_usd` caps agent spending | **🧪 Record/replay** - deterministic agent tests without spending tokens |
-| **🏃 Dry-run mode** - skip execution while logging intent | **❌ No hidden retries** - a step fails, the run fails, unless you ask for a `RetryPolicy` |
-| **🔁 Idempotent runs** - `Idempotency-Key` on run creation, so replayed webhooks never duplicate | **📦 Artifacts** - steps declare the files they produce and consume, with SHA-256, MIME type and a download endpoint |
-
----
-
-## 🤖 Agent Providers
-
-Every provider implements `AgentProvider`, so a workflow written against one runs against any
-other. All of them except `ClaudeCodeProvider` are behind a feature flag.
-
-| Provider | Feature flag | Use case |
-|----------|-------------|----------|
-| `ClaudeCodeProvider` | *(always available)* | Claude Code CLI installed locally |
-| `SshProvider` | `transport-ssh` | Claude Code on a remote build server |
-| `DockerProvider` | `transport-docker` | Claude Code inside a running container |
-| `K8sEphemeralProvider` | `transport-k8s` | One pod per invocation, full isolation |
-| `K8sPersistentProvider` | `transport-k8s` | Reuses a worker pod, lower latency |
-| `AnthropicApiProvider` | `provider-anthropic-api` | Anthropic Messages API, no CLI needed |
-| `OpenAiProvider` | `provider-openai` | OpenAI Chat Completions |
-| `GeminiProvider` | `provider-gemini` | Google Gemini |
-| `MistralProvider` | `provider-mistral` | Mistral |
-| `NvidiaProvider` | `provider-nvidia` | NVIDIA NIM, 100+ models behind one API |
-
-HTTP providers are used exactly like the local one:
-
-```rust,no_run
-use ironflow_core::prelude::*;
-use ironflow_core::providers::http::{NvidiaModel, NvidiaProvider};
-
-# async fn example() -> Result<(), OperationError> {
-let provider = NvidiaProvider::from_env(); // reads NVIDIA_API_KEY
-
-let result = Agent::new()
-    .prompt("Summarize the changelog")
-    .model(NvidiaModel::DEEPSEEK_V4_FLASH)
-    .max_budget_usd(0.10)
-    .run(&provider)
-    .await?;
-# Ok(())
-# }
-```
-
-HTTP providers have no CLI to call tools for them, so tools are opt-in per feature: `tool-bash`,
-`tool-read-file`, `tool-grep`, `tool-glob`, `tool-web-fetch`, `tool-web-search`, and `tool-mcp`
-to bridge any MCP server into the agent's toolset. `GrepTool` and `GlobTool` search a codebase
-without handing the agent a shell: they are confined to the directories you give them.
-
-```rust,no_run
-use std::path::PathBuf;
-
-use ironflow_core::providers::http::tools::glob::GlobTool;
-use ironflow_core::providers::http::tools::grep::GrepTool;
-use ironflow_core::providers::http::tools::{ToolError, ToolRegistry};
-
-# fn example() -> Result<(), ToolError> {
-let repo = vec![PathBuf::from("/srv/repo")];
-let tools = ToolRegistry::new()
-    .register(GrepTool::with_allowed_paths(repo.clone())?)
-    .register(GlobTool::with_allowed_paths(repo)?);
-# Ok(())
-# }
-```
-
-A step picks a named tool profile and sees only its tools; without one it gets the
-`with_tools` registry, or none. Declare each `ToolProfile` once as a constant shared by the
-provider and the steps. An MCP server shared between profiles is opened once:
-
-```rust,no_run
-use std::sync::Arc;
-use ironflow_core::prelude::*;
-use ironflow_core::provider::{AgentConfig, ToolProfile};
-use ironflow_core::providers::http::OpenAiProvider;
-use ironflow_core::providers::http::tools::ToolRegistry;
-use ironflow_core::providers::http::tools::mcp::{McpConnection, register_shared_mcp_tools};
-
-const SUGGESTION: ToolProfile = ToolProfile::new("suggestion");
-const BUG: ToolProfile = ToolProfile::new("bug");
-
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let mut gitlab = McpConnection::stdio("mcp-gitlab", &[], &[]).await?;
-gitlab.initialize().await?;
-let gitlab = Arc::new(gitlab);
-let provider = OpenAiProvider::from_env()
-    .with_tool_profile(SUGGESTION, register_shared_mcp_tools(ToolRegistry::new(), &gitlab, "gitlab").await?)
-    .with_tool_profile(BUG, register_shared_mcp_tools(ToolRegistry::new(), &gitlab, "gitlab").await?);
-
-let config = AgentConfig::new("Find the root cause").tool_profile(BUG);
-let result = Agent::from_config(config).model("gpt-5.5").run(&provider).await?;
-# Ok(())
-# }
-```
-
-### Routing between providers
-
-`ProviderRouter` dispatches on the model name, so a single workflow can mix vendors:
-
-```rust,no_run
-use std::sync::Arc;
-use ironflow_core::prelude::*;
-use ironflow_core::providers::http::NvidiaProvider;
-
-# async fn example() -> Result<(), OperationError> {
-let claude = Arc::new(ClaudeCodeProvider::new());
-let nvidia = Arc::new(NvidiaProvider::from_env());
-
-let router = ProviderRouter::new(claude)
-    .route(ProviderMatcher::ModelPrefix("nvidia/".into()), nvidia);
-
-// Goes to Claude Code
-let a = Agent::new().prompt("Review").model(Model::SONNET).run(&router).await?;
-
-// Goes to NVIDIA
-let b = Agent::new().prompt("Review").model("nvidia/deepseek-v4-flash").run(&router).await?;
-# Ok(())
-# }
-```
-
-<details>
-<summary><b>Remote transport examples</b></summary>
-
-```rust,no_run
-use ironflow_core::prelude::*;
-use ironflow_core::providers::claude::{
-    DockerProvider, ImagePullPolicy, K8sEphemeralProvider, K8sPersistentProvider, SshProvider,
-};
-
-# async fn example() -> Result<(), OperationError> {
-// Remote host over SSH
-let ssh = SshProvider::new("build-server.example.com", "deploy")
-    .password("s3cret")
-    .working_dir("/opt/project");
-
-// Running Docker container
-let docker = DockerProvider::new("claude-worker")
-    .user("node")
-    .working_dir("/workspace");
-
-// Kubernetes: one pod per invocation
-let ephemeral = K8sEphemeralProvider::new("my-registry/claude:v1")
-    .namespace("ci")
-    .image_pull_policy(ImagePullPolicy::IfNotPresent)
-    .oauth_credentials(r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-..."}}"#);
-
-// Kubernetes: long-lived worker pod
-let persistent = K8sPersistentProvider::new("my-registry/claude:v1")
-    .pod_name("claude-worker")
-    .namespace("ci");
-
-let result = Agent::new().prompt("Review the codebase").run(&ssh).await?;
-# Ok(())
-# }
-```
-
-</details>
-
----
-
-## 🖥️ Interfaces
-
-### Dashboard
-
-React + Vite UI covering the workflow catalog (with dynamic forms generated from each handler's
-`input_schema`), run history with filters, live step and log streaming, approval and rejection,
-secrets, API keys, users, and audit logs.
-
-Two ways to serve it:
-
-- **Embedded** - build `ironflow-api` with the `dashboard` feature and the compiled assets are
-  baked into the binary via `rust-embed`.
-- **From disk** - set `DASHBOARD_DIR` to a build output directory, which overrides the embedded
-  copy.
-
-### CLI
-
-```bash
-cargo install ironflow-cli
-```
-
-```console
-$ ironflow-cli workflow list
-┌───────────────────┬──────────┬─────────┐
-│ Name              ┆ Category ┆ Version │
-╞═══════════════════╪══════════╪═════════╡
-│ ci-pipeline       ┆ -        ┆ -       │
-├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┤
-│ deploy-approval   ┆ -        ┆ -       │
-├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┤
-│ greeting          ┆ examples ┆ -       │
-└───────────────────┴──────────┴─────────┘
-
-$ ironflow-cli run create ci-pipeline
-┌──────────┬─────────────┬─────────┬──────────┬─────────┬─────────────────────┬─────────┐
-│ ID       ┆ Workflow    ┆ Status  ┆ Duration ┆ Cost    ┆ Created             ┆ Started │
-╞══════════╪═════════════╪═════════╪══════════╪═════════╪═════════════════════╪═════════╡
-│ 019f9f50 ┆ ci-pipeline ┆ pending ┆ 0ms      ┆ $0.0000 ┆ 2026-07-26 16:44:19 ┆ -       │
-└──────────┴─────────────┴─────────┴──────────┴─────────┴─────────────────────┴─────────┘
-
-$ ironflow-cli logs 019f9f50-17c8-73b1-9288-b41cbed28d1a
-$ ironflow-cli run list --status completed --workflow ci-pipeline
-$ ironflow-cli run get <run-id> --verbose
-$ ironflow-cli stats
-```
-
-Configuration is resolved in this order: command-line flags (`--url`, `--api-key`), then the
-`IRONFLOW_URL` and `IRONFLOW_API_KEY` environment variables, then `~/.ironflow.toml`:
-
-```toml
-base_url = "http://localhost:3000"
-api_key = "irfl_..."
-```
-
-Add `--json` to any command for machine-readable output.
-
-### Rust SDK
-
-Types are generated from `openapi.json` at build time, so the client cannot drift from the API.
-
-```rust,no_run
-use ironflow_sdk::IronflowClient;
-use ironflow_sdk::types::CreateRunRequest;
-
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let client = IronflowClient::new("http://localhost:3000", "irfl_...");
-
-let mut payload = serde_json::Map::new();
-payload.insert("branch".to_string(), serde_json::json!("main"));
-
-let created = client
-    .create_run(&CreateRunRequest {
-        workflow: "ci-pipeline".to_string(),
-        payload: Some(payload),
-        labels: None,
-        scheduled_at: None,
-        max_retries: Some(2),
-        max_cost_usd: Some(1.0),
-        concurrency_key: None,
-        priority: None,
-        concurrency_limits: Vec::new(),
-        worker_tags: Vec::new(),
-    })
-    .await?;
-
-let detail = client.get_run(created.data.id).await?;
-println!("status: {:?}", detail.data.run.status);
-# Ok(())
-# }
-```
-
-### MCP server
-
-Lets an AI assistant list workflows, trigger runs, inspect results, and approve or reject pending
-gates.
-
-```bash
-cargo install ironflow-mcp
-claude mcp add ironflow --env IRONFLOW_URL=http://localhost:3000 --env IRONFLOW_API_KEY=irfl_... -- ironflow-mcp
-```
-
-Or declare it in `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "ironflow": {
-      "command": "ironflow-mcp",
-      "env": {
-        "IRONFLOW_URL": "http://localhost:3000",
-        "IRONFLOW_API_KEY": "irfl_..."
-      }
-    }
-  }
-}
-```
-
-Exposed tools: `list_workflows`, `get_workflow`, `list_runs`, `get_run`, `create_run`,
-`approve_run`, `reject_run`, `cancel_run`, `retry_run`, `get_stats`.
-
-### Claude Code plugin
-
-Skills that teach Claude Code how to build on Ironflow: scaffold a project, write a
-handler, write a custom operation, test it end to end, and review a handler for the
-pitfalls the compiler cannot catch (side effects around approval gates, unstable step
-names, leaked secrets).
-
-```bash
-# 1. Register the Ironflow repository as a plugin marketplace
-claude plugin marketplace add https://gitlab.com/ThomasTartrau/ironflow.git
-
-# 2. Install the plugin
-claude plugin install ironflow@ironflow
-```
-
-```text
-/ironflow setup              # workspace: workflows lib, server, worker, hello workflow, e2e test
-/ironflow workflow deploy    # a WorkflowHandler with a typed input schema, registered
-/ironflow operation slack    # a custom Operation tracked as a step
-/ironflow test deploy        # Engine + InMemoryStore + record/replay test
-/ironflow review             # the workflow reviewer agent
-```
-
-Every Rust snippet in the plugin is compiled in CI, and the project template is
-scaffolded and built against each release. Details in
-[`plugins/ironflow/README.md`](plugins/ironflow/README.md).
-
----
-
-## 🚩 Feature Flags
-
-| Crate | Flag | Effect |
-|-------|------|--------|
-| `ironflow-core` | `prometheus` | Emit operation metrics |
-| | `transport-ssh` | `SshProvider` (russh) |
-| | `transport-docker` | `DockerProvider` (bollard) |
-| | `transport-k8s` | `K8sEphemeralProvider`, `K8sPersistentProvider` (kube) |
-| | `provider-anthropic-api` | Anthropic Messages API provider |
-| | `provider-openai` | OpenAI provider |
-| | `provider-gemini` | Google Gemini provider |
-| | `provider-mistral` | Mistral provider |
-| | `provider-nvidia` | NVIDIA NIM provider |
-| | `tool-bash` | Bash tool for HTTP providers |
-| | `tool-read-file` | File reading tool for HTTP providers |
-| | `tool-grep` | Confined content search (regex) tool for HTTP providers |
-| | `tool-glob` | Confined file-name search tool for HTTP providers |
-| | `tool-web-fetch` | Web fetch tool for HTTP providers |
-| | `tool-web-search` | Web search tool for HTTP providers |
-| | `tool-mcp` | MCP bridge, exposes MCP servers as agent tools |
-| `ironflow-store` | `store-memory` *(default)* | In-memory store, no persistence |
-| | `store-postgres` | Postgres backend (sqlx) |
-| | `secret-store` | AES-GCM encrypted secrets |
-| | `openapi` | utoipa schemas for stored entities |
-| `ironflow-api` | `dashboard` | Embed the built dashboard via `rust-embed` |
-| | `sign-up` | Expose the self-service sign-up route |
-| | `prometheus` | Expose `/metrics` |
-| | `openapi` | Expose `/api/v1/openapi.json` |
-| `ironflow-engine` | `prometheus` | Engine metrics |
-| | `openapi` | utoipa schemas for engine types |
-| `ironflow-worker` | `prometheus` | Worker metrics |
-| | `heartbeat` | Periodic liveness reporting to the API |
-| `ironflow-runtime` | `prometheus` | Webhook metrics |
-| `ironflow-types` | `openapi` | utoipa schemas for envelope types |
-| `ironflow-sdk` | `rustls` *(default)* | reqwest with rustls |
-| | `native-tls` | reqwest with the platform TLS stack |
-
----
-
-## ⚙️ Configuration
-
-Ironflow reads `.env` via [dotenvy](https://crates.io/crates/dotenvy).
-
-### API server
-
-| Variable | Required | Default |
-|----------|----------|---------|
-| `IRONFLOW_ENV` | no | unset: secrets required |
-| `DATABASE_URL` | in production | - |
-| `JWT_SECRET` | yes, except `IRONFLOW_ENV=development` | random per process in development |
-| `WORKER_TOKEN` | yes, except `IRONFLOW_ENV=development` | random per process in development, logged |
-| `IRONFLOW_SECRET_KEYS` | no | unset, secret store disabled |
-| `IRONFLOW_SECRET_ACTIVE_KEY_VERSION` | no | highest configured version |
-| `IRONFLOW_SECRET_KEY` | no | deprecated, see below |
-| `PORT` | no | `3000` |
-| `ALLOWED_ORIGINS` | no | same-origin only |
-| `DASHBOARD_DIR` | no | uses the embedded dashboard |
-| `WEBHOOK_URL` | no | no outbound webhook |
-| `RATE_LIMIT_AUTH` | no | `10` req/min |
-| `RATE_LIMIT_GENERAL` | no | `60` req/min |
-| `TRUSTED_PROXIES` | behind a reverse proxy | none: the TCP peer is the client |
-| `ARTIFACTS_DIR` | no | unset, artifacts disabled |
-| `ARTIFACT_MAX_BYTES` | no | `104857600` (100 MiB) |
-
-No secret is built into the binary. `JWT_SECRET` and `WORKER_TOKEN` must be at least 32 bytes
-and must not start with `ironflow-dev-` (the development values once published here); generate
-them with `openssl rand -hex 32`. Only `IRONFLOW_ENV=development` boots without them: each
-missing secret is then generated for the process, and the length minimum is waived. Production
-also requires `DATABASE_URL`. Any violation aborts at boot with every error listed.
-
-### Secret encryption keys
-
-`IRONFLOW_SECRET_KEYS` holds one or more versioned AES-GCM keys, as
-`version:hex` pairs separated by commas. Each key is 64 hex characters (32 bytes):
-
-```sh
-IRONFLOW_SECRET_KEYS="1:0123...ef,2:fedc...10"
-IRONFLOW_SECRET_ACTIVE_KEY_VERSION=2
-```
-
-Every key in the ring can decrypt; only the active one encrypts. Without any key the secret
-store stays off and workflows reading secrets fail.
-
-`IRONFLOW_SECRET_KEY` (a single unversioned key) is still accepted and read as version 1, so
-existing deployments keep working. It is deprecated: when `IRONFLOW_SECRET_KEYS` is also set,
-it is ignored with a warning.
-
-The server refuses to start if a stored secret uses a key version absent from the
-configuration, naming the missing versions. That is the safety net behind the rotation
-procedure below.
-
-### Rotating the encryption key
-
-```sh
-# 1. Add the new key without activating it, then restart.
-#    New secrets stay on version 1; version 2 is merely available.
-IRONFLOW_SECRET_KEYS="1:<hexA>,2:<hexB>"
-IRONFLOW_SECRET_ACTIVE_KEY_VERSION=1
-
-# 2. Activate version 2, then restart.
-#    New secrets use version 2; older ones stay readable.
-IRONFLOW_SECRET_ACTIVE_KEY_VERSION=2
-
-# 3. Re-encrypt the existing stock.
-ironflow-cli secret rotate
-
-# 4. Confirm version 1 is no longer used by any secret.
-ironflow-cli secret key-status
-
-# 5. Drop version 1, then restart.
-IRONFLOW_SECRET_KEYS="2:<hexB>"
-```
-
-Step 1 is kept separate from step 2 so rolling back to the previous deployment stays possible
-for as long as nothing has been encrypted with the new key.
-
-`secret rotate` works in batches and is safe to interrupt: secrets already re-encrypted are
-skipped on the next run, and every secret stays readable throughout. It re-encrypts in place --
-the ID, key, and timestamps of a secret never change. If a secret cannot be decrypted, it is
-skipped, reported, and the command exits non-zero rather than leaving the failure silent.
-
-`secret key-status` reports which versions are configured, which are actually used by stored
-secrets, and which can be retired.
-
-### Worker
-
-| Variable | Required | Default |
-|----------|----------|---------|
-| `API_URL` | no | `http://localhost:3000` |
-| `WORKER_TOKEN` | yes, must match the API | - |
-| `CONCURRENCY` | no | `2` |
-| `POLL_INTERVAL_SECS` | no | `2` |
-
-### CLI and MCP
-
-| Variable | Required | Default |
-|----------|----------|---------|
-| `IRONFLOW_URL` | yes | - |
-| `IRONFLOW_API_KEY` | yes | - |
-
----
-
-## 🛠️ Library Reference
-
-Everything below applies to `ironflow-core` used standalone, without the API or a store.
-
-### Shell
-
-```rust,no_run
-use ironflow_core::prelude::*;
-use std::time::Duration;
-
-# async fn example() -> Result<(), OperationError> {
-let output = Shell::new("cargo test")
-    .dir("/path/to/project")
-    .timeout(Duration::from_secs(120))
-    .env("RUST_LOG", "debug")
-    .await?;
-
-println!("stdout: {}", output.stdout());
-println!("exit code: {}", output.exit_code());
-# Ok(())
-# }
-```
-
-### Http
-
-Non-2xx statuses are not errors - check `is_success()`.
-
-```rust,no_run
-use ironflow_core::prelude::*;
-use std::time::Duration;
-
-# async fn example() -> Result<(), OperationError> {
-let output = Http::post("https://httpbin.org/post")
-    .header("Authorization", "Bearer token123")
-    .json(serde_json::json!({"key": "value"}))
-    .timeout(Duration::from_secs(30))
-    .await?;
-
-println!("status: {}, body: {}", output.status(), output.body());
-# Ok(())
-# }
-```
-
-### Agent
-
-Derive `JsonSchema` on a type and the provider is constrained to return it.
-
-```rust,no_run
-use ironflow_core::prelude::*;
-
-#[derive(Deserialize, JsonSchema)]
-struct Review {
-    score: u8,
-    summary: String,
-}
-
-# async fn example() -> Result<(), OperationError> {
-let provider = ClaudeCodeProvider::new();
-
-let result = Agent::new()
-    .system_prompt("You are a senior Rust reviewer.")
-    .prompt("Review the codebase")
-    .model(Model::OPUS)
-    .allowed_tools(&["Read", "Grep"])
-    .max_turns(5)
-    .max_budget_usd(0.50)
-    .output::<Review>()
-    .run(&provider)
-    .await?;
-
-let review: Review = result.json().expect("schema-validated output");
-println!("Score: {}/10 - {}", review.score, review.summary);
-println!("Cost: ${:.4}", result.cost_usd().unwrap_or(0.0));
-# Ok(())
-# }
-```
-
-<details>
-<summary><b>🔄 Session resume</b></summary>
-
-```rust,no_run
-use ironflow_core::prelude::*;
-
-# async fn example() -> Result<(), OperationError> {
-let provider = ClaudeCodeProvider::new();
-
-let first = Agent::new()
-    .prompt("Analyze the src/ directory")
-    .max_budget_usd(0.10)
-    .run(&provider)
-    .await?;
-
-let session = first.session_id().expect("provider returned session ID");
-
-let followup = Agent::new()
-    .prompt("Now suggest improvements")
-    .resume(session)
-    .max_budget_usd(0.10)
-    .run(&provider)
-    .await?;
-# Ok(())
-# }
-```
-
-</details>
-
-<details>
-<summary><b>🔀 Parallel execution</b></summary>
-
-`tokio::try_join!` when the step count is known at compile time:
-
-```rust,no_run
-use ironflow_core::prelude::*;
-
-# async fn example() -> Result<(), OperationError> {
-let (files, status) = tokio::try_join!(
-    Shell::new("ls -la"),
-    Shell::new("git status"),
-)?;
-# Ok(())
-# }
-```
-
-`try_join_all` when it is decided at runtime, `try_join_all_limited` to cap concurrency:
-
-```rust,no_run
-use ironflow_core::prelude::*;
-
-# async fn example() -> Result<(), OperationError> {
-let provider = ClaudeCodeProvider::new();
-let prompts = vec!["Summarize file A", "Summarize file B", "Summarize file C"];
-
-let results = try_join_all_limited(
-    prompts.iter().map(|p| {
-        Agent::new()
-            .prompt(p)
-            .model(Model::HAIKU)
-            .max_budget_usd(0.10)
-            .run(&provider)
-    }),
-    2, // at most 2 agent calls at a time
-).await?;
-# Ok(())
-# }
-```
-
-</details>
-
-<details>
-<summary><b>📈 WorkflowTracker</b></summary>
-
-Cost, tokens and duration across steps, for library use without a store:
-
-```rust,no_run
-use ironflow_core::prelude::*;
-
-# async fn example() -> Result<(), OperationError> {
-let provider = ClaudeCodeProvider::new();
-let mut tracker = WorkflowTracker::new("deploy-pipeline");
-
-let files = Shell::new("ls -la").await?;
-tracker.record_shell("list-files", &files);
-
-let review = Agent::new()
-    .prompt("Review the project")
-    .max_budget_usd(0.10)
-    .run(&provider)
-    .await?;
-tracker.record_agent("code-review", &review);
-
-tracker.summary(); // structured log via tracing
-println!("Total cost: ${:.4}", tracker.total_cost_usd());
-println!("Steps: {}", tracker.step_count());
-# Ok(())
-# }
-```
-
-</details>
-
-<details>
-<summary><b>🏃 Dry-run mode</b></summary>
-
-```rust,no_run
-use ironflow_core::prelude::*;
-
-# async fn example() -> Result<(), OperationError> {
-// Global: every operation skips execution
-set_dry_run(true);
-let output = Shell::new("rm -rf /").await?; // not executed
-assert_eq!(output.stdout(), "");
-
-// Per-operation, overrides the global setting
-set_dry_run(false);
-let output = Shell::new("echo hello").dry_run(true).await?;
-assert_eq!(output.stdout(), "");
-# Ok(())
-# }
-```
-
-</details>
-
-<details>
-<summary><b>🧪 Record/replay testing</b></summary>
-
-`RecordReplayProvider` wraps any provider and stores responses as JSON fixtures, keyed by a hash
-of prompt + system prompt + schema.
-
-```rust,no_run
-use ironflow_core::prelude::*;
-
-# async fn example() -> Result<(), OperationError> {
-// Record mode when IRONFLOW_RECORD=1, replay otherwise
-let provider = RecordReplayProvider::new(ClaudeCodeProvider::new(), "tests/fixtures");
-
-// Or force replay, ignoring the env var
-let provider = RecordReplayProvider::replay(ClaudeCodeProvider::new(), "tests/fixtures");
-
-let result = Agent::new()
-    .prompt("Explain ownership in Rust")
-    .max_budget_usd(0.10)
-    .run(&provider)
-    .await?;
-# Ok(())
-# }
-```
-
-</details>
-
----
-
-## 🌐 Standalone Runtime
-
-`ironflow-runtime` is the no-database path: an axum server exposing webhook endpoints
-and trigger sources that call operations directly.
-
-```rust,no_run
-use ironflow_core::prelude::*;
-use ironflow_runtime::prelude::*;
-
-async fn on_push(payload: serde_json::Value, provider: &ClaudeCodeProvider) {
-    let branch = payload["ref"].as_str().unwrap_or("main");
-    // The branch comes from the webhook: an argument, never a `sh -c` string.
-    let range = format!("origin/main...origin/{branch}");
-    let diff = Shell::exec("git", &["diff", &range])
-        .await
-        .expect("git diff");
-    let review = Agent::new()
-        .prompt(&format!("Review this diff:\n{}", diff.stdout()))
-        .model(Model::SONNET)
-        .max_budget_usd(0.50)
-        .run(provider)
-        .await
-        .expect("agent review");
-    println!("{}", review.text());
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = ClaudeCodeProvider::new();
-
-    Runtime::new()
-        .webhook("/hooks/github", WebhookAuth::github("my-secret"), {
-            let p = provider.clone();
-            move |payload| {
-                let p = p.clone();
-                async move { on_push(payload, &p).await }
-            }
-        })
-        .serve("0.0.0.0:8080")
-        .await?;
-
-    Ok(())
-}
-```
-
-| Webhook auth | Behaviour |
-|--------------|-----------|
-| `WebhookAuth::none()` | No authentication |
-| `WebhookAuth::header(name, value)` | Static header comparison |
-| `WebhookAuth::github(secret)` | GitHub HMAC-SHA256 (`X-Hub-Signature-256`) |
-| `WebhookAuth::gitlab(secret)` | GitLab token (`X-Gitlab-Token`) |
-
-Built-in endpoints: `GET /health`, and `GET /metrics` with the `prometheus` feature.
-
-### Webhook replays
-
-GitHub and GitLab replay a delivery when the receiver times out or answers 5xx.
-Use `webhook_with_context` to get the provider delivery id, already prefixed and
-ready to pass as an `Idempotency-Key`, so a replay does not start a second run.
-
-```rust,no_run
-use ironflow_runtime::prelude::*;
-
-Runtime::new().webhook_with_context(
-    "/hooks/github",
-    WebhookAuth::github("my-secret"),
-    |ctx: WebhookContext| async move {
-        // ctx.delivery_id == Some("github:8f4e2a10-...") when the provider
-        // stamped the request, None otherwise. Pass it straight to
-        // create_run_idempotent as the Idempotency-Key.
-        match ctx.delivery_id {
-            Some(key) => println!("replay-safe key: {key}"),
-            None => println!("no delivery id, the call is not replay-safe"),
-        }
-    },
-);
-```
-
-| Provider | Header read | Derived key |
-|----------|-------------|-------------|
-| GitHub | `X-GitHub-Delivery` | `github:<id>` |
-| GitLab | `X-Gitlab-Event-UUID` | `gitlab:<id>` |
-
-`webhook()` keeps its original signature and receives only the payload.
-
-<details>
-<summary><b>📊 Exposed metrics</b></summary>
-
-| Metric | Type | Labels |
-|--------|------|--------|
-| `ironflow_shell_total` | Counter | `status` |
-| `ironflow_shell_duration_seconds` | Histogram | |
-| `ironflow_http_total` | Counter | `method`, `status` |
-| `ironflow_http_duration_seconds` | Histogram | |
-| `ironflow_agent_total` | Counter | `model`, `status` |
-| `ironflow_agent_duration_seconds` | Histogram | `model` |
-| `ironflow_agent_cost_usd_total` | Gauge | `model` |
-| `ironflow_agent_tokens_input_total` | Counter | `model` |
-| `ironflow_agent_tokens_output_total` | Counter | `model` |
-| `ironflow_agent_tokens_cache_read_total` | Counter | `model` |
-| `ironflow_agent_tokens_cache_write_total` | Counter | `model` |
-| `ironflow_webhook_received_total` | Counter | `path`, `auth` |
-| `ironflow_runs_reaped_total` | Counter | `outcome` |
-| `ironflow_worker_leases_lost_total` | Counter | |
-
-</details>
-
----
-
-## 🔒 Worker Leases and Recovery
-
-A worker that dies mid-execution (OOM, reclaimed spot instance, deleted pod)
-would otherwise leave its run stuck in `Running` forever: workers only pick up
-`Pending` runs, so nobody takes it over.
-
-Every run a worker picks up carries a **lease**: the worker identifies itself
-(`worker_id`) and refreshes an expiry (`lease_expires_at`) every 30 seconds
-while it executes. The lease lasts 90 seconds, so three missed refreshes make
-the run recoverable. If the worker cannot refresh it — the API took the run away,
-or the API stayed unreachable longer than the lease — the worker **abandons** the
-run instead of executing it twice.
-
-The **reaper** runs on the API side and requeues those runs:
-
-```rust,no_run
-use std::sync::Arc;
-
-use ironflow_api::reaper::Reaper;
-use ironflow_engine::engine::Engine;
-use ironflow_store::store::Store;
-use tokio::spawn;
-use tokio_util::sync::CancellationToken;
-
-# fn example(store: Arc<dyn Store>, engine: Arc<Engine>) {
-let shutdown = CancellationToken::new();
-spawn(Reaper::new(store, engine).run(shutdown.clone()));
-# }
-```
-
-**You must start the reaper yourself.** Without it, leases expire and nothing
-requeues the runs — the original problem is unchanged.
-
-Every 60 seconds the reaper recovers at most 100 runs whose lease expired: each
-goes back to `Pending` with `retry_count` incremented, or to `Failed` with
-`worker lease expired` once `max_retries` is exhausted. A recovered run restarts
-from scratch — completed steps are not replayed. Runs are recovered at most once
-even with several API instances, and a run holding a valid lease is never touched.
-
-Defaults are adjustable:
-
-```rust,no_run
-use std::sync::Arc;
-use std::time::Duration;
-
-use ironflow_api::reaper::Reaper;
-use ironflow_engine::engine::Engine;
-use ironflow_store::store::Store;
-use ironflow_worker::WorkerBuilder;
-
-# fn example(
-#     store: Arc<dyn Store>,
-#     engine: Arc<Engine>,
-#     api_url: &str,
-#     token: &str,
-# ) -> Result<(), Box<dyn std::error::Error>> {
-let reaper = Reaper::new(store, engine)
-    .interval(Duration::from_secs(30))
-    .batch_size(50);
-
-let worker = WorkerBuilder::new(api_url, token)
-    .worker_id("worker-eu-west-1a")     // default: worker-<uuid>, new at every start
-    .lease_ttl(Duration::from_secs(120))
-    .lease_refresh_interval(Duration::from_secs(30))
-    .build()?;
-# Ok(())
-# }
-```
-
-> **Note** — Runs executed inside the API server (inline execution, resume after
-> a human approval) hold no lease and are never reaped. An API crash during such
-> a run still leaves it stuck.
-
----
-
-## 💡 Use Cases
-
-<details>
-<summary><b>🔍 Automated code review</b></summary>
-
-```text
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
-│   GitLab    │────▶│  Get Diff &  │────▶│    Agent    │────▶│    Post      │
-│   Webhook   │     │    Files     │     │   Review    │     │   Comments   │
-└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
-```
-
-Webhook on a new MR, fetch the diff, review it with an agent under a budget cap, post comments
-back. The run, its cost and its logs stay queryable in the dashboard.
-
-</details>
-
-<details>
-<summary><b>🚀 Deploy with an approval gate</b></summary>
-
-```text
-┌────────┐   ┌──────────────────┐   ┌──────────┐   ┌────────────┐
-│  Build │──▶│ test │ lint │ audit │──▶│ Approval │──▶│ Production │
-└────────┘   └──────────────────┘   └──────────┘   └────────────┘
-                  (parallel)          (human)
-```
-
-Checks run concurrently, then the run suspends. A human approves from the dashboard, the CLI, or
-an AI assistant through MCP, and execution resumes at the next step - completed steps replay from
-cache instead of re-running.
-
-</details>
-
-<details>
-<summary><b>🐛 Alert-driven bug fixing</b></summary>
-
-```text
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
-│   Sentry    │────▶│    Parse     │────▶│    Agent    │────▶│  Create MR   │
-│   Alert     │     │ Stack Trace  │     │   Fix Bug   │     │   + Notify   │
-└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
-```
-
-Webhook from error monitoring, parse the stack trace, let an agent produce a fix, run the tests,
-open a merge request. Outbound notification subscribers report the outcome.
-
-</details>
-
----
-
-## 🧑‍💻 Development
-
-```bash
-cargo build                                  # Build the workspace
-cargo test                                   # Unit and integration tests
-cargo test -p ironflow-readme-tests --doc    # Check every Rust snippet in this README compiles
-cargo doc --no-deps                          # Docs, must be warning-free
-```
-
-The dashboard lives in `ironflow-dashboard/` - see
-[its README](ironflow-dashboard/README.md) for the frontend workflow.
-
----
-
-## 📄 License
+| Run the demo, then my own project | [Quick Start](https://ironflow-023e1b.gitlab.io/getting-started/quick-start.html) |
+| Write my first workflow | [Writing a Workflow](https://ironflow-023e1b.gitlab.io/guides/writing-a-workflow.html) |
+| Know every kind of step | [Steps](https://ironflow-023e1b.gitlab.io/concepts/steps.html) |
+| Use OpenAI, Gemini, Mistral or a remote Claude | [Agent Providers](https://ironflow-023e1b.gitlab.io/guides/agent-providers.html) |
+| Use the building blocks without a server | [Library Mode](https://ironflow-023e1b.gitlab.io/guides/library-mode.html) |
+| Drive Ironflow from a terminal, Rust code or an AI assistant | [Interfaces](https://ironflow-023e1b.gitlab.io/reference/interfaces.html) |
+| Deploy and configure it | [Running the Server](https://ironflow-023e1b.gitlab.io/getting-started/server.html) |
+| Understand how it is built | [Architecture](https://ironflow-023e1b.gitlab.io/architecture/overview.html) |
+
+API reference for every crate is on [docs.rs](https://docs.rs/ironflow-engine).
+To work on Ironflow itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
 
 MIT - see [LICENSE](LICENSE).
-
----
-
-<div align="center">
-
-**[GitLab](https://gitlab.com/ThomasTartrau/ironflow)**
-
-[core](https://crates.io/crates/ironflow-core) •
-[store](https://crates.io/crates/ironflow-store) •
-[engine](https://crates.io/crates/ironflow-engine) •
-[auth](https://crates.io/crates/ironflow-auth) •
-[api](https://crates.io/crates/ironflow-api) •
-[worker](https://crates.io/crates/ironflow-worker) •
-[runtime](https://crates.io/crates/ironflow-runtime) •
-[types](https://crates.io/crates/ironflow-types) •
-[sdk](https://crates.io/crates/ironflow-sdk) •
-[cli](https://crates.io/crates/ironflow-cli) •
-[mcp](https://crates.io/crates/ironflow-mcp)
-
-</div>

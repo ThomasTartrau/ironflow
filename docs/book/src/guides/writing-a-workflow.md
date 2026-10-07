@@ -73,7 +73,7 @@ passes each argument as is. Keep `ShellConfig::new` for commands you write in fu
 Branching is plain Rust `if`/`else`. When a branch depends on the run input,
 declare it with `ctx.when("production run", |i: &DeployInput| i.environment == "production")`
 so it shows up in the [execution plan](execution-plan.md); use `ctx.when_dynamic` when
-the branch depends on a previous step's output. Run `ironflow run plan <name>
+the branch depends on a previous step's output. Run `ironflow-cli run plan <name>
 --input '{}'` to see the steps your handler would create before triggering it.
 
 ## 3. Register in your handlers list

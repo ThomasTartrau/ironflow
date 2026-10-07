@@ -111,7 +111,7 @@ The countdown surfaces in three places:
 - the API: `approval_seconds_remaining` and `approval_assignee` on every step of
   `GET /api/v1/runs/:id` (clamped at 0, `null` without a deadline);
 - the dashboard: a countdown badge on the gate in the run's step list;
-- the CLI: the `SLA` column of `ironflow run steps <id>`, yellow in the last
+- the CLI: the `SLA` column of `ironflow-cli run steps <id>`, yellow in the last
   tenth of the window and red once expired.
 
 Every escalation is also recorded in the audit log as an `approval_escalated`

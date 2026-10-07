@@ -37,7 +37,7 @@ VITE_API_URL=http://localhost:8080 pnpm dev
 ```
 
 You need a running API for anything beyond the sign-in screen - see the platform quick start in
-the [root README](../README.md#-quick-start).
+the [root README](../README.md#try-it-in-5-minutes).
 
 ## Scripts
 

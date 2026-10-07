@@ -13,9 +13,14 @@ documentation in `docs/book/src/` needs updating.
 | `ironflow-engine/src/config/` | `concepts/steps.md`, `guides/writing-a-workflow.md` |
 | `ironflow-engine/src/engine.rs` | `concepts/engine-worker.md` |
 | `ironflow-worker/` | `concepts/engine-worker.md`, `getting-started/worker.md` |
-| `ironflow-api/` | `getting-started/server.md`, `architecture/overview.md` |
-| `ironflow-core/src/providers/` | `guides/transports.md` |
+| `ironflow-api/` | `getting-started/server.md`, `concepts/runs.md`, `concepts/artifacts.md`, `architecture/overview.md` |
+| `ironflow-core/src/providers/` | `guides/transports.md`, `guides/agent-providers.md` |
+| `ironflow-core/src/operations/` | `guides/library-mode.md` |
+| `ironflow-runtime/` | `guides/standalone-runtime.md` |
+| `ironflow-cli/`, `ironflow-sdk/`, `ironflow-mcp/` | `reference/interfaces.md` |
+| A `[features]` table of any crate | `reference/feature-flags.md` |
 | `examples/` | All pages using `{{#include}}` -- a renamed or deleted example breaks the build |
+| `README.md` | Keep it short: what Ironflow is for, one example, how to try it. Details go in the book |
 
 ## What to check
 
@@ -31,6 +36,11 @@ documentation in `docs/book/src/` needs updating.
    including it in a guide page via `{{#include}}`.
 
 ## Build check
+
+The Rust snippets of the README and of the book pages listed in
+`examples/readme-tests/src/lib.rs` are compiled by
+`cargo test -p ironflow-readme-tests --doc`. A new book page with `rust,no_run`
+snippets that are not `{{#include}}`d from `examples/` belongs in that list.
 
 Run `mdbook build` after doc changes. A broken `{{#include}}` path fails the
 build. This is also checked in CI on MR pipelines.
