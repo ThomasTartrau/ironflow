@@ -4741,6 +4741,11 @@
             "nullable": true,
             "type": "string"
           },
+          "priority": {
+            "description": "Default queue priority of the runs of this workflow, from -100 to 100.\nClamped like the run creation path. Always present, 0 when the handler\ndeclares none.",
+            "format": "int32",
+            "type": "integer"
+          },
           "schedule": {
             "description": "Optional 6-field cron expression for automatic execution.",
             "nullable": true,
@@ -4767,7 +4772,8 @@
         "required": [
           "name",
           "description",
-          "sub_workflows"
+          "sub_workflows",
+          "priority"
         ],
         "type": "object"
       },
