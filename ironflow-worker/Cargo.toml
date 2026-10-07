@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-worker"
-version = "2.25.9"
+version = "2.25.10"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -40,7 +40,7 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 async-trait = "0.1"
 rust_decimal = "1"
-ironflow-api = { version = "2.50.4", path = "../ironflow-api", features = ["prometheus"] }
+ironflow-api = { version = "2.50.5", path = "../ironflow-api", features = ["prometheus"] }
 ironflow-auth = { version = "2.4.70", path = "../ironflow-auth" }
 ironflow-store = { version = "2.46.1", path = "../ironflow-store", features = ["store-memory"] }
 schemars = "1"
