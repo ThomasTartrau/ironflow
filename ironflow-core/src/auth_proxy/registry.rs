@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::backend::{GrantBackend, MemoryGrantBackend};
-use super::credential::ProxyCredential;
+use super::secret::GrantCredential;
 use super::{AuthProxyError, MAX_TOKEN_LIFETIME, TOKEN_PREFIX};
 
 /// Length of [`IssuedToken::short_id`].
@@ -27,7 +27,7 @@ const SHORT_ID_LEN: usize = 12;
 ///     run_id: "run-1".to_string(),
 ///     step: "review".to_string(),
 ///     expires_at: 1_700_000_600,
-///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()).into(),
 /// };
 /// assert!(!format!("{request:?}").contains("sk-ant"));
 /// ```
@@ -39,8 +39,9 @@ pub struct TokenRequest {
     pub step: String,
     /// Expiry, in unix seconds.
     pub expires_at: u64,
-    /// Real credential the proxy injects for this token.
-    pub credential: ProxyCredential,
+    /// Real credential the proxy injects for this token: the Claude
+    /// credential, or a proxied secret.
+    pub credential: GrantCredential,
 }
 
 /// A freshly issued opaque token. Its [`Debug`] output never shows the token.
@@ -97,7 +98,7 @@ pub struct Grant {
     /// Expiry, in unix seconds.
     pub expires_at: u64,
     /// Real credential to inject.
-    pub credential: ProxyCredential,
+    pub credential: GrantCredential,
     /// Token id ([`token_id`]).
     pub id: String,
 }
@@ -116,9 +117,13 @@ pub struct Grant {
 /// ```
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TokenRejection {
-    /// The token was never issued, or was revoked.
+    /// The token was never issued, or its revocation is no longer
+    /// remembered (expired since, or lost with an in-memory registry).
     #[error("unknown token")]
     Unknown,
+    /// The token was revoked.
+    #[error("revoked token")]
+    Revoked,
     /// The token has expired.
     #[error("expired token")]
     Expired,
@@ -147,7 +152,7 @@ pub enum TokenRejection {
 ///     run_id: "run-1".to_string(),
 ///     step: "review".to_string(),
 ///     expires_at: 200,
-///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()).into(),
 /// };
 /// let issued = registry.issue(request, 100).await?;
 /// assert_eq!(registry.len().await?, 1);
@@ -195,7 +200,7 @@ impl AuthProxyRegistry {
     ///     run_id: "run-1".to_string(),
     ///     step: "review".to_string(),
     ///     expires_at: 200,
-    ///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+    ///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()).into(),
     /// };
     /// let issued = a.issue(request, 100).await?;
     /// assert!(b.resolve(&issued.token, 150).await.is_ok());
@@ -213,7 +218,9 @@ impl AuthProxyRegistry {
     /// Returns [`AuthProxyError::InvalidRequest`] when `expires_at` is not
     /// after `now` or more than [`MAX_TOKEN_LIFETIME`] away, or when the run,
     /// step or credential is empty, or when the credential holds a character
-    /// outside printable ASCII; [`AuthProxyError::Random`] when the system
+    /// outside printable ASCII, or when a proxied secret fails
+    /// [`SecretCredential::validate`](super::SecretCredential::validate);
+    /// [`AuthProxyError::Random`] when the system
     /// random source fails; [`AuthProxyError::Backend`] when the backend
     /// cannot store the grant.
     ///
@@ -233,12 +240,17 @@ impl AuthProxyRegistry {
         if req.step.is_empty() {
             return Err(invalid("step is empty"));
         }
-        let credential = req.credential.expose();
-        if credential.is_empty() {
-            return Err(invalid("credential is empty"));
-        }
-        if !credential.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(invalid("credential holds characters a header cannot carry"));
+        match &req.credential {
+            GrantCredential::Claude(claude) => {
+                let credential = claude.expose();
+                if credential.is_empty() {
+                    return Err(invalid("credential is empty"));
+                }
+                if !credential.bytes().all(|b| b.is_ascii_graphic()) {
+                    return Err(invalid("credential holds characters a header cannot carry"));
+                }
+            }
+            GrantCredential::Secret(secret) => secret.validate()?,
         }
 
         let mut bytes = [0u8; 32];
@@ -261,8 +273,9 @@ impl AuthProxyRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`TokenRejection::Unknown`] for a token never issued or
-    /// revoked, [`TokenRejection::Expired`] once `expires_at <= now`,
+    /// Returns [`TokenRejection::Unknown`] for a token never issued (or whose
+    /// revocation has been purged), [`TokenRejection::Revoked`] for a revoked
+    /// token, [`TokenRejection::Expired`] once `expires_at <= now`,
     /// [`TokenRejection::Unavailable`] when the backend fails.
     ///
     /// # Examples
@@ -278,7 +291,7 @@ impl AuthProxyRegistry {
     ///     run_id: "run-1".to_string(),
     ///     step: "review".to_string(),
     ///     expires_at: 200,
-    ///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+    ///     credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()).into(),
     /// };
     /// let issued = registry.issue(request, 100).await?;
     /// assert_eq!(
@@ -294,23 +307,25 @@ impl AuthProxyRegistry {
     /// ```
     pub async fn resolve(&self, token: &str, now: u64) -> Result<Grant, TokenRejection> {
         let id = token_id(token);
-        let grant = self
-            .backend
-            .get(&id)
-            .await
-            .map_err(|e| TokenRejection::Unavailable(e.to_string()))?
-            .ok_or(TokenRejection::Unknown)?;
+        let unavailable = |e: AuthProxyError| TokenRejection::Unavailable(e.to_string());
+        let Some(grant) = self.backend.get(&id).await.map_err(unavailable)? else {
+            let revoked = self.backend.is_revoked(&id).await.map_err(unavailable)?;
+            return Err(if revoked {
+                TokenRejection::Revoked
+            } else {
+                TokenRejection::Unknown
+            });
+        };
         if grant.expires_at <= now {
-            self.backend
-                .remove(&id)
-                .await
-                .map_err(|e| TokenRejection::Unavailable(e.to_string()))?;
+            self.backend.remove(&id).await.map_err(unavailable)?;
             return Err(TokenRejection::Expired);
         }
         Ok(grant)
     }
 
-    /// Revoke a token by id. Returns whether it existed.
+    /// Revoke a token by id: its grant (and so its credential) is dropped and
+    /// the id remembered until its expiry, so the token then resolves to
+    /// [`TokenRejection::Revoked`]. Returns whether a live grant existed.
     ///
     /// # Errors
     ///
@@ -320,10 +335,11 @@ impl AuthProxyRegistry {
     ///
     /// See [`AuthProxyRegistry`].
     pub async fn revoke(&self, id: &str) -> Result<bool, AuthProxyError> {
-        self.backend.remove(id).await
+        self.backend.revoke(id).await
     }
 
-    /// Revoke every token of a run. Returns how many were revoked.
+    /// Revoke every token of a run, as [`AuthProxyRegistry::revoke`] does for
+    /// one. Returns how many were revoked.
     ///
     /// # Errors
     ///
@@ -340,10 +356,11 @@ impl AuthProxyRegistry {
     /// # }
     /// ```
     pub async fn revoke_run(&self, run_id: &str) -> Result<usize, AuthProxyError> {
-        self.backend.remove_run(run_id).await
+        self.backend.revoke_run(run_id).await
     }
 
-    /// Drop every grant expired at `now`. Returns how many were dropped.
+    /// Drop every grant expired at `now`, and the revocations of tokens
+    /// expired at `now`. Returns how many grants were dropped.
     ///
     /// # Errors
     ///
@@ -442,7 +459,10 @@ pub fn admin_key_matches(expected: &str, presented: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::CredentialKind;
+    use serde_json::{from_value, json};
+
+    use super::super::secret::{HostPattern, SecretCredential, SecretInjection};
+    use super::super::{CredentialKind, ProxyCredential};
     use super::*;
 
     const NOW: u64 = 1_700_000_000;
@@ -455,7 +475,8 @@ mod tests {
             credential: ProxyCredential::new(
                 CredentialKind::OauthToken,
                 "sk-ant-oat01-test".to_string(),
-            ),
+            )
+            .into(),
         }
     }
 
@@ -479,7 +500,12 @@ mod tests {
         assert_eq!(grant.expires_at, NOW + 600);
         assert_eq!(grant.id, issued.id);
         assert_eq!(grant.credential.expose(), "sk-ant-oat01-test");
-        assert_eq!(grant.credential.kind(), CredentialKind::OauthToken);
+        match grant.credential {
+            GrantCredential::Claude(claude) => {
+                assert_eq!(claude.kind(), CredentialKind::OauthToken)
+            }
+            other => panic!("expected a Claude credential, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -520,7 +546,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revoke_makes_token_unknown() {
+    async fn revoked_token_resolves_to_revoked() {
         let registry = AuthProxyRegistry::default();
         let issued = registry
             .issue(request("run-1", NOW + 600), NOW)
@@ -530,7 +556,7 @@ mod tests {
         assert!(!registry.revoke(&issued.id).await.unwrap());
         assert_eq!(
             registry.resolve(&issued.token, NOW).await.unwrap_err(),
-            TokenRejection::Unknown
+            TokenRejection::Revoked
         );
     }
 
@@ -551,8 +577,14 @@ mod tests {
             .unwrap();
         assert_eq!(registry.revoke_run("run-a").await.unwrap(), 2);
         assert_eq!(registry.revoke_run("run-a").await.unwrap(), 0);
-        assert!(registry.resolve(&a1.token, NOW).await.is_err());
-        assert!(registry.resolve(&a2.token, NOW).await.is_err());
+        assert_eq!(
+            registry.resolve(&a1.token, NOW).await.unwrap_err(),
+            TokenRejection::Revoked
+        );
+        assert_eq!(
+            registry.resolve(&a2.token, NOW).await.unwrap_err(),
+            TokenRejection::Revoked
+        );
         assert_eq!(
             registry.resolve(&b.token, NOW).await.unwrap().run_id,
             "run-b"
@@ -608,7 +640,7 @@ mod tests {
     async fn issue_rejects_empty_credential() {
         let registry = AuthProxyRegistry::default();
         let mut req = request("run-1", NOW + 600);
-        req.credential = ProxyCredential::new(CredentialKind::ApiKey, String::new());
+        req.credential = ProxyCredential::new(CredentialKind::ApiKey, String::new()).into();
         assert_eq!(
             invalid_message(registry.issue(req, NOW).await),
             "credential is empty"
@@ -625,7 +657,8 @@ mod tests {
         );
 
         let mut req = request("run-1", NOW + 600);
-        req.credential = ProxyCredential::new(CredentialKind::OauthToken, "tok\nen".to_string());
+        req.credential =
+            ProxyCredential::new(CredentialKind::OauthToken, "tok\nen".to_string()).into();
         let message = invalid_message(registry.issue(req, NOW).await);
         assert!(message.contains("header cannot carry"), "{message}");
         assert!(registry.is_empty().await.unwrap());
@@ -683,7 +716,7 @@ mod tests {
         assert!(b.revoke(&issued.id).await.unwrap());
         assert_eq!(
             a.resolve(&issued.token, NOW + 1).await.unwrap_err(),
-            TokenRejection::Unknown
+            TokenRejection::Revoked
         );
         assert!(a.is_empty().await.unwrap());
     }
@@ -714,5 +747,139 @@ mod tests {
         assert!(!admin_key_matches(key, "0123"));
         assert!(!admin_key_matches(key, ""));
         assert!(!admin_key_matches("", key));
+    }
+
+    fn secret_request(run_id: &str, injection: SecretInjection, hosts: &[&str]) -> TokenRequest {
+        TokenRequest {
+            run_id: run_id.to_string(),
+            step: "review".to_string(),
+            expires_at: NOW + 600,
+            credential: SecretCredential::new(
+                "GITHUB_TOKEN".to_string(),
+                "ghp_test".to_string(),
+                injection,
+                hosts
+                    .iter()
+                    .map(|h| HostPattern::parse(h).unwrap())
+                    .collect(),
+            )
+            .into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_run_tombstones_every_grant() {
+        let registry = AuthProxyRegistry::default();
+        let claude = registry
+            .issue(request("run-a", NOW + 600), NOW)
+            .await
+            .unwrap();
+        let secret = registry
+            .issue(
+                secret_request("run-a", SecretInjection::Bearer, &["api.github.com"]),
+                NOW,
+            )
+            .await
+            .unwrap();
+        assert_eq!(registry.revoke_run("run-a").await.unwrap(), 2);
+        for token in [&claude.token, &secret.token] {
+            assert_eq!(
+                registry.resolve(token, NOW).await.unwrap_err(),
+                TokenRejection::Revoked
+            );
+        }
+        assert!(registry.is_empty().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn purge_drops_expired_tombstones() {
+        let registry = AuthProxyRegistry::default();
+        let issued = registry
+            .issue(request("run-1", NOW + 600), NOW)
+            .await
+            .unwrap();
+        assert!(registry.revoke(&issued.id).await.unwrap());
+        assert_eq!(registry.purge_expired(NOW + 599).await.unwrap(), 0);
+        assert_eq!(
+            registry.resolve(&issued.token, NOW).await.unwrap_err(),
+            TokenRejection::Revoked
+        );
+        assert_eq!(registry.purge_expired(NOW + 600).await.unwrap(), 0);
+        assert_eq!(
+            registry.resolve(&issued.token, NOW).await.unwrap_err(),
+            TokenRejection::Unknown
+        );
+    }
+
+    #[tokio::test]
+    async fn issue_secret_with_empty_hosts_is_invalid() {
+        let registry = AuthProxyRegistry::default();
+        let req = secret_request("run-1", SecretInjection::Bearer, &[]);
+        let message = invalid_message(registry.issue(req, NOW).await);
+        assert!(message.contains("empty host allowlist"), "{message}");
+        assert!(registry.is_empty().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn issue_secret_with_bad_host_is_invalid() {
+        let body = json!({
+            "run_id": "run-1",
+            "step": "review",
+            "expires_at": NOW + 600,
+            "credential": {
+                "name": "GITHUB_TOKEN",
+                "value": "ghp_test",
+                "injection": "bearer",
+                "hosts": [".*github.com"]
+            }
+        });
+        assert!(from_value::<TokenRequest>(body).is_err());
+
+        let registry = AuthProxyRegistry::default();
+        let req = secret_request(
+            "run-1",
+            SecretInjection::Header("Host".to_string()),
+            &["api.github.com"],
+        );
+        let message = invalid_message(registry.issue(req, NOW).await);
+        assert!(message.contains("managed by the proxy"), "{message}");
+
+        let mut req = secret_request("run-1", SecretInjection::Bearer, &["api.github.com"]);
+        req.credential = SecretCredential::new(
+            "GITHUB_TOKEN".to_string(),
+            "ghp test".to_string(),
+            SecretInjection::Bearer,
+            vec![HostPattern::parse("api.github.com").unwrap()],
+        )
+        .into();
+        let message = invalid_message(registry.issue(req, NOW).await);
+        assert!(!message.contains("ghp test"), "{message}");
+        assert!(registry.is_empty().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn issue_then_resolve_secret_grant() {
+        let registry = AuthProxyRegistry::default();
+        let injection = SecretInjection::Basic {
+            username: "oauth2".to_string(),
+        };
+        let issued = registry
+            .issue(
+                secret_request("run-1", injection.clone(), &["gitlab.com"]),
+                NOW,
+            )
+            .await
+            .unwrap();
+        let grant = registry.resolve(&issued.token, NOW + 1).await.unwrap();
+        assert_eq!(grant.run_id, "run-1");
+        match grant.credential {
+            GrantCredential::Secret(secret) => {
+                assert_eq!(secret.name(), "GITHUB_TOKEN");
+                assert_eq!(secret.expose(), "ghp_test");
+                assert_eq!(secret.injection(), &injection);
+                assert!(secret.allows_host("gitlab.com"));
+            }
+            other => panic!("expected a secret, got {other:?}"),
+        }
     }
 }

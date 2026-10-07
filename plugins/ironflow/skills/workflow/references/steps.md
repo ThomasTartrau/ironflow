@@ -846,6 +846,18 @@ on the step, or `K8sEphemeralProvider::runtime_class("gvisor")` for every step o
 provider (the step value wins). `PodRun::runtime_class` does the same for a pod you build
 yourself. The cluster must define a matching `RuntimeClass`.
 
+With `K8sEphemeralProvider::auth_proxy`, a GitHub or GitLab token (any API secret) stays
+out of the pod too: declare it with `AgentConfig::proxied_secret(ProxiedSecret { name,
+env, value, injection, hosts })` on the step, or `K8sEphemeralProvider::proxied_secret`
+for every step (a step entry replaces the provider entry with the same `env`).
+`ProxiedSecret` and `SecretInjection` come from `ironflow_core::auth_proxy`. The pod gets
+an opaque token in `<env>` and `<proxy>/r` in `<env>_URL`, and calls
+`$<env>_URL/<host>/<path>`; the proxy injects the real secret for the hosts of `hosts`
+only (exact names or `*.domain`) and answers 403 elsewhere. `SecretInjection::Basic {
+username }` also rewrites `https://<host>/` in the pod's git config, so `git clone` goes
+through the proxy unchanged. Prefer it to `env_from_secret` for any token the agent uses
+over HTTPS. A proxied secret without `auth_proxy` fails the step.
+
 ## Parallel
 
 ```rust,no_run

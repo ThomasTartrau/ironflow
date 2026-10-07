@@ -6,6 +6,15 @@
 # token here; the proxy swaps it for the real credential and relays to
 # api.anthropic.com only.
 #
+# Proxied secrets (K8sEphemeralProvider::proxied_secret): the pod gets another
+# opaque token per secret and calls /r/<host>/<path>; the proxy checks the host
+# against the secret allowlist, injects the real secret and relays to
+# https://<host>/<path>. Every allowlisted host must also be opened in policy
+# (b) of cilium-egress-auth-proxy.yaml.
+#
+# Prometheus metrics (ironflow_auth_proxy_requests_total{secret, result}) are
+# served at /metrics on the http port (8080), next to the relay.
+#
 # Create the admin key before applying, in this namespace and in the worker's
 # environment (IRONFLOW_AUTH_PROXY_ADMIN_KEY):
 #

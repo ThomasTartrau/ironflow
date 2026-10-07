@@ -1,17 +1,21 @@
 //! What the proxy accepts from a pod and what it forwards each way.
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use reqwest::Method;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
 use super::OAUTH_BETA;
 use super::credential::{CredentialKind, ProxyCredential};
+use super::secret::{SecretCredential, SecretInjection};
 
 const X_API_KEY: &str = "x-api-key";
+const PRIVATE_TOKEN: &str = "private-token";
 const ANTHROPIC_BETA: &str = "anthropic-beta";
 
 /// Headers that only make sense on one connection.
-const HOP_BY_HOP: [&str; 9] = [
+pub(super) const HOP_BY_HOP: [&str; 9] = [
     "connection",
     "keep-alive",
     "proxy-authenticate",
@@ -24,11 +28,13 @@ const HOP_BY_HOP: [&str; 9] = [
 ];
 
 /// Request headers never forwarded upstream on top of [`HOP_BY_HOP`]: the
-/// opaque token, the pod's host, the body length (recomputed), the encoding
-/// negotiation (the proxy relays identity bodies) and cookies.
-const REQUEST_DROPPED: [&str; 6] = [
+/// opaque token (whichever header carries it), the pod's host, the body
+/// length (recomputed), the encoding negotiation (the proxy relays identity
+/// bodies) and cookies.
+const REQUEST_DROPPED: [&str; 7] = [
     "authorization",
     X_API_KEY,
+    PRIVATE_TOKEN,
     "host",
     "content-length",
     "accept-encoding",
@@ -39,8 +45,10 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
     HOP_BY_HOP.contains(&name.as_str())
 }
 
-/// The opaque token a pod presents: `Authorization: Bearer <token>` (scheme
-/// case-insensitive), else `x-api-key`. `None` when absent or empty.
+/// The opaque token a pod presents, in this order: `Authorization: Bearer
+/// <token>` (scheme case-insensitive), `x-api-key`, `Private-Token`, then the
+/// password of `Authorization: Basic base64(<user>:<token>)` (what git sends).
+/// `None` when absent or empty.
 ///
 /// # Examples
 ///
@@ -54,26 +62,64 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// assert_eq!(extract_opaque_token(&HeaderMap::new()), None);
 /// ```
 pub fn extract_opaque_token(headers: &HeaderMap) -> Option<String> {
-    let bearer = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().split_once(' '))
-        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map(|(_, token)| token.trim())
-        .filter(|token| !token.is_empty());
-    let api_key = || {
+    let scheme_value = |wanted: &str| {
         headers
-            .get(X_API_KEY)
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().split_once(' '))
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case(wanted))
+            .map(|(_, rest)| rest.trim())
+    };
+    let plain = |name: &str| {
+        headers
+            .get(name)
             .and_then(|value| value.to_str().ok())
             .map(str::trim)
             .filter(|token| !token.is_empty())
+            .map(str::to_string)
     };
-    bearer.or_else(api_key).map(str::to_string)
+    let basic = || {
+        scheme_value("basic")
+            .and_then(|encoded| STANDARD.decode(encoded).ok())
+            .and_then(|decoded| String::from_utf8(decoded).ok())
+            .and_then(|pair| {
+                pair.split_once(':')
+                    .map(|(_, password)| password.trim().to_string())
+            })
+            .filter(|token| !token.is_empty())
+    };
+    scheme_value("bearer")
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .or_else(|| plain(X_API_KEY))
+        .or_else(|| plain(PRIVATE_TOKEN))
+        .or_else(basic)
 }
 
-/// Whether the proxy relays `path`: it starts with `/v1/`, only holds
-/// `[A-Za-z0-9/_.-]` (so no percent-encoding), and has no `..` segment and no
-/// `//`.
+/// Whether the proxy relays `path` at all: it starts with `/`, only holds
+/// `[A-Za-z0-9/_.-]` (so no percent-encoding), and has no `..` segment and
+/// no `//`.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::auth_proxy::is_relay_path;
+///
+/// assert!(is_relay_path("/group/project.git/info/refs"));
+/// assert!(!is_relay_path("/a/../b"));
+/// assert!(!is_relay_path("/a%2Fb"));
+/// ```
+pub fn is_relay_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '.' | '-'))
+        && !path.contains("//")
+        && !path.split('/').any(|segment| segment == "..")
+}
+
+/// Whether the proxy relays `path` to the Anthropic API: it starts with
+/// `/v1/` and passes [`is_relay_path`].
 ///
 /// # Examples
 ///
@@ -85,15 +131,10 @@ pub fn extract_opaque_token(headers: &HeaderMap) -> Option<String> {
 /// assert!(!is_allowed_path("/v1/%2e%2e/x"));
 /// ```
 pub fn is_allowed_path(path: &str) -> bool {
-    path.starts_with("/v1/")
-        && path
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '.' | '-'))
-        && !path.contains("//")
-        && !path.split('/').any(|segment| segment == "..")
+    path.starts_with("/v1/") && is_relay_path(path)
 }
 
-/// Whether the proxy relays `method`: GET and POST only.
+/// Whether the proxy relays `method` to the Anthropic API: GET and POST only.
 ///
 /// # Examples
 ///
@@ -106,6 +147,31 @@ pub fn is_allowed_path(path: &str) -> bool {
 /// ```
 pub fn is_allowed_method(method: &Method) -> bool {
     method == Method::GET || method == Method::POST
+}
+
+/// Whether the proxy relays `method` for a proxied secret: GET, HEAD, POST,
+/// PUT, PATCH and DELETE (git push and REST APIs need more than GET/POST).
+/// CONNECT, TRACE and OPTIONS are refused.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::auth_proxy::is_relay_method;
+/// use reqwest::Method;
+///
+/// assert!(is_relay_method(&Method::PUT));
+/// assert!(!is_relay_method(&Method::CONNECT));
+/// ```
+pub fn is_relay_method(method: &Method) -> bool {
+    [
+        Method::GET,
+        Method::HEAD,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+    ]
+    .contains(method)
 }
 
 /// Headers sent upstream: the pod's headers minus the opaque token,
@@ -148,6 +214,80 @@ pub fn upstream_headers(incoming: &HeaderMap, credential: &ProxyCredential) -> H
                 headers.insert(X_API_KEY, value);
             }
         }
+    }
+    headers
+}
+
+/// Headers sent upstream for a proxied secret: the pod's headers minus the
+/// opaque token (`authorization`, `x-api-key`, `private-token`), hop-by-hop
+/// headers, `host`, `content-length`, `accept-encoding`, `cookie` and the
+/// custom header of a [`SecretInjection::Header`], plus the real secret,
+/// marked sensitive:
+///
+/// | Injection | Header sent |
+/// |---|---|
+/// | [`SecretInjection::Bearer`] | `authorization: Bearer <secret>` |
+/// | [`SecretInjection::PrivateToken`] | `private-token: <secret>` |
+/// | [`SecretInjection::XApiKey`] | `x-api-key: <secret>` |
+/// | [`SecretInjection::Header`] | `<header>: <secret>` |
+/// | [`SecretInjection::Basic`] | `authorization: Basic base64(<username>:<secret>)` |
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::auth_proxy::{
+///     HostPattern, SecretCredential, SecretInjection, secret_upstream_headers,
+/// };
+/// use reqwest::header::{HeaderMap, HeaderValue};
+///
+/// # fn example() -> Result<(), ironflow_core::auth_proxy::AuthProxyError> {
+/// let mut incoming = HeaderMap::new();
+/// incoming.insert("private-token", HeaderValue::from_static("ifap_abc"));
+/// let secret = SecretCredential::new(
+///     "GITLAB_TOKEN".to_string(),
+///     "glpat-x".to_string(),
+///     SecretInjection::PrivateToken,
+///     vec![HostPattern::parse("gitlab.com")?],
+/// );
+/// let headers = secret_upstream_headers(&incoming, &secret);
+/// assert!(headers.get("private-token").is_some_and(|v| v == "glpat-x" && v.is_sensitive()));
+/// # Ok(())
+/// # }
+/// ```
+pub fn secret_upstream_headers(incoming: &HeaderMap, secret: &SecretCredential) -> HeaderMap {
+    let custom = match secret.injection() {
+        SecretInjection::Header(name) => HeaderName::from_bytes(name.as_bytes()).ok(),
+        _ => None,
+    };
+    let mut headers = HeaderMap::new();
+    for (name, value) in incoming {
+        if !is_hop_by_hop(name)
+            && !REQUEST_DROPPED.contains(&name.as_str())
+            && custom.as_ref() != Some(name)
+        {
+            headers.append(name.clone(), value.clone());
+        }
+    }
+
+    let value = secret.expose();
+    let (name, raw) = match secret.injection() {
+        SecretInjection::Bearer => (AUTHORIZATION, format!("Bearer {value}")),
+        SecretInjection::PrivateToken => {
+            (HeaderName::from_static(PRIVATE_TOKEN), value.to_string())
+        }
+        SecretInjection::XApiKey => (HeaderName::from_static(X_API_KEY), value.to_string()),
+        SecretInjection::Basic { username } => (
+            AUTHORIZATION,
+            format!("Basic {}", STANDARD.encode(format!("{username}:{value}"))),
+        ),
+        SecretInjection::Header(_) => match custom {
+            Some(name) => (name, value.to_string()),
+            // Refused at issuance: nothing to inject.
+            None => return headers,
+        },
+    };
+    if let Some(value) = sensitive_value(&raw) {
+        headers.insert(name, value);
     }
     headers
 }
@@ -227,6 +367,7 @@ pub fn error_body(kind: &str, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use super::super::secret::HostPattern;
     use super::*;
 
     fn oauth() -> ProxyCredential {
@@ -441,5 +582,162 @@ mod tests {
             body,
             json!({"type": "error", "error": {"type": "permission_error", "message": "nope"}})
         );
+    }
+
+    fn secret(injection: SecretInjection) -> SecretCredential {
+        SecretCredential::new(
+            "GITHUB_TOKEN".to_string(),
+            "ghp_test".to_string(),
+            injection,
+            vec![HostPattern::parse("api.github.com").unwrap()],
+        )
+    }
+
+    /// Every header the pod could carry its opaque token in.
+    fn pod_headers() -> HeaderMap {
+        headers(&[
+            ("authorization", "Bearer ifap_abc"),
+            ("x-api-key", "ifap_abc"),
+            ("private-token", "ifap_abc"),
+            ("x-vault-token", "ifap_abc"),
+            ("host", "ironflow-auth-proxy"),
+            ("cookie", "a=b"),
+            ("connection", "keep-alive"),
+            ("accept", "application/json"),
+        ])
+    }
+
+    fn assert_no_opaque_token(out: &HeaderMap) {
+        for (name, value) in out {
+            assert!(
+                !value.as_bytes().windows(4).any(|w| w == b"ifap"),
+                "{name} still carries the opaque token"
+            );
+        }
+        for name in ["host", "cookie", "connection"] {
+            assert!(out.get(name).is_none(), "{name} must be dropped");
+        }
+        assert_eq!(out.get("accept").unwrap(), "application/json");
+    }
+
+    #[test]
+    fn private_token_is_extracted() {
+        let pod = headers(&[("private-token", "ifap_pt")]);
+        assert_eq!(extract_opaque_token(&pod).as_deref(), Some("ifap_pt"));
+        let empty = headers(&[("private-token", " ")]);
+        assert_eq!(extract_opaque_token(&empty), None);
+    }
+
+    #[test]
+    fn basic_password_is_extracted() {
+        let encoded = format!("Basic {}", STANDARD.encode("oauth2:ifap_x"));
+        let mut pod = HeaderMap::new();
+        pod.insert(AUTHORIZATION, HeaderValue::from_str(&encoded).unwrap());
+        assert_eq!(extract_opaque_token(&pod).as_deref(), Some("ifap_x"));
+
+        let encoded = format!("basic {}", STANDARD.encode("oauth2:"));
+        let mut empty = HeaderMap::new();
+        empty.insert(AUTHORIZATION, HeaderValue::from_str(&encoded).unwrap());
+        assert_eq!(extract_opaque_token(&empty), None);
+
+        let encoded = format!("Basic {}", STANDARD.encode("no-colon"));
+        let mut no_colon = HeaderMap::new();
+        no_colon.insert(AUTHORIZATION, HeaderValue::from_str(&encoded).unwrap());
+        assert_eq!(extract_opaque_token(&no_colon), None);
+    }
+
+    #[test]
+    fn relay_paths() {
+        for path in ["/", "/user", "/group/project.git/info/refs", "/v1/messages"] {
+            assert!(is_relay_path(path), "{path} must be accepted");
+        }
+        for path in [
+            "", "user", "/..", "/a/../b", "//x", "/a//b", "/a%2Fb", "/a b", "/a?b",
+        ] {
+            assert!(!is_relay_path(path), "{path} must be refused");
+        }
+    }
+
+    #[test]
+    fn relay_methods() {
+        for method in [
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ] {
+            assert!(is_relay_method(&method), "{method}");
+        }
+        for method in [Method::CONNECT, Method::TRACE, Method::OPTIONS] {
+            assert!(!is_relay_method(&method), "{method}");
+        }
+    }
+
+    #[test]
+    fn secret_headers_bearer() {
+        let out = secret_upstream_headers(&pod_headers(), &secret(SecretInjection::Bearer));
+        let auth = out.get(AUTHORIZATION).unwrap();
+        assert_eq!(auth, "Bearer ghp_test");
+        assert!(auth.is_sensitive());
+        assert!(out.get(X_API_KEY).is_none());
+        assert!(out.get(PRIVATE_TOKEN).is_none());
+        assert!(out.get(ANTHROPIC_BETA).is_none());
+        assert_eq!(out.get("x-vault-token").unwrap(), "ifap_abc");
+    }
+
+    #[test]
+    fn secret_headers_private_token() {
+        let mut pod = pod_headers();
+        pod.remove("x-vault-token");
+        let out = secret_upstream_headers(&pod, &secret(SecretInjection::PrivateToken));
+        let value = out.get(PRIVATE_TOKEN).unwrap();
+        assert_eq!(value, "ghp_test");
+        assert!(value.is_sensitive());
+        assert!(out.get(AUTHORIZATION).is_none());
+        assert!(out.get(X_API_KEY).is_none());
+        assert_no_opaque_token(&out);
+    }
+
+    #[test]
+    fn secret_headers_x_api_key() {
+        let mut pod = pod_headers();
+        pod.remove("x-vault-token");
+        let out = secret_upstream_headers(&pod, &secret(SecretInjection::XApiKey));
+        let value = out.get(X_API_KEY).unwrap();
+        assert_eq!(value, "ghp_test");
+        assert!(value.is_sensitive());
+        assert!(out.get(AUTHORIZATION).is_none());
+        assert!(out.get(PRIVATE_TOKEN).is_none());
+        assert_no_opaque_token(&out);
+    }
+
+    #[test]
+    fn secret_headers_custom_header() {
+        let injection = SecretInjection::Header("X-Vault-Token".to_string());
+        let out = secret_upstream_headers(&pod_headers(), &secret(injection));
+        let value = out.get("x-vault-token").unwrap();
+        assert_eq!(value, "ghp_test");
+        assert!(value.is_sensitive());
+        assert_eq!(out.get_all("x-vault-token").iter().count(), 1);
+        assert!(out.get(AUTHORIZATION).is_none());
+        assert_no_opaque_token(&out);
+    }
+
+    #[test]
+    fn secret_headers_basic() {
+        let mut pod = pod_headers();
+        pod.remove("x-vault-token");
+        let injection = SecretInjection::Basic {
+            username: "oauth2".to_string(),
+        };
+        let out = secret_upstream_headers(&pod, &secret(injection));
+        let auth = out.get(AUTHORIZATION).unwrap();
+        assert!(auth.is_sensitive());
+        let encoded = auth.to_str().unwrap().strip_prefix("Basic ").unwrap();
+        assert_eq!(STANDARD.decode(encoded).unwrap(), b"oauth2:ghp_test");
+        assert!(out.get(PRIVATE_TOKEN).is_none());
+        assert_no_opaque_token(&out);
     }
 }

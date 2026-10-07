@@ -38,7 +38,7 @@ struct RevokedCount {
 ///         run_id: "run-1".to_string(),
 ///         step: "review".to_string(),
 ///         expires_at: 1_700_000_600,
-///         credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()),
+///         credential: ProxyCredential::new(CredentialKind::OauthToken, "sk-ant-oat01-x".to_string()).into(),
 ///     })
 ///     .await?;
 /// client.revoke(&issued.id).await?;

@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ironflow_core::auth_proxy::{
-    AuthProxyError, AuthProxyRegistry, CredentialKind, IssuedToken, ProxyCredential,
-    TokenRejection, TokenRequest, token_id,
+    AuthProxyError, AuthProxyRegistry, CredentialKind, GrantCredential, HostPattern, IssuedToken,
+    ProxyCredential, SecretCredential, SecretInjection, TokenRejection, TokenRequest, token_id,
 };
 use ironflow_store::crypto::KeyRing;
 use ironflow_store::postgres::PostgresStore;
@@ -89,7 +89,7 @@ fn request(run_id: &str, expires_at: u64) -> TokenRequest {
         run_id: run_id.to_string(),
         step: "review".to_string(),
         expires_at,
-        credential: ProxyCredential::new(CredentialKind::OauthToken, CREDENTIAL.to_string()),
+        credential: ProxyCredential::new(CredentialKind::OauthToken, CREDENTIAL.to_string()).into(),
     }
 }
 
@@ -105,6 +105,16 @@ async fn issue(registry: &AuthProxyRegistry, run_id: &str) -> IssuedToken {
 async fn count_rows(pool: &PgPool, run_id: &str) -> i64 {
     query("SELECT COUNT(*) AS count FROM ironflow.auth_proxy_grants WHERE run_id = $1")
         .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("count")
+        .get("count")
+}
+
+/// Revocation tombstones of the grant `id`, read straight from the table.
+async fn count_tombstones(pool: &PgPool, id: &str) -> i64 {
+    query("SELECT COUNT(*) AS count FROM ironflow.auth_proxy_revocations WHERE id = $1")
+        .bind(id)
         .fetch_one(pool)
         .await
         .expect("count")
@@ -131,7 +141,10 @@ async fn grant_survives_a_restart() {
     assert_eq!(grant.id, issued.id);
     assert_eq!(grant.run_id, run_id);
     assert_eq!(grant.step, "review");
-    assert_eq!(grant.credential.kind(), CredentialKind::OauthToken);
+    match &grant.credential {
+        GrantCredential::Claude(claude) => assert_eq!(claude.kind(), CredentialKind::OauthToken),
+        other => panic!("expected a Claude credential, got {other:?}"),
+    }
     assert_eq!(grant.credential.expose(), CREDENTIAL);
 
     restarted.revoke_run(&run_id).await.expect("cleanup");
@@ -150,11 +163,11 @@ async fn two_replicas_share_revocation() {
     assert_eq!(b.revoke_run(&run_id).await.expect("revoke run"), 2);
     assert_eq!(
         a.resolve(&first.token, now()).await.unwrap_err(),
-        TokenRejection::Unknown
+        TokenRejection::Revoked
     );
     assert_eq!(
         a.resolve(&second.token, now()).await.unwrap_err(),
-        TokenRejection::Unknown
+        TokenRejection::Revoked
     );
     assert_eq!(a.revoke_run(&run_id).await.expect("revoke run"), 0);
 }
@@ -171,7 +184,7 @@ async fn single_revocation_is_seen_by_another_replica() {
     assert!(!a.revoke(&issued.id).await.expect("revoke again"));
     assert_eq!(
         a.resolve(&issued.token, now()).await.unwrap_err(),
-        TokenRejection::Unknown
+        TokenRejection::Revoked
     );
 }
 
@@ -293,4 +306,99 @@ async fn wrong_key_ring_cannot_read_grant() {
     }
 
     writer.revoke_run(&run_id).await.expect("cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires a live PostgreSQL database"]
+async fn secret_grant_round_trips_encrypted() {
+    const SECRET: &str = "glpat-postgres-test";
+    let run_id = unique_run("secret");
+    let writer = registry(store_with_key(0xaa).await);
+    let now = now();
+    let request = TokenRequest {
+        credential: SecretCredential::new(
+            "GITLAB_TOKEN".to_string(),
+            SECRET.to_string(),
+            SecretInjection::PrivateToken,
+            vec![
+                HostPattern::parse("gitlab.com").expect("host"),
+                HostPattern::parse("*.gitlab.example.org").expect("host"),
+            ],
+        )
+        .into(),
+        ..request(&run_id, now + 600)
+    };
+    let issued = writer.issue(request, now).await.expect("issue");
+
+    let restarted = registry(store_with_key(0xaa).await);
+    let grant = restarted
+        .resolve(&issued.token, now)
+        .await
+        .expect("grant survives");
+    match &grant.credential {
+        GrantCredential::Secret(secret) => {
+            assert_eq!(secret.name(), "GITLAB_TOKEN");
+            assert_eq!(secret.expose(), SECRET);
+            assert_eq!(secret.injection(), &SecretInjection::PrivateToken);
+            let hosts: Vec<&str> = secret.hosts().iter().map(HostPattern::as_str).collect();
+            assert_eq!(hosts, vec!["gitlab.com", "*.gitlab.example.org"]);
+        }
+        other => panic!("expected a secret credential, got {other:?}"),
+    }
+
+    let pool = raw_pool().await;
+    let row = query(
+        "SELECT credential_kind, secret_spec::text AS spec, encrypted_credential FROM ironflow.auth_proxy_grants WHERE run_id = $1",
+    )
+    .bind(&run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("row exists");
+    let kind: String = row.get("credential_kind");
+    let spec: String = row.get("spec");
+    let encrypted: Vec<u8> = row.get("encrypted_credential");
+    assert_eq!(kind, "secret");
+    assert!(spec.contains("GITLAB_TOKEN"), "{spec}");
+    assert!(!spec.contains(SECRET), "{spec}");
+    assert!(!contains(&encrypted, SECRET.as_bytes()));
+    let text: String = query(ROW_AS_TEXT)
+        .bind(&run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("row exists")
+        .get("row_text");
+    assert!(!text.contains(SECRET), "{text}");
+    assert!(!text.contains(&issued.token), "{text}");
+
+    restarted.revoke_run(&run_id).await.expect("cleanup");
+}
+
+#[tokio::test]
+#[ignore = "requires a live PostgreSQL database"]
+async fn revoked_tombstone_is_purged_at_expiry() {
+    let run_id = unique_run("tombstone");
+    let registry = registry(store_with_key(0xaa).await);
+    let pool = raw_pool().await;
+    // Same window as `purge_expired_deletes_expired_rows`: older than the
+    // grant of `expired_grant_is_rejected_and_removed_on_resolve`.
+    let past_now = now() - 7_200;
+    let issued = registry
+        .issue(request(&run_id, past_now + 10), past_now)
+        .await
+        .expect("issue");
+
+    assert!(registry.revoke(&issued.id).await.expect("revoke"));
+    assert_eq!(count_rows(&pool, &run_id).await, 0);
+    assert_eq!(count_tombstones(&pool, &issued.id).await, 1);
+    assert_eq!(
+        registry.resolve(&issued.token, past_now).await.unwrap_err(),
+        TokenRejection::Revoked
+    );
+
+    registry.purge_expired(past_now + 10).await.expect("purge");
+    assert_eq!(count_tombstones(&pool, &issued.id).await, 0);
+    assert_eq!(
+        registry.resolve(&issued.token, past_now).await.unwrap_err(),
+        TokenRejection::Unknown
+    );
 }

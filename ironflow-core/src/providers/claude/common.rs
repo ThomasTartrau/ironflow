@@ -1841,6 +1841,7 @@ mod tests {
             retry: None,
             trace_context: None,
             account: None,
+            proxied_secrets: Vec::new(),
             max_capacity_wait: None,
             account_name: None,
             account_pool: None,

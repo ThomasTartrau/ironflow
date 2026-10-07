@@ -8,14 +8,36 @@
 //! which swaps it for the real credential and relays the request to
 //! `api.anthropic.com`, streaming the answer back.
 //!
+//! The same mechanism keeps other secrets (a GitHub or GitLab token, an API
+//! key) out of the pod: a grant can hold a proxied secret with a host
+//! allowlist instead of the Claude credential. The pod calls
+//! `/r/<host>/<path>` with its opaque token (as `Authorization: Bearer`,
+//! `x-api-key`, `Private-Token` or the password of `Authorization: Basic`),
+//! and the proxy relays to `https://<host>/<path>` with the real secret
+//! injected the way the grant says (bearer, `Private-Token`, `x-api-key`, a
+//! named header or Basic). A host outside the allowlist (exact names or a
+//! leading `*.`, no port, no IP) gets a 403, so does a Claude token on `/r/`
+//! and a secret token on the Anthropic API. Redirects are returned to the
+//! pod, never followed.
+//!
 //! One listener serves:
 //!
 //! * `GET /healthz` - liveness;
+//! * `GET /metrics` - Prometheus metrics, when a recorder handle is given
+//!   ([`AuthProxyState::with_metrics`]): [`REQUESTS_TOTAL`] counts the `/r/`
+//!   requests by `secret` name and `result`;
 //! * `/admin/v1/...` - token issuance and revocation, behind
 //!   `Authorization: Bearer <IRONFLOW_AUTH_PROXY_ADMIN_KEY>`;
-//! * anything else - the relay: an unknown, expired or revoked token gets a
-//!   401, a path outside `/v1/` or a request for another host a 403, a method
-//!   other than GET/POST a 405.
+//! * `/r/<host>/<path>` - the relay of proxied secrets: an unknown, expired
+//!   or revoked token gets a 401, a host outside the allowlist or a path with
+//!   `..`, `//` or percent-encoding a 403, CONNECT, TRACE or OPTIONS a 405.
+//!   Each request logs one `secret relay` event with its `result`
+//!   (`relayed`, `forbidden_host`, `forbidden_path`, `forbidden_method`,
+//!   `unknown_token`, `expired`, `revoked`, `upstream_error`,
+//!   `unavailable`);
+//! * anything else - the Anthropic relay: an unknown, expired or revoked
+//!   token gets a 401, a path outside `/v1/` or a request for another host a
+//!   403, a method other than GET/POST a 405.
 //!
 //! Grants live in a registry with two backends:
 //!
@@ -25,7 +47,8 @@
 //!   SHA-256 is stored, never the token, and the credential is AES-256-GCM
 //!   encrypted at rest with the `IRONFLOW_SECRET_KEYS` key ring.
 //!
-//! Logs never contain a token or a credential, only the short token id.
+//! Logs never contain a token, a credential, a secret, a header or a query
+//! string, only the short token id.
 //!
 //! # Examples
 //!
@@ -60,12 +83,14 @@ use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
-use axum::http::header::AUTHORIZATION;
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::serve as serve_router;
 use axum::{Json, Router};
+use metrics::counter;
+use metrics_exporter_prometheus::PrometheusHandle;
 use reqwest::redirect::Policy;
 use reqwest::{Client, Error as ReqwestError};
 use serde_json::{from_slice, json};
@@ -80,9 +105,10 @@ use tracing::{info, warn};
 use url::Url;
 
 use ironflow_core::auth_proxy::{
-    AuthProxyError, AuthProxyRegistry, DEFAULT_UPSTREAM, TokenRejection, TokenRequest,
-    admin_key_matches, downstream_headers, error_body, extract_opaque_token, is_allowed_method,
-    is_allowed_path, upstream_headers,
+    AuthProxyError, AuthProxyRegistry, DEFAULT_UPSTREAM, Grant, GrantCredential, RELAY_PREFIX,
+    TokenRejection, TokenRequest, admin_key_matches, downstream_headers, error_body,
+    extract_opaque_token, is_allowed_method, is_allowed_path, is_relay_method, is_relay_path,
+    is_valid_request_host, secret_upstream_headers, upstream_headers,
 };
 use ironflow_store::crypto::{CryptoError, KeyRing};
 use ironflow_store::error::StoreError;
@@ -97,6 +123,17 @@ pub const MIN_ADMIN_KEY_LEN: usize = 32;
 
 /// Default largest request body relayed: 32 MiB.
 pub const DEFAULT_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+
+/// Prometheus counter of the requests to the `/r/` relay, labelled by
+/// `secret` (its name, empty for an unknown token) and `result`.
+pub const REQUESTS_TOTAL: &str = "ironflow_auth_proxy_requests_total";
+
+/// Content type of the Prometheus text exposition format.
+const METRICS_CONTENT_TYPE: &str = "text/plain; version=0.0.4";
+
+/// Base of the URL of a `/r/` request, whose host is then replaced by the
+/// requested one.
+const SECRET_UPSTREAM_BASE: &str = "https://localhost";
 
 /// Length of the token id prefix written to logs.
 const SHORT_ID_LEN: usize = 12;
@@ -114,12 +151,16 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// let config = AuthProxyConfig::new("0123456789abcdef0123456789abcdef");
 /// assert_eq!(config.upstream.as_str(), "https://api.anthropic.com/");
+/// assert!(config.secret_upstream.is_none());
 /// assert!(!format!("{config:?}").contains("0123456789abcdef"));
 /// ```
 #[derive(Clone)]
 pub struct AuthProxyConfig {
     /// Where requests are relayed. Always `https://api.anthropic.com` in the binary.
     pub upstream: Url,
+    /// Where `/r/<host>/` requests are relayed instead of `https://<host>`.
+    /// Always `None` in the binary.
+    pub secret_upstream: Option<Url>,
     /// Key protecting the admin API.
     pub admin_key: String,
     /// Largest request body relayed, in bytes.
@@ -130,6 +171,10 @@ impl fmt::Debug for AuthProxyConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AuthProxyConfig")
             .field("upstream", &self.upstream.as_str())
+            .field(
+                "secret_upstream",
+                &self.secret_upstream.as_ref().map(Url::as_str),
+            )
             .field("admin_key", &"<redacted>")
             .field("max_body_bytes", &self.max_body_bytes)
             .finish()
@@ -153,6 +198,7 @@ impl AuthProxyConfig {
         );
         Self {
             upstream: Url::parse(DEFAULT_UPSTREAM).expect("DEFAULT_UPSTREAM is a valid URL"),
+            secret_upstream: None,
             admin_key: admin_key.to_string(),
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
         }
@@ -178,6 +224,29 @@ impl AuthProxyConfig {
         self.upstream = upstream;
         self
     }
+
+    /// Relay every `/r/<host>/` request to `upstream` instead of
+    /// `https://<host>`. The host allowlist is still checked on `<host>`.
+    /// **For tests only**: the binary never calls it, so a deployed proxy
+    /// only reaches the allowlisted hosts, over https.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_auth_proxy::AuthProxyConfig;
+    /// use url::Url;
+    ///
+    /// # fn example() -> Result<(), url::ParseError> {
+    /// let config = AuthProxyConfig::new("0123456789abcdef0123456789abcdef")
+    ///     .with_secret_upstream(Url::parse("http://127.0.0.1:9001")?);
+    /// assert_eq!(config.secret_upstream.and_then(|url| url.port()), Some(9001));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_secret_upstream(mut self, upstream: Url) -> Self {
+        self.secret_upstream = Some(upstream);
+        self
+    }
 }
 
 /// Shared state of the proxy: the token registry, the configuration and the
@@ -199,6 +268,7 @@ pub struct AuthProxyState {
     registry: AuthProxyRegistry,
     config: Arc<AuthProxyConfig>,
     http: Client,
+    metrics: Option<PrometheusHandle>,
 }
 
 impl AuthProxyState {
@@ -255,6 +325,7 @@ impl AuthProxyState {
             registry,
             config: Arc::new(config),
             http,
+            metrics: None,
         })
     }
 
@@ -265,6 +336,28 @@ impl AuthProxyState {
     /// See [`AuthProxyState`].
     pub fn registry(&self) -> &AuthProxyRegistry {
         &self.registry
+    }
+
+    /// Serve `GET /metrics` from `handle`, the handle of the installed
+    /// Prometheus recorder. Without it, `/metrics` answers 404.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_auth_proxy::{AuthProxyConfig, AuthProxyState};
+    /// use metrics_exporter_prometheus::PrometheusBuilder;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let handle = PrometheusBuilder::new().install_recorder()?;
+    /// let state = AuthProxyState::new(AuthProxyConfig::new("0123456789abcdef0123456789abcdef"))?
+    ///     .with_metrics(handle);
+    /// # let _ = state;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_metrics(mut self, handle: PrometheusHandle) -> Self {
+        self.metrics = Some(handle);
+        self
     }
 }
 
@@ -333,7 +426,7 @@ pub async fn registry_from_config(
     Ok(AuthProxyRegistry::with_backend(Arc::new(store)))
 }
 
-/// The proxy router: health, admin API and relay.
+/// The proxy router: health, metrics, admin API and relays.
 ///
 /// # Examples
 ///
@@ -353,6 +446,7 @@ pub fn router(state: AuthProxyState) -> Router {
     let limit = state.config.max_body_bytes;
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/metrics", get(serve_metrics))
         .route("/admin/v1/tokens", post(issue_token))
         .route("/admin/v1/tokens/{id}", delete(revoke_token))
         .route("/admin/v1/runs/{run_id}/tokens", delete(revoke_run))
@@ -483,6 +577,11 @@ fn admin_authorized(state: &AuthProxyState, headers: &HeaderMap) -> bool {
 /// The answer to a pod presenting no valid token. Logs the reason, never the token.
 fn invalid_token(reason: &str, path: &str) -> Response {
     warn!(reason, path = %path, "request with an invalid token rejected");
+    unauthorized()
+}
+
+/// The 401 answer to an unknown, expired or revoked token.
+fn unauthorized() -> Response {
     error_response(
         StatusCode::UNAUTHORIZED,
         "authentication_error",
@@ -509,6 +608,17 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
+async fn serve_metrics(State(state): State<AuthProxyState>) -> Response {
+    match &state.metrics {
+        Some(handle) => ([(CONTENT_TYPE, METRICS_CONTENT_TYPE)], handle.render()).into_response(),
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "not_found_error",
+            "metrics are disabled",
+        ),
+    }
+}
+
 async fn issue_token(
     State(state): State<AuthProxyState>,
     headers: HeaderMap,
@@ -533,12 +643,18 @@ async fn issue_token(
     };
     let run_id = request.run_id.clone();
     let step = request.step.clone();
+    // The name only: the value never reaches a log.
+    let secret = match &request.credential {
+        GrantCredential::Secret(secret) => Some(secret.name().to_string()),
+        GrantCredential::Claude(_) => None,
+    };
     match state.registry.issue(request, now).await {
         Ok(issued) => {
             info!(
                 token = %issued.short_id(),
                 run_id = %run_id,
                 step = %step,
+                secret = secret.as_deref(),
                 "token issued"
             );
             (StatusCode::CREATED, Json(issued)).into_response()
@@ -618,6 +734,13 @@ async fn relay(State(state): State<AuthProxyState>, request: Request) -> Respons
             "only api.anthropic.com is reachable through this proxy",
         );
     }
+    if let Some(rest) = path
+        .strip_prefix(RELAY_PREFIX)
+        .and_then(|rest| rest.strip_prefix('/'))
+    {
+        let query = parts.uri.query();
+        return relay_secret(&state, method, &parts.headers, query, body, rest).await;
+    }
 
     let now = match now_unix() {
         Ok(now) => now,
@@ -630,12 +753,21 @@ async fn relay(State(state): State<AuthProxyState>, request: Request) -> Respons
         Ok(grant) => grant,
         Err(TokenRejection::Unknown) => return invalid_token("unknown", &path),
         Err(TokenRejection::Expired) => return invalid_token("expired", &path),
+        Err(TokenRejection::Revoked) => return invalid_token("revoked", &path),
         Err(TokenRejection::Unavailable(e)) => {
             warn!(error = %e, path = %path, "token registry unavailable");
             return registry_unavailable("auth proxy token registry unavailable");
         }
     };
     let token = short_id(&grant.id);
+    let GrantCredential::Claude(credential) = &grant.credential else {
+        warn!(token = %token, path = %path, "secret token on the Anthropic API refused");
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "this token only reaches its allowlisted hosts under /r/",
+        );
+    };
 
     if !is_allowed_path(&path) {
         warn!(token = %token, path = %path, "path outside the API refused");
@@ -672,7 +804,7 @@ async fn relay(State(state): State<AuthProxyState>, request: Request) -> Respons
     let upstream = state
         .http
         .request(method.clone(), url)
-        .headers(upstream_headers(&parts.headers, &grant.credential))
+        .headers(upstream_headers(&parts.headers, credential))
         .body(bytes)
         .send()
         .await;
@@ -697,6 +829,241 @@ async fn relay(State(state): State<AuthProxyState>, request: Request) -> Respons
         path = %path,
         status = status.as_u16(),
         "relayed"
+    );
+    let headers = downstream_headers(upstream.headers());
+    let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    response
+}
+
+/// Outcome of a `/r/` request: the `result` label of [`REQUESTS_TOTAL`]
+/// and the `result` field of its log event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayResult {
+    Relayed,
+    ForbiddenHost,
+    ForbiddenPath,
+    ForbiddenMethod,
+    UnknownToken,
+    Expired,
+    Revoked,
+    UpstreamError,
+    Unavailable,
+}
+
+impl RelayResult {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Relayed => "relayed",
+            Self::ForbiddenHost => "forbidden_host",
+            Self::ForbiddenPath => "forbidden_path",
+            Self::ForbiddenMethod => "forbidden_method",
+            Self::UnknownToken => "unknown_token",
+            Self::Expired => "expired",
+            Self::Revoked => "revoked",
+            Self::UpstreamError => "upstream_error",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Count a `/r/` request and log it. `secret` is empty when the token is
+/// unknown. Never given the token, the secret value, a header or the query.
+fn record(
+    result: RelayResult,
+    host: &str,
+    secret: &str,
+    grant: Option<&Grant>,
+    upstream_status: Option<u16>,
+) {
+    counter!(REQUESTS_TOTAL, "secret" => secret.to_string(), "result" => result.as_str())
+        .increment(1);
+    let token = grant.map(|grant| short_id(&grant.id));
+    let run_id = grant.map(|grant| grant.run_id.as_str());
+    let step = grant.map(|grant| grant.step.as_str());
+    if result == RelayResult::Relayed {
+        info!(
+            host,
+            secret,
+            run_id,
+            step,
+            token,
+            result = result.as_str(),
+            upstream_status,
+            "secret relay"
+        );
+    } else {
+        warn!(
+            host,
+            secret,
+            run_id,
+            step,
+            token,
+            result = result.as_str(),
+            upstream_status,
+            "secret relay"
+        );
+    }
+}
+
+/// Relay `/r/<host>/<path>` (`rest` is `<host>/<path>`) to `https://<host>`
+/// with the proxied secret of the token's grant.
+async fn relay_secret(
+    state: &AuthProxyState,
+    method: Method,
+    headers: &HeaderMap,
+    query: Option<&str>,
+    body: Body,
+    rest: &str,
+) -> Response {
+    let (host, path) = match rest.split_once('/') {
+        Some((host, path)) => (host.to_ascii_lowercase(), format!("/{path}")),
+        None => (rest.to_ascii_lowercase(), "/".to_string()),
+    };
+    // Never echo a host that failed validation into a log.
+    let logged_host = if is_valid_request_host(&host) {
+        host.as_str()
+    } else {
+        "<invalid>"
+    };
+
+    let now = match now_unix() {
+        Ok(now) => now,
+        Err(e) => return clock_error(&e),
+    };
+    let Some(token) = extract_opaque_token(headers) else {
+        record(RelayResult::UnknownToken, logged_host, "", None, None);
+        return unauthorized();
+    };
+    let grant = match state.registry.resolve(&token, now).await {
+        Ok(grant) => grant,
+        Err(rejection) => {
+            let result = match rejection {
+                TokenRejection::Unknown => RelayResult::UnknownToken,
+                TokenRejection::Expired => RelayResult::Expired,
+                TokenRejection::Revoked => RelayResult::Revoked,
+                TokenRejection::Unavailable(e) => {
+                    warn!(error = %e, "token registry unavailable");
+                    record(RelayResult::Unavailable, logged_host, "", None, None);
+                    return registry_unavailable("auth proxy token registry unavailable");
+                }
+            };
+            record(result, logged_host, "", None, None);
+            return unauthorized();
+        }
+    };
+
+    let GrantCredential::Secret(secret) = &grant.credential else {
+        record(
+            RelayResult::ForbiddenHost,
+            logged_host,
+            "",
+            Some(&grant),
+            None,
+        );
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "a Claude token only reaches the Anthropic API",
+        );
+    };
+    let name = secret.name();
+    let refuse = |result| record(result, logged_host, name, Some(&grant), None);
+    let forbidden_host = || {
+        refuse(RelayResult::ForbiddenHost);
+        error_response(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "host not allowed for this secret",
+        )
+    };
+    if !secret.allows_host(&host) {
+        return forbidden_host();
+    }
+    if !is_relay_path(&path) {
+        refuse(RelayResult::ForbiddenPath);
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "path not allowed: no '..', '//' or percent-encoding",
+        );
+    }
+    if !is_relay_method(&method) {
+        refuse(RelayResult::ForbiddenMethod);
+        return error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "invalid_request_error",
+            "only GET, HEAD, POST, PUT, PATCH and DELETE are relayed",
+        );
+    }
+
+    let bytes = match to_bytes(body, state.config.max_body_bytes).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            warn!(
+                token = %short_id(&grant.id),
+                secret = name,
+                error = %e,
+                "request body rejected"
+            );
+            return error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_too_large",
+                "request body too large or unreadable",
+            );
+        }
+    };
+
+    let mut url = match &state.config.secret_upstream {
+        Some(upstream) => upstream.clone(),
+        None => {
+            // `host` passed the allowlist, so it is a DNS name: this only
+            // fails if the URL parser disagrees, and then refuses it.
+            let url = Url::parse(SECRET_UPSTREAM_BASE).ok().and_then(|mut url| {
+                url.set_host(Some(&host)).ok()?;
+                Some(url)
+            });
+            let Some(url) = url else {
+                return forbidden_host();
+            };
+            url
+        }
+    };
+    url.set_path(&path);
+    url.set_query(query);
+    let upstream = state
+        .http
+        .request(method, url)
+        .headers(secret_upstream_headers(headers, secret))
+        .body(bytes)
+        .send()
+        .await;
+    let upstream = match upstream {
+        Ok(upstream) => upstream,
+        Err(e) => {
+            warn!(
+                token = %short_id(&grant.id),
+                secret = name,
+                error = %e.without_url(),
+                "upstream request failed"
+            );
+            refuse(RelayResult::UpstreamError);
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "upstream_error",
+                "upstream unreachable",
+            );
+        }
+    };
+
+    let status = upstream.status();
+    record(
+        RelayResult::Relayed,
+        logged_host,
+        name,
+        Some(&grant),
+        Some(status.as_u16()),
     );
     let headers = downstream_headers(upstream.headers());
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
@@ -743,5 +1110,45 @@ mod tests {
             matches!(result, Err(RegistryConfigError::Store(_))),
             "{result:?}"
         );
+    }
+    #[test]
+    fn relay_results_have_stable_labels() {
+        let labels: Vec<&str> = [
+            RelayResult::Relayed,
+            RelayResult::ForbiddenHost,
+            RelayResult::ForbiddenPath,
+            RelayResult::ForbiddenMethod,
+            RelayResult::UnknownToken,
+            RelayResult::Expired,
+            RelayResult::Revoked,
+            RelayResult::UpstreamError,
+            RelayResult::Unavailable,
+        ]
+        .into_iter()
+        .map(RelayResult::as_str)
+        .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "relayed",
+                "forbidden_host",
+                "forbidden_path",
+                "forbidden_method",
+                "unknown_token",
+                "expired",
+                "revoked",
+                "upstream_error",
+                "unavailable",
+            ]
+        );
+    }
+
+    #[test]
+    fn config_debug_shows_secret_upstream_not_admin_key() {
+        let config = AuthProxyConfig::new("0123456789abcdef0123456789abcdef")
+            .with_secret_upstream(Url::parse("http://127.0.0.1:9001").unwrap());
+        let debug = format!("{config:?}");
+        assert!(debug.contains("http://127.0.0.1:9001/"), "{debug}");
+        assert!(!debug.contains("0123456789abcdef"), "{debug}");
     }
 }

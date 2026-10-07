@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::account::{AccountSession, RateLimitRecorder};
+use crate::auth_proxy::ProxiedSecret;
 use crate::error::AgentError;
 use crate::operations::agent::{Model, PermissionMode};
 use crate::retry::RetryPolicy;
@@ -47,7 +48,7 @@ pub use pod::{
     StorageUnit, VolumeSize, assert_pod_label_allowed, is_reserved_pod_label, sanitize_label_value,
     validate_pvc_sub_path,
 };
-pub(crate) use pod::{assert_environment_id_valid, upsert_secret_env};
+pub(crate) use pod::{assert_environment_id_valid, upsert_proxied_secret, upsert_secret_env};
 pub use tool::Tool;
 pub use tool_profile::ToolProfile;
 
@@ -379,6 +380,15 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(skip)]
     pub account: Option<AccountSession>,
 
+    /// Secrets the agent reaches through the auth proxy (K8s ephemeral
+    /// provider only), merged with the provider's: a step entry overrides a
+    /// provider entry with the same `env`.
+    ///
+    /// Set it with [`AgentConfig::proxied_secret`]. Never serialized: it
+    /// carries a secret.
+    #[serde(skip)]
+    pub proxied_secrets: Vec<ProxiedSecret>,
+
     /// Longest the run may sleep waiting for provider capacity when every
     /// targeted account is rate limited.
     ///
@@ -463,6 +473,7 @@ impl AgentConfig {
             retry: None,
             trace_context: None,
             account: None,
+            proxied_secrets: Vec::new(),
             max_capacity_wait: None,
             account_name: None,
             account_pool: None,
@@ -862,6 +873,46 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             key: key.to_string(),
         };
         upsert_secret_env(&mut self.pod.secret_env, entry);
+        self
+    }
+
+    /// Hand a secret to the agent through the auth proxy (K8s ephemeral
+    /// provider with an auth proxy only).
+    ///
+    /// The pod gets `<env>` set to an opaque token and `<env>_URL` set to
+    /// `<proxy>/r`, never the value: the proxy injects the real secret on
+    /// requests to the allowlisted hosts. Calling it again with the same
+    /// `env` replaces the entry. A step entry overrides a provider entry
+    /// with the same `env`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when [`ProxiedSecret::validate`] refuses `secret`: invalid
+    /// `env` or name, empty or invalid host allowlist, invalid injection.
+    /// The message never carries the value.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::env::{VarError, var};
+    ///
+    /// use ironflow_core::auth_proxy::{ProxiedSecret, SecretInjection};
+    /// use ironflow_core::provider::AgentConfig;
+    ///
+    /// # fn example() -> Result<(), VarError> {
+    /// let config = AgentConfig::new("open the PR").proxied_secret(ProxiedSecret {
+    ///     name: "GITHUB_TOKEN".to_string(),
+    ///     env: "GITHUB_TOKEN".to_string(),
+    ///     value: var("GITHUB_TOKEN")?,
+    ///     injection: SecretInjection::Bearer,
+    ///     hosts: vec!["api.github.com".to_string()],
+    /// });
+    /// assert_eq!(config.proxied_secrets[0].env, "GITHUB_TOKEN");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn proxied_secret(mut self, secret: ProxiedSecret) -> Self {
+        upsert_proxied_secret(&mut self.proxied_secrets, secret);
         self
     }
 
@@ -1279,6 +1330,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             retry: self.retry,
             trace_context: self.trace_context,
             account: self.account,
+            proxied_secrets: self.proxied_secrets,
             max_capacity_wait: self.max_capacity_wait,
             account_name: self.account_name,
             account_pool: self.account_pool,
@@ -1874,7 +1926,9 @@ pub use crate::decision::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{from_str, json, to_string};
+
+    use crate::auth_proxy::SecretInjection;
 
     fn full_config() -> AgentConfig {
         AgentConfig {
@@ -1907,6 +1961,7 @@ mod tests {
             retry: None,
             trace_context: None,
             account: None,
+            proxied_secrets: Vec::new(),
             max_capacity_wait: None,
             account_name: None,
             account_pool: None,
@@ -1965,6 +2020,7 @@ mod tests {
             retry: None,
             trace_context: None,
             account: None,
+            proxied_secrets: Vec::new(),
             max_capacity_wait: None,
             account_name: None,
             account_pool: None,
@@ -2445,6 +2501,53 @@ mod tests {
         assert_eq!(config.pod.secret_env[0].secret, "new-secret");
         assert_eq!(config.pod.secret_env[0].key, "c");
         assert_eq!(config.pod.secret_env[1].name, "OTHER");
+    }
+
+    fn github_secret(value: &str, host: &str) -> ProxiedSecret {
+        ProxiedSecret {
+            name: "GITHUB_TOKEN".to_string(),
+            env: "GITHUB_TOKEN".to_string(),
+            value: value.to_string(),
+            injection: SecretInjection::Bearer,
+            hosts: vec![host.to_string()],
+        }
+    }
+
+    #[test]
+    fn proxied_secret_replaces_same_env() {
+        let gitlab = ProxiedSecret {
+            name: "GITLAB_TOKEN".to_string(),
+            env: "GITLAB_TOKEN".to_string(),
+            value: "glpat-x".to_string(),
+            injection: SecretInjection::PrivateToken,
+            hosts: vec!["gitlab.com".to_string()],
+        };
+        let config = AgentConfig::new("x")
+            .proxied_secret(github_secret("ghp_old", "api.github.com"))
+            .proxied_secret(gitlab)
+            .proxied_secret(github_secret("ghp_new", "*.github.com"));
+        assert_eq!(config.proxied_secrets.len(), 2);
+        assert_eq!(config.proxied_secrets[0].env, "GITHUB_TOKEN");
+        assert_eq!(config.proxied_secrets[0].value, "ghp_new");
+        assert_eq!(config.proxied_secrets[0].hosts, ["*.github.com"]);
+        assert_eq!(config.proxied_secrets[1].env, "GITLAB_TOKEN");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid proxied secret")]
+    fn proxied_secret_invalid_host_panics() {
+        let _ = AgentConfig::new("x").proxied_secret(github_secret("ghp_x", ".*github.com"));
+    }
+
+    #[test]
+    fn proxied_secret_is_never_serialized() {
+        let config = AgentConfig::new("x")
+            .proxied_secret(github_secret("ghp_never_serialized", "api.github.com"));
+        let json = to_string(&config).unwrap();
+        assert!(!json.contains("ghp_never_serialized"), "{json}");
+        assert!(!json.contains("proxied_secrets"), "{json}");
+        let back: AgentConfig = from_str(&json).unwrap();
+        assert!(back.proxied_secrets.is_empty());
     }
 
     #[test]

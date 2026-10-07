@@ -3589,6 +3589,8 @@ dependencies = [
  "axum",
  "ironflow-core",
  "ironflow-store",
+ "metrics",
+ "metrics-exporter-prometheus",
  "reqwest 0.13.5",
  "serde_json",
  "thiserror 2.0.20",
@@ -3640,6 +3642,7 @@ name = "ironflow-core"
 version = "4.11.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bollard",
  "chrono",
  "futures-util",

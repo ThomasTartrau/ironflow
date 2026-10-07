@@ -47,6 +47,7 @@ pub enum CredentialKind {
 /// assert!(!format!("{credential:?}").contains("sk-ant"));
 /// ```
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxyCredential {
     kind: CredentialKind,
     value: String,

@@ -33,6 +33,8 @@ use std::env::var;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod};
 use kube::Client;
@@ -48,7 +50,7 @@ use tracing::{debug, info, warn};
 use crate::account::ClaudeSubscriptionKind;
 use crate::auth_proxy::{
     ADMIN_KEY_ENV, AuthProxyClient, AuthProxyError, IssuedToken, POD_BASE_URL_ENV, POD_TOKEN_ENV,
-    TokenRequest, resolve_credential,
+    ProxiedSecret, RELAY_PREFIX, SecretInjection, TokenRequest, resolve_credential,
 };
 use crate::error::AgentError;
 use crate::provider::{
@@ -56,7 +58,7 @@ use crate::provider::{
     InvokeFuture, LABEL_COMPONENT, LABEL_EGRESS_PROFILE, LABEL_EXPIRES_AT, LABEL_MANAGED_BY,
     LABEL_ROOT_RUN_ID, LABEL_RUN_ID, LABEL_STEP, LogSink, MANAGED_BY_IRONFLOW, PodVolumeSource,
     PvcVolume, ReadOnlyVolume, ReleaseFuture, SecretEnvVar, assert_pod_label_allowed,
-    is_reserved_pod_label, upsert_secret_env, validate_environment_id,
+    is_reserved_pod_label, upsert_proxied_secret, upsert_secret_env, validate_environment_id,
 };
 use crate::providers::claude::common as claude_common;
 use crate::providers::claude::common::DEFAULT_TIMEOUT;
@@ -91,6 +93,13 @@ const PROXY_FORBIDDEN_ENV: [&str; 5] = [
 /// behind the auth proxy only the Messages API is reachable.
 const NONESSENTIAL_TRAFFIC_ENV: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
 
+/// Prefix of the variables git reads its config from
+/// (`GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`).
+const GIT_CONFIG_PREFIX: &str = "GIT_CONFIG_";
+
+/// Number of git config entries passed through the environment.
+const GIT_CONFIG_COUNT: &str = "GIT_CONFIG_COUNT";
+
 /// The error raised when the pod would receive `name` while the auth proxy
 /// is set. Names the variable, never its value.
 fn proxy_forbidden(name: &str) -> AgentError {
@@ -108,6 +117,14 @@ fn auth_proxy_error(e: AuthProxyError) -> AgentError {
         exit_code: -1,
         stderr: format!("auth proxy: {e}"),
     }
+}
+
+/// The run and step labels of the proxy tokens of a pod: the pod name and
+/// `agent` for an invocation outside a run.
+fn grant_scope(run_id: Option<&String>, step: Option<&String>, pod: &str) -> (String, String) {
+    let run_id = run_id.map_or_else(|| pod.to_string(), String::clone);
+    let step = step.map_or_else(|| "agent".to_string(), String::clone);
+    (run_id, step)
 }
 
 /// Delete the prompt ConfigMap of a pod that will not be created.
@@ -361,6 +378,7 @@ pub struct K8sEphemeralProvider {
     runtime_class: Option<String>,
     auth_proxy_url: Option<String>,
     auth_proxy_admin_key: Option<String>,
+    proxied_secrets: Vec<ProxiedSecret>,
     environment: Option<EnvironmentVolume>,
     sessions_claim: Option<String>,
 }
@@ -422,6 +440,7 @@ impl K8sEphemeralProvider {
             runtime_class: None,
             auth_proxy_url: None,
             auth_proxy_admin_key: None,
+            proxied_secrets: Vec::new(),
             environment: None,
             sessions_claim: None,
         }
@@ -823,6 +842,54 @@ impl K8sEphemeralProvider {
         self
     }
 
+    /// Hand a secret to every pod through the auth proxy. Requires
+    /// [`auth_proxy`](Self::auth_proxy): an invocation without it fails.
+    ///
+    /// The pod gets `<env>` set to an opaque token and `<env>_URL` set to
+    /// `<proxy>/r`, never the value. A request to `<env>_URL/<host>/<path>`
+    /// carrying the token reaches `https://<host>/<path>` with the real
+    /// secret, for the allowlisted hosts only. For a
+    /// [`SecretInjection::Basic`] secret the pod also gets a git config
+    /// (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`) that
+    /// rewrites `https://<host>/` to the proxy and sends the token as the
+    /// Basic password, so `git clone https://<host>/..` works unchanged.
+    /// Wildcard hosts get no git rewrite.
+    ///
+    /// Calling it again with the same `env` replaces the entry. A step entry
+    /// ([`AgentConfig::proxied_secret`]) overrides a provider entry with the
+    /// same `env`. The tokens are revoked with the step's Claude token.
+    ///
+    /// # Panics
+    ///
+    /// Panics when [`ProxiedSecret::validate`] refuses `secret`. The message
+    /// never carries the value.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::env::{VarError, var};
+    ///
+    /// use ironflow_core::auth_proxy::{ProxiedSecret, SecretInjection};
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// # fn example() -> Result<(), VarError> {
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1")
+    ///     .auth_proxy("http://ironflow-auth-proxy.ironflow-system")
+    ///     .proxied_secret(ProxiedSecret {
+    ///         name: "GITLAB_TOKEN".to_string(),
+    ///         env: "GITLAB_TOKEN".to_string(),
+    ///         value: var("GITLAB_TOKEN")?,
+    ///         injection: SecretInjection::Basic { username: "oauth2".to_string() },
+    ///         hosts: vec!["gitlab.com".to_string()],
+    ///     });
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn proxied_secret(mut self, secret: ProxiedSecret) -> Self {
+        upsert_proxied_secret(&mut self.proxied_secrets, secret);
+        self
+    }
+
     /// Set the Kubernetes namespace (default: `"default"`).
     pub fn namespace(mut self, ns: &str) -> Self {
         self.namespace = ns.to_string();
@@ -1176,8 +1243,9 @@ struct CreatedPod {
     start: Instant,
     prompt_configmap: Option<String>,
     configmaps: Option<Api<ConfigMap>>,
-    /// Id of the auth proxy token issued for the pod, revoked at the end of the step.
-    proxy_token_id: Option<String>,
+    /// Ids of the auth proxy tokens issued for the pod (Claude and proxied
+    /// secrets), revoked at the end of the step.
+    proxy_token_ids: Vec<String>,
     /// Name of the environment claim mounted in the pod, handed out as
     /// [`AgentOutput::environment_id`].
     environment_id: Option<String>,
@@ -1194,6 +1262,7 @@ struct MergedPodInputs<'a> {
     managed_settings_configmap: Option<String>,
     labels: BTreeMap<String, String>,
     runtime_class: Option<String>,
+    proxied_secrets: Vec<ProxiedSecret>,
 }
 
 impl K8sEphemeralProvider {
@@ -1203,7 +1272,9 @@ impl K8sEphemeralProvider {
     ///
     /// Returns [`AgentError::ProcessFailed`] when a sandboxed provider carries
     /// a secret as plain text, when the auth proxy is set and the pod would
-    /// receive a Claude credential, or when the managed-settings preset is unknown,
+    /// receive a Claude credential, when a proxied secret has no auth proxy or
+    /// collides with another variable of the pod, when the managed-settings
+    /// preset is unknown,
     /// or when the step resumes an environment and the provider has no
     /// [`environment_volume`](Self::environment_volume).
     fn merged_pod_inputs<'a>(
@@ -1259,6 +1330,8 @@ impl K8sEphemeralProvider {
         {
             return Err(proxy_forbidden(&entry.name));
         }
+        let proxied_secrets = self.merged_proxied_secrets(config);
+        self.check_proxied_secrets(&proxied_secrets, &secret_env)?;
 
         let service_account = config
             .pod
@@ -1338,6 +1411,7 @@ impl K8sEphemeralProvider {
             managed_settings_configmap,
             labels,
             runtime_class,
+            proxied_secrets,
         })
     }
 
@@ -1359,14 +1433,128 @@ impl K8sEphemeralProvider {
         }
     }
 
+    /// The provider's proxied secrets, then the step's, a step entry
+    /// replacing a provider entry with the same `env`.
+    fn merged_proxied_secrets(&self, config: &AgentConfig) -> Vec<ProxiedSecret> {
+        let mut secrets = self.proxied_secrets.clone();
+        for secret in &config.proxied_secrets {
+            upsert_proxied_secret(&mut secrets, secret.clone());
+        }
+        secrets
+    }
+
+    /// Refuse proxied secrets without the auth proxy, a proxied variable
+    /// (`<env>` or `<env>_URL`) the pod already receives, and a
+    /// [`SecretInjection::Basic`] secret when the pod already receives a git
+    /// config variable. Names the variable, never a value.
+    fn check_proxied_secrets(
+        &self,
+        secrets: &[ProxiedSecret],
+        secret_env: &[SecretEnvVar],
+    ) -> Result<(), AgentError> {
+        if secrets.is_empty() {
+            return Ok(());
+        }
+        if self.auth_proxy_url.is_none() {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: "proxied_secret requires auth_proxy".to_string(),
+            });
+        }
+        let pod_env: Vec<&str> = self
+            .env_vars
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .chain(secret_env.iter().map(|entry| entry.name.as_str()))
+            .collect();
+        let is_git_config = |name: &str| name.starts_with(GIT_CONFIG_PREFIX);
+        let mut proxied: Vec<String> = Vec::new();
+        for secret in secrets {
+            for name in [secret.env.clone(), secret.url_env()] {
+                let collides = PROXY_FORBIDDEN_ENV.contains(&name.as_str())
+                    || name == NONESSENTIAL_TRAFFIC_ENV
+                    || is_git_config(&name)
+                    || pod_env.contains(&name.as_str())
+                    || proxied.contains(&name);
+                if collides {
+                    return Err(AgentError::ProcessFailed {
+                        exit_code: -1,
+                        stderr: format!(
+                            "proxied secret variable {name} is already set for the pod"
+                        ),
+                    });
+                }
+                proxied.push(name);
+            }
+        }
+        let basic = secrets
+            .iter()
+            .any(|secret| matches!(secret.injection, SecretInjection::Basic { .. }));
+        let git_config = pod_env.iter().find(|key| is_git_config(key));
+        if basic && let Some(key) = git_config {
+            return Err(AgentError::ProcessFailed {
+                exit_code: -1,
+                stderr: format!(
+                    "a Basic proxied secret sets the git config: the pod must not receive {key}"
+                ),
+            });
+        }
+        Ok(())
+    }
+
     /// Plain environment variables of the pod: the provider's, plus the proxy
-    /// URL and the opaque token when the auth proxy is set and a token was issued.
-    fn pod_env_vars(&self, proxy_token: Option<&str>) -> Vec<(String, String)> {
+    /// URL and the opaque token when the auth proxy is set and a token was
+    /// issued, then `<env>` (the token) and `<env>_URL` (`<proxy>/r`) of each
+    /// proxied secret, then the git config of the [`SecretInjection::Basic`]
+    /// secrets.
+    ///
+    /// For each non-wildcard host `h` of a Basic secret, git rewrites
+    /// `https://h/` to `<proxy>/r/h/` and sends the token as the Basic
+    /// password there; the proxy swaps it for the real secret.
+    fn pod_env_vars(
+        &self,
+        proxy_token: Option<&str>,
+        secrets: &[(ProxiedSecret, IssuedToken)],
+    ) -> Vec<(String, String)> {
         let mut env = self.env_vars.clone();
-        if let (Some(url), Some(token)) = (&self.auth_proxy_url, proxy_token) {
+        let Some(url) = &self.auth_proxy_url else {
+            return env;
+        };
+        if let Some(token) = proxy_token {
             env.push((POD_BASE_URL_ENV.to_string(), url.clone()));
             env.push((POD_TOKEN_ENV.to_string(), token.to_string()));
             env.push((NONESSENTIAL_TRAFFIC_ENV.to_string(), "1".to_string()));
+        }
+
+        let relay = format!("{url}{RELAY_PREFIX}");
+        let mut git_config: Vec<(String, String)> = Vec::new();
+        for (secret, issued) in secrets {
+            env.push((secret.env.clone(), issued.token.clone()));
+            env.push((secret.url_env(), relay.clone()));
+            let SecretInjection::Basic { username } = &secret.injection else {
+                continue;
+            };
+            let basic = STANDARD.encode(format!("{username}:{}", issued.token));
+            for host in &secret.hosts {
+                let host = host.trim().to_ascii_lowercase();
+                if host.starts_with("*.") {
+                    continue;
+                }
+                let base = format!("{relay}/{host}/");
+                git_config.push((format!("url.{base}.insteadOf"), format!("https://{host}/")));
+                git_config.push((
+                    format!("http.{base}.extraHeader"),
+                    format!("Authorization: Basic {basic}"),
+                ));
+            }
+        }
+        if !git_config.is_empty() {
+            let count = git_config.len().to_string();
+            env.push((GIT_CONFIG_COUNT.to_string(), count));
+            for (n, (key, value)) in git_config.into_iter().enumerate() {
+                env.push((format!("{GIT_CONFIG_PREFIX}KEY_{n}"), key));
+                env.push((format!("{GIT_CONFIG_PREFIX}VALUE_{n}"), value));
+            }
         }
         env
     }
@@ -1392,24 +1580,23 @@ impl K8sEphemeralProvider {
         Ok(Some(AuthProxyClient::new(url, &key)))
     }
 
-    /// Revoke the opaque token of a step, best effort: its expiry is the backstop.
-    async fn revoke_proxy_token(&self, id: Option<&str>) {
-        let Some(id) = id else {
-            return;
-        };
-        let short = id.get(..12).unwrap_or(id);
-        let result = match self.auth_proxy_client() {
-            Ok(Some(client)) => client.revoke(id).await.map_err(|e| e.to_string()),
-            Ok(None) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        };
-        match result {
-            Ok(()) => debug!(token = %short, "auth proxy token revoked"),
-            Err(e) => warn!(
-                token = %short,
-                error = %e,
-                "auth proxy token revocation failed; it expires at expires-at"
-            ),
+    /// Revoke the opaque tokens of a step, best effort: their expiry is the backstop.
+    async fn revoke_proxy_tokens(&self, ids: &[String]) {
+        for id in ids {
+            let short = id.get(..12).unwrap_or(id);
+            let result = match self.auth_proxy_client() {
+                Ok(Some(client)) => client.revoke(id).await.map_err(|e| e.to_string()),
+                Ok(None) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            };
+            match result {
+                Ok(()) => debug!(token = %short, "auth proxy token revoked"),
+                Err(e) => warn!(
+                    token = %short,
+                    error = %e,
+                    "auth proxy token revocation failed; it expires at expires-at"
+                ),
+            }
         }
     }
 
@@ -1669,8 +1856,22 @@ impl K8sEphemeralProvider {
                 return Err(e);
             }
         };
-        let env_vars = self.pod_env_vars(issued.as_ref().map(|t| t.token.as_str()));
-        let proxy_token_id = issued.map(|t| t.id);
+        let claude_ids: Vec<String> = issued.iter().map(|t| t.id.clone()).collect();
+        let proxied = &merged.proxied_secrets;
+        let secrets = match self
+            .issue_secret_tokens(proxied, run_id, step, &pod_name, expires_at)
+            .await
+        {
+            Ok(secrets) => secrets,
+            Err(e) => {
+                self.revoke_proxy_tokens(&claude_ids).await;
+                abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
+                return Err(e);
+            }
+        };
+        let env_vars = self.pod_env_vars(issued.as_ref().map(|t| t.token.as_str()), &secrets);
+        let secret_ids = secrets.iter().map(|(_, t)| t.id.clone());
+        let proxy_token_ids: Vec<String> = claude_ids.into_iter().chain(secret_ids).collect();
 
         let claims: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), &self.namespace);
         let environment = match self
@@ -1679,7 +1880,7 @@ impl K8sEphemeralProvider {
         {
             Ok(environment) => environment,
             Err(e) => {
-                self.revoke_proxy_token(proxy_token_id.as_deref()).await;
+                self.revoke_proxy_tokens(&proxy_token_ids).await;
                 abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
                 return Err(e);
             }
@@ -1738,7 +1939,7 @@ impl K8sEphemeralProvider {
         };
         if let Err(e) = created {
             // No pod runs with the token: drop it now rather than at expiry.
-            self.revoke_proxy_token(proxy_token_id.as_deref()).await;
+            self.revoke_proxy_tokens(&proxy_token_ids).await;
             abort_launch_configmap(&configmaps, prompt_configmap_name.as_deref()).await;
             if let Some(claim) = &environment {
                 abort_environment_claim(&claims, claim).await;
@@ -1752,7 +1953,7 @@ impl K8sEphemeralProvider {
             start,
             prompt_configmap: prompt_configmap_name,
             configmaps: Some(configmaps),
-            proxy_token_id,
+            proxy_token_ids,
             environment_id: environment.map(|claim| claim.name),
         })
     }
@@ -1779,11 +1980,12 @@ impl K8sEphemeralProvider {
         };
         let credential = resolve_credential(config.account.as_ref(), |k| var(k).ok());
         let credential = credential.map_err(auth_proxy_error)?;
+        let (run_id, step) = grant_scope(run_id, step, pod_name);
         let request = TokenRequest {
-            run_id: run_id.map_or_else(|| pod_name.to_string(), String::clone),
-            step: step.map_or_else(|| "agent".to_string(), String::clone),
+            run_id,
+            step,
             expires_at,
-            credential,
+            credential: credential.into(),
         };
         let issued = client.issue(&request).await.map_err(auth_proxy_error)?;
         info!(
@@ -1794,6 +1996,69 @@ impl K8sEphemeralProvider {
             "auth proxy token issued"
         );
         Ok(Some(issued))
+    }
+
+    /// Issue one auth proxy token per proxied secret of a pod, none when no
+    /// proxy is set.
+    ///
+    /// Each token is bound to the same run and step labels as the Claude
+    /// token and expires with the pod. When one issuance fails, the tokens
+    /// already issued are revoked before the error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::ProcessFailed`] when no admin key is available,
+    /// when a secret is invalid, or when the proxy refuses or cannot be
+    /// reached.
+    async fn issue_secret_tokens(
+        &self,
+        secrets: &[ProxiedSecret],
+        run_id: Option<&String>,
+        step: Option<&String>,
+        pod_name: &str,
+        expires_at: u64,
+    ) -> Result<Vec<(ProxiedSecret, IssuedToken)>, AgentError> {
+        if secrets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(client) = self.auth_proxy_client()? else {
+            return Ok(Vec::new());
+        };
+        let (run_id, step) = grant_scope(run_id, step, pod_name);
+        let mut issued: Vec<(ProxiedSecret, IssuedToken)> = Vec::with_capacity(secrets.len());
+        for secret in secrets {
+            let result = match secret.to_credential() {
+                Ok(credential) => {
+                    let request = TokenRequest {
+                        run_id: run_id.clone(),
+                        step: step.clone(),
+                        expires_at,
+                        credential: credential.into(),
+                    };
+                    client.issue(&request).await
+                }
+                Err(e) => Err(e),
+            };
+            match result {
+                Ok(token) => {
+                    info!(
+                        token = %token.short_id(),
+                        secret = %secret.name,
+                        pod = %pod_name,
+                        run_id = %run_id,
+                        step = %step,
+                        "auth proxy secret token issued"
+                    );
+                    issued.push((secret.clone(), token));
+                }
+                Err(e) => {
+                    let ids: Vec<String> = issued.into_iter().map(|(_, t)| t.id).collect();
+                    self.revoke_proxy_tokens(&ids).await;
+                    return Err(auth_proxy_error(e));
+                }
+            }
+        }
+        Ok(issued)
     }
 
     /// Create or resume the environment claim of a pod, `None` when the
@@ -2190,8 +2455,7 @@ impl AgentProvider for K8sEphemeralProvider {
         Box::pin(async move {
             let created = self.create_pod(config).await?;
             let result = self.run_created(config, &created).await;
-            self.revoke_proxy_token(created.proxy_token_id.as_deref())
-                .await;
+            self.revoke_proxy_tokens(&created.proxy_token_ids).await;
             result
         })
     }
@@ -2213,8 +2477,7 @@ impl AgentProvider for K8sEphemeralProvider {
 
             let created = self.create_pod(config).await?;
             let result = self.run_created_with_logs(config, &created, log_sink).await;
-            self.revoke_proxy_token(created.proxy_token_id.as_deref())
-                .await;
+            self.revoke_proxy_tokens(&created.proxy_token_ids).await;
             result
         })
     }
@@ -2915,7 +3178,7 @@ mod tests {
         token: Option<&str>,
     ) -> Vec<Value> {
         let merged = merge(provider, config);
-        let env_vars = provider.pod_env_vars(token);
+        let env_vars = provider.pod_env_vars(token, &[]);
         let pod = build_pod_spec(&PodConfig {
             name: "claude-code-test",
             image: &provider.image,
@@ -3071,6 +3334,149 @@ mod tests {
         assert!(!rendered.contains("sk-ant"), "{rendered}");
     }
 
+    fn secret_for(env: &str, injection: SecretInjection, hosts: &[&str]) -> ProxiedSecret {
+        ProxiedSecret {
+            name: env.to_string(),
+            env: env.to_string(),
+            value: "ghp_real".to_string(),
+            injection,
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+        }
+    }
+
+    fn oauth2() -> SecretInjection {
+        SecretInjection::Basic {
+            username: "oauth2".to_string(),
+        }
+    }
+
+    fn issued(token: &str) -> IssuedToken {
+        IssuedToken {
+            id: format!("{token}-id"),
+            token: token.to_string(),
+        }
+    }
+
+    fn var_of<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        env.iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn pod_env_vars_sets_secret_token_and_url() {
+        let secret = secret_for("GITHUB_TOKEN", SecretInjection::Bearer, &["github.com"]);
+        let pairs = [(secret, issued("ifap_gh"))];
+        let env = proxied().pod_env_vars(Some("ifap_claude"), &pairs);
+        let relay = format!("{PROXY_URL}{RELAY_PREFIX}");
+        assert_eq!(var_of(&env, "GITHUB_TOKEN"), Some("ifap_gh"));
+        assert_eq!(var_of(&env, "GITHUB_TOKEN_URL"), Some(relay.as_str()));
+        assert_eq!(var_of(&env, POD_TOKEN_ENV), Some("ifap_claude"));
+        assert_eq!(var_of(&env, GIT_CONFIG_COUNT), None);
+        let leaked = env.iter().any(|(_, value)| value.contains("ghp_real"));
+        assert!(!leaked, "{env:?}");
+    }
+
+    #[test]
+    fn pod_env_vars_basic_secret_sets_git_config() {
+        let secret = secret_for("GITLAB_TOKEN", oauth2(), &["gitlab.com"]);
+        let pairs = [(secret, issued("ifap_gl"))];
+        let env = proxied().pod_env_vars(None, &pairs);
+        let base = format!("{PROXY_URL}{RELAY_PREFIX}/gitlab.com/");
+        let key_0 = format!("url.{base}.insteadOf");
+        let key_1 = format!("http.{base}.extraHeader");
+        let origin = "https://gitlab.com/";
+        assert_eq!(var_of(&env, "GITLAB_TOKEN"), Some("ifap_gl"));
+        assert_eq!(var_of(&env, GIT_CONFIG_COUNT), Some("2"));
+        assert_eq!(var_of(&env, "GIT_CONFIG_KEY_0"), Some(key_0.as_str()));
+        assert_eq!(var_of(&env, "GIT_CONFIG_VALUE_0"), Some(origin));
+        assert_eq!(var_of(&env, "GIT_CONFIG_KEY_1"), Some(key_1.as_str()));
+        let header = var_of(&env, "GIT_CONFIG_VALUE_1").unwrap();
+        let encoded = header.strip_prefix("Authorization: Basic ").unwrap();
+        assert_eq!(STANDARD.decode(encoded).unwrap(), b"oauth2:ifap_gl");
+        let leaked = env.iter().any(|(_, value)| value.contains("ghp_real"));
+        assert!(!leaked, "{env:?}");
+    }
+
+    #[test]
+    fn pod_env_vars_basic_wildcard_host_has_no_git_rewrite() {
+        let secret = secret_for("GITLAB_TOKEN", oauth2(), &["*.gitlab.com"]);
+        let pairs = [(secret, issued("ifap_gl"))];
+        let env = proxied().pod_env_vars(None, &pairs);
+        assert_eq!(var_of(&env, "GITLAB_TOKEN"), Some("ifap_gl"));
+        assert_eq!(var_of(&env, GIT_CONFIG_COUNT), None);
+    }
+
+    #[test]
+    fn merged_proxied_secrets_step_overrides_provider() {
+        let github = secret_for("GITHUB_TOKEN", SecretInjection::Bearer, &["github.com"]);
+        let npm = secret_for("NPM_TOKEN", SecretInjection::Bearer, &["npmjs.org"]);
+        let provider = proxied().proxied_secret(github).proxied_secret(npm);
+        let step = secret_for("GITHUB_TOKEN", SecretInjection::Bearer, &["ghe.io"]);
+        let config = AgentConfig::new("hi").proxied_secret(step);
+        let merged = provider.merged_proxied_secrets(&config);
+        let envs: Vec<&str> = merged.iter().map(|secret| secret.env.as_str()).collect();
+        assert_eq!(envs, ["GITHUB_TOKEN", "NPM_TOKEN"]);
+        assert_eq!(merged[0].hosts, ["ghe.io"]);
+        assert_eq!(merge(&provider, &config).proxied_secrets.len(), 2);
+    }
+
+    #[test]
+    fn proxied_secret_without_auth_proxy_is_an_error() {
+        let secret = secret_for("GITHUB_TOKEN", SecretInjection::Bearer, &["github.com"]);
+        let config = AgentConfig::new("hi").proxied_secret(secret);
+        let provider = K8sEphemeralProvider::sandboxed("img:v1");
+        let err = err_text(provider.merged_pod_inputs(&config));
+        assert!(err.contains("proxied_secret requires auth_proxy"), "{err}");
+        assert!(!err.contains("ghp_real"), "{err}");
+    }
+
+    #[test]
+    fn proxied_secret_env_collision_is_an_error() {
+        let secret = secret_for("GITHUB_TOKEN", SecretInjection::Bearer, &["github.com"]);
+        let provider = proxied()
+            .env("GITHUB_TOKEN", "x")
+            .proxied_secret(secret.clone());
+        let err = err_text(provider.merged_pod_inputs(&AgentConfig::new("hi")));
+        assert!(err.contains("GITHUB_TOKEN is already set"), "{err}");
+
+        let claude = ProxiedSecret {
+            env: "ANTHROPIC_AUTH_TOKEN".to_string(),
+            ..secret.clone()
+        };
+        let config = AgentConfig::new("hi").proxied_secret(claude);
+        let err = err_text(proxied().merged_pod_inputs(&config));
+        assert!(err.contains("ANTHROPIC_AUTH_TOKEN is already set"), "{err}");
+
+        let other = ProxiedSecret {
+            name: "OTHER".to_string(),
+            env: "GITHUB_TOKEN_URL".to_string(),
+            ..secret.clone()
+        };
+        let config = AgentConfig::new("hi").proxied_secret(other);
+        let provider = proxied().proxied_secret(secret.clone());
+        let err = err_text(provider.merged_pod_inputs(&config));
+        assert!(err.contains("GITHUB_TOKEN_URL is already set"), "{err}");
+
+        let basic = ProxiedSecret {
+            injection: oauth2(),
+            ..secret
+        };
+        let config = AgentConfig::new("hi")
+            .env_from_secret("GIT_CONFIG_COUNT", "git", "count")
+            .proxied_secret(basic);
+        let err = err_text(proxied().merged_pod_inputs(&config));
+        assert!(err.contains("must not receive GIT_CONFIG_COUNT"), "{err}");
+        assert!(!err.contains("ghp_real"), "{err}");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid proxied secret")]
+    fn proxied_secret_builder_panics_on_invalid_host() {
+        let secret = secret_for("GITHUB_TOKEN", SecretInjection::Bearer, &[".*github.com"]);
+        let _ = proxied().proxied_secret(secret);
+    }
+
     #[test]
     fn auth_proxy_account_kind_is_subscription_only_with_proxy() {
         assert_eq!(proxied().account_kind(), Some(ClaudeSubscriptionKind::ID));
@@ -3087,10 +3493,10 @@ mod tests {
             .env("TEAM", "infra")
             .oauth_token_from_secret("claude-oauth", "token");
         assert_eq!(
-            provider.pod_env_vars(Some("ifap_x")),
+            provider.pod_env_vars(Some("ifap_x"), &[]),
             vec![("TEAM".to_string(), "infra".to_string())]
         );
-        assert_eq!(proxied().pod_env_vars(None), Vec::new());
+        assert_eq!(proxied().pod_env_vars(None, &[]), Vec::new());
 
         let env = pod_env(&provider, &AgentConfig::new("hi"), None);
         assert!(env_value(&env, "ANTHROPIC_BASE_URL").is_none());
