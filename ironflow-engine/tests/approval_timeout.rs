@@ -15,7 +15,7 @@ use axum::{Json, Router};
 use chrono::{TimeDelta, Utc};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 use ironflow_core::provider::AgentProvider;
@@ -622,6 +622,176 @@ async fn approval_timeout_writes_an_audit_entry_with_the_reason() {
                 .contains("900s"),
             "got {}",
             entry.payload["reason"]
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn gate_sla_expired_during_pause_is_escalated_instead_of_lost() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let config = ApprovalConfig::new("Deploy?")
+            .with_deadline_secs(1)
+            .on_timeout(EscalationPolicy::AutoApprove);
+        let engine = Arc::new(
+            engine_with(store.clone(), config).with_execution_mode(ExecutionMode::Workers),
+        );
+
+        let run_id = suspended_run(&engine).await;
+        let step_id = gate_step(&store, run_id).await.id;
+        engine.pause_run(run_id).await.expect("pause the run");
+
+        // Wait past the real SLA: the deadline keeps running during the pause.
+        sleep(Duration::from_millis(1200)).await;
+
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action, EscalationAction::Approved);
+
+        let gate = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(gate.status.state, StepStatus::Completed);
+        assert_eq!(
+            gate.output.as_ref().unwrap()["approved_by"],
+            json!(SYSTEM_TIMEOUT_ACTOR)
+        );
+        assert!(gate.approval_deadline_at.is_none());
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Paused);
+        assert_eq!(run.resume_status, Some(RunStatus::Pending));
+        assert!(
+            !step_names(&store, run_id)
+                .await
+                .contains(&"deploy".to_string())
+        );
+
+        engine
+            .resume_paused_run(run_id)
+            .await
+            .expect("resume the run");
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Pending);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn gate_sla_expired_during_pause_auto_reject_fails_the_paused_run() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let config = ApprovalConfig::new("Deploy?")
+            .with_deadline_secs(600)
+            .on_timeout(EscalationPolicy::AutoReject);
+        let engine = Arc::new(engine_with(store.clone(), config));
+
+        let run_id = suspended_run(&engine).await;
+        engine.pause_run(run_id).await.expect("pause the run");
+        let step_id = expire_gate(&store, run_id).await;
+
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action, EscalationAction::Rejected);
+
+        let gate = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(gate.status.state, StepStatus::Failed);
+        assert_eq!(gate.error.as_deref(), Some(APPROVAL_TIMEOUT_ERROR));
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Failed);
+        assert_eq!(run.error.as_deref(), Some(APPROVAL_TIMEOUT_ERROR));
+
+        assert!(engine.resume_paused_run(run_id).await.is_err());
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn gate_sla_expired_during_pause_notify_rearms_timer_kept_on_resume() {
+    timeout(TEST_TIMEOUT, async {
+        let (addr, received) = recording_server().await;
+        let store = Arc::new(InMemoryStore::new());
+        let config = ApprovalConfig::new("Deploy?")
+            .with_deadline_secs(600)
+            .on_timeout(EscalationPolicy::Notify(vec![
+                NotificationTarget::Webhook {
+                    url: format!("http://{addr}/hook"),
+                },
+            ]));
+        let engine = Arc::new(engine_with(store.clone(), config));
+
+        let run_id = suspended_run(&engine).await;
+        engine.pause_run(run_id).await.expect("pause the run");
+        let step_id = expire_gate(&store, run_id).await;
+
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action, EscalationAction::Notified(1));
+        assert_eq!(received.lock().expect("recorder lock").len(), 1);
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Paused);
+
+        let gate = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(gate.status.state, StepStatus::AwaitingApproval);
+        assert!(gate.approval_deadline_at.expect("timer rearmed") > Utc::now());
+
+        engine
+            .resume_paused_run(run_id)
+            .await
+            .expect("resume the run");
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::AwaitingApproval);
+
+        let gate = store.get_step(step_id).await.unwrap().unwrap();
+        assert!(gate.approval_deadline_at.expect("timer kept") > Utc::now());
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn gate_sla_expired_during_pause_auto_approve_does_not_resume_local_run() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let config = ApprovalConfig::new("Deploy?")
+            .with_deadline_secs(600)
+            .on_timeout(EscalationPolicy::AutoApprove);
+        let engine = Arc::new(engine_with(store.clone(), config));
+
+        let run_id = suspended_run(&engine).await;
+        engine.pause_run(run_id).await.expect("pause the run");
+        expire_gate(&store, run_id).await;
+
+        let records = ApprovalEscalator::new(engine.clone())
+            .tick()
+            .await
+            .expect("tick");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].action, EscalationAction::Approved);
+
+        let run = store.get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Paused);
+        assert!(
+            !step_names(&store, run_id)
+                .await
+                .contains(&"deploy".to_string())
         );
     })
     .await

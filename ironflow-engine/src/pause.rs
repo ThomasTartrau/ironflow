@@ -91,7 +91,10 @@ impl Engine {
     ///
     /// While the run is paused, an approval, a human input or a signal it
     /// waits for can still be resolved: the decision is recorded and only
-    /// changes the state the run resumes to.
+    /// changes the state the run resumes to. The SLA deadline of an approval
+    /// gate keeps running: the [`ApprovalEscalator`](crate::escalation::ApprovalEscalator)
+    /// applies its policy during the pause, with the same effect as a human
+    /// decision.
     ///
     /// # Errors
     ///

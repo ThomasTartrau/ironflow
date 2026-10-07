@@ -16,6 +16,12 @@
 //! Every firing publishes an [`Event::ApprovalEscalated`], which the
 //! [`AuditLogSubscriber`](crate::notify::AuditLogSubscriber) persists with the
 //! reason, so the escalation history of a gate is always reconstructable.
+//!
+//! A gate whose run is paused keeps its deadline: the escalator applies the
+//! policy while the run stays `Paused`. An auto-approval only makes the run
+//! resume to `Pending` when the operator resumes it, an auto-rejection fails
+//! it, a notification or a reassignment re-arms the timer, which the resume
+//! keeps.
 
 use std::sync::Arc;
 
@@ -26,7 +32,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use ironflow_store::models::{
-    Assignee, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
+    Assignee, Run, RunStatus, RunUpdate, Step, StepKind, StepStatus, StepUpdate,
 };
 use strum::IntoStaticStr;
 
@@ -211,6 +217,9 @@ impl ApprovalEscalator {
     /// A gate that fails to escalate is logged and reported as
     /// [`EscalationAction::Stale`]: one broken gate never aborts the batch.
     ///
+    /// A gate whose run is paused is escalated like any other: the run stays
+    /// `Paused` and the policy only changes the state it resumes to.
+    ///
     /// An [`EscalationPolicy::AutoApprove`] resumes the run inline, so a long
     /// workflow holds this call until it suspends or finishes. That blocks the
     /// escalator loop, never the HTTP server, and escalations are rare.
@@ -285,11 +294,10 @@ impl ApprovalEscalator {
         let Some(run) = run else {
             return Ok(self.stale(step, "run no longer exists"));
         };
-        if run.status.state != RunStatus::AwaitingApproval
-            || step.status.state != StepStatus::AwaitingApproval
-        {
+        if !awaits_gate(&run) || step.status.state != StepStatus::AwaitingApproval {
             return Ok(self.stale(step, "gate already resolved"));
         }
+        let paused = run.status.state == RunStatus::Paused;
 
         let policy = config.effective_policy();
         let reason = format!(
@@ -329,7 +337,7 @@ impl ApprovalEscalator {
             EscalationPolicy::AutoApprove if step.kind == StepKind::HumanInput => {
                 self.auto_reject(step).await?
             }
-            EscalationPolicy::AutoApprove => self.auto_approve(step, &reason).await?,
+            EscalationPolicy::AutoApprove => self.auto_approve(step, &reason, paused).await?,
             EscalationPolicy::AutoReject => self.auto_reject(step).await?,
             EscalationPolicy::Notify(targets) => {
                 self.notify(step, &config, &policy, targets, &reason)
@@ -380,6 +388,7 @@ impl ApprovalEscalator {
         &self,
         step: &Step,
         reason: &str,
+        paused: bool,
     ) -> Result<EscalationAction, EngineError> {
         let now = Utc::now();
         let store = self.engine.store();
@@ -400,11 +409,24 @@ impl ApprovalEscalator {
                 },
             )
             .await?;
-        let resume_status = match self.engine.execution_mode() {
-            ExecutionMode::Local => RunStatus::Running,
-            ExecutionMode::Workers => RunStatus::Pending,
-        };
-        store.update_run_status(step.run_id, resume_status).await?;
+        // A paused run waits for its operator: the resume requeues it.
+        if paused {
+            store
+                .update_run(
+                    step.run_id,
+                    RunUpdate {
+                        resume_status: Some(RunStatus::Pending),
+                        ..RunUpdate::default()
+                    },
+                )
+                .await?;
+        } else {
+            let resume_status = match self.engine.execution_mode() {
+                ExecutionMode::Local => RunStatus::Running,
+                ExecutionMode::Workers => RunStatus::Pending,
+            };
+            store.update_run_status(step.run_id, resume_status).await?;
+        }
 
         self.engine
             .event_publisher()
@@ -426,7 +448,12 @@ impl ApprovalEscalator {
         // state change already happened, so a failed resume is reported, not
         // rolled back. The run sits in `Running` without a lease, exactly like
         // the human-approval path.
-        if matches!(self.engine.execution_mode(), ExecutionMode::Local)
+        if paused {
+            info!(
+                run_id = %step.run_id,
+                "paused run will resume after its auto-approved gate"
+            );
+        } else if matches!(self.engine.execution_mode(), ExecutionMode::Local)
             && let Err(err) = self.engine.resume_run(step.run_id).await
         {
             error!(
@@ -439,7 +466,8 @@ impl ApprovalEscalator {
         Ok(EscalationAction::Approved)
     }
 
-    /// Fail the gate and the run.
+    /// Fail the gate and the run. A paused run fails too (`Paused -> Failed`),
+    /// like a human rejection during a pause.
     async fn auto_reject(&self, step: &Step) -> Result<EscalationAction, EngineError> {
         let now = Utc::now();
         let store = self.engine.store();
@@ -658,6 +686,14 @@ impl ApprovalEscalator {
             }
         }
     }
+}
+
+/// Whether `run` still waits on its gate: suspended on it, or paused by an
+/// operator while suspended on it.
+fn awaits_gate(run: &Run) -> bool {
+    run.status.state == RunStatus::AwaitingApproval
+        || (run.status.state == RunStatus::Paused
+            && run.resume_status == Some(RunStatus::AwaitingApproval))
 }
 
 /// The policy to apply at `stage`, rejecting a misconfigured nested chain.
