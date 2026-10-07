@@ -166,7 +166,7 @@ let worker = WorkerBuilder::new(&api_url, &worker_token)
 A run requires the tags its handler declares with
 [`required_worker_tags`](workflow-handler.md#worker-tags), plus the ones given
 at creation: `EnqueueOptions::worker_tags`, `worker_tags` in
-`POST /api/v1/runs`, `ironflow run create --worker-tag gpu` or the
+`POST /api/v1/runs`, `ironflow-cli run create --worker-tag gpu` or the
 `worker_tags` argument of the MCP `create_run` tool. A tag is 1 to 64 ASCII
 letters, digits or `- _ . : / =`, at most 32 per worker or run; `build()`
 rejects an invalid one. Retrying a run keeps its tags; replaying it adds the
@@ -180,7 +180,7 @@ take.
 A run no worker can take waits in silence. While a run is `pending` or
 `retrying`, `GET /api/v1/runs/{id}` returns `worker_routing`: the workers seen
 recently by this API process and how many of them could take the run. The
-dashboard and `ironflow run get` warn when none was seen, or when none is
+dashboard and `ironflow-cli run get` warn when none was seen, or when none is
 eligible.
 
 Inside a worker, a `ctx.workflow(..)` step refuses a child whose required tags
@@ -190,6 +190,26 @@ the wrong host.
 ## Lease & Reaper
 
 Workers hold a time-limited lease on each run they execute. If a worker crashes or is evicted, the lease expires and the Reaper (a background task in the API server) detects the orphaned run and requeues it.
+
+A worker refreshes its lease every 30 seconds and the lease lasts 90 seconds, so three
+missed refreshes make the run recoverable. A worker that cannot refresh its lease (the API
+took the run away, or stayed unreachable longer than the lease) abandons the run instead of
+executing it twice. Every 60 seconds the Reaper recovers at most 100 expired runs.
+
+`AppState::spawn_background_tasks` starts the Reaper; a custom server that does not call it
+must start one itself, or expired runs stay `Running`. Both sides can be tuned:
+
+```rust,ignore
+let reaper = Reaper::new(store, engine)
+    .interval(Duration::from_secs(30))
+    .batch_size(50);
+
+let worker = WorkerBuilder::new(api_url, token)
+    .worker_id("worker-eu-west-1a") // default: worker-<uuid>, new at every start
+    .lease_ttl(Duration::from_secs(120))
+    .lease_refresh_interval(Duration::from_secs(30))
+    .build()?;
+```
 
 A sub-workflow child that was suspended (human input, signal, delay) is picked
 like any run, but the worker resumes its root run instead. The lease follows:
@@ -267,8 +287,8 @@ executing are not affected; pause them one by one. `GET /api/v1/workflows`
 and `GET /api/v1/workflows/{name}` report `paused_at` while the workflow is
 paused.
 
-The CLI exposes the same actions as `ironflow run pause|resume <id>` and
-`ironflow workflow pause|resume <name>`, the MCP server as the `pause_run`,
+The CLI exposes the same actions as `ironflow-cli run pause|resume <id>` and
+`ironflow-cli workflow pause|resume <name>`, the MCP server as the `pause_run`,
 `resume_run`, `pause_workflow` and `resume_workflow` tools.
 
 ## Scaling

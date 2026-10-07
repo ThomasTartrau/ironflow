@@ -29,7 +29,7 @@ shows the nominal branch, not every branch the run might take.
 ## From the CLI
 
 ```bash
-ironflow run plan deploy --input '{"env":"prod"}'
+ironflow-cli run plan deploy --input '{"env":"prod"}'
 ```
 
 ```text

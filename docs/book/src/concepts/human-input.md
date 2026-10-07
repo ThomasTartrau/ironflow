@@ -115,8 +115,8 @@ curl -X POST "$IRONFLOW_URL/api/v1/runs/$RUN_ID/steps/$STEP_ID/reject" \
 `400`: approving it would resume the handler without an answer.
 
 The dashboard shows a form for every pending input on the run page. The CLI has
-`ironflow run input <run> <step> --value '{..}'` (or `--value-file`) and
-`ironflow run reject-input <run> <step> --reason ..`; the MCP server has the
+`ironflow-cli run input <run> <step> --value '{..}'` (or `--value-file`) and
+`ironflow-cli run reject-input <run> <step> --reason ..`; the MCP server has the
 `submit_input` and `reject_input` tools.
 
 ## Rejection

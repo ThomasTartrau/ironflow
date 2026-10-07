@@ -24,13 +24,78 @@ The repository includes a complete example server:
 | `RATE_LIMIT_AUTH` | `10` | Sign-in / sign-up requests per minute, per client IP and per targeted email (`0` disables) |
 | `RATE_LIMIT_GENERAL` | `60` | Other API requests per minute, per caller (`0` disables) |
 | `TRUSTED_PROXIES` | -- | Comma-separated IPs or CIDR ranges of the reverse proxies whose `X-Forwarded-For` is believed |
-| `ARTIFACTS_DIR` | -- | Filesystem root for step artifacts |
+| `ARTIFACTS_DIR` | -- | Filesystem root for step [artifacts](../concepts/artifacts.md); unset disables them |
+| `ARTIFACT_MAX_BYTES` | `104857600` | Maximum size of one artifact (100 MiB) |
+| `IRONFLOW_SECRET_KEYS` | -- | Versioned AES-GCM keys for the secret store, see [Secret encryption keys](#secret-encryption-keys); unset disables secrets |
+| `IRONFLOW_SECRET_ACTIVE_KEY_VERSION` | highest configured | Key version used to encrypt new secrets |
+| `IRONFLOW_SECRET_KEY` | -- | Deprecated single key, read as version 1 |
+| `DASHBOARD_DIR` | embedded | Serve the dashboard from this directory instead of the embedded copy |
+| `WEBHOOK_URL` | -- | Outbound webhook notified of run events |
 | `PURGE_MAX_AGE_DAYS` | `90` | Terminal runs older than this are purged |
 | `PURGE_MAX_RUNS_PER_WORKFLOW` | `1000` | Terminal runs kept per workflow |
 | `PURGE_DRY_RUN` | `false` | Log what would be purged without deleting (also disables usage and signal purging) |
 | `PURGE_INTERVAL_SECS` | `86400` | Seconds between purger ticks (min 60) |
 | `PROVIDER_ACCOUNT_USAGE_RETENTION_DAYS` | `30` | Days of Provider Account usage history kept (min 1) |
 | `SIGNAL_RETENTION_DAYS` | `7` | Days received [signals](../concepts/signals.md) are kept before the purger deletes them (min 1) |
+
+No secret is built into the binary. `JWT_SECRET` and `WORKER_TOKEN` must be at least 32
+bytes and must not start with `ironflow-dev-`; generate them with `openssl rand -hex 32`.
+Only `IRONFLOW_ENV=development` boots without them. Production also requires
+`DATABASE_URL`. Any violation aborts at boot with every error listed.
+
+### Secret encryption keys
+
+`IRONFLOW_SECRET_KEYS` holds one or more versioned AES-GCM keys, as `version:hex` pairs
+separated by commas. Each key is 64 hex characters (32 bytes):
+
+```sh
+IRONFLOW_SECRET_KEYS="1:0123...ef,2:fedc...10"
+IRONFLOW_SECRET_ACTIVE_KEY_VERSION=2
+```
+
+Every key in the ring can decrypt; only the active one encrypts. Without any key the secret
+store stays off and workflows reading secrets fail.
+
+`IRONFLOW_SECRET_KEY` (a single unversioned key) is still accepted and read as version 1,
+so existing deployments keep working. It is deprecated: when `IRONFLOW_SECRET_KEYS` is also
+set, it is ignored with a warning.
+
+The server refuses to start if a stored secret uses a key version absent from the
+configuration, and names the missing versions. That is the safety net behind the rotation
+procedure below.
+
+#### Rotating the encryption key
+
+```sh
+# 1. Add the new key without activating it, then restart.
+#    New secrets stay on version 1; version 2 is merely available.
+IRONFLOW_SECRET_KEYS="1:<hexA>,2:<hexB>"
+IRONFLOW_SECRET_ACTIVE_KEY_VERSION=1
+
+# 2. Activate version 2, then restart.
+#    New secrets use version 2; older ones stay readable.
+IRONFLOW_SECRET_ACTIVE_KEY_VERSION=2
+
+# 3. Re-encrypt the existing secrets.
+ironflow-cli secret rotate
+
+# 4. Confirm version 1 is no longer used by any secret.
+ironflow-cli secret key-status
+
+# 5. Drop version 1, then restart.
+IRONFLOW_SECRET_KEYS="2:<hexB>"
+```
+
+Step 1 is kept separate from step 2 so rolling back to the previous deployment stays
+possible for as long as nothing has been encrypted with the new key.
+
+`secret rotate` works in batches and is safe to interrupt: secrets already re-encrypted are
+skipped on the next run, and every secret stays readable throughout. It re-encrypts in place:
+the ID, key and timestamps of a secret never change. A secret that cannot be decrypted is
+skipped and reported, and the command exits non-zero.
+
+`secret key-status` reports which versions are configured, which are used by stored
+secrets, and which can be retired.
 
 ### Transport security
 
@@ -115,7 +180,7 @@ admin account (403 otherwise):
 
 An unknown run or workflow answers 404. Pausing a finished, already paused or
 sub-workflow run, or resuming a run that is not paused, answers 400. The CLI
-offers the same actions as `ironflow run pause|resume <id>` and
-`ironflow workflow pause|resume <name>`. See
+offers the same actions as `ironflow-cli run pause|resume <id>` and
+`ironflow-cli workflow pause|resume <name>`. See
 [Pausing runs and workflows](../concepts/engine-worker.md#pausing-runs-and-workflows)
 for the lifecycle details.
