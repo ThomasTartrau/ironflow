@@ -23,8 +23,10 @@ use serde_json::to_string_pretty;
 use uuid::Uuid;
 
 mod cancel;
+mod pause;
 
 pub use cancel::cancelled_table;
+pub use pause::{paused_table, resumed_table, workflow_pause_table};
 
 /// Map a [`RunStatus`] to a terminal color.
 fn status_color(status: &RunStatus) -> Color {
@@ -38,6 +40,7 @@ fn status_color(status: &RunStatus) -> Color {
         RunStatus::Retrying => Color::Cyan,
         RunStatus::Warning => Color::DarkYellow,
         RunStatus::Sleeping => Color::DarkCyan,
+        RunStatus::Paused => Color::DarkMagenta,
     }
 }
 
@@ -492,13 +495,14 @@ pub fn steps_table(steps: &[StepResponse]) -> Table {
 /// Render a list of workflows as a table.
 pub fn workflows_table(workflows: &[WorkflowSummary]) -> Table {
     let mut table = base_table();
-    table.set_header(vec!["Name", "Category", "Version"]);
+    table.set_header(vec!["Name", "Category", "Version", "Paused since"]);
 
     for wf in workflows {
         table.add_row(vec![
             Cell::new(&wf.name),
             Cell::new(wf.category.as_deref().unwrap_or("-")),
             Cell::new(wf.version.as_deref().unwrap_or("-")),
+            Cell::new(format_optional_datetime(&wf.paused_at)),
         ]);
     }
 
@@ -523,6 +527,12 @@ pub fn workflow_detail_table(detail: &WorkflowDetailResponse) -> Table {
         Cell::new("Version"),
         Cell::new(detail.version.as_deref().unwrap_or("-")),
     ]);
+    if let Some(paused_at) = &detail.paused_at {
+        table.add_row(vec![
+            Cell::new("Paused since"),
+            Cell::new(format_datetime(paused_at)),
+        ]);
+    }
 
     if !detail.sub_workflows.is_empty() {
         let names: Vec<&str> = detail
@@ -727,7 +737,8 @@ pub fn stats_history_table(history: &StatsHistoryResponse) -> Table {
             + bucket.running
             + bucket.retrying
             + bucket.awaiting_approval
-            + bucket.sleeping;
+            + bucket.sleeping
+            + bucket.paused;
         table.add_row(vec![
             Cell::new(bucket.time),
             Cell::new(bucket.completed).fg(Color::Green),
@@ -1261,6 +1272,7 @@ mod tests {
             labels: HashMap::new(),
             scheduled_at: None,
             capacity_wait_kind: None,
+            resume_status: None,
             created_by,
             idempotency_key: None,
             concurrency_key: None,
@@ -1775,6 +1787,7 @@ mod tests {
         let output = table.to_string();
         assert!(output.contains("Name"));
         assert!(output.contains("Category"));
+        assert!(output.contains("Paused since"));
     }
 
     // ── Secrets ────────────────────────────────────────────────

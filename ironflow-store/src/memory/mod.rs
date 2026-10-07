@@ -87,6 +87,8 @@ pub(super) struct State {
     pub(super) signal_idempotency: HashMap<String, Uuid>,
     /// Issued refresh tokens, keyed by their SHA-256 hash.
     pub(super) refresh_tokens: HashMap<String, StoredRefreshToken>,
+    /// Paused workflows, keyed by workflow name.
+    pub(super) workflow_pauses: HashMap<String, crate::entities::WorkflowPause>,
 }
 
 #[derive(Debug, Clone)]

@@ -336,6 +336,29 @@ the failed try created, so the agent sees what that try did.
 +     .resume_prompt("You were interrupted. Finish the review where you stopped.");
 ```
 
+## run-status-paused
+- kind: breaking
+- since: ironflow-store after 2.45.2, ironflow-engine after 2.51.2 (#172)
+- compiler: `non-exhaustive patterns: ... RunStatus::Paused not covered`
+
+`RunStatus` has a new `Paused` variant: an administrator paused the run (`POST
+/api/v1/runs/{id}/pause`), which holds it until it is resumed or cancelled. A `match` on
+the status of a run, a child run included, needs an arm for it. A paused run is not
+finished: treat it like a run still waiting.
+
+```diff
+  let waiting = match child.status() {
+      RunStatus::Pending
+      | RunStatus::Running
+      | RunStatus::Retrying
+      | RunStatus::Sleeping
+-     | RunStatus::AwaitingApproval => true,
++     | RunStatus::AwaitingApproval
++     | RunStatus::Paused => true,
+      RunStatus::Completed | RunStatus::Warning | RunStatus::Failed | RunStatus::Cancelled => false,
+  };
+```
+
 ## cron-trigger-fields
 - kind: breaking
 - since: ironflow-store after 2.45.2 (#174)

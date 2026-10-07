@@ -1,4 +1,4 @@
-//! Workflow subcommands: list, get.
+//! Workflow subcommands: list, get, pause, resume.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -24,6 +24,16 @@ pub enum WorkflowCommands {
         /// Workflow name.
         name: String,
     },
+    /// Pause a workflow: workers stop picking its queued runs.
+    Pause {
+        /// Workflow name.
+        name: String,
+    },
+    /// Resume a paused workflow: workers pick its queued runs again.
+    Resume {
+        /// Workflow name.
+        name: String,
+    },
 }
 
 /// Execute a workflow subcommand.
@@ -43,6 +53,18 @@ pub async fn execute(client: &IronflowClient, args: &WorkflowArgs, json_mode: bo
             let response = client.get_workflow(name).await?;
             output::print_output(json_mode, &response, || {
                 output::workflow_detail_table(&response.data)
+            })?;
+        }
+        WorkflowCommands::Pause { name } => {
+            let response = client.pause_workflow(name).await?;
+            output::print_output(json_mode, &response, || {
+                output::workflow_pause_table(&response.data)
+            })?;
+        }
+        WorkflowCommands::Resume { name } => {
+            let response = client.resume_workflow(name).await?;
+            output::print_output(json_mode, &response, || {
+                output::workflow_pause_table(&response.data)
             })?;
         }
     }

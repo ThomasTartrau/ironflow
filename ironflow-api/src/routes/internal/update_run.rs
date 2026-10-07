@@ -105,6 +105,7 @@ mod tests {
             output: None,
             lease: None,
             capacity_wait_kind: None,
+            resume_status: None,
         };
 
         let req = Request::builder()
@@ -145,6 +146,7 @@ mod tests {
             output: None,
             lease: None,
             capacity_wait_kind: None,
+            resume_status: None,
         };
 
         let req = Request::builder()

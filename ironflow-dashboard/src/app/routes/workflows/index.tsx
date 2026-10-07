@@ -194,6 +194,11 @@ function TreeNodeRow({
 									className="size-4 text-muted-foreground"
 								/>
 								<span className="font-mono text-sm">{wf.name}</span>
+								{wf.paused_at && (
+									<span className="rounded-sm border border-[var(--status-paused-border)] bg-[var(--status-paused-bg)] px-1.5 text-[11px] font-medium uppercase tracking-wide text-[var(--status-paused-fg)]">
+										Paused
+									</span>
+								)}
 								{wf.version !== "unversioned" && (
 									<span className="ml-auto text-xs font-mono text-muted-foreground tabular-nums">
 										{wf.version}

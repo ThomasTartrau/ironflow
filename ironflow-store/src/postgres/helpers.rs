@@ -28,6 +28,7 @@ pub(crate) fn parse_run_status(s: &str) -> Result<RunStatus, StoreError> {
         "awaiting_approval" => Ok(RunStatus::AwaitingApproval),
         "warning" => Ok(RunStatus::Warning),
         "sleeping" => Ok(RunStatus::Sleeping),
+        "paused" => Ok(RunStatus::Paused),
         other => Err(StoreError::Database(format!("unknown run status: {other}"))),
     }
 }
@@ -78,6 +79,7 @@ pub(crate) fn run_status_to_db_str(status: &RunStatus) -> &'static str {
         RunStatus::AwaitingApproval => "awaiting_approval",
         RunStatus::Warning => "warning",
         RunStatus::Sleeping => "sleeping",
+        RunStatus::Paused => "paused",
     }
 }
 
@@ -189,6 +191,10 @@ pub(crate) fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<Run, StoreError>
             .get::<Option<String>, _>("capacity_wait_kind")
             .map(ProviderKind::from),
         worker_tags: row.get::<Vec<String>, _>("worker_tags"),
+        resume_status: row
+            .get::<Option<&str>, _>("resume_status")
+            .map(parse_run_status)
+            .transpose()?,
     })
 }
 

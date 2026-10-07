@@ -8,6 +8,7 @@ import { CodeBlock } from "@/app/components/CodeBlock";
 import { Breadcrumb } from "@/app/components/Breadcrumb";
 import { RunsTable } from "@/app/routes/runs/_components/RunsTable";
 import { RunDialog } from "./_components/RunDialog";
+import { WorkflowPauseButton } from "./_components/WorkflowPauseButton";
 import { Button } from "@/components/ui/button";
 import { Tag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -42,10 +43,16 @@ export function Component() {
 			description={workflow.description || "No description provided."}
 			titleItem={
 				isAdmin ? (
-					<RunDialog
-						workflow={workflow}
-						onCreated={(id) => navigate(`/runs/${id}`)}
-					/>
+					<div className="flex gap-2">
+						<WorkflowPauseButton
+							name={workflow.name}
+							pausedAt={workflow.paused_at}
+						/>
+						<RunDialog
+							workflow={workflow}
+							onCreated={(id) => navigate(`/runs/${id}`)}
+						/>
+					</div>
 				) : undefined
 			}
 		>
@@ -57,12 +64,22 @@ export function Component() {
 							{ label: workflow.name },
 						]}
 					/>
-					{workflow.version !== "unversioned" && (
-						<Badge variant="outline" className="gap-1 font-mono text-xs">
-							<Tag className="size-3" aria-hidden="true" />
-							{workflow.version}
-						</Badge>
-					)}
+					<div className="flex items-center gap-2">
+						{workflow.paused_at && (
+							<Badge
+								variant="outline"
+								className="text-xs border-[var(--status-paused-border)] bg-[var(--status-paused-bg)] text-[var(--status-paused-fg)]"
+							>
+								Paused since {new Date(workflow.paused_at).toLocaleString()}
+							</Badge>
+						)}
+						{workflow.version !== "unversioned" && (
+							<Badge variant="outline" className="gap-1 font-mono text-xs">
+								<Tag className="size-3" aria-hidden="true" />
+								{workflow.version}
+							</Badge>
+						)}
+					</div>
 				</div>
 
 				<div className="space-y-3">

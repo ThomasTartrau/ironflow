@@ -148,6 +148,13 @@ pub struct Run {
     /// [`WorkerCapabilities::can_take`] for the routing rule.
     #[serde(default)]
     pub worker_tags: Vec<String>,
+    /// State the run returns to on resume.
+    ///
+    /// `Some` only while the run is `Paused`: it records the state the run was
+    /// paused from, or the state a decision taken during the pause (approval,
+    /// human input, signal) moved it to. `None` in every other state.
+    #[serde(default)]
+    pub resume_status: Option<RunStatus>,
 }
 
 /// How long a client-supplied idempotency key stays bound to its run.
@@ -823,6 +830,14 @@ pub struct RunUpdate {
     /// Applied only with `status: Some(Sleeping)`; any other status clears it.
     #[serde(default)]
     pub capacity_wait_kind: Option<ProviderKind>,
+    /// New target state of a `Paused` run, see [`Run::resume_status`].
+    ///
+    /// Applied only with `status: None`, and refused with
+    /// [`StoreError::InvalidTransition`](crate::error::StoreError::InvalidTransition)
+    /// unless the run is `Paused`: it lets a decision taken during the pause
+    /// change where the run goes on resume without leaving `Paused`.
+    #[serde(default)]
+    pub resume_status: Option<RunStatus>,
 }
 
 /// Retention policy for purging old runs.
@@ -1033,6 +1048,7 @@ mod tests {
             output: Some(json!({"verdict": "approved", "score": 9})),
             lease_recoveries: 1,
             capacity_wait_kind: Some(ProviderKind::new("claude_subscription")),
+            resume_status: None,
             worker_tags: vec!["gpu".to_string(), "region:eu".to_string()],
         };
 
@@ -1103,6 +1119,7 @@ mod tests {
             output: Some(json!("set")),
             lease_recoveries: 2,
             capacity_wait_kind: None,
+            resume_status: None,
             worker_tags: vec!["gpu".to_string()],
         };
         let mut raw = serde_json::to_value(&run).expect("serialize");
@@ -1331,6 +1348,7 @@ mod tests {
             output: None,
             lease: None,
             capacity_wait_kind: None,
+            resume_status: None,
         };
 
         let json = serde_json::to_string(&update).expect("serialize");

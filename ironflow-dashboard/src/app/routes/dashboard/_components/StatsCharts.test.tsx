@@ -120,6 +120,7 @@ describe("StatsCharts", () => {
 							retrying: 0,
 							awaiting_approval: 0,
 							sleeping: 0,
+							paused: 0,
 							avg_duration_ms: 1200,
 							p95_duration_ms: 1800,
 							total_cost_usd: 0.05,

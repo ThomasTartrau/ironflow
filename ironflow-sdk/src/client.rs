@@ -571,6 +571,41 @@ impl IronflowClient {
             .await
     }
 
+    /// `POST /api/v1/runs/:id/pause` -- Pause a run and the sub-workflow runs
+    /// below it.
+    ///
+    /// A running run has its step in flight interrupted, executed again on
+    /// resume. The response carries
+    /// the paused run's fields, with `resume_status` (the state it returns
+    /// to), plus `paused_descendants`, the ids of the sub-runs paused with it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 404, 403 (not an admin) or 400 (the run
+    /// already finished, is already paused, or is a sub-workflow run).
+    pub async fn pause_run(&self, id: Uuid) -> Result<ApiResponse<types::PauseRunResponse>, Error> {
+        self.send_envelope(self.post(&format!("/api/v1/runs/{id}/pause")))
+            .await
+    }
+
+    /// `POST /api/v1/runs/:id/resume` -- Resume a paused run and the
+    /// sub-workflow runs paused below it.
+    ///
+    /// The response carries the resumed run's fields plus
+    /// `resumed_descendants`, the ids of the sub-runs resumed with it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 404, 403 (not an admin) or 400 (the run is
+    /// not paused, or is a sub-workflow run).
+    pub async fn resume_run(
+        &self,
+        id: Uuid,
+    ) -> Result<ApiResponse<types::ResumeRunResponse>, Error> {
+        self.send_envelope(self.post(&format!("/api/v1/runs/{id}/resume")))
+            .await
+    }
+
     /// `POST /api/v1/runs/:id/approve` -- Approve a run waiting for approval.
     ///
     /// # Errors
@@ -708,6 +743,35 @@ impl IronflowClient {
                 .json(request),
         )
         .await
+    }
+
+    /// `POST /api/v1/workflows/:name/pause` -- Pause a workflow: workers stop
+    /// picking its queued runs until it is resumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 404 (workflow not registered) or 403 (not an
+    /// admin).
+    pub async fn pause_workflow(
+        &self,
+        name: &str,
+    ) -> Result<ApiResponse<types::WorkflowPauseResponse>, Error> {
+        self.send_envelope(self.post(&format!("/api/v1/workflows/{name}/pause")))
+            .await
+    }
+
+    /// `POST /api/v1/workflows/:name/resume` -- Resume a paused workflow.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Api`] on 404 (workflow not registered) or 403 (not an
+    /// admin).
+    pub async fn resume_workflow(
+        &self,
+        name: &str,
+    ) -> Result<ApiResponse<types::WorkflowPauseResponse>, Error> {
+        self.send_envelope(self.post(&format!("/api/v1/workflows/{name}/resume")))
+            .await
     }
 
     // ── Stats ──────────────────────────────────────────────────────

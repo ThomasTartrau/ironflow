@@ -1,5 +1,5 @@
-//! Run subcommands: create, list, get, cancel, approve, reject, input, reject-input, retry,
-//! replay, watch, plan, diff.
+//! Run subcommands: create, list, get, cancel, pause, resume, approve, reject, input,
+//! reject-input, retry, replay, watch, plan, diff.
 
 use std::fs;
 use std::io::{Write as _, stdout};
@@ -122,6 +122,16 @@ pub enum RunCommands {
     },
     /// Cancel a pending or running run.
     Cancel {
+        /// Run UUID.
+        id: Uuid,
+    },
+    /// Pause a run and its sub-workflow runs. A running run stops at its next step.
+    Pause {
+        /// Run UUID.
+        id: Uuid,
+    },
+    /// Resume a paused run in the state it was paused from.
+    Resume {
         /// Run UUID.
         id: Uuid,
     },
@@ -352,6 +362,18 @@ pub async fn execute(
             let response = client.cancel_run(*id).await?;
             output::print_output(json_mode, &response, || {
                 output::cancelled_table(&response.data)
+            })?;
+        }
+        RunCommands::Pause { id } => {
+            let response = client.pause_run(*id).await?;
+            output::print_output(json_mode, &response, || {
+                output::paused_table(&response.data)
+            })?;
+        }
+        RunCommands::Resume { id } => {
+            let response = client.resume_run(*id).await?;
+            output::print_output(json_mode, &response, || {
+                output::resumed_table(&response.data)
             })?;
         }
         RunCommands::Approve { id } => {

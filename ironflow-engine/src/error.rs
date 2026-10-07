@@ -376,6 +376,53 @@ pub enum EngineError {
         run_id: Uuid,
     },
 
+    /// An operator paused the run while it executed.
+    ///
+    /// Raised at the next step boundary: the step is not started and the run
+    /// stays `Paused`, neither failed nor retried, until it is resumed or
+    /// cancelled. A `Workflow` step whose child is paused is left as the pause
+    /// recorded it, so the resumed parent re-enters the same child run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// let err = EngineError::RunPaused { run_id: Uuid::nil() };
+    /// assert!(err.to_string().contains("paused"));
+    /// ```
+    #[error("run {run_id} was paused")]
+    RunPaused {
+        /// The paused run.
+        run_id: Uuid,
+    },
+
+    /// A pause or a resume targeted a sub-workflow run.
+    ///
+    /// A child run executes inside its root run's execution, so it is paused
+    /// and resumed with its root, never on its own.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::error::EngineError;
+    /// use uuid::Uuid;
+    ///
+    /// let err = EngineError::ChildRunNotPausable {
+    ///     run_id: Uuid::nil(),
+    ///     root_run_id: Uuid::nil(),
+    /// };
+    /// assert!(err.to_string().contains("root run"));
+    /// ```
+    #[error("run {run_id} is a sub-workflow run: pause or resume its root run {root_run_id}")]
+    ChildRunNotPausable {
+        /// The sub-workflow run targeted.
+        run_id: Uuid,
+        /// The root run of its chain, the one to pause or resume.
+        root_run_id: Uuid,
+    },
+
     /// A signal could not be delivered because it is malformed (empty name or
     /// key).
     #[error("invalid signal: {0}")]

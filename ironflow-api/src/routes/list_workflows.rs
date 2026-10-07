@@ -1,7 +1,10 @@
 //! `GET /api/v1/workflows` — List registered workflows.
 
+use std::collections::HashMap;
+
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
+use chrono::{DateTime, Utc};
 use ironflow_auth::extractor::Authenticated;
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +39,10 @@ pub struct WorkflowSummary {
     /// Optional 6-field cron expression for automatic execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    /// When the workflow was paused: its queued runs are not picked up until
+    /// it is resumed. Omitted when the workflow is not paused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_at: Option<DateTime<Utc>>,
 }
 
 /// Sentinel value for the `category` query parameter that selects only
@@ -69,6 +76,14 @@ pub async fn list_workflows(
     State(state): State<AppState>,
     Query(params): Query<ListWorkflowsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let paused_at: HashMap<String, DateTime<Utc>> = state
+        .store
+        .list_workflow_pauses()
+        .await?
+        .into_iter()
+        .map(|pause| (pause.workflow_name, pause.paused_at))
+        .collect();
+
     let mut summaries: Vec<WorkflowSummary> = state
         .engine
         .handler_names()
@@ -83,6 +98,7 @@ pub async fn list_workflows(
                 category,
                 version,
                 schedule,
+                paused_at: paused_at.get(name).copied(),
             }
         })
         .collect();
@@ -397,5 +413,27 @@ mod tests {
             .find(|s| s.name == "test-workflow")
             .unwrap();
         assert!(unscheduled.schedule.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_workflows_returns_paused_at_for_paused_workflows() {
+        let state = test_state();
+        let pause = state
+            .store
+            .pause_workflow("test-workflow", None)
+            .await
+            .unwrap();
+
+        let (_, summaries) = run_request(state, "/").await;
+        let paused = summaries
+            .iter()
+            .find(|s| s.name == "test-workflow")
+            .unwrap();
+        assert_eq!(paused.paused_at, Some(pause.paused_at));
+        let active = summaries
+            .iter()
+            .find(|s| s.name == "another-workflow")
+            .unwrap();
+        assert!(active.paused_at.is_none());
     }
 }

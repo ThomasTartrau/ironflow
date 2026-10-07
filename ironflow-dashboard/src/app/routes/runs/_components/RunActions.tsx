@@ -5,8 +5,10 @@ import { withToast, type ToastMessages } from "@/app/lib/api-toast";
 import {
 	approveRun,
 	cancelRun,
+	pauseRun,
 	rejectRun,
 	replayRun,
+	resumeRun,
 	retryRun,
 } from "../_actions/actions";
 import { Button } from "@/components/ui/button";
@@ -38,6 +40,8 @@ function descendantsNotice(count: number): string {
 type PendingAction =
 	| "idle"
 	| "cancelling"
+	| "pausing"
+	| "resuming"
 	| "retrying"
 	| "replaying"
 	| "approving"
@@ -61,7 +65,18 @@ export function RunActions({
 		run.status === "pending" ||
 		run.status === "running" ||
 		run.status === "awaiting_approval" ||
-		run.status === "sleeping";
+		run.status === "sleeping" ||
+		run.status === "paused";
+	// A sub-workflow run is paused and resumed through its root run.
+	const isSubRun = run.trigger.kind === "workflow";
+	const canPause =
+		!isSubRun &&
+		(run.status === "pending" ||
+			run.status === "running" ||
+			run.status === "retrying" ||
+			run.status === "awaiting_approval" ||
+			run.status === "sleeping");
+	const canResume = !isSubRun && run.status === "paused";
 	const canRetry = run.status === "failed" || run.status === "cancelled";
 	const canReplay = run.status === "completed" || run.status === "failed";
 	const canApprove = run.status === "awaiting_approval" && !awaitingInput;
@@ -118,6 +133,36 @@ export function RunActions({
 						{pendingAction === "rejecting" ? "Rejecting..." : "Reject"}
 					</Button>
 				</>
+			)}
+			{canPause && (
+				<Button
+					onClick={() =>
+						handleAction("pausing", () => pauseRun(run.id), {
+							loading: "Pausing run...",
+							success: "Run paused",
+							error: "Failed to pause run",
+						})
+					}
+					disabled={isLoading}
+					variant="outline"
+				>
+					{pendingAction === "pausing" ? "Pausing..." : "Pause"}
+				</Button>
+			)}
+			{canResume && (
+				<Button
+					onClick={() =>
+						handleAction("resuming", () => resumeRun(run.id), {
+							loading: "Resuming run...",
+							success: "Run resumed",
+							error: "Failed to resume run",
+						})
+					}
+					disabled={isLoading}
+					variant="default"
+				>
+					{pendingAction === "resuming" ? "Resuming..." : "Resume"}
+				</Button>
 			)}
 			{canCancel && (
 				<Button

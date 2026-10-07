@@ -231,6 +231,46 @@ it was created replays nothing either and fails with `HANDLER_VERSION_MISMATCH`.
 
 Runs paused in `Sleeping` (a `ctx.delay` step, a `ctx.wait_for_signal` step waiting for its signal, or an agent step waiting for [provider capacity](provider-accounts.md#when-every-account-is-limited)) carry their wake-up time in `scheduled_at`. The Waker, a background task of the API server, claims every due run every 10 seconds and moves it back to `Pending` exactly once, even with several API instances. Under `ExecutionMode::Local` the API then resumes the run in-process; under `ExecutionMode::Workers` a worker picks it up. A delivered [signal](signals.md) wakes its runs right away, without waiting for the Waker.
 
+## Pausing runs and workflows
+
+An administrator can hold a run, or a whole workflow, without cancelling
+anything.
+
+**A run.** `POST /api/v1/runs/{id}/pause` (`Engine::pause_run`) moves a root
+run and every active sub-workflow run below it to `Paused`. Each run keeps the
+state it was paused from in `resume_status`:
+
+- a queued (`Pending`, `Retrying`) run is no longer picked by a worker;
+- a `Sleeping` run is no longer woken by the Waker;
+- a `Running` run has its step in flight interrupted at once: the step is
+  marked `Failed` with `interrupted: worker lease lost` and no further step
+  is started. A worker loses the lease of the run, and the reaper never
+  touches a paused run;
+- an approval, a human input or a signal the run waits for can still be
+  resolved while it is paused. The decision is recorded and only changes the
+  state the run resumes to; a rejection fails the run.
+
+`POST /api/v1/runs/{id}/resume` (`Engine::resume_paused_run`) puts every run
+back in the state it was paused from. A run paused while it executed goes
+back to `Pending` and replays: finished steps are skipped and the interrupted
+step is executed again, like a run resumed after a lost lease. A `Sleeping`
+run whose deadline passed during the pause goes back to `Pending`. A paused
+run can also be cancelled.
+
+Only a root run is paused or resumed: the API answers 400 for a sub-workflow
+run, a run already finished, or (on resume) a run that is not paused.
+
+**A workflow.** `POST /api/v1/workflows/{name}/pause` (`Engine::pause_workflow`)
+records a pause for the workflow: runs are still created, but workers leave
+them queued until `POST /api/v1/workflows/{name}/resume`. Runs already
+executing are not affected; pause them one by one. `GET /api/v1/workflows`
+and `GET /api/v1/workflows/{name}` report `paused_at` while the workflow is
+paused.
+
+The CLI exposes the same actions as `ironflow run pause|resume <id>` and
+`ironflow workflow pause|resume <name>`, the MCP server as the `pause_run`,
+`resume_run`, `pause_workflow` and `resume_workflow` tools.
+
 ## Scaling
 
 Workers are stateless. Add more workers to increase throughput. Each worker polls independently -- no coordination is needed beyond the API server.

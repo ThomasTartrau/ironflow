@@ -72,6 +72,8 @@ const JITTER_RATIO: f64 = 0.2;
 /// | [`EngineError::ApprovalRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::ApprovalRejected`] | a human decision, replaying cannot change it |
 /// | [`EngineError::ChildSuspended`] | not a failure; the run is suspended with its child |
+/// | [`EngineError::RunPaused`] | not a failure; the run waits for an operator to resume it |
+/// | [`EngineError::ChildRunNotPausable`] | a misdirected pause or resume; a replay targets the same child |
 /// | [`EngineError::HumanInputRequired`] | not a failure; the run is suspended, not failed |
 /// | [`EngineError::HumanInputRejected`] | a human decision, replaying cannot change it |
 /// | [`EngineError::ReplayDivergence`] | replaying reproduces the same position divergence |
@@ -128,6 +130,9 @@ pub fn is_run_retryable(error: &EngineError) -> bool {
         | EngineError::ChildSuspended { .. }
         // Deliberate: a retry would start again the child the user stopped.
         | EngineError::ChildRunCancelled { .. }
+        // Not a failure: the run waits for an operator to resume it.
+        | EngineError::RunPaused { .. }
+        | EngineError::ChildRunNotPausable { .. }
         | EngineError::InvalidSignal(_)
         // Deterministic: replaying reproduces the same position divergence or
         // the same incompatible handler version.

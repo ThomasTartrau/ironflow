@@ -22,12 +22,13 @@ use ironflow_store::store::RunStore;
 use serde_json::json;
 use uuid::Uuid;
 
-const ALL_STATUSES: [RunStatus; 9] = [
+const ALL_STATUSES: [RunStatus; 10] = [
     RunStatus::Pending,
     RunStatus::Running,
     RunStatus::Retrying,
     RunStatus::AwaitingApproval,
     RunStatus::Sleeping,
+    RunStatus::Paused,
     RunStatus::Completed,
     RunStatus::Warning,
     RunStatus::Failed,
@@ -78,6 +79,7 @@ async fn seed_one_run_per_status(store: &dyn RunStore, labels: &HashMap<String, 
             RunStatus::Retrying => &[RunStatus::Running, RunStatus::Retrying],
             RunStatus::AwaitingApproval => &[RunStatus::Running, RunStatus::AwaitingApproval],
             RunStatus::Sleeping => &[RunStatus::Running, RunStatus::Sleeping],
+            RunStatus::Paused => &[RunStatus::Paused],
             RunStatus::Completed => &[RunStatus::Running, RunStatus::Completed],
             RunStatus::Warning => &[RunStatus::Running, RunStatus::Warning],
             RunStatus::Failed => &[RunStatus::Running, RunStatus::Failed],
@@ -93,8 +95,8 @@ async fn seed_one_run_per_status(store: &dyn RunStore, labels: &HashMap<String, 
 }
 
 /// Per-status totals over every bucket, in [`ALL_STATUSES`] order.
-fn history_totals(buckets: &[StatsHistoryBucket]) -> [u64; 9] {
-    let mut totals = [0u64; 9];
+fn history_totals(buckets: &[StatsHistoryBucket]) -> [u64; 10] {
+    let mut totals = [0u64; 10];
     for b in buckets {
         let counts = [
             b.pending,
@@ -102,6 +104,7 @@ fn history_totals(buckets: &[StatsHistoryBucket]) -> [u64; 9] {
             b.retrying,
             b.awaiting_approval,
             b.sleeping,
+            b.paused,
             b.completed,
             b.warning,
             b.failed,
@@ -130,8 +133,8 @@ async fn get_stats_active_runs_match_in_memory() {
     let pg_stats = pg.get_stats(filter.clone()).await.expect("pg stats");
     let memory_stats = memory.get_stats(filter).await.expect("memory stats");
 
-    assert_eq!(pg_stats.total_runs, 9);
-    assert_eq!(pg_stats.active_runs, 5);
+    assert_eq!(pg_stats.total_runs, 10);
+    assert_eq!(pg_stats.active_runs, 6);
     assert_eq!(pg_stats.awaiting_approval_runs, 1);
     assert_eq!(pg_stats.total_runs, memory_stats.total_runs);
     assert_eq!(pg_stats.active_runs, memory_stats.active_runs);
@@ -168,7 +171,7 @@ async fn get_stats_history_counters_match_in_memory() {
         .await
         .expect("memory history");
 
-    assert_eq!(history_totals(&pg_buckets), [1; 9]);
+    assert_eq!(history_totals(&pg_buckets), [1; 10]);
     assert_eq!(history_totals(&pg_buckets), history_totals(&memory_buckets));
 }
 
@@ -195,5 +198,5 @@ async fn get_stats_history_weekly_buckets_start_on_monday() {
         assert_eq!(b.time.second(), 0);
         assert_eq!(b.time, HistoryGranularity::OneWeek.bucket_start(b.time));
     }
-    assert_eq!(history_totals(&buckets), [1; 9]);
+    assert_eq!(history_totals(&buckets), [1; 10]);
 }

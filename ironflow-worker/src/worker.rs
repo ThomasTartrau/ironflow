@@ -946,7 +946,8 @@ enum RunOutcome {
     Timeout(String),
     /// Run panicked (task JoinError).
     Panicked(String),
-    /// Run was abandoned because this worker lost its lease.
+    /// Run was abandoned because this worker lost its lease: another worker
+    /// took it over, or an operator paused the run.
     LeaseLost(String),
 }
 
@@ -1019,7 +1020,7 @@ async fn refresh_lease(
                 warn!(
                     run_id = %target,
                     held_by = held_by.as_deref().unwrap_or("unknown"),
-                    "lease taken over by another worker"
+                    "lease lost: taken over by another worker, or the run was paused"
                 );
                 lease_token.cancel();
                 return;

@@ -30,6 +30,7 @@ mod step_status;
 mod trigger_kind;
 mod user;
 mod worker_routing;
+mod workflow_pause;
 
 pub use api_key::{ApiKey, ApiKeyUpdate, NewApiKey};
 pub use api_key_scope::ApiKeyScope;
@@ -85,3 +86,4 @@ pub use worker_routing::{
     MAX_WORKER_TAG_LEN, MAX_WORKER_TAGS, WorkerCapabilities, WorkerTagError, normalize_worker_tags,
     validate_worker_tags,
 };
+pub use workflow_pause::WorkflowPause;

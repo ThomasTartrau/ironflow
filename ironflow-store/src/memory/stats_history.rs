@@ -66,6 +66,7 @@ fn compute_bucket(time: DateTime<Utc>, runs: &[&Run]) -> StatsHistoryBucket {
             RunStatus::AwaitingApproval => bucket.awaiting_approval += 1,
             RunStatus::Warning => bucket.warning += 1,
             RunStatus::Sleeping => bucket.sleeping += 1,
+            RunStatus::Paused => bucket.paused += 1,
         }
         if has_terminal_duration && run.duration_ms > 0 {
             durations.push(run.duration_ms);
@@ -102,7 +103,7 @@ mod tests {
     use crate::memory::tests::new_run_req;
     use crate::store::RunStore;
 
-    const ALL_STATUSES: [RunStatus; 9] = [
+    const ALL_STATUSES: [RunStatus; 10] = [
         RunStatus::Pending,
         RunStatus::Running,
         RunStatus::Completed,
@@ -112,6 +113,7 @@ mod tests {
         RunStatus::AwaitingApproval,
         RunStatus::Warning,
         RunStatus::Sleeping,
+        RunStatus::Paused,
     ];
 
     fn utc(s: &str) -> DateTime<Utc> {
@@ -157,6 +159,7 @@ mod tests {
         assert_eq!(b.awaiting_approval, 1);
         assert_eq!(b.warning, 1);
         assert_eq!(b.sleeping, 1);
+        assert_eq!(b.paused, 1);
     }
 
     #[tokio::test]

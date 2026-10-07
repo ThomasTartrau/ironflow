@@ -42,6 +42,7 @@ const STATUS_OPTIONS: RunStatus[] = [
 	"cancelled",
 	"awaiting_approval",
 	"sleeping",
+	"paused",
 ];
 
 interface RunFiltersProps {

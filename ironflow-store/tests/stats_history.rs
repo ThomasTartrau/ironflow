@@ -216,6 +216,7 @@ async fn create_run_in_status(store: &InMemoryStore, req: NewRun, status: RunSta
         RunStatus::Retrying => &[RunStatus::Running, RunStatus::Retrying],
         RunStatus::AwaitingApproval => &[RunStatus::Running, RunStatus::AwaitingApproval],
         RunStatus::Sleeping => &[RunStatus::Running, RunStatus::Sleeping],
+        RunStatus::Paused => &[RunStatus::Paused],
         RunStatus::Completed => &[RunStatus::Running, RunStatus::Completed],
         RunStatus::Warning => &[RunStatus::Running, RunStatus::Warning],
         RunStatus::Failed => &[RunStatus::Running, RunStatus::Failed],
@@ -227,12 +228,13 @@ async fn create_run_in_status(store: &InMemoryStore, req: NewRun, status: RunSta
     store.get_run(run.id).await.unwrap().unwrap()
 }
 
-const ALL_STATUSES: [RunStatus; 9] = [
+const ALL_STATUSES: [RunStatus; 10] = [
     RunStatus::Pending,
     RunStatus::Running,
     RunStatus::Retrying,
     RunStatus::AwaitingApproval,
     RunStatus::Sleeping,
+    RunStatus::Paused,
     RunStatus::Completed,
     RunStatus::Warning,
     RunStatus::Failed,
@@ -261,6 +263,7 @@ async fn stats_history_counts_every_status() {
     assert_eq!(sum(&buckets, |b| b.retrying), 1);
     assert_eq!(sum(&buckets, |b| b.awaiting_approval), 1);
     assert_eq!(sum(&buckets, |b| b.sleeping), 1);
+    assert_eq!(sum(&buckets, |b| b.paused), 1);
     assert_eq!(sum(&buckets, |b| b.completed), 1);
     assert_eq!(sum(&buckets, |b| b.warning), 1);
     assert_eq!(sum(&buckets, |b| b.failed), 1);

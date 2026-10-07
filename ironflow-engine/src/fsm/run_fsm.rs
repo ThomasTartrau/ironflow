@@ -52,6 +52,13 @@ pub enum RunEvent {
     DelayElapsed,
     /// A signal resumed the run.
     SignalReceived,
+    /// An operator paused the run.
+    PauseRequested,
+    /// An operator resumed a paused run, which goes back to the queue.
+    ///
+    /// The engine restores the exact state the run was paused in (kept in
+    /// `Run::resume_status`); the FSM models the common case, a requeue.
+    ResumeRequested,
 }
 
 /// Finite state machine for a workflow run.
@@ -80,6 +87,9 @@ pub enum RunEvent {
 /// | Sleeping | DelayElapsed | Pending |
 /// | Sleeping | SignalReceived | Pending |
 /// | Sleeping | CancelRequested | Cancelled |
+/// | Pending, Retrying, Sleeping, AwaitingApproval, Running | PauseRequested | Paused |
+/// | Paused | ResumeRequested | Pending |
+/// | Paused | CancelRequested | Cancelled |
 ///
 /// # Examples
 ///
@@ -248,6 +258,18 @@ fn next_state(from: RunStatus, event: RunEvent) -> Option<RunStatus> {
         (RunStatus::Sleeping, RunEvent::DelayElapsed) => Some(RunStatus::Pending),
         (RunStatus::Sleeping, RunEvent::SignalReceived) => Some(RunStatus::Pending),
         (RunStatus::Sleeping, RunEvent::CancelRequested) => Some(RunStatus::Cancelled),
+
+        // Pause
+        (
+            RunStatus::Pending
+            | RunStatus::Retrying
+            | RunStatus::Sleeping
+            | RunStatus::AwaitingApproval
+            | RunStatus::Running,
+            RunEvent::PauseRequested,
+        ) => Some(RunStatus::Paused),
+        (RunStatus::Paused, RunEvent::ResumeRequested) => Some(RunStatus::Pending),
+        (RunStatus::Paused, RunEvent::CancelRequested) => Some(RunStatus::Cancelled),
 
         // Terminal states and all other combos → invalid
         _ => None,
@@ -486,6 +508,61 @@ mod tests {
         let mut fsm = RunFsm::new();
         fsm.apply(RunEvent::PickedUp).unwrap();
         assert!(fsm.apply(RunEvent::SignalReceived).is_err());
+    }
+
+    #[test]
+    fn every_active_state_can_be_paused() {
+        for state in [
+            RunStatus::Pending,
+            RunStatus::Retrying,
+            RunStatus::Sleeping,
+            RunStatus::AwaitingApproval,
+            RunStatus::Running,
+        ] {
+            let mut fsm = RunFsm::from_state(state);
+            assert_eq!(
+                fsm.apply(RunEvent::PauseRequested).unwrap(),
+                RunStatus::Paused
+            );
+        }
+        assert_eq!(RunEvent::PauseRequested.to_string(), "pause_requested");
+    }
+
+    #[test]
+    fn paused_resume_goes_pending() {
+        let mut fsm = RunFsm::new();
+        fsm.apply(RunEvent::PauseRequested).unwrap();
+        fsm.apply(RunEvent::ResumeRequested).unwrap();
+        assert_eq!(fsm.state(), RunStatus::Pending);
+        assert_eq!(RunEvent::ResumeRequested.to_string(), "resume_requested");
+    }
+
+    #[test]
+    fn paused_can_be_cancelled() {
+        let mut fsm = RunFsm::from_state(RunStatus::Paused);
+        assert_eq!(
+            fsm.apply(RunEvent::CancelRequested).unwrap(),
+            RunStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn cannot_pause_terminal_or_paused_run() {
+        for state in [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+            RunStatus::Warning,
+            RunStatus::Paused,
+        ] {
+            assert!(!RunFsm::from_state(state).can_apply(RunEvent::PauseRequested));
+        }
+    }
+
+    #[test]
+    fn cannot_resume_a_run_that_is_not_paused() {
+        let mut fsm = RunFsm::new();
+        assert!(fsm.apply(RunEvent::ResumeRequested).is_err());
     }
 
     // ---- TransitionError Display ----

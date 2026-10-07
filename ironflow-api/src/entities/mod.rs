@@ -18,6 +18,7 @@ mod stats;
 mod step;
 mod user;
 mod worker_capabilities;
+mod workflow_pause;
 
 pub use approval_delegation::{
     ApprovalDelegationResponse, CreateApprovalDelegationRequest, ListApprovalDelegationsQuery,
@@ -36,7 +37,10 @@ pub use provider_account::{
     ListProviderAccountsQuery, ProviderAccountResponse, ProviderAccountTestResponse,
     ProviderAccountUsageResponse, UpdateProviderAccountRequest, UsageQuery,
 };
-pub use run::{CancelRunResponse, ListRunsQuery, RunDetailResponse, RunResponse, WorkerRouting};
+pub use run::{
+    CancelRunResponse, ListRunsQuery, PauseRunResponse, ResumeRunResponse, RunDetailResponse,
+    RunResponse, WorkerRouting,
+};
 pub use schedule::{CreateScheduleRequest, ScheduleResponse, UpdateScheduleRequest};
 pub use secret::{
     KeyVersionsResponse, RotateSecretsRequest, RotateSecretsResponse, SecretResponse,
@@ -54,3 +58,4 @@ pub use user::{
     CreateUserRequest, UpdateRoleRequest, UpdateUserGroupsRequest, UserGroupsResponse, UserResponse,
 };
 pub use worker_capabilities::parse_worker_capabilities;
+pub use workflow_pause::WorkflowPauseResponse;

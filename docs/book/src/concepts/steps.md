@@ -201,6 +201,9 @@ parent:
   `allow_failure` the step and the parent fail with `ChildRunCancelled`, never
   retried; with it the step completes with a `Cancelled` output and the parent
   ends as `Warning`.
+- Pausing a root run pauses its children with it, and resuming it resumes
+  them. A child is never paused or resumed on its own (see
+  [Pausing runs and workflows](engine-worker.md#pausing-runs-and-workflows)).
 
 ## Approval steps
 

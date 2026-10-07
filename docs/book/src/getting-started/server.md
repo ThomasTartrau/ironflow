@@ -100,3 +100,22 @@ The server starts on `http://localhost:3000`. The dashboard is available at the 
 In development it generates its secrets and logs the worker token
 (`start workers with WORKER_TOKEN=...`). Without `IRONFLOW_ENV=development`, set
 `JWT_SECRET` and `WORKER_TOKEN` (`openssl rand -hex 32`): no secret is built in.
+
+## Pausing runs and workflows
+
+An administrator can hold work without cancelling it. Every route below needs an
+admin account (403 otherwise):
+
+| Route | Effect |
+|-------|--------|
+| `POST /api/v1/runs/{id}/pause` | Moves a root run and its active sub-workflow runs to `Paused`. A running step is interrupted and executed again on resume. |
+| `POST /api/v1/runs/{id}/resume` | Puts a paused root run and its sub-workflow runs back in the state they were paused from. |
+| `POST /api/v1/workflows/{name}/pause` | Workers stop picking the queued runs of the workflow; new runs are still created. |
+| `POST /api/v1/workflows/{name}/resume` | Workers pick the queued runs of the workflow again. |
+
+An unknown run or workflow answers 404. Pausing a finished, already paused or
+sub-workflow run, or resuming a run that is not paused, answers 400. The CLI
+offers the same actions as `ironflow run pause|resume <id>` and
+`ironflow workflow pause|resume <name>`. See
+[Pausing runs and workflows](../concepts/engine-worker.md#pausing-runs-and-workflows)
+for the lifecycle details.

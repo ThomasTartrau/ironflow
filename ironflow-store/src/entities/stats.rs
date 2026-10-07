@@ -45,7 +45,7 @@ pub struct RunStats {
     /// Runs that reached the `Cancelled` state.
     pub cancelled_runs: u64,
     /// Runs in an active state: `Pending`, `Running`, `Retrying`,
-    /// `AwaitingApproval` or `Sleeping`.
+    /// `AwaitingApproval`, `Sleeping` or `Paused`.
     pub active_runs: u64,
     /// Runs in the `AwaitingApproval` state. A subset of
     /// [`active_runs`](Self::active_runs).
@@ -401,6 +401,9 @@ pub struct StatsHistoryBucket {
     pub awaiting_approval: u64,
     /// Runs created in this bucket and currently `Sleeping`.
     pub sleeping: u64,
+    /// Runs created in this bucket and currently `Paused`.
+    #[serde(default)]
+    pub paused: u64,
     /// Average duration in milliseconds of terminal runs in this bucket.
     pub avg_duration_ms: u64,
     /// 95th percentile duration in milliseconds of terminal runs in this bucket.
