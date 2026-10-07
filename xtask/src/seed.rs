@@ -431,6 +431,8 @@ fn run_specs() -> Vec<RunSpec> {
             workflow: "system-audit",
             trigger: TriggerKind::Cron {
                 schedule: "0 0 * * *".to_string(),
+                schedule_id: None,
+                scheduled_for: None,
             },
             target_status: RunStatus::Completed,
             labels: HashMap::from([("env".to_string(), "production".to_string())]),

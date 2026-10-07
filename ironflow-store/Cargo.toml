@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-store"
-version = "2.45.3"
+version = "2.45.4"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -19,6 +19,7 @@ rust_decimal = { version = "1", features = ["serde-float"] }
 tokio = { version = "1", features = ["sync"] }
 glob = "0.3"
 strum = { version = "0.27", features = ["derive"] }
+chrono-tz = { version = "0.10", features = ["serde"] }
 thiserror = "2"
 tracing = "0.1"
 utoipa = { version = "5", features = ["uuid", "chrono", "decimal_float"], optional = true }
@@ -32,7 +33,7 @@ base64 = { version = "0.22", optional = true }
 
 # Operation context (SecretResolver impl)
 async-trait = { version = "0.1", optional = true }
-ironflow-core = { version = "4.11.0", path = "../ironflow-core", optional = true }
+ironflow-core = { version = "4.12.0", path = "../ironflow-core", optional = true }
 
 # PostgreSQL (Phase 2)
 sqlx = { version = "0.8", features = [

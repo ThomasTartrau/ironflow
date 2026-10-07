@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 pub use ironflow_store::entities::LogStream;
 use ironflow_store::models::{
-    ApprovalRequirement, Assignee, ProviderAccountWindow, RunStatus, StepKind,
+    ApprovalRequirement, Assignee, ProviderAccountWindow, RunStatus, ScheduleMissReason, StepKind,
 };
 
 /// Vote counts assumed for approval events serialized before multi-approver
@@ -762,6 +762,51 @@ pub struct SignalReceivedEvent {
     pub at: DateTime<Utc>,
 }
 
+/// Payload of the `Event::ScheduleOccurrencesMissed` event.
+///
+/// A cron schedule skipped some of its occurrences: the server was down
+/// longer than the catch-up window allows, the catch-up policy dropped them,
+/// or the previous run was still active under an overlap `skip` policy.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::{TimeDelta, Utc};
+/// use ironflow_engine::notify::ScheduleOccurrencesMissedEvent;
+/// use ironflow_store::models::ScheduleMissReason;
+/// use uuid::Uuid;
+///
+/// let now = Utc::now();
+/// let payload = ScheduleOccurrencesMissedEvent {
+///     schedule_id: Uuid::now_v7(),
+///     workflow_name: "nightly-report".to_string(),
+///     reason: ScheduleMissReason::OutsideWindow,
+///     count: 3,
+///     first: now - TimeDelta::hours(3),
+///     last: now - TimeDelta::hours(1),
+///     at: now,
+/// };
+/// assert_eq!(payload.count, 3);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ScheduleOccurrencesMissedEvent {
+    /// Schedule that missed the occurrences.
+    pub schedule_id: Uuid,
+    /// Workflow the schedule starts.
+    pub workflow_name: String,
+    /// Why the occurrences were not run.
+    pub reason: ScheduleMissReason,
+    /// Number of missed occurrences.
+    pub count: u64,
+    /// Earliest missed occurrence.
+    pub first: DateTime<Utc>,
+    /// Latest missed occurrence.
+    pub last: DateTime<Utc>,
+    /// When the ticker noticed the miss.
+    pub at: DateTime<Utc>,
+}
+
 /// A domain event emitted by the ironflow system.
 ///
 /// Covers the full lifecycle: runs, steps, approvals, and authentication.
@@ -880,6 +925,12 @@ pub enum Event {
 
     /// A signal was received.
     SignalReceived(SignalReceivedEvent),
+
+    // -- Schedules --
+    /// A cron schedule dropped occurrences instead of starting a run for them.
+    ///
+    /// Emitted by the schedule ticker once per schedule, tick and reason.
+    ScheduleOccurrencesMissed(ScheduleOccurrencesMissedEvent),
 }
 
 impl Event {
@@ -922,6 +973,9 @@ impl Event {
     pub const SIGNAL_AWAITED: &'static str = "signal_awaited";
     /// Event type constant for [`SignalReceived`](Event::SignalReceived).
     pub const SIGNAL_RECEIVED: &'static str = "signal_received";
+    /// Event type constant for
+    /// [`ScheduleOccurrencesMissed`](Event::ScheduleOccurrencesMissed).
+    pub const SCHEDULE_OCCURRENCES_MISSED: &'static str = "schedule_occurrences_missed";
 
     /// All event types. Pass this to
     /// [`EventPublisher::subscribe`](super::EventPublisher::subscribe) to
@@ -958,6 +1012,7 @@ impl Event {
         Self::PROVIDER_ACCOUNT_USAGE_UPDATED,
         Self::SIGNAL_AWAITED,
         Self::SIGNAL_RECEIVED,
+        Self::SCHEDULE_OCCURRENCES_MISSED,
     ];
 
     /// Returns the event type as a static string (e.g. `"run_status_changed"`).
@@ -1000,6 +1055,7 @@ impl Event {
             Event::ProviderAccountUsageUpdated(_) => Self::PROVIDER_ACCOUNT_USAGE_UPDATED,
             Event::SignalAwaited(_) => Self::SIGNAL_AWAITED,
             Event::SignalReceived(_) => Self::SIGNAL_RECEIVED,
+            Event::ScheduleOccurrencesMissed(_) => Self::SCHEDULE_OCCURRENCES_MISSED,
         }
     }
 
@@ -1046,7 +1102,8 @@ impl Event {
             | Event::UserSignedOut(_)
             | Event::ProviderAccountUpdated(_)
             | Event::ProviderAccountUsageUpdated(_)
-            | Event::SignalReceived(_) => None,
+            | Event::SignalReceived(_)
+            | Event::ScheduleOccurrencesMissed(_) => None,
         }
     }
 
@@ -1100,7 +1157,8 @@ impl Event {
             | Event::UserSignedOut(_)
             | Event::ProviderAccountUpdated(_)
             | Event::ProviderAccountUsageUpdated(_)
-            | Event::SignalReceived(_) => None,
+            | Event::SignalReceived(_)
+            | Event::ScheduleOccurrencesMissed(_) => None,
         }
     }
 
@@ -1147,7 +1205,8 @@ impl Event {
             | Event::ProviderAccountUpdated(_)
             | Event::ProviderAccountUsageUpdated(_)
             | Event::SignalAwaited(_)
-            | Event::SignalReceived(_) => None,
+            | Event::SignalReceived(_)
+            | Event::ScheduleOccurrencesMissed(_) => None,
         }
     }
 }
@@ -1955,6 +2014,18 @@ mod tests {
                 }),
                 "signal_received",
             ),
+            (
+                Event::ScheduleOccurrencesMissed(ScheduleOccurrencesMissedEvent {
+                    schedule_id: id,
+                    workflow_name: "nightly".to_string(),
+                    reason: ScheduleMissReason::Overlap,
+                    count: 1,
+                    first: now,
+                    last: now,
+                    at: now,
+                }),
+                "schedule_occurrences_missed",
+            ),
         ];
 
         assert_eq!(
@@ -2061,6 +2132,40 @@ mod tests {
             panic!("expected a signal_received event, got {back:?}");
         };
         assert_eq!(payload.resumed_runs, vec![resumed]);
+        assert_eq!(back.run_id(), None);
+        assert_eq!(back.step_id(), None);
+        assert_eq!(back.user_id(), None);
+    }
+
+    #[test]
+    fn schedule_occurrences_missed_serde_roundtrip() {
+        let schedule_id = Uuid::now_v7();
+        let first = Utc::now();
+        let event = Event::ScheduleOccurrencesMissed(ScheduleOccurrencesMissedEvent {
+            schedule_id,
+            workflow_name: "nightly".to_string(),
+            reason: ScheduleMissReason::OutsideWindow,
+            count: 4,
+            first,
+            last: first,
+            at: first,
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(
+            json.contains("\"type\":\"schedule_occurrences_missed\""),
+            "got {json}"
+        );
+        assert!(json.contains("\"reason\":\"outside_window\""), "got {json}");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        let Event::ScheduleOccurrencesMissed(payload) = &back else {
+            panic!("expected a schedule_occurrences_missed event, got {back:?}");
+        };
+        assert_eq!(payload.schedule_id, schedule_id);
+        assert_eq!(payload.reason, ScheduleMissReason::OutsideWindow);
+        assert_eq!(payload.count, 4);
+        assert_eq!(payload.first, first);
+        assert!(Event::ALL.contains(&Event::SCHEDULE_OCCURRENCES_MISSED));
         assert_eq!(back.run_id(), None);
         assert_eq!(back.step_id(), None);
         assert_eq!(back.user_id(), None);

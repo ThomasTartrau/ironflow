@@ -89,6 +89,10 @@ pub const RUNS_PURGED_TOTAL: &str = "ironflow_runs_purged_total";
 /// Counter: schedule occurrences that failed to fire, or schedules disabled
 /// because their next trigger cannot be computed (labels: schedule).
 pub const SCHEDULE_FIRE_ERRORS_TOTAL: &str = "ironflow_schedule_fire_errors_total";
+/// Counter: cron occurrences a schedule did not run, because they fell outside
+/// the catch-up window, were dropped by the catch-up policy, or overlapped a
+/// still-active run (labels: schedule).
+pub const SCHEDULE_MISSED_TOTAL: &str = "ironflow_schedule_missed_total";
 
 // ── API metrics ────────────────────────────────────────────────────
 /// Counter: total API requests (labels: method, path, status).

@@ -275,3 +275,23 @@ Section: Agent.
 +         hosts: vec!["gitlab.com".to_string()],
 +     });
 ```
+
+## schedule-policies
+- kind: adopt
+- since: ironflow-engine after 2.51.2 (#174)
+- detect: `CronSchedule::new\(`
+
+A schedule fired in UTC only, at most once after an outage, and stacked runs when the
+previous one was still active. Projects shifted the expression by hand for local time
+(and again at each daylight saving change), or checked for an active run at the start of
+the handler. Set the timezone, the catch-up of missed occurrences and the overlap on the
+schedule instead; a catch-up run reads its occurrence from
+`TriggerKind::Cron { scheduled_for, .. }`. Section: Handler metadata.
+
+```diff
+- CronSchedule::new("0 7 * * *")   // 9:00 in Paris, summer only
++ CronSchedule::new("0 9 * * *")?
++     .with_timezone("Europe/Paris")?
++     .with_catchup(CatchupPolicy::All)        // or Latest (default), Skip
++     .with_overlap(OverlapPolicy::Skip)       // instead of an active-run check in the handler
+```

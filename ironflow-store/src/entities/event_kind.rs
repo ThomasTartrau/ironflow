@@ -77,6 +77,8 @@ pub enum EventKind {
     SignalAwaited,
     /// A signal was received.
     SignalReceived,
+    /// Occurrences of a cron schedule created no run.
+    ScheduleOccurrencesMissed,
 }
 
 impl EventKind {
@@ -102,6 +104,7 @@ impl EventKind {
         Self::ProviderAccountUsageUpdated,
         Self::SignalAwaited,
         Self::SignalReceived,
+        Self::ScheduleOccurrencesMissed,
     ];
 
     /// Returns the wire-format string for this kind.
@@ -134,7 +137,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 20);
+        assert_eq!(EventKind::ALL.len(), 21);
     }
 
     #[test]

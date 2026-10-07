@@ -8,13 +8,13 @@ use validator::Validate;
 
 use ironflow_auth::extractor::Authenticated;
 use ironflow_store::entities::{
-    MAX_PRIORITY, MIN_PRIORITY, NewSchedule, ScheduleSource, validate_priority,
+    MAX_PRIORITY, MIN_PRIORITY, NewSchedule, SchedulePolicy, ScheduleSource, validate_priority,
 };
 
 use crate::entities::{CreateScheduleRequest, ScheduleResponse};
 use crate::error::ApiError;
 use crate::response::ok;
-use crate::schedule_ticker::next_trigger;
+use crate::schedule_clock::next_trigger;
 use crate::state::AppState;
 
 /// Create a new schedule.
@@ -23,8 +23,12 @@ use crate::state::AppState;
 ///
 /// - 400 if validation fails or cron expression is invalid
 /// - 400 if `priority` is outside `-100..=100`
+/// - 400 if `catchup_max` is outside `1..=1000` or `catchup_window_secs` is
+///   outside `60..=2592000`
 /// - 400 if the workflow is not registered
 /// - 401 if not authenticated
+/// - 422 if `timezone` is not an IANA timezone name, or `catchup` or `overlap`
+///   is not a known policy
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -34,8 +38,9 @@ use crate::state::AppState;
         request_body(content = CreateScheduleRequest, description = "Schedule definition"),
         responses(
             (status = 201, description = "Schedule created", body = ScheduleResponse),
-            (status = 400, description = "Invalid input"),
-            (status = 401, description = "Unauthorized")
+            (status = 400, description = "Invalid input, cron, priority or catch-up bounds"),
+            (status = 401, description = "Unauthorized"),
+            (status = 422, description = "Unknown timezone, catch-up or overlap policy")
         ),
         security(("Bearer" = []))
     )
@@ -62,7 +67,19 @@ pub async fn create_schedule(
         .priority
         .unwrap_or_else(|| handler.priority().clamp(MIN_PRIORITY, MAX_PRIORITY));
 
-    let next = next_trigger(&req.cron_expression).map_err(ApiError::BadRequest)?;
+    let defaults = SchedulePolicy::default();
+    let policy = SchedulePolicy {
+        catchup: req.catchup.unwrap_or(defaults.catchup),
+        catchup_max: req.catchup_max.unwrap_or(defaults.catchup_max),
+        catchup_window_secs: req
+            .catchup_window_secs
+            .unwrap_or(defaults.catchup_window_secs),
+        overlap: req.overlap.unwrap_or(defaults.overlap),
+        timezone: req.timezone.unwrap_or(defaults.timezone),
+    };
+    policy.validate().map_err(ApiError::BadRequest)?;
+
+    let next = next_trigger(&req.cron_expression, policy.timezone).map_err(ApiError::BadRequest)?;
 
     let schedule = state
         .store
@@ -74,6 +91,7 @@ pub async fn create_schedule(
             priority,
             created_by_user_id: Some(auth.user_id),
             next_trigger_at: next,
+            policy,
         })
         .await?;
 
@@ -314,7 +332,11 @@ mod tests {
         let resp = app.oneshot(req).await.expect("request");
         let status = resp.status();
         let bytes = resp.into_body().collect().await.expect("body").to_bytes();
-        (status, from_slice(&bytes).expect("json"))
+        // A body axum's `Json` extractor rejects comes back as plain text, not
+        // as the JSON error envelope: keep it readable in assertion messages.
+        let val = from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+        (status, val)
     }
 
     #[tokio::test]
@@ -363,5 +385,98 @@ mod tests {
                 "priority must be between -100 and 100"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn create_schedule_with_catchup_policies_and_timezone() {
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "deploy",
+            "cron_expression": "0 9 * * *",
+            "catchup": "all",
+            "catchup_max": 24,
+            "catchup_window_secs": 3600,
+            "overlap": "skip",
+            "timezone": "Europe/Paris",
+        }))
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let data = &val["data"];
+        assert_eq!(data["catchup"], "all");
+        assert_eq!(data["catchup_max"], 24);
+        assert_eq!(data["catchup_window_secs"], 3600);
+        assert_eq!(data["overlap"], "skip");
+        assert_eq!(data["timezone"], "Europe/Paris");
+        // 9:00 in Paris is 7:00 or 8:00 UTC depending on DST, never 9:00.
+        let next = data["next_trigger_at"].as_str().expect("next trigger");
+        assert!(
+            next.contains("T07:00:00") || next.contains("T08:00:00"),
+            "{next}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_schedule_defaults_to_latest_allow_utc() {
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "deploy",
+            "cron_expression": "0 0 * * * *",
+        }))
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let data = &val["data"];
+        assert_eq!(data["catchup"], "latest");
+        assert_eq!(data["catchup_max"], 10);
+        assert_eq!(data["catchup_window_secs"], 86400);
+        assert_eq!(data["overlap"], "allow");
+        assert_eq!(data["timezone"], "UTC");
+    }
+
+    #[tokio::test]
+    async fn create_schedule_rejects_invalid_timezone() {
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "deploy",
+            "cron_expression": "0 9 * * *",
+            "timezone": "Mars/Olympus",
+        }))
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{val}");
+    }
+
+    #[tokio::test]
+    async fn create_schedule_rejects_catchup_max_out_of_range() {
+        for catchup_max in [0, 1001] {
+            let (status, val) = post_schedule(json!({
+                "workflow_name": "deploy",
+                "cron_expression": "0 9 * * *",
+                "catchup_max": catchup_max,
+            }))
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            let message = val["error"]["message"].as_str().expect("msg");
+            assert!(message.contains("catchup_max"), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn create_schedule_rejects_catchup_window_below_a_minute() {
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "deploy",
+            "cron_expression": "0 9 * * *",
+            "catchup_window_secs": 59,
+        }))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let message = val["error"]["message"].as_str().expect("msg");
+        assert!(message.contains("catchup_window"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn create_schedule_rejects_unknown_catchup_value() {
+        let (status, val) = post_schedule(json!({
+            "workflow_name": "deploy",
+            "cron_expression": "0 9 * * *",
+            "catchup": "sometimes",
+        }))
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{val}");
     }
 }

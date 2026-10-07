@@ -31,6 +31,7 @@ const EVENT_KINDS: EventKind[] = [
 	"provider_account.updated",
 	"signal_awaited",
 	"signal_received",
+	"schedule_occurrences_missed",
 ];
 
 interface FilterValues {

@@ -11,6 +11,7 @@
 # Concepts
 
 - [WorkflowHandler](concepts/workflow-handler.md)
+- [Schedules](concepts/schedules.md)
 - [Steps](concepts/steps.md)
 - [Operations](concepts/operations.md)
 - [Engine & Worker](concepts/engine-worker.md)

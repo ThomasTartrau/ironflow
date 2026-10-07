@@ -290,7 +290,8 @@ impl AppState {
         }
 
         let shutdown = CancellationToken::new();
-        tokio::spawn(ScheduleTicker::new(self.store.clone()).run(shutdown.clone()));
+        let ticker = ScheduleTicker::new(self.store.clone()).engine(self.engine.clone());
+        tokio::spawn(ticker.run(shutdown.clone()));
         tokio::spawn(Reaper::new(self.store.clone(), self.engine.clone()).run(shutdown.clone()));
         tokio::spawn(Escalator::new(self.engine.clone()).run(shutdown.clone()));
         tokio::spawn(Waker::new(self.engine.clone()).run(shutdown.clone()));

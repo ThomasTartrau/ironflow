@@ -1033,7 +1033,7 @@ async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
 | `category()` | `None` | `"data/etl"` groups workflows in the UI tree |
 | `input_schema()` | `None` | `Some(input_schema_for::<T>())`, or `Self::typed_input_schema()` with `TypedWorkflow` |
 | `default_labels()` | empty | Labels applied to every run |
-| `schedule()` | `None` | `CronSchedule`, wired by the runtime |
+| `schedule()` | `None` | `CronSchedule`, wired by the runtime. `.with_timezone("Europe/Paris")?` (UTC by default), `.with_catchup(CatchupPolicy::All)` (`Latest` by default) with `.with_catchup_max(n)` and `.with_catchup_window(d)`, `.with_overlap(OverlapPolicy::Skip)` (`Allow` by default) |
 | `default_max_cost_usd()` | `None` | Cost cap for runs of this handler |
 | `priority()` | `0` | Queue priority of its runs, -100 to 100 (clamped): workers pick the highest first, then the oldest. No preemption, no aging |
 | `version()` / `compatible_versions()` | `"1"` / empty | Retry compatibility across handler versions |
