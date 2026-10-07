@@ -68,6 +68,21 @@ pub mod crypto;
 #[cfg(feature = "secret-store")]
 pub mod workflow_secrets;
 
+/// Maximum JSON request body the API accepts on its JSON routes: 2 MiB.
+///
+/// Shared by the API, which enforces it, and the worker's HTTP store, which
+/// checks a payload against it before sending so an oversized step output
+/// fails with an explicit error instead of a refused or cut-off request.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_store::MAX_API_BODY_BYTES;
+///
+/// assert_eq!(MAX_API_BODY_BYTES, 2 * 1024 * 1024);
+/// ```
+pub const MAX_API_BODY_BYTES: usize = 2 * 1024 * 1024;
+
 /// Backward-compatible alias -- prefer `entities` for new code.
 pub use entities as models;
 

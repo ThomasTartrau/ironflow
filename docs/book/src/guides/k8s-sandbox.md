@@ -33,6 +33,7 @@ tag: pin the full tag.
 | `HOME` on a 1Gi `emptyDir` | `.home_size_limit("4Gi")` |
 | `/tmp` on a 512Mi `emptyDir` | `.tmp_size_limit("2Gi")` |
 | `activeDeadlineSeconds` = timeout + 60s | `.deadline_margin(d)`, or `.active_deadline_seconds(d)` to set it outright |
+| Pod `fsGroupChangePolicy: OnRootMismatch`: volume ownership is only rewritten when the root does not match | `.fs_group_change_policy("Always")` |
 | No service account token mounted | `.service_account(name)` on the provider or the step |
 | Secrets refused as plain text | none: use a Secret |
 
@@ -295,6 +296,13 @@ other's pod, so the engine fails such a group before creating any step.
 
 Deleting `JobRun` Jobs needs `list` and `delete` on `jobs`; without them, Jobs
 are skipped with a warning and the pods are still released.
+
+`PodRun` and `JobRun` keep at most 1 MiB of logs: past that, only the tail is
+kept, behind a `[... N bytes truncated ...]` marker, and `logs_truncated` is
+set on the output. `.max_log_bytes(n)` changes the limit. A `PodRun` with
+`.security(..)` sets `fsGroupChangePolicy: OnRootMismatch`, so a large volume
+is not re-chowned on every pod; `.fs_group_change_policy("Always")` restores
+the Kubernetes default.
 
 ## Persistent environment
 

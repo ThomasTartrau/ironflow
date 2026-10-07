@@ -579,6 +579,34 @@ impl K8sEphemeralProvider {
         self
     }
 
+    /// Set the pod's `fsGroupChangePolicy` (default `"OnRootMismatch"`).
+    ///
+    /// `"OnRootMismatch"` skips the recursive ownership change of a mounted
+    /// volume whose root already belongs to the fsGroup; `"Always"` runs it on
+    /// every pod start, which takes minutes on a large PVC.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider was not built with [`sandboxed`](Self::sandboxed),
+    /// or if `policy` is neither `"OnRootMismatch"` nor `"Always"`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::providers::claude::K8sEphemeralProvider;
+    ///
+    /// let provider = K8sEphemeralProvider::sandboxed("img:v1").fs_group_change_policy("Always");
+    /// ```
+    pub fn fs_group_change_policy(mut self, policy: &str) -> Self {
+        assert!(
+            policy == "OnRootMismatch" || policy == "Always",
+            "fs_group_change_policy must be \"OnRootMismatch\" or \"Always\", got {policy:?}"
+        );
+        self.sandbox_mut("fs_group_change_policy")
+            .fs_group_change_policy = policy.to_string();
+        self
+    }
+
     /// Keep Claude Code sessions on a PersistentVolumeClaim so an agent step
     /// interrupted with its pod can resume its session in a new pod.
     ///
@@ -2830,6 +2858,29 @@ mod tests {
     #[should_panic(expected = "run_as_user must be greater than 0")]
     fn run_as_user_zero_panics() {
         let _ = K8sEphemeralProvider::sandboxed("img:v1").run_as_user(0);
+    }
+
+    #[test]
+    fn fs_group_change_policy_builder_sets_policy() {
+        let provider = K8sEphemeralProvider::sandboxed("img:v1").fs_group_change_policy("Always");
+        assert_eq!(provider.sandbox.unwrap().fs_group_change_policy, "Always");
+        let default = K8sEphemeralProvider::sandboxed("img:v1");
+        assert_eq!(
+            default.sandbox.unwrap().fs_group_change_policy,
+            "OnRootMismatch"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "fs_group_change_policy must be")]
+    fn fs_group_change_policy_unknown_value_panics() {
+        let _ = K8sEphemeralProvider::sandboxed("img:v1").fs_group_change_policy("Never");
+    }
+
+    #[test]
+    #[should_panic(expected = "fs_group_change_policy requires a provider built with")]
+    fn fs_group_change_policy_on_non_sandboxed_panics() {
+        let _ = K8sEphemeralProvider::new("img:v1").fs_group_change_policy("Always");
     }
 
     #[test]

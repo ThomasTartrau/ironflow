@@ -24,7 +24,8 @@ use crate::conventions::{
 };
 use crate::error::k8s_external;
 use crate::pod_run::{
-    PvcMount, active_deadline_secs, build_env_vars, build_pvc_volumes, new_pvc_mount, push_volume,
+    DEFAULT_MAX_LOG_BYTES, PvcMount, active_deadline_secs, build_env_vars, build_pvc_volumes,
+    new_pvc_mount, push_volume, truncate_logs,
 };
 
 #[cfg(test)]
@@ -46,9 +47,18 @@ pub struct JobRunOutput {
     /// `true` when the Job completed successfully.
     pub success: bool,
     /// Logs of the Job's pod, captured once the Job reached a terminal state.
+    ///
+    /// Bounded by [`JobRun::max_log_bytes`] (1 MiB by default): when the logs
+    /// are longer, only their tail is kept, prefixed with a
+    /// `[... N bytes truncated ...]` line, and
+    /// [`logs_truncated`](Self::logs_truncated) is `true`.
     pub logs: String,
     /// Terminal phase: `"Succeeded"` (Job `Complete`) or `"Failed"`.
     pub phase: String,
+    /// `true` when [`logs`](Self::logs) holds only the tail of the pod logs.
+    /// Defaults to `false` when absent from a serialized output.
+    #[serde(default)]
+    pub logs_truncated: bool,
 }
 
 /// Run a shell command to completion via an ephemeral `batch/v1` Job, wait for
@@ -103,13 +113,14 @@ pub struct JobRun {
     timeout: Duration,
     expiry_margin: Duration,
     poll_interval: Duration,
+    max_log_bytes: usize,
 }
 
 impl JobRun {
     /// Create a job-run operation. `command` is executed via `/bin/sh -c`.
     ///
     /// Defaults: namespace `"default"`, `backoff_limit` 0, a 600s wall-clock
-    /// timeout, and a 2s poll interval.
+    /// timeout, a 2s poll interval, and logs capped at 1 MiB.
     pub fn new(client: &KubeClient, name: &str, image: &str, command: &str) -> Self {
         Self {
             client: client.client().clone(),
@@ -128,6 +139,7 @@ impl JobRun {
             timeout: DEFAULT_TIMEOUT,
             expiry_margin: DEFAULT_EXPIRY_MARGIN,
             poll_interval: DEFAULT_POLL_INTERVAL,
+            max_log_bytes: DEFAULT_MAX_LOG_BYTES,
         }
     }
 
@@ -346,6 +358,31 @@ impl JobRun {
         self
     }
 
+    /// Cap the bytes of pod logs kept in [`JobRunOutput::logs`] (default
+    /// 1 MiB).
+    ///
+    /// Longer logs keep their tail, where a failure usually shows, behind a
+    /// `[... N bytes truncated ...]` line, and
+    /// [`JobRunOutput::logs_truncated`] is set. `0` keeps the marker only.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::job_run::JobRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = JobRun::new(kube, "migrate", "migrate:1.0", "migrate up")
+    ///     .max_log_bytes(256 * 1024);
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn max_log_bytes(mut self, max_log_bytes: usize) -> Self {
+        self.max_log_bytes = max_log_bytes;
+        self
+    }
+
     /// Build the [`Job`] manifest for this run. Pure: performs no I/O.
     ///
     /// Exposed for testing the manifest without a cluster.
@@ -452,11 +489,15 @@ impl JobRun {
                 self.name, self.timeout
             ))),
             Ok(Err(e)) => Err(e),
-            Ok(Ok((phase, logs))) => Ok(JobRunOutput {
-                success: phase == "Succeeded",
-                logs,
-                phase,
-            }),
+            Ok(Ok((phase, logs))) => {
+                let (logs, logs_truncated) = truncate_logs(logs, self.max_log_bytes);
+                Ok(JobRunOutput {
+                    success: phase == "Succeeded",
+                    logs,
+                    phase,
+                    logs_truncated,
+                })
+            }
         }
     }
 

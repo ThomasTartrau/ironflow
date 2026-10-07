@@ -35,6 +35,23 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// Default interval between pod status polls.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Default cap on the container logs kept in [`PodRunOutput::logs`] and
+/// [`JobRunOutput::logs`](crate::job_run::JobRunOutput::logs): 1 MiB.
+///
+/// The output is persisted as the step output and sent to the API, whose body
+/// limit is a few MiB: an unbounded log stream would make the step update fail.
+pub(crate) const DEFAULT_MAX_LOG_BYTES: usize = 1024 * 1024;
+
+/// `fsGroupChangePolicy` applied when [`PodRun::security`] is set and no
+/// policy was chosen with [`PodRun::fs_group_change_policy`].
+///
+/// `OnRootMismatch` skips the recursive `chown` of a volume whose root already
+/// has the expected owner, which otherwise takes minutes on a large PVC.
+const DEFAULT_FS_GROUP_CHANGE_POLICY: &str = "OnRootMismatch";
+
+/// Values Kubernetes accepts for `fsGroupChangePolicy`.
+const FS_GROUP_CHANGE_POLICIES: [&str; 2] = ["OnRootMismatch", "Always"];
+
 /// CPU and memory requests/limits for a [`PodRun`] container.
 ///
 /// Values are Kubernetes quantity strings (e.g. `"100m"`, `"256Mi"`). Each
@@ -86,9 +103,18 @@ pub struct PodRunOutput {
     /// `true` when `phase == "Succeeded"`.
     pub success: bool,
     /// Container logs captured once the pod reached a terminal phase.
+    ///
+    /// Bounded by [`PodRun::max_log_bytes`] (1 MiB by default): when the logs
+    /// are longer, only their tail is kept, prefixed with a
+    /// `[... N bytes truncated ...]` line, and
+    /// [`logs_truncated`](Self::logs_truncated) is `true`.
     pub logs: String,
     /// Terminal pod phase (`"Succeeded"` or `"Failed"`).
     pub phase: String,
+    /// `true` when [`logs`](Self::logs) holds only the tail of the container
+    /// logs. Defaults to `false` when absent from a serialized output.
+    #[serde(default)]
+    pub logs_truncated: bool,
 }
 
 /// Run a shell command in an ephemeral pod, wait for completion, collect its
@@ -140,6 +166,7 @@ pub struct PodRun {
     envs: BTreeMap<String, String>,
     resources: Option<ResourceSpec>,
     security: Option<SecuritySpec>,
+    fs_group_change_policy: Option<String>,
     automount_service_account_token: Option<bool>,
     allow_privilege_escalation: Option<bool>,
     runtime_class: Option<String>,
@@ -147,13 +174,14 @@ pub struct PodRun {
     timeout: Duration,
     expiry_margin: Duration,
     poll_interval: Duration,
+    max_log_bytes: usize,
 }
 
 impl PodRun {
     /// Create a pod-run operation. `command` is executed via `/bin/sh -c`.
     ///
-    /// Defaults: namespace `"default"`, a 300s wall-clock timeout, and a 2s
-    /// poll interval.
+    /// Defaults: namespace `"default"`, a 300s wall-clock timeout, a 2s poll
+    /// interval, and logs capped at 1 MiB.
     pub fn new(client: &KubeClient, name: &str, image: &str, command: &str) -> Self {
         Self {
             client: client.client().clone(),
@@ -171,6 +199,7 @@ impl PodRun {
             envs: BTreeMap::new(),
             resources: None,
             security: None,
+            fs_group_change_policy: None,
             automount_service_account_token: None,
             allow_privilege_escalation: None,
             runtime_class: None,
@@ -178,6 +207,7 @@ impl PodRun {
             timeout: DEFAULT_TIMEOUT,
             expiry_margin: DEFAULT_EXPIRY_MARGIN,
             poll_interval: DEFAULT_POLL_INTERVAL,
+            max_log_bytes: DEFAULT_MAX_LOG_BYTES,
         }
     }
 
@@ -396,9 +426,48 @@ impl PodRun {
     }
 
     /// Run the container as a non-root user with the given uid/gid and fsGroup.
+    ///
+    /// The pod also gets `fsGroupChangePolicy: OnRootMismatch` unless
+    /// [`fs_group_change_policy`](Self::fs_group_change_policy) picks another
+    /// value.
     #[must_use]
     pub fn security(mut self, security: SecuritySpec) -> Self {
         self.security = Some(security);
+        self
+    }
+
+    /// Set the pod's `securityContext.fsGroupChangePolicy` (default
+    /// `"OnRootMismatch"`).
+    ///
+    /// Only emitted alongside the `fsGroup` of [`security`](Self::security):
+    /// without it the pod has no pod-level security context. `"Always"`
+    /// re-applies the volume ownership recursively on every mount, which is
+    /// slow on a large PVC.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `policy` is neither `"OnRootMismatch"` nor `"Always"`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::pod_run::{PodRun, SecuritySpec};
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = PodRun::new(kube, "run-tests", "rust:1.94", "cargo test")
+    ///     .security(SecuritySpec { run_as_user: 1000, run_as_group: 1000, fs_group: 1000 })
+    ///     .fs_group_change_policy("Always");
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn fs_group_change_policy(mut self, policy: &str) -> Self {
+        assert!(
+            FS_GROUP_CHANGE_POLICIES.contains(&policy),
+            "invalid fsGroupChangePolicy '{policy}': expected one of {FS_GROUP_CHANGE_POLICIES:?}"
+        );
+        self.fs_group_change_policy = Some(policy.to_string());
         self
     }
 
@@ -483,6 +552,31 @@ impl PodRun {
         self
     }
 
+    /// Cap the bytes of container logs kept in [`PodRunOutput::logs`]
+    /// (default 1 MiB).
+    ///
+    /// Longer logs keep their tail, where a failure usually shows, behind a
+    /// `[... N bytes truncated ...]` line, and
+    /// [`PodRunOutput::logs_truncated`] is set. `0` keeps the marker only.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_ops_k8s::pod_run::PodRun;
+    /// # use ironflow_ops_k8s::KubeClient;
+    ///
+    /// # fn example(kube: &KubeClient) {
+    /// let run = PodRun::new(kube, "run-tests", "rust:1.94", "cargo test")
+    ///     .max_log_bytes(256 * 1024);
+    /// # let _ = run;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn max_log_bytes(mut self, max_log_bytes: usize) -> Self {
+        self.max_log_bytes = max_log_bytes;
+        self
+    }
+
     /// Build the [`Pod`] manifest for this run. Pure: performs no I/O.
     ///
     /// Exposed for testing the manifest without a cluster.
@@ -541,6 +635,11 @@ impl PodRun {
         let security_context = self.security.map(|sec| PodSecurityContext {
             run_as_non_root: Some(true),
             fs_group: Some(sec.fs_group),
+            fs_group_change_policy: Some(
+                self.fs_group_change_policy
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_FS_GROUP_CHANGE_POLICY.to_string()),
+            ),
             ..Default::default()
         });
 
@@ -600,15 +699,22 @@ impl PodRun {
                 self.name, self.timeout
             ))),
             Ok(Err(e)) => Err(e),
-            Ok(Ok((phase, logs))) => Ok(PodRunOutput {
-                success: phase == "Succeeded",
-                logs,
-                phase,
-            }),
+            Ok(Ok((phase, logs))) => {
+                let (logs, logs_truncated) = truncate_logs(logs, self.max_log_bytes);
+                Ok(PodRunOutput {
+                    success: phase == "Succeeded",
+                    logs,
+                    phase,
+                    logs_truncated,
+                })
+            }
         }
     }
 
     /// Poll the pod until it reaches a terminal phase, then collect its logs.
+    ///
+    /// The whole log stream is fetched and cut afterwards: `LogParams::limit_bytes`
+    /// would keep the head, while the tail is what explains a failure.
     async fn wait_terminal(&self, pods: &Api<Pod>) -> Result<(String, String), OperationError> {
         loop {
             let pod = pods.get(&self.name).await.map_err(k8s_external)?;
@@ -627,6 +733,29 @@ impl PodRun {
             sleep(self.poll_interval).await;
         }
     }
+}
+
+/// Keep at most the last `max` bytes of `logs`.
+///
+/// Returns `(logs, false)` unchanged when they fit. Otherwise the head is cut
+/// on the next UTF-8 char boundary and replaced by a
+/// `[... N bytes truncated ...]` line, N being the bytes dropped, and the flag
+/// is `true`. The kept tail is at most `max` bytes, the marker comes on top;
+/// `max == 0` keeps the marker only.
+///
+/// Shared by [`PodRun::run`] and [`JobRun::run`](crate::job_run::JobRun::run).
+pub(crate) fn truncate_logs(logs: String, max: usize) -> (String, bool) {
+    if logs.len() <= max {
+        return (logs, false);
+    }
+    let mut cut = logs.len() - max;
+    while !logs.is_char_boundary(cut) {
+        cut += 1;
+    }
+    (
+        format!("[... {cut} bytes truncated ...]\n{}", &logs[cut..]),
+        true,
+    )
 }
 
 /// Build a [`PvcMount`], validating its `sub_path`.

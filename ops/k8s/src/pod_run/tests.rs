@@ -18,8 +18,12 @@ use k8s_openapi::api::core::v1::{
     EmptyDirVolumeSource, PersistentVolumeClaimVolumeSource, Toleration, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use serde_json::from_str;
 
-use super::{PodRun, ResourceSpec, SecuritySpec, active_deadline_secs, build_env_vars};
+use super::{
+    PodRun, PodRunOutput, ResourceSpec, SecuritySpec, active_deadline_secs, build_env_vars,
+    truncate_logs,
+};
 use crate::KubeClient;
 
 /// Wrap a canned `tower` service as a [`KubeClient`].
@@ -207,6 +211,39 @@ async fn build_pod_applies_security_context() {
     let psc = spec.security_context.as_ref().unwrap();
     assert_eq!(psc.fs_group, Some(2000));
     assert_eq!(psc.run_as_non_root, Some(true));
+    assert_eq!(
+        psc.fs_group_change_policy.as_deref(),
+        Some("OnRootMismatch"),
+        "fsGroup must not trigger a recursive chown on every start"
+    );
+}
+
+#[tokio::test]
+async fn pod_run_build_pod_honours_fs_group_change_policy() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .security(SecuritySpec {
+            run_as_user: 1000,
+            run_as_group: 1000,
+            fs_group: 1000,
+        })
+        .fs_group_change_policy("Always")
+        .build_pod();
+    let psc = pod.spec.unwrap().security_context.unwrap();
+    assert_eq!(psc.fs_group_change_policy.as_deref(), Some("Always"));
+}
+
+#[tokio::test]
+async fn pod_run_build_pod_without_security_has_no_fs_group_change_policy() {
+    let pod = PodRun::new(&dummy_kube(), "p", "busybox", "true")
+        .fs_group_change_policy("Always")
+        .build_pod();
+    assert!(pod.spec.unwrap().security_context.is_none());
+}
+
+#[tokio::test]
+#[should_panic(expected = "invalid fsGroupChangePolicy")]
+async fn pod_run_fs_group_change_policy_rejects_unknown_value() {
+    let _ = PodRun::new(&dummy_kube(), "p", "busybox", "true").fs_group_change_policy("Never");
 }
 
 #[tokio::test]
@@ -758,11 +795,27 @@ fn routing_service(
     Error = Infallible,
     Future = impl Send,
 > + Clone {
+    routing_service_with_logs(get_phases, deleted, "line-1\nline-2\n".to_string())
+}
+
+/// Same as [`routing_service`], the pod log endpoint returning `logs`.
+fn routing_service_with_logs(
+    get_phases: Vec<&'static str>,
+    deleted: Arc<AtomicUsize>,
+    logs: String,
+) -> impl Service<
+    Request<kube::client::Body>,
+    Response = Response<kube::client::Body>,
+    Error = Infallible,
+    Future = impl Send,
+> + Clone {
     let get_idx = Arc::new(AtomicUsize::new(0));
     let phases = Arc::new(get_phases);
+    let logs = Arc::new(logs);
     service_fn(move |req: Request<kube::client::Body>| {
         let get_idx = get_idx.clone();
         let phases = phases.clone();
+        let logs = logs.clone();
         let deleted = deleted.clone();
         async move {
             let method = req.method().clone();
@@ -771,7 +824,7 @@ fn routing_service(
                 deleted.fetch_add(1, Ordering::SeqCst);
                 r#"{"kind":"Status","apiVersion":"v1","status":"Success"}"#.to_string()
             } else if path.ends_with("/log") {
-                "line-1\nline-2\n".to_string()
+                logs.to_string()
             } else if method == Method::POST {
                 r#"{"kind":"Pod","apiVersion":"v1","metadata":{"name":"job-pod","namespace":"default"},"spec":{"containers":[]},"status":{"phase":"Pending"}}"#.to_string()
             } else {
@@ -801,7 +854,96 @@ async fn run_succeeded_collects_logs_and_deletes() {
     assert!(out.success);
     assert_eq!(out.phase, "Succeeded");
     assert!(out.logs.contains("line-1"));
+    assert!(!out.logs_truncated, "short logs must be kept whole");
     assert_eq!(deleted.load(Ordering::SeqCst), 1, "pod must be deleted");
+}
+
+#[tokio::test]
+async fn pod_run_keeps_only_the_tail_of_logs_over_the_default_limit() {
+    // A pod printing well over 1 MiB must not produce an output the API
+    // refuses: only the last MiB is kept, behind a marker line.
+    let logs = format!("{}final-error\n", "x".repeat(3 * 1024 * 1024));
+    let run = pod_run_with(routing_service_with_logs(
+        vec!["Failed"],
+        Arc::new(AtomicUsize::new(0)),
+        logs,
+    ));
+    let out = run.run().await.unwrap();
+    assert!(!out.success);
+    assert!(out.logs_truncated);
+    let marker = "[... 2097164 bytes truncated ...]\n";
+    assert!(out.logs.starts_with(marker), "got: {}", &out.logs[..60]);
+    assert!(out.logs.ends_with("final-error\n"));
+    assert_eq!(out.logs.len(), marker.len() + 1024 * 1024);
+}
+
+#[tokio::test]
+async fn pod_run_honours_max_log_bytes() {
+    let run = pod_run_with(routing_service_with_logs(
+        vec!["Succeeded"],
+        Arc::new(AtomicUsize::new(0)),
+        "0123456789".to_string(),
+    ))
+    .max_log_bytes(4);
+    let out = run.run().await.unwrap();
+    assert!(out.success);
+    assert!(out.logs_truncated);
+    assert_eq!(out.logs, "[... 6 bytes truncated ...]\n6789");
+}
+
+#[tokio::test]
+async fn pod_run_output_without_logs_truncated_deserializes_as_false() {
+    let out: PodRunOutput =
+        from_str(r#"{"success":true,"logs":"ok","phase":"Succeeded"}"#).unwrap();
+    assert!(!out.logs_truncated);
+}
+
+// -- truncate_logs (pure) --
+
+#[test]
+fn pod_run_truncate_logs_keeps_short_logs() {
+    assert_eq!(
+        truncate_logs("hello".to_string(), 10),
+        ("hello".to_string(), false)
+    );
+}
+
+#[test]
+fn pod_run_truncate_logs_keeps_logs_of_exactly_max_bytes() {
+    assert_eq!(
+        truncate_logs("hello".to_string(), 5),
+        ("hello".to_string(), false)
+    );
+}
+
+#[test]
+fn pod_run_truncate_logs_keeps_tail_behind_marker() {
+    assert_eq!(
+        truncate_logs("head-tail".to_string(), 4),
+        ("[... 5 bytes truncated ...]\ntail".to_string(), true)
+    );
+}
+
+#[test]
+fn pod_run_truncate_logs_cuts_on_char_boundary() {
+    // "é" is two bytes: a cut at byte 2 would split it, so it moves to byte 3
+    // and the kept tail is shorter than `max`.
+    let (logs, truncated) = truncate_logs("aéb".to_string(), 2);
+    assert!(truncated);
+    assert_eq!(logs, "[... 3 bytes truncated ...]\nb");
+}
+
+#[test]
+fn pod_run_truncate_logs_zero_keeps_marker_only() {
+    assert_eq!(
+        truncate_logs("abc".to_string(), 0),
+        ("[... 3 bytes truncated ...]\n".to_string(), true)
+    );
+}
+
+#[test]
+fn pod_run_truncate_logs_empty_is_untouched() {
+    assert_eq!(truncate_logs(String::new(), 0), (String::new(), false));
 }
 
 #[tokio::test]
