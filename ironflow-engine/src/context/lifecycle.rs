@@ -831,7 +831,11 @@ impl WorkflowContext {
     /// # Errors
     ///
     /// Returns the store error when the completion cannot be persisted.
-    pub(crate) async fn complete_step(&self, step: &Step, update: StepUpdate) -> Result<Uuid, EngineError> {
+    pub(crate) async fn complete_step(
+        &self,
+        step: &Step,
+        update: StepUpdate,
+    ) -> Result<Uuid, EngineError> {
         let err = match self.store.update_step(step.id, update.clone()).await {
             Ok(()) => return Ok(step.id),
             Err(err) => err,

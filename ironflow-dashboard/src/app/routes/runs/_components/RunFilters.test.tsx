@@ -34,8 +34,8 @@ describe("RunFilters priority", () => {
 
 		await waitFor(() => {
 			expect(lastSearchParams(onUrlUpdate)?.get("priority")).toBe("-15");
+			expect(lastSearchParams(onUrlUpdate)?.get("page")).toBe("1");
 		});
-		expect(lastSearchParams(onUrlUpdate)?.get("page")).toBe("1");
 	});
 
 	it("keeps an out of range priority out of the URL", async () => {
