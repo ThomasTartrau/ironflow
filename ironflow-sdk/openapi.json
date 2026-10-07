@@ -2076,6 +2076,31 @@
         ],
         "type": "string"
       },
+      "PauseRunResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RunResponse",
+            "description": "The paused run. Its `resume_status` is the state it returns to."
+          },
+          {
+            "properties": {
+              "paused_descendants": {
+                "description": "Sub-workflow runs below it that this request paused, oldest first.",
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "paused_descendants"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Response of `POST /api/v1/runs/:id/pause`: the paused run, with the\nsub-workflow runs paused along with it."
+      },
       "PlanWorkflowRequest": {
         "description": "Request body for building a workflow execution plan.",
         "properties": {
@@ -2479,6 +2504,31 @@
         ],
         "type": "object"
       },
+      "ResumeRunResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RunResponse",
+            "description": "The resumed run, in the state it was paused from."
+          },
+          {
+            "properties": {
+              "resumed_descendants": {
+                "description": "Sub-workflow runs below it that this request resumed, oldest first.",
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "resumed_descendants"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Response of `POST /api/v1/runs/:id/resume`: the resumed run, with the\nsub-workflow runs resumed along with it."
+      },
       "ResumedRunResponse": {
         "description": "A run resumed by a signal.",
         "properties": {
@@ -2854,6 +2904,11 @@
             "format": "int32",
             "type": "integer"
           },
+          "resume_status": {
+            "$ref": "#/components/schemas/RunStatus",
+            "description": "State a `paused` run returns to when it is resumed. Omitted in every\nother state.",
+            "nullable": true
+          },
           "retry_count": {
             "description": "Number of times retried.",
             "format": "int32",
@@ -2913,7 +2968,7 @@
         "type": "object"
       },
       "RunStatus": {
-        "description": "Status of a workflow run, forming a finite state machine.\n\nValid transitions:\n- `Pending` -> `Running`, `Cancelled`\n- `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`, `Sleeping`\n- `Retrying` -> `Running`, `Failed`, `Cancelled`\n- `AwaitingApproval` -> `Running`, `Pending` (requeued for a worker under `ExecutionMode::Workers`), `Failed`, `Cancelled`\n- `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`\n\nTerminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:\ntransitioning to the same terminal state is a no-op, not an error.\n\n# Examples\n\n```\nuse ironflow_store::entities::RunStatus;\n\nassert!(RunStatus::Pending.can_transition_to(&RunStatus::Running));\nassert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));\nassert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::Warning));\n// A run whose worker lease expired goes back to the queue:\nassert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));\nassert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));\nassert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Pending));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));\nassert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));\nassert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));\n// Terminal-to-same is idempotent:\nassert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));\nassert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));\nassert!(RunStatus::Warning.can_transition_to(&RunStatus::Warning));\nassert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));\n```",
+        "description": "Status of a workflow run, forming a finite state machine.\n\nValid transitions:\n- `Pending` -> `Running`, `Cancelled`\n- `Running` -> `Pending` (worker lease expired), `Completed`, `Failed`, `Warning`, `Retrying`, `Cancelled`, `AwaitingApproval`, `Sleeping`\n- `Retrying` -> `Running`, `Failed`, `Cancelled`\n- `AwaitingApproval` -> `Running`, `Pending` (requeued for a worker under `ExecutionMode::Workers`), `Failed`, `Cancelled`\n- `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`\n- `Pending`, `Retrying`, `Sleeping`, `AwaitingApproval`, `Running` -> `Paused` (operator pause)\n- `Paused` -> `Pending`, `Running`, `Retrying`, `Sleeping`, `AwaitingApproval` (resume),\n  `Failed` (rejection decided while paused), `Cancelled`\n\nTerminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:\ntransitioning to the same terminal state is a no-op, not an error.\n\n# Examples\n\n```\nuse ironflow_store::entities::RunStatus;\n\nassert!(RunStatus::Pending.can_transition_to(&RunStatus::Running));\nassert!(!RunStatus::Pending.can_transition_to(&RunStatus::Completed));\nassert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::AwaitingApproval));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::Warning));\n// A run whose worker lease expired goes back to the queue:\nassert!(RunStatus::Running.can_transition_to(&RunStatus::Pending));\nassert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Running));\nassert!(RunStatus::AwaitingApproval.can_transition_to(&RunStatus::Pending));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));\nassert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));\nassert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));\nassert!(RunStatus::Running.can_transition_to(&RunStatus::Paused));\nassert!(RunStatus::Paused.can_transition_to(&RunStatus::Pending));\n// Terminal-to-same is idempotent:\nassert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));\nassert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));\nassert!(RunStatus::Warning.can_transition_to(&RunStatus::Warning));\nassert!(RunStatus::Cancelled.can_transition_to(&RunStatus::Cancelled));\n```",
         "enum": [
           "pending",
           "running",
@@ -2923,7 +2978,8 @@
           "cancelled",
           "awaiting_approval",
           "warning",
-          "sleeping"
+          "sleeping",
+          "paused"
         ],
         "type": "string"
       },
@@ -3508,6 +3564,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "paused": {
+            "description": "Number of runs created in this bucket and currently paused.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "pending": {
             "description": "Number of runs created in this bucket and currently pending.",
             "format": "int64",
@@ -3566,6 +3628,7 @@
           "retrying",
           "awaiting_approval",
           "sleeping",
+          "paused",
           "avg_duration_ms",
           "p95_duration_ms",
           "total_cost_usd"
@@ -4672,6 +4735,12 @@
             "description": "Workflow name.",
             "type": "string"
           },
+          "paused_at": {
+            "description": "When the workflow was paused: its queued runs are not picked up until\nit is resumed. Omitted when the workflow is not paused.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
           "schedule": {
             "description": "Optional 6-field cron expression for automatic execution.",
             "nullable": true,
@@ -4910,6 +4979,31 @@
         ],
         "type": "object"
       },
+      "WorkflowPauseResponse": {
+        "description": "Response of `POST /api/v1/workflows/:name/pause` and\n`POST /api/v1/workflows/:name/resume`.\n\n# Examples\n\n```\nuse ironflow_api::entities::WorkflowPauseResponse;\n\nlet response = WorkflowPauseResponse::resumed(\"deploy\");\nassert!(response.paused_at.is_none());\n```",
+        "properties": {
+          "paused_at": {
+            "description": "When the workflow was paused: its queued runs are not picked up until\nit is resumed. Omitted when the workflow is not paused.",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "paused_by": {
+            "description": "User who paused the workflow, when known.",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "workflow_name": {
+            "description": "Workflow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_name"
+        ],
+        "type": "object"
+      },
       "WorkflowStepCompletedEvent": {
         "description": "Payload of the `WorkflowEvent::StepCompleted` workflow event.\n\n# Examples\n\n```\nuse ironflow_engine::notify::WorkflowStepCompletedEvent;\n\nlet payload = WorkflowStepCompletedEvent {\n    step_name: \"deploy\".to_string(),\n    step_index: 1,\n    duration_ms: 5000,\n    output_summary: Some(\"deployed v1.2.3\".to_string()),\n};\nassert_eq!(payload.duration_ms, 5000);\n```",
         "properties": {
@@ -5010,6 +5104,12 @@
           },
           "name": {
             "description": "Workflow name (unique identifier).",
+            "type": "string"
+          },
+          "paused_at": {
+            "description": "When the workflow was paused: its queued runs are not picked up until\nit is resumed. Omitted when the workflow is not paused.",
+            "format": "date-time",
+            "nullable": true,
             "type": "string"
           },
           "schedule": {
@@ -6298,7 +6398,7 @@
     },
     "/api/v1/runs/{id}/approve": {
       "post": {
-        "description": "Records the caller's vote on the open gate. Votes are counted per user: an\nAPI key votes as its owner, and an admin's vote counts as one vote like any\nother. Once the gate holds as many distinct approvals as its\n[`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)\nrequires (one for a gate opened without approvers), the run transitions from\n`AwaitingApproval` back to `Running` and resumes. Until then the response\nreturns the run still `AwaitingApproval`, and the gate keeps its SLA timer.\n\nReturns 400 if the run is not in `AwaitingApproval` state, 403 if the\ncaller may not vote on the gate, and 409 if the caller already approved it.",
+        "description": "Records the caller's vote on the open gate. Votes are counted per user: an\nAPI key votes as its owner, and an admin's vote counts as one vote like any\nother. Once the gate holds as many distinct approvals as its\n[`ApprovalRequirement`](ironflow_store::models::ApprovalRequirement)\nrequires (one for a gate opened without approvers), the run transitions from\n`AwaitingApproval` back to `Running` and resumes. Until then the response\nreturns the run still `AwaitingApproval`, and the gate keeps its SLA timer.\n\nA run an operator paused while it awaited approval can be approved too: the\nvote is recorded and the run stays `paused`, resuming to `pending` once the\noperator resumes it.\n\nReturns 400 if the run is not in `AwaitingApproval` state, 403 if the\ncaller may not vote on the gate, and 409 if the caller already approved it.",
         "operationId": "approve_run",
         "parameters": [
           {
@@ -6536,9 +6636,60 @@
         ]
       }
     },
+    "/api/v1/runs/{id}/pause": {
+      "post": {
+        "description": "A queued, sleeping or waiting run is no longer picked or woken. A running\nrun has its step in flight interrupted and starts no further step; the\nresume executes the interrupted step again (see\n[`Engine::pause_run`](ironflow_engine::engine::Engine::pause_run)). The\nrun keeps the state it was paused from in `resume_status`.\n\nReturns 400 for a run that already finished, a run already paused, or a\nsub-workflow run: pause its root run instead.",
+        "operationId": "pause_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseRunResponse"
+                }
+              }
+            },
+            "description": "Run paused, with the sub-runs paused along"
+          },
+          "400": {
+            "description": "Run cannot be paused"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Pause a run that has not finished, with every sub-workflow run below it.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/api/v1/runs/{id}/reject": {
       "post": {
-        "description": "Transitions the run from `AwaitingApproval` to `Failed`. A single rejection\nfrom anyone allowed to vote on the gate vetoes it, even after partial\napprovals.\nReturns 400 if the run is not in `AwaitingApproval` state.",
+        "description": "Transitions the run from `AwaitingApproval` to `Failed`. A single rejection\nfrom anyone allowed to vote on the gate vetoes it, even after partial\napprovals.\nA run paused while it awaited approval is rejected the same way.\nReturns 400 if the run is not in `AwaitingApproval` state.",
         "operationId": "reject_run",
         "parameters": [
           {
@@ -6633,6 +6784,57 @@
           }
         ],
         "summary": "Replay a finished run on the current handler version.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{id}/resume": {
+      "post": {
+        "description": "The run returns to the state it was paused from: a queued run is picked\nagain, a sleeping run waits for its deadline, a run waiting for an\napproval keeps waiting. A run paused while it executed goes back to\n`pending` and replays from the step where it stopped.\n\nReturns 400 for a run that is not paused or a sub-workflow run.",
+        "operationId": "resume_run",
+        "parameters": [
+          {
+            "description": "Run ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeRunResponse"
+                }
+              }
+            },
+            "description": "Run resumed, with the sub-runs resumed along"
+          },
+          "400": {
+            "description": "Run is not paused"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Run not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Resume a paused run, with the sub-workflow runs paused below it.",
         "tags": [
           "runs"
         ]
@@ -8292,6 +8494,53 @@
         ]
       }
     },
+    "/api/v1/workflows/{name}/pause": {
+      "post": {
+        "description": "Runs already executing are left alone (pause them one by one with\n`POST /api/v1/runs/{id}/pause`), and new runs are still created: they\nwait in the queue until the workflow is resumed. Pausing a workflow\nalready paused succeeds and keeps its first `paused_at`.",
+        "operationId": "pause_workflow",
+        "parameters": [
+          {
+            "description": "Workflow name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowPauseResponse"
+                }
+              }
+            },
+            "description": "Workflow paused"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Workflow not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Pause a workflow: workers stop picking its queued runs.",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
     "/api/v1/workflows/{name}/plan": {
       "post": {
         "description": "# Errors\n\n- 400 if `max_depth` is out of range or the payload is not a JSON object\n- 404 if the workflow is not registered",
@@ -8345,6 +8594,53 @@
           }
         ],
         "summary": "Build a workflow execution plan without running it.",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{name}/resume": {
+      "post": {
+        "description": "Resuming a workflow that is not paused succeeds and changes nothing.",
+        "operationId": "resume_workflow",
+        "parameters": [
+          {
+            "description": "Workflow name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowPauseResponse"
+                }
+              }
+            },
+            "description": "Workflow resumed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Workflow not found"
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "summary": "Resume a paused workflow: workers pick its queued runs again.",
         "tags": [
           "workflows"
         ]

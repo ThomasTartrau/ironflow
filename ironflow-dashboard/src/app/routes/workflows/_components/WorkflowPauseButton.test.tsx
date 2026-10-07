@@ -3,8 +3,13 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../_actions/actions", () => ({
-	pauseWorkflow: vi.fn().mockResolvedValue({ paused: true }),
-	resumeWorkflow: vi.fn().mockResolvedValue({ paused: false }),
+	pauseWorkflow: vi
+		.fn()
+		.mockResolvedValue({
+			workflow_name: "deploy",
+			paused_at: "2026-10-06T12:00:00Z",
+		}),
+	resumeWorkflow: vi.fn().mockResolvedValue({ workflow_name: "deploy" }),
 }));
 
 import { pauseWorkflow, resumeWorkflow } from "../_actions/actions";

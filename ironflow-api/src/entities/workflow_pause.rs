@@ -15,16 +15,15 @@ use ironflow_store::entities::WorkflowPause;
 /// use ironflow_api::entities::WorkflowPauseResponse;
 ///
 /// let response = WorkflowPauseResponse::resumed("deploy");
-/// assert!(!response.paused);
+/// assert!(response.paused_at.is_none());
 /// ```
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Serialize)]
 pub struct WorkflowPauseResponse {
     /// Workflow name.
     pub workflow_name: String,
-    /// Whether the workflow is paused: its queued runs are not picked up.
-    pub paused: bool,
-    /// When the workflow was paused. Omitted once it is resumed.
+    /// When the workflow was paused: its queued runs are not picked up until
+    /// it is resumed. Omitted when the workflow is not paused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paused_at: Option<DateTime<Utc>>,
     /// User who paused the workflow, when known.
@@ -47,7 +46,6 @@ impl WorkflowPauseResponse {
     pub fn resumed(workflow_name: &str) -> Self {
         Self {
             workflow_name: workflow_name.to_string(),
-            paused: false,
             paused_at: None,
             paused_by: None,
         }
@@ -58,7 +56,6 @@ impl From<WorkflowPause> for WorkflowPauseResponse {
     fn from(pause: WorkflowPause) -> Self {
         Self {
             workflow_name: pause.workflow_name,
-            paused: true,
             paused_at: Some(pause.paused_at),
             paused_by: pause.paused_by,
         }

@@ -539,6 +539,10 @@ export interface paths {
 		 *     `AwaitingApproval` back to `Running` and resumes. Until then the response
 		 *     returns the run still `AwaitingApproval`, and the gate keeps its SLA timer.
 		 *
+		 *     A run an operator paused while it awaited approval can be approved too: the
+		 *     vote is recorded and the run stays `paused`, resuming to `pending` once the
+		 *     operator resumes it.
+		 *
 		 *     Returns 400 if the run is not in `AwaitingApproval` state, 403 if the
 		 *     caller may not vote on the gate, and 409 if the caller already approved it.
 		 */
@@ -631,6 +635,33 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/runs/{id}/pause": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Pause a run that has not finished, with every sub-workflow run below it.
+		 * @description A queued, sleeping or waiting run is no longer picked or woken. A running
+		 *     run has its step in flight interrupted and starts no further step; the
+		 *     resume executes the interrupted step again (see
+		 *     [`Engine::pause_run`](ironflow_engine::engine::Engine::pause_run)). The
+		 *     run keeps the state it was paused from in `resume_status`.
+		 *
+		 *     Returns 400 for a run that already finished, a run already paused, or a
+		 *     sub-workflow run: pause its root run instead.
+		 */
+		post: operations["pause_run"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/runs/{id}/reject": {
 		parameters: {
 			query?: never;
@@ -645,6 +676,7 @@ export interface paths {
 		 * @description Transitions the run from `AwaitingApproval` to `Failed`. A single rejection
 		 *     from anyone allowed to vote on the gate vetoes it, even after partial
 		 *     approvals.
+		 *     A run paused while it awaited approval is rejected the same way.
 		 *     Returns 400 if the run is not in `AwaitingApproval` state.
 		 */
 		post: operations["reject_run"];
@@ -669,6 +701,31 @@ export interface paths {
 		 *     original, always on the current handler version. The original run is not modified.
 		 */
 		post: operations["replay_run"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/runs/{id}/resume": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Resume a paused run, with the sub-workflow runs paused below it.
+		 * @description The run returns to the state it was paused from: a queued run is picked
+		 *     again, a sleeping run waits for its deadline, a run waiting for an
+		 *     approval keeps waiting. A run paused while it executed goes back to
+		 *     `pending` and replays from the step where it stopped.
+		 *
+		 *     Returns 400 for a run that is not paused or a sub-workflow run.
+		 */
+		post: operations["resume_run"];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -1306,6 +1363,29 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	"/api/v1/workflows/{name}/pause": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Pause a workflow: workers stop picking its queued runs.
+		 * @description Runs already executing are left alone (pause them one by one with
+		 *     `POST /api/v1/runs/{id}/pause`), and new runs are still created: they
+		 *     wait in the queue until the workflow is resumed. Pausing a workflow
+		 *     already paused succeeds and keeps its first `paused_at`.
+		 */
+		post: operations["pause_workflow"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	"/api/v1/workflows/{name}/plan": {
 		parameters: {
 			query?: never;
@@ -1323,6 +1403,26 @@ export interface paths {
 		 *     - 404 if the workflow is not registered
 		 */
 		post: operations["plan_workflow"];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	"/api/v1/workflows/{name}/resume": {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Resume a paused workflow: workers pick its queued runs again.
+		 * @description Resuming a workflow that is not paused succeeds and changes nothing.
+		 */
+		post: operations["resume_workflow"];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2812,6 +2912,14 @@ export interface components {
 		 * @enum {string}
 		 */
 		OverlapPolicy: "allow" | "skip";
+		/**
+		 * @description Response of `POST /api/v1/runs/:id/pause`: the paused run, with the
+		 *     sub-workflow runs paused along with it.
+		 */
+		PauseRunResponse: components["schemas"]["RunResponse"] & {
+			/** @description Sub-workflow runs below it that this request paused, oldest first. */
+			paused_descendants: string[];
+		};
 		/** @description Request body for building a workflow execution plan. */
 		PlanWorkflowRequest: {
 			/** @description Estimate step durations from run history. Defaults to `true`. */
@@ -3069,6 +3177,14 @@ export interface components {
 			 * @description The signal step that keeps waiting.
 			 */
 			step_id: string;
+		};
+		/**
+		 * @description Response of `POST /api/v1/runs/:id/resume`: the resumed run, with the
+		 *     sub-workflow runs resumed along with it.
+		 */
+		ResumeRunResponse: components["schemas"]["RunResponse"] & {
+			/** @description Sub-workflow runs below it that this request resumed, oldest first. */
+			resumed_descendants: string[];
 		};
 		/** @description A run resumed by a signal. */
 		ResumedRunResponse: {
@@ -3417,6 +3533,7 @@ export interface components {
 			 *     `0` is the default.
 			 */
 			priority?: number;
+			resume_status?: null | components["schemas"]["RunStatus"];
 			/**
 			 * Format: int32
 			 * @description Number of times retried.
@@ -3458,6 +3575,9 @@ export interface components {
 		 *     - `Retrying` -> `Running`, `Failed`, `Cancelled`
 		 *     - `AwaitingApproval` -> `Running`, `Pending` (requeued for a worker under `ExecutionMode::Workers`), `Failed`, `Cancelled`
 		 *     - `Sleeping` -> `Pending` (wake-up timer elapsed), `Cancelled`
+		 *     - `Pending`, `Retrying`, `Sleeping`, `AwaitingApproval`, `Running` -> `Paused` (operator pause)
+		 *     - `Paused` -> `Pending`, `Running`, `Retrying`, `Sleeping`, `AwaitingApproval` (resume),
+		 *       `Failed` (rejection decided while paused), `Cancelled`
 		 *
 		 *     Terminal states (`Completed`, `Failed`, `Warning`, `Cancelled`) are idempotent:
 		 *     transitioning to the same terminal state is a no-op, not an error.
@@ -3479,6 +3599,8 @@ export interface components {
 		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Sleeping));
 		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Pending));
 		 *     assert!(RunStatus::Sleeping.can_transition_to(&RunStatus::Cancelled));
+		 *     assert!(RunStatus::Running.can_transition_to(&RunStatus::Paused));
+		 *     assert!(RunStatus::Paused.can_transition_to(&RunStatus::Pending));
 		 *     // Terminal-to-same is idempotent:
 		 *     assert!(RunStatus::Failed.can_transition_to(&RunStatus::Failed));
 		 *     assert!(RunStatus::Completed.can_transition_to(&RunStatus::Completed));
@@ -3496,7 +3618,8 @@ export interface components {
 			| "cancelled"
 			| "awaiting_approval"
 			| "warning"
-			| "sleeping";
+			| "sleeping"
+			| "paused";
 		/**
 		 * @description Payload of the `Event::RunStatusChanged` event.
 		 *
@@ -3980,6 +4103,11 @@ export interface components {
 			 * @description 95th percentile duration in milliseconds.
 			 */
 			p95_duration_ms: number;
+			/**
+			 * Format: int64
+			 * @description Number of runs created in this bucket and currently paused.
+			 */
+			paused: number;
 			/**
 			 * Format: int64
 			 * @description Number of runs created in this bucket and currently pending.
@@ -4902,6 +5030,12 @@ export interface components {
 			input_schema?: unknown;
 			/** @description Workflow name. */
 			name: string;
+			/**
+			 * Format: date-time
+			 * @description When the workflow was paused: its queued runs are not picked up until
+			 *     it is resumed. Omitted when the workflow is not paused.
+			 */
+			paused_at?: string | null;
 			/** @description Optional 6-field cron expression for automatic execution. */
 			schedule?: string | null;
 			/** @description Optional Rust source code of the handler. */
@@ -5014,6 +5148,34 @@ export interface components {
 			step_name: string;
 		};
 		/**
+		 * @description Response of `POST /api/v1/workflows/:name/pause` and
+		 *     `POST /api/v1/workflows/:name/resume`.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use ironflow_api::entities::WorkflowPauseResponse;
+		 *
+		 *     let response = WorkflowPauseResponse::resumed("deploy");
+		 *     assert!(response.paused_at.is_none());
+		 *     ```
+		 */
+		WorkflowPauseResponse: {
+			/**
+			 * Format: date-time
+			 * @description When the workflow was paused: its queued runs are not picked up until
+			 *     it is resumed. Omitted when the workflow is not paused.
+			 */
+			paused_at?: string | null;
+			/**
+			 * Format: uuid
+			 * @description User who paused the workflow, when known.
+			 */
+			paused_by?: string | null;
+			/** @description Workflow name. */
+			workflow_name: string;
+		};
+		/**
 		 * @description Payload of the `WorkflowEvent::StepCompleted` workflow event.
 		 *
 		 *     # Examples
@@ -5116,6 +5278,12 @@ export interface components {
 			category?: string | null;
 			/** @description Workflow name (unique identifier). */
 			name: string;
+			/**
+			 * Format: date-time
+			 * @description When the workflow was paused: its queued runs are not picked up until
+			 *     it is resumed. Omitted when the workflow is not paused.
+			 */
+			paused_at?: string | null;
 			/** @description Optional 6-field cron expression for automatic execution. */
 			schedule?: string | null;
 			/** @description Current handler version. */
@@ -6388,6 +6556,57 @@ export interface operations {
 			};
 		};
 	};
+	pause_run: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Run paused, with the sub-runs paused along */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["PauseRunResponse"];
+				};
+			};
+			/** @description Run cannot be paused */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
 	reject_run: {
 		parameters: {
 			query?: never;
@@ -6482,6 +6701,57 @@ export interface operations {
 				content?: never;
 			};
 			/** @description Run not found or workflow not registered */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	resume_run: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Run ID */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Run resumed, with the sub-runs resumed along */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["ResumeRunResponse"];
+				};
+			};
+			/** @description Run is not paused */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Run not found */
 			404: {
 				headers: {
 					[name: string]: unknown;
@@ -7853,6 +8123,50 @@ export interface operations {
 			};
 		};
 	};
+	pause_workflow: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Workflow name */
+				name: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Workflow paused */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["WorkflowPauseResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Workflow not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
 	plan_workflow: {
 		parameters: {
 			query?: never;
@@ -7888,6 +8202,50 @@ export interface operations {
 			};
 			/** @description Unauthorized */
 			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Workflow not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+		};
+	};
+	resume_workflow: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description Workflow name */
+				name: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Workflow resumed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					"application/json": components["schemas"]["WorkflowPauseResponse"];
+				};
+			};
+			/** @description Unauthorized */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Forbidden */
+			403: {
 				headers: {
 					[name: string]: unknown;
 				};

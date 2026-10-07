@@ -188,7 +188,6 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["workflow_name"], "deploy");
-        assert_eq!(body["data"]["paused"], true);
         assert!(body["data"]["paused_at"].is_string());
         assert!(body["data"]["paused_by"].is_string());
         let pauses = store.list_workflow_pauses().await.unwrap();
@@ -225,7 +224,6 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["workflow_name"], "deploy");
-        assert_eq!(body["data"]["paused"], false);
         assert!(body["data"].get("paused_at").is_none());
         assert!(store.list_workflow_pauses().await.unwrap().is_empty());
     }
@@ -237,7 +235,7 @@ mod tests {
         let (status, body) = send(test_state(store), "resume", "deploy", true).await;
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["data"]["paused"], false);
+        assert!(body["data"].get("paused_at").is_none());
     }
 
     #[tokio::test]

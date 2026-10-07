@@ -239,7 +239,6 @@ mod tests {
                     }
                     Json(json!({ "data": {
                         "workflow_name": name,
-                        "paused": true,
                         "paused_at": "2026-10-06T12:00:00Z",
                     } }))
                     .into_response()
@@ -248,7 +247,7 @@ mod tests {
             .route(
                 "/api/v1/workflows/{name}/resume",
                 post(|Path(name): Path<String>| async move {
-                    Json(json!({ "data": { "workflow_name": name, "paused": false } }))
+                    Json(json!({ "data": { "workflow_name": name } }))
                 }),
             )
             .route(
@@ -711,7 +710,6 @@ mod tests {
         let parsed = extract_json(&result);
 
         assert_eq!(parsed["workflow_name"], "deploy");
-        assert_eq!(parsed["paused"], true);
         assert_eq!(parsed["paused_at"], "2026-10-06T12:00:00Z");
     }
 
@@ -740,7 +738,7 @@ mod tests {
         let parsed = extract_json(&result);
 
         assert_eq!(parsed["workflow_name"], "deploy");
-        assert_eq!(parsed["paused"], false);
+        assert!(parsed.get("paused_at").is_none());
     }
 
     // ---------------------------------------------------------------

@@ -53,7 +53,11 @@ pub fn workflow_pause_table(pause: &WorkflowPauseResponse) -> Table {
     table.set_header(vec!["Workflow", "Paused", "Paused at"]);
     table.add_row(vec![
         Cell::new(&pause.workflow_name),
-        Cell::new(if pause.paused { "yes" } else { "no" }),
+        Cell::new(if pause.paused_at.is_some() {
+            "yes"
+        } else {
+            "no"
+        }),
         Cell::new(format_optional_datetime(&pause.paused_at)),
     ]);
     table
@@ -125,7 +129,6 @@ mod tests {
     fn workflow_pause_table_shows_when_the_workflow_was_paused() {
         let pause: WorkflowPauseResponse = from_value(json!({
             "workflow_name": "deploy",
-            "paused": true,
             "paused_at": "2026-10-06T10:00:00Z",
         }))
         .expect("a workflow pause response");
@@ -141,7 +144,6 @@ mod tests {
     fn workflow_pause_table_shows_a_resumed_workflow() {
         let pause: WorkflowPauseResponse = from_value(json!({
             "workflow_name": "deploy",
-            "paused": false,
         }))
         .expect("a workflow pause response");
 
