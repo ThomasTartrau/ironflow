@@ -25,7 +25,12 @@ function getTriggerMeta(t: TriggerKind): TriggerMeta {
 		case "webhook":
 			return { label: "Webhook", tooltip: t.path };
 		case "cron":
-			return { label: "Cron", tooltip: t.schedule };
+			return {
+				label: "Cron",
+				tooltip: t.scheduled_for
+					? `${t.schedule} (occurrence ${t.scheduled_for})`
+					: t.schedule,
+			};
 		case "api":
 			return { label: "API", tooltip: null };
 		case "retry":

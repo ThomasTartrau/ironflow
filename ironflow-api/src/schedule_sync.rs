@@ -9,23 +9,26 @@ use std::collections::{HashMap, HashSet};
 use chrono::Utc;
 use ironflow_engine::engine::Engine;
 use ironflow_store::entities::{
-    MAX_PRIORITY, MIN_PRIORITY, NewSchedule, Schedule, ScheduleNext, ScheduleSource, ScheduleUpdate,
+    MAX_PRIORITY, MIN_PRIORITY, NewSchedule, Schedule, ScheduleNext, SchedulePolicy,
+    ScheduleSource, ScheduleUpdate,
 };
 use ironflow_store::error::StoreError;
 use ironflow_store::store::Store;
 use serde_json::json;
 use tracing::{info, warn};
 
-use crate::schedule_ticker::schedule_next;
+use crate::schedule_clock::schedule_next;
 
 /// Reconcile DB schedules with handler-declared schedules.
 ///
 /// Performs a three-way sync at startup:
 /// 1. **Create** DB rows for handlers that declare a schedule but have no
 ///    corresponding `source = handler` row.
-/// 2. **Update** the cron expression when the handler's cron changed, and the
+/// 2. **Update** the cron expression when the handler's cron changed, the
 ///    priority when the handler's
-///    [`priority`](ironflow_engine::handler::WorkflowHandler::priority) changed.
+///    [`priority`](ironflow_engine::handler::WorkflowHandler::priority) changed,
+///    and the catch-up, overlap and timezone policy when the handler's
+///    [`CronSchedule`](ironflow_engine::schedule::CronSchedule) changed it.
 /// 3. **Delete** orphan `source = handler` rows whose handler was removed
 ///    from the code.
 ///
@@ -55,13 +58,13 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
     let handlers = engine.scheduled_handlers();
     // The priority every run of the schedule gets, clamped like a run the
     // handler creates itself.
-    let handler_map: HashMap<&str, (&str, i16)> = handlers
+    let handler_map: HashMap<&str, (&str, i16, &SchedulePolicy)> = handlers
         .iter()
-        .map(|(name, cron)| {
+        .map(|(name, sched)| {
             let priority = engine.get_handler(name).map_or(0, |handler| {
                 handler.priority().clamp(MIN_PRIORITY, MAX_PRIORITY)
             });
-            (*name, (cron.as_str(), priority))
+            (*name, (sched.as_str(), priority, sched.policy()))
         })
         .collect();
     let handler_names: HashSet<&str> = handler_map.keys().copied().collect();
@@ -92,30 +95,37 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
         .map(|s| (s.workflow_name.as_str(), *s))
         .collect();
 
-    for (name, (cron_str, priority)) in &handler_map {
+    for (name, (cron_str, priority, policy)) in &handler_map {
         match existing_map.get(name) {
             Some(existing) => {
                 let cron_changed = existing.cron_expression != *cron_str;
                 let priority_changed = existing.priority != *priority;
-                if !cron_changed && !priority_changed {
+                let policy_changed = existing.policy != **policy;
+                if !cron_changed && !priority_changed && !policy_changed {
                     continue;
                 }
                 let mut update = ScheduleUpdate::default();
-                if cron_changed {
+                // The next occurrence depends on the cron and the timezone.
+                if cron_changed || existing.policy.timezone != policy.timezone {
                     // 2. Cron changed in code: update DB row. A schedule Ironflow
                     // disabled on an error is re-enabled by a cron that works.
-                    let next = schedule_next(cron_str);
+                    let next = schedule_next(cron_str, policy.timezone);
                     let reenable =
                         existing.last_error.is_some() && matches!(next, ScheduleNext::At(_));
                     update = next_trigger_update(next);
-                    update.cron_expression = Some(cron_str.to_string());
                     if reenable {
                         update.disabled_at = Some(None);
                         update.last_error = Some(None);
                     }
                 }
+                if cron_changed {
+                    update.cron_expression = Some(cron_str.to_string());
+                }
                 if priority_changed {
                     update.priority = Some(*priority);
+                }
+                if policy_changed {
+                    update.policy = Some((*policy).clone());
                 }
                 store.update_schedule(existing.id, update).await?;
                 info!(
@@ -124,12 +134,14 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
                     new_cron = %cron_str,
                     old_priority = existing.priority,
                     new_priority = *priority,
+                    old_policy = ?existing.policy,
+                    new_policy = ?policy,
                     "updated handler schedule"
                 );
             }
             None => {
                 // 3. Missing: create a new handler schedule.
-                let next = schedule_next(cron_str);
+                let next = schedule_next(cron_str, policy.timezone);
                 let next_trigger_at = match next {
                     ScheduleNext::At(at) => Some(at),
                     ScheduleNext::Disable { .. } => None,
@@ -143,6 +155,7 @@ pub async fn sync_handler_schedules(engine: &Engine, store: &dyn Store) -> Resul
                         priority: *priority,
                         created_by_user_id: None,
                         next_trigger_at,
+                        policy: (*policy).clone(),
                     })
                     .await?;
                 if let ScheduleNext::Disable { error } = next {
@@ -242,7 +255,7 @@ pub async fn repair_unscheduled_schedules(store: &dyn Store) -> Result<usize, St
     }
 
     for schedule in &broken {
-        let next = schedule_next(&schedule.cron_expression);
+        let next = schedule_next(&schedule.cron_expression, schedule.policy.timezone);
         match &next {
             ScheduleNext::At(at) => warn!(
                 schedule_id = %schedule.id,
@@ -267,10 +280,17 @@ pub async fn repair_unscheduled_schedules(store: &dyn Store) -> Result<usize, St
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use chrono::Timelike;
+    use chrono_tz::America::New_York;
+    use chrono_tz::Europe::Paris;
+    use chrono_tz::Tz;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
     use ironflow_engine::prelude::CronSchedule;
+    use ironflow_store::entities::{CatchupPolicy, OverlapPolicy};
     use ironflow_store::memory::InMemoryStore;
     use std::sync::Arc;
     use uuid::Uuid;
@@ -327,6 +347,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("seed");
@@ -361,6 +382,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("seed orphan");
@@ -375,6 +397,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: Some(Uuid::now_v7()),
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("seed api");
@@ -404,6 +427,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("seed");
@@ -448,6 +472,7 @@ mod tests {
                 priority: 0,
                 created_by_user_id: None,
                 next_trigger_at: None,
+                policy: SchedulePolicy::default(),
             })
             .await
             .expect("seed")
@@ -662,7 +687,7 @@ mod tests {
         let schedule = only_schedule(&store).await;
         assert_eq!(schedule.source, ScheduleSource::Handler);
         assert_eq!(schedule.priority, 40);
-        assert_eq!(schedule.new_run(None).priority, 40);
+        assert_eq!(schedule.new_run(None, None).priority, 40);
     }
 
     #[tokio::test]
@@ -697,5 +722,80 @@ mod tests {
             .await
             .expect("sync low");
         assert_eq!(only_schedule(&store).await.priority, MIN_PRIORITY);
+    }
+
+    fn engine_with_schedule(store: &Arc<dyn Store>, cron: CronSchedule) -> Engine {
+        let provider = Arc::new(ClaudeCodeProvider::new());
+        let mut engine = Engine::new(store.clone(), provider);
+        engine
+            .register(NamedScheduled {
+                wf_name: "report",
+                cron,
+            })
+            .expect("register");
+        engine
+    }
+
+    #[tokio::test]
+    async fn sync_applies_handler_catchup_overlap_timezone() {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        let cron = CronSchedule::new("0 9 * * *")
+            .unwrap()
+            .with_timezone("Europe/Paris")
+            .unwrap()
+            .with_catchup(CatchupPolicy::All)
+            .with_catchup_max(5)
+            .with_catchup_window(Duration::from_secs(7200))
+            .with_overlap(OverlapPolicy::Skip);
+
+        sync_handler_schedules(&engine_with_schedule(&store, cron), store.as_ref())
+            .await
+            .expect("sync");
+
+        let schedule = only_schedule(&store).await;
+        assert_eq!(
+            schedule.policy,
+            SchedulePolicy {
+                catchup: CatchupPolicy::All,
+                catchup_max: 5,
+                catchup_window_secs: 7200,
+                overlap: OverlapPolicy::Skip,
+                timezone: Tz::Europe__Paris,
+            }
+        );
+        let next = schedule.next_trigger_at.expect("next trigger");
+        let local = next.with_timezone(&Paris);
+        assert_eq!((local.hour(), local.minute()), (9, 0));
+    }
+
+    #[tokio::test]
+    async fn sync_updates_policy_when_handler_changes_it() {
+        let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
+        let cron = CronSchedule::new("0 9 * * *").unwrap();
+        sync_handler_schedules(&engine_with_schedule(&store, cron), store.as_ref())
+            .await
+            .expect("first sync");
+        let before = only_schedule(&store).await;
+        assert_eq!(before.policy, SchedulePolicy::default());
+
+        let cron = CronSchedule::new("0 9 * * *")
+            .unwrap()
+            .with_timezone("America/New_York")
+            .unwrap()
+            .with_overlap(OverlapPolicy::Skip);
+        sync_handler_schedules(&engine_with_schedule(&store, cron), store.as_ref())
+            .await
+            .expect("second sync");
+
+        let after = only_schedule(&store).await;
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.policy.timezone, Tz::America__New_York);
+        assert_eq!(after.policy.overlap, OverlapPolicy::Skip);
+        assert_eq!(after.policy.catchup, CatchupPolicy::Latest);
+        // The timezone moved the next occurrence to 9:00 in New York.
+        let next = after.next_trigger_at.expect("next trigger");
+        let local = next.with_timezone(&New_York);
+        assert_eq!((local.hour(), local.minute()), (9, 0));
+        assert_ne!(after.next_trigger_at, before.next_trigger_at);
     }
 }

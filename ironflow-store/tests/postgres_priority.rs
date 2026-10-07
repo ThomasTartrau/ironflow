@@ -211,6 +211,7 @@ async fn priority_schedule_firing_carries_the_schedule_priority() {
             inputs: json!({}),
             source: ScheduleSource::Api,
             priority: 25,
+            policy: SchedulePolicy::default(),
             created_by_user_id: None,
             next_trigger_at: Some(Utc::now() - TimeDelta::seconds(60)),
         })
@@ -223,13 +224,16 @@ async fn priority_schedule_firing_carries_the_schedule_priority() {
         .fire_due_schedule(
             schedule.id,
             occurrence,
-            ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600)),
+            ScheduleFiringPlan {
+                occurrences: vec![occurrence],
+                next: ScheduleNext::At(Utc::now() + TimeDelta::seconds(3600)),
+            },
         )
         .await
         .unwrap()
         .expect("due occurrence fires");
-    let run_id = firing.run.run().id;
-    assert_eq!(firing.run.run().priority, 25);
+    let run_id = firing.runs[0].run.run().id;
+    assert_eq!(firing.runs[0].run.run().priority, 25);
 
     let updated = store
         .update_schedule(

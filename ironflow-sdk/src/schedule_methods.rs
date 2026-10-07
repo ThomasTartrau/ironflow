@@ -49,6 +49,11 @@ impl IronflowClient {
     ///     cron_expression: "0 * * * *".to_string(),
     ///     inputs: Some(serde_json::json!({})),
     ///     priority: None,
+    ///     catchup: None,
+    ///     catchup_max: None,
+    ///     catchup_window_secs: None,
+    ///     overlap: None,
+    ///     timezone: Some("Europe/Paris".to_string()),
     /// }).await?;
     /// # Ok(())
     /// # }

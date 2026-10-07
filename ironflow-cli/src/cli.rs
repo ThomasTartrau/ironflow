@@ -196,7 +196,7 @@ mod tests {
     use crate::commands::audit_log::AuditLogCommands;
     use crate::commands::delegation::DelegationCommands;
     use crate::commands::run::RunCommands;
-    use crate::commands::schedule::ScheduleCommands;
+    use crate::commands::schedule::{CatchupArg, OverlapArg, ScheduleCommands};
     use crate::commands::secret::SecretCommands;
     use crate::commands::signal::SignalCommands;
     use crate::commands::user::UserCommands;
@@ -480,6 +480,112 @@ mod tests {
             panic!("expected Create subcommand");
         };
         assert_eq!(*priority, Some(-5));
+    }
+
+    #[test]
+    fn parse_schedule_create_with_catchup_and_timezone() {
+        let cli = parse(&[
+            "ironflow-cli",
+            "schedule",
+            "create",
+            "deploy",
+            "0 9 * * *",
+            "--catchup",
+            "all",
+            "--catchup-max",
+            "24",
+            "--catchup-window",
+            "3600",
+            "--overlap",
+            "skip",
+            "--timezone",
+            "Europe/Paris",
+        ]);
+        let Commands::Schedule(args) = &cli.command else {
+            panic!("expected Schedule command");
+        };
+        let ScheduleCommands::Create {
+            catchup,
+            catchup_max,
+            catchup_window_secs,
+            overlap,
+            timezone,
+            ..
+        } = &args.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(*catchup, Some(CatchupArg::All));
+        assert_eq!(*catchup_max, Some(24));
+        assert_eq!(*catchup_window_secs, Some(3600));
+        assert_eq!(*overlap, Some(OverlapArg::Skip));
+        assert_eq!(timezone.as_deref(), Some("Europe/Paris"));
+    }
+
+    #[test]
+    fn parse_schedule_create_defaults_leave_the_policy_to_the_server() {
+        let cli = parse(&["ironflow-cli", "schedule", "create", "deploy", "0 9 * * *"]);
+        let Commands::Schedule(args) = &cli.command else {
+            panic!("expected Schedule command");
+        };
+        let ScheduleCommands::Create {
+            catchup,
+            catchup_max,
+            catchup_window_secs,
+            overlap,
+            timezone,
+            ..
+        } = &args.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(*catchup, None);
+        assert_eq!(*catchup_max, None);
+        assert_eq!(*catchup_window_secs, None);
+        assert_eq!(*overlap, None);
+        assert_eq!(*timezone, None);
+    }
+
+    #[test]
+    fn parse_schedule_create_rejects_catchup_max_zero() {
+        let result = Cli::try_parse_from([
+            "ironflow-cli",
+            "schedule",
+            "create",
+            "deploy",
+            "0 0 * * *",
+            "--catchup-max",
+            "0",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_schedule_create_rejects_a_catchup_window_below_a_minute() {
+        let result = Cli::try_parse_from([
+            "ironflow-cli",
+            "schedule",
+            "create",
+            "deploy",
+            "0 0 * * *",
+            "--catchup-window",
+            "59",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_schedule_create_rejects_an_unknown_catchup() {
+        let result = Cli::try_parse_from([
+            "ironflow-cli",
+            "schedule",
+            "create",
+            "deploy",
+            "0 0 * * *",
+            "--catchup",
+            "sometimes",
+        ]);
+        assert!(result.is_err());
     }
 
     #[test]

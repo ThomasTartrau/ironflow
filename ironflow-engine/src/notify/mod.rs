@@ -47,8 +47,9 @@ pub use event::{
     ApprovalEscalatedEvent, ApprovalGrantedEvent, ApprovalRejectedEvent, ApprovalRequestedEvent,
     Event, LogLineEvent, LogStream, ProviderAccountChange, ProviderAccountUpdatedEvent,
     ProviderAccountUsageUpdatedEvent, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent,
-    RunFailedEvent, RunStatusChangedEvent, SignalAwaitedEvent, SignalReceivedEvent,
-    StepCompletedEvent, StepFailedEvent, UserSignedInEvent, UserSignedOutEvent, UserSignedUpEvent,
+    RunFailedEvent, RunStatusChangedEvent, ScheduleOccurrencesMissedEvent, SignalAwaitedEvent,
+    SignalReceivedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
+    UserSignedOutEvent, UserSignedUpEvent,
 };
 pub use event_bus::{
     WorkflowAgentStepResumedEvent, WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent,

@@ -62,7 +62,10 @@ pub use run::{
 pub use run_actor::RunActor;
 pub use run_status::RunStatus;
 pub use schedule::{
-    NewSchedule, Schedule, ScheduleFiring, ScheduleNext, ScheduleSource, ScheduleUpdate,
+    CatchupPolicy, DEFAULT_CATCHUP_MAX, DEFAULT_CATCHUP_WINDOW_SECS, DEFAULT_TIMEZONE,
+    MAX_CATCHUP_MAX, MAX_CATCHUP_WINDOW_SECS, MIN_CATCHUP_MAX, MIN_CATCHUP_WINDOW_SECS,
+    NewSchedule, OverlapPolicy, Schedule, ScheduleFiring, ScheduleFiringPlan, ScheduleMissReason,
+    ScheduleNext, SchedulePolicy, ScheduleSource, ScheduleUpdate, ScheduledRun,
 };
 pub use secret::{
     DEFAULT_ROTATION_BATCH_SIZE, KeyVersionStatus, MAX_ROTATION_BATCH_SIZE, RotationBatch,

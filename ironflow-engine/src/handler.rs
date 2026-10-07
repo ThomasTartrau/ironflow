@@ -551,6 +551,13 @@ pub trait WorkflowHandler: Send + Sync {
     ///
     /// The default is `None` (no automatic scheduling).
     ///
+    /// The schedule's policy decides what happens to the occurrences missed
+    /// while no server fired them ([`CronSchedule::with_catchup`]), whether a
+    /// run starts while the previous one is still active
+    /// ([`CronSchedule::with_overlap`]), and the timezone the expression is
+    /// evaluated in ([`CronSchedule::with_timezone`]). It is synced to the
+    /// stored schedule at startup, like the expression.
+    ///
     /// # Examples
     ///
     /// ```
@@ -569,6 +576,38 @@ pub trait WorkflowHandler: Send + Sync {
     ///         Box::pin(async move { Ok(()) })
     ///     }
     /// }
+    /// ```
+    ///
+    /// Every morning at 9:00 Paris time, catching up every missed morning,
+    /// and never two reports at once:
+    ///
+    /// ```
+    /// use std::sync::LazyLock;
+    ///
+    /// use ironflow_engine::context::WorkflowContext;
+    /// use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
+    /// use ironflow_engine::schedule::{CatchupPolicy, CronSchedule, OverlapPolicy};
+    ///
+    /// static MORNING: LazyLock<CronSchedule> = LazyLock::new(|| {
+    ///     CronSchedule::new("0 9 * * *")
+    ///         .and_then(|s| s.with_timezone("Europe/Paris"))
+    ///         .map(|s| s.with_catchup(CatchupPolicy::All).with_overlap(OverlapPolicy::Skip))
+    ///         .expect("valid schedule")
+    /// });
+    ///
+    /// struct MorningReport;
+    ///
+    /// impl WorkflowHandler for MorningReport {
+    ///     fn name(&self) -> &str { "morning-report" }
+    ///     fn schedule(&self) -> Option<&CronSchedule> {
+    ///         Some(&MORNING)
+    ///     }
+    ///     fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+    ///         Box::pin(async move { Ok(()) })
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(MorningReport.schedule().map(|s| s.policy().timezone.name()), Some("Europe/Paris"));
     /// ```
     fn schedule(&self) -> Option<&CronSchedule> {
         None
