@@ -31,12 +31,6 @@ const MAX_CANDIDATES: usize = 1000;
 /// Most minutes walked forward to leave a DST gap.
 const MAX_GAP_MINUTES: usize = 24 * 60;
 
-/// Parse an IANA timezone name, e.g. `"Europe/Paris"`.
-pub(crate) fn parse_timezone(name: &str) -> Result<Tz, String> {
-    name.parse::<Tz>()
-        .map_err(|e| format!("invalid timezone '{name}': {e}"))
-}
-
 /// Parse a cron expression (5 fields, or 6 with seconds).
 fn parse_cron(expression: &str) -> Result<Cron, String> {
     let mut cron = Cron::new(expression);
@@ -342,12 +336,6 @@ mod tests {
 
         assert_eq!(first, at("2026-10-25T00:30:00Z"));
         assert_eq!(second, Ok(Some(at("2026-10-26T01:30:00Z"))));
-    }
-
-    #[test]
-    fn schedule_timezone_invalid_name_is_rejected() {
-        let error = parse_timezone("Mars/Olympus").expect_err("bad zone");
-        assert!(error.contains("invalid timezone 'Mars/Olympus'"), "{error}");
     }
 
     #[test]

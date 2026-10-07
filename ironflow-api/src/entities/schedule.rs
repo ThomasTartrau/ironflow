@@ -1,6 +1,7 @@
 //! Schedule request and response DTOs.
 
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -44,7 +45,8 @@ pub struct ScheduleResponse {
     /// is still active.
     pub overlap: OverlapPolicy,
     /// IANA timezone the cron expression is evaluated in.
-    pub timezone: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
+    pub timezone: Tz,
     /// User who created the schedule. `None` for handler-declared schedules.
     pub created_by_user_id: Option<Uuid>,
     /// When the schedule was created.
@@ -70,7 +72,7 @@ impl From<Schedule> for ScheduleResponse {
             catchup_max: s.policy.catchup_max,
             catchup_window_secs: s.policy.catchup_window_secs,
             overlap: s.policy.overlap,
-            timezone: s.policy.timezone.name().to_string(),
+            timezone: s.policy.timezone,
             created_by_user_id: s.created_by_user_id,
             created_at: s.created_at,
             updated_at: s.updated_at,
@@ -119,7 +121,8 @@ pub struct CreateScheduleRequest {
     /// IANA timezone the cron expression is evaluated in, e.g.
     /// `"Europe/Paris"`. Defaults to `"UTC"`.
     #[serde(default)]
-    pub timezone: Option<String>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub timezone: Option<Tz>,
 }
 
 fn default_inputs() -> Value {
