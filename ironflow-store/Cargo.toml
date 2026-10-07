@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-store"
-version = "2.45.4"
+version = "2.45.5"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
