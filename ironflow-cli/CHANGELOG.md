@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.58](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.57...ironflow-cli-v0.1.58) - 2026-10-07
+
+### Added
+
+- #174 add catchup, overlap and timezone policies to cron schedules
+
 ## [0.1.57](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.56...ironflow-cli-v0.1.57) - 2026-10-06
 ## [0.1.56](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.55...ironflow-cli-v0.1.56) - 2026-10-06
 ## [0.1.55](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-cli-v0.1.54...ironflow-cli-v0.1.55) - 2026-10-06
