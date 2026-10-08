@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-engine"
-version = "2.51.8"
+version = "2.51.9"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
