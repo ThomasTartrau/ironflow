@@ -10,7 +10,9 @@
 //!
 //! [`Engine::pause_workflow`] holds the queued runs of a workflow instead:
 //! they are created as usual but no worker picks them up until
-//! [`Engine::resume_workflow`].
+//! [`Engine::resume_workflow`]. Under [`ExecutionMode::Local`] no worker
+//! exists: a run created while the workflow is paused stays `Pending`, and
+//! [`Engine::resume_workflow`] starts it in a background task.
 
 use std::sync::Arc;
 
@@ -19,11 +21,14 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use ironflow_store::error::StoreError;
-use ironflow_store::models::{Run, RunStatus, RunUpdate, WorkflowPause};
+use ironflow_store::models::{Run, RunFilter, RunStatus, RunUpdate, WorkflowPause};
 
 use crate::engine::{Engine, ExecutionMode, chain_root};
 use crate::error::EngineError;
 use crate::notify::{Event, RunStatusChangedEvent};
+
+/// Page size used to list the runs held while a workflow is paused.
+const HELD_RUNS_PAGE_SIZE: u32 = 100;
 
 /// Outcome of [`Engine::pause_run`].
 ///
@@ -323,7 +328,9 @@ impl Engine {
     /// Pause a registered workflow: its queued runs are no longer picked up.
     ///
     /// Runs keep being created; workers skip them until
-    /// [`resume_workflow`](Self::resume_workflow). Runs already executing
+    /// [`resume_workflow`](Self::resume_workflow). Under
+    /// [`ExecutionMode::Local`] a run created meanwhile stays `Pending` until
+    /// the resume. Runs already executing
     /// are not affected: pause them with [`pause_run`](Self::pause_run).
     /// Pausing a paused workflow returns the pause already recorded.
     ///
@@ -362,34 +369,94 @@ impl Engine {
     /// Resume a paused workflow so its queued runs are picked up again.
     ///
     /// Returns `true` when the workflow was paused, `false` when it was not:
-    /// resuming is idempotent.
+    /// resuming is idempotent and starts nothing in that case.
+    ///
+    /// Under [`ExecutionMode::Local`] the runs held `Pending` while the
+    /// workflow was paused are started in background tasks, except
+    /// sub-workflow runs and runs scheduled in the future.
     ///
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] when no handler is registered
     /// under `workflow_name`, and [`EngineError::Store`] when the resume
-    /// cannot be persisted.
+    /// cannot be persisted or the held runs cannot be listed.
     ///
     /// # Examples
     ///
     /// ```no_run
+    /// use std::sync::Arc;
+    ///
     /// use ironflow_engine::engine::Engine;
     /// use ironflow_engine::error::EngineError;
     ///
-    /// # async fn example(engine: &Engine) -> Result<(), EngineError> {
+    /// # async fn example(engine: Arc<Engine>) -> Result<(), EngineError> {
     /// if engine.resume_workflow("deploy").await? {
     ///     println!("deploy resumed");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn resume_workflow(&self, workflow_name: &str) -> Result<bool, EngineError> {
+    pub async fn resume_workflow(
+        self: &Arc<Self>,
+        workflow_name: &str,
+    ) -> Result<bool, EngineError> {
         self.require_handler(workflow_name)?;
         let was_paused = self.store().resume_workflow(workflow_name).await?;
         if was_paused {
             info!(workflow = %workflow_name, "workflow resumed");
+            if self.execution_mode() == ExecutionMode::Local {
+                self.start_held_runs(workflow_name).await?;
+            }
         }
         Ok(was_paused)
+    }
+
+    /// Start, in background tasks, the due root runs of `workflow_name` left
+    /// `Pending` while it was paused.
+    async fn start_held_runs(self: &Arc<Self>, workflow_name: &str) -> Result<(), EngineError> {
+        // Collect every run before spawning: a spawned run leaves `Pending`
+        // and would shift the pages.
+        let mut held = Vec::new();
+        let mut page = 1;
+        loop {
+            let filter = RunFilter {
+                workflow_name: Some(workflow_name.to_string()),
+                status: Some(RunStatus::Pending),
+                ..RunFilter::default()
+            };
+            let result = self
+                .store()
+                .list_runs(filter, page, HELD_RUNS_PAGE_SIZE)
+                .await?;
+            if result.items.is_empty() {
+                break;
+            }
+            held.extend(result.items);
+            if held.len() as u64 >= result.total {
+                break;
+            }
+            page += 1;
+        }
+
+        let now = Utc::now();
+        for run in held {
+            if chain_root(&run).is_some() || run.scheduled_at.is_some_and(|at| at > now) {
+                continue;
+            }
+            self.spawn_local_resume(run.id);
+        }
+        Ok(())
+    }
+
+    /// Whether `workflow_name` is currently paused.
+    pub(crate) async fn is_workflow_paused(
+        &self,
+        workflow_name: &str,
+    ) -> Result<bool, EngineError> {
+        let pauses = self.store().list_workflow_pauses().await?;
+        Ok(pauses
+            .iter()
+            .any(|pause| pause.workflow_name == workflow_name))
     }
 
     fn require_handler(&self, workflow_name: &str) -> Result<(), EngineError> {

@@ -295,7 +295,9 @@ run, a run already finished, or (on resume) a run that is not paused.
 **A workflow.** `POST /api/v1/workflows/{name}/pause` (`Engine::pause_workflow`)
 records a pause for the workflow: runs are still created, but workers leave
 them queued until `POST /api/v1/workflows/{name}/resume`. Runs already
-executing are not affected; pause them one by one. `GET /api/v1/workflows`
+executing are not affected; pause them one by one. Under `ExecutionMode::Local`
+a run created while the workflow is paused stays `Pending` and is started by
+`resume_workflow`. `GET /api/v1/workflows`
 and `GET /api/v1/workflows/{name}` report `paused_at` while the workflow is
 paused.
 

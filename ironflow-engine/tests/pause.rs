@@ -26,7 +26,7 @@ use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::config::ApprovalConfig;
 use ironflow_engine::config::delay::DelayConfig;
 use ironflow_engine::context::WorkflowContext;
-use ironflow_engine::engine::{Engine, ExecutionMode};
+use ironflow_engine::engine::{Engine, EnqueueOptions, ExecutionMode};
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_engine::operation::{Operation, OperationContext};
@@ -714,6 +714,77 @@ async fn pause_workflow_holds_its_runs_until_resumed() {
                 .expect("resume again")
         );
         pick(&store, run_id).await;
+    })
+    .await
+    .expect("test timed out");
+}
+
+/// An engine in the default [`ExecutionMode::Local`] with `handler` registered.
+fn local_engine_with(
+    store: &Arc<InMemoryStore>,
+    handler: impl WorkflowHandler + 'static,
+) -> Arc<Engine> {
+    let store: Arc<dyn Store> = store.clone();
+    let provider: Arc<dyn AgentProvider> = Arc::new(ClaudeCodeProvider::new());
+    let mut engine = Engine::new(store, provider);
+    engine.register(handler).expect("register handler");
+    Arc::new(engine)
+}
+
+#[tokio::test]
+async fn pause_workflow_holds_local_runs_until_resumed() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let handler = single();
+        let op = handler.op.clone();
+        let engine = local_engine_with(&store, handler);
+
+        engine.pause_workflow(WORKFLOW, None).await.expect("pause");
+
+        let result = engine
+            .run_handler(WORKFLOW, TriggerKind::Manual, json!({}))
+            .await
+            .expect("run handler");
+        let run_id = result.run.id;
+        assert_eq!(result.run.status.state, RunStatus::Pending);
+        assert!(result.steps.is_empty());
+        assert_eq!(op.calls(), 0);
+        assert_eq!(status_of(&store, run_id).await, RunStatus::Pending);
+
+        assert!(engine.resume_workflow(WORKFLOW).await.expect("resume"));
+        while status_of(&store, run_id).await != RunStatus::Completed {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(op.calls(), 1);
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn pause_workflow_resume_in_local_mode_ignores_scheduled_future_runs() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let handler = single();
+        let op = handler.op.clone();
+        let engine = local_engine_with(&store, handler);
+
+        engine.pause_workflow(WORKFLOW, None).await.expect("pause");
+        let options = EnqueueOptions {
+            scheduled_at: Some(Utc::now() + TimeDelta::hours(1)),
+            ..EnqueueOptions::default()
+        };
+        let run_id = engine
+            .enqueue_handler_with_options(WORKFLOW, TriggerKind::Manual, json!({}), options)
+            .await
+            .expect("enqueue")
+            .into_run()
+            .id;
+
+        assert!(engine.resume_workflow(WORKFLOW).await.expect("resume"));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(status_of(&store, run_id).await, RunStatus::Pending);
+        assert_eq!(op.calls(), 0);
     })
     .await
     .expect("test timed out");
