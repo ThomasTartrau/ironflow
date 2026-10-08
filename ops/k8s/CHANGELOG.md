@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.37](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.36...ironflow-ops-k8s-v0.1.37) - 2026-10-08
+
+### Fixed
+
+- #191 bound PodRun/JobRun logs, retry and explain step writes, route-labelled metrics, fsGroupChangePolicy
+
 ## [0.1.27](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.26...ironflow-ops-k8s-v0.1.27) - 2026-10-01
 ## [0.1.25](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-ops-k8s-v0.1.24...ironflow-ops-k8s-v0.1.25) - 2026-10-01
 
