@@ -1,6 +1,6 @@
 [package]
 name = "ironflow-auth-proxy"
-version = "0.1.25"
+version = "0.1.26"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Thomas Tartrau"]
@@ -18,8 +18,8 @@ name = "ironflow-auth-proxy"
 path = "src/main.rs"
 
 [dependencies]
-ironflow-core = { path = "../ironflow-core", version = "4.13.0" }
-ironflow-store = { path = "../ironflow-store", version = "2.46.1", features = ["store-postgres", "secret-store"] }
+ironflow-core = { path = "../ironflow-core", version = "4.13.1" }
+ironflow-store = { path = "../ironflow-store", version = "2.46.2", features = ["store-postgres", "secret-store"] }
 axum = "0.8"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
