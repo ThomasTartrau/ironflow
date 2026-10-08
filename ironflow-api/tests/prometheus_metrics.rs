@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Body;
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use ironflow_auth::jwt::JwtConfig;
@@ -14,6 +16,7 @@ use ironflow_engine::notify::Event;
 use ironflow_store::memory::InMemoryStore;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
+use uuid::Uuid;
 
 use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::state::AppState;
@@ -94,5 +97,59 @@ async fn metrics_endpoint_includes_api_request_metrics() {
     assert!(
         body_str.contains("ironflow_api_request_duration_seconds"),
         "metrics must include API request duration histogram"
+    );
+}
+
+/// Render `/api/v1/metrics` as text.
+async fn scrape(app: Router) -> String {
+    let req = Request::builder()
+        .uri("/api/v1/metrics")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8_lossy(&body).into_owned()
+}
+
+#[tokio::test]
+async fn metrics_label_requests_by_matched_route_not_raw_url() {
+    let app = create_router(test_state(), RouterConfig::default());
+    let step_id = Uuid::now_v7();
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/v1/internal/steps/{step_id}"))
+        .header(AUTHORIZATION, "Bearer test-worker-token")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let _response = app.clone().oneshot(req).await.unwrap();
+
+    let body = scrape(app).await;
+    assert!(
+        body.contains(r#"path="/api/v1/internal/steps/{id}""#),
+        "the route pattern must be the path label"
+    );
+    assert!(
+        !body.contains(&step_id.to_string()),
+        "a raw id must never become a label value"
+    );
+}
+
+#[tokio::test]
+async fn metrics_do_not_label_unknown_urls_with_their_raw_path() {
+    let app = create_router(test_state(), RouterConfig::default());
+    let unknown = format!("/no-such-page-{}", Uuid::now_v7());
+
+    let req = Request::builder()
+        .uri(&unknown)
+        .body(Body::empty())
+        .unwrap();
+    let _response = app.clone().oneshot(req).await.unwrap();
+
+    let body = scrape(app).await;
+    assert!(
+        !body.contains(&unknown),
+        "an unknown URL must not create its own time series"
     );
 }

@@ -487,11 +487,27 @@ fn routing_service(
     Error = Infallible,
     Future = impl Send,
 > + Clone {
+    routing_service_with_logs(conditions, deleted, "migration-output\n".to_string())
+}
+
+/// Same as [`routing_service`], the pod log endpoint returning `logs`.
+fn routing_service_with_logs(
+    conditions: Vec<Option<&'static str>>,
+    deleted: Arc<AtomicUsize>,
+    logs: String,
+) -> impl Service<
+    Request<kube::client::Body>,
+    Response = Response<kube::client::Body>,
+    Error = Infallible,
+    Future = impl Send,
+> + Clone {
     let get_idx = Arc::new(AtomicUsize::new(0));
     let conditions = Arc::new(conditions);
+    let logs = Arc::new(logs);
     service_fn(move |req: Request<kube::client::Body>| {
         let get_idx = get_idx.clone();
         let conditions = conditions.clone();
+        let logs = logs.clone();
         let deleted = deleted.clone();
         async move {
             let method = req.method().clone();
@@ -499,7 +515,7 @@ fn routing_service(
             let body: String = if method == Method::POST {
                 r#"{"kind":"Job","apiVersion":"batch/v1","metadata":{"name":"migrate","namespace":"default"},"spec":{"template":{}},"status":{}}"#.to_string()
             } else if path.ends_with("/log") {
-                "migration-output\n".to_string()
+                logs.to_string()
             } else if method == Method::DELETE {
                 deleted.fetch_add(1, Ordering::SeqCst);
                 r#"{"kind":"Status","apiVersion":"v1","status":"Success"}"#.to_string()
@@ -553,7 +569,43 @@ async fn run_complete_is_success_with_logs() {
     assert!(out.success);
     assert_eq!(out.phase, "Succeeded");
     assert!(out.logs.contains("migration-output"));
+    assert!(!out.logs_truncated, "short logs must be kept whole");
     assert_eq!(deleted.load(Ordering::SeqCst), 1, "job must be deleted");
+}
+
+#[tokio::test]
+async fn run_keeps_only_the_tail_of_logs_over_the_default_limit() {
+    let logs = format!("{}migration-tail\n", "x".repeat(2 * 1024 * 1024));
+    let run = job_run_with(routing_service_with_logs(
+        vec![Some("Complete")],
+        Arc::new(AtomicUsize::new(0)),
+        logs,
+    ));
+    let out = run.run().await.unwrap();
+    assert!(out.success);
+    assert!(out.logs_truncated);
+    assert!(
+        out.logs.starts_with("[... 1048591 bytes truncated ...]\n"),
+        "got: {}",
+        &out.logs[..60]
+    );
+    assert!(out.logs.ends_with("migration-tail\n"));
+    let marker_len = "[... 1048591 bytes truncated ...]\n".len();
+    assert_eq!(out.logs.len(), marker_len + 1024 * 1024);
+}
+
+#[tokio::test]
+async fn run_honours_max_log_bytes() {
+    let run = job_run_with(routing_service_with_logs(
+        vec![Some("Failed")],
+        Arc::new(AtomicUsize::new(0)),
+        "0123456789".to_string(),
+    ))
+    .max_log_bytes(4);
+    let out = run.run().await.unwrap();
+    assert!(!out.success);
+    assert!(out.logs_truncated);
+    assert_eq!(out.logs, "[... 6 bytes truncated ...]\n6789");
 }
 
 #[tokio::test]

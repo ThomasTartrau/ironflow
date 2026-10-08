@@ -110,6 +110,10 @@ pub struct PodHardening<'a> {
 pub struct SandboxSettings {
     /// Uid, gid and fsGroup of the pod (default [`SANDBOX_UID`]).
     pub run_as_user: i64,
+    /// `fsGroupChangePolicy` of the pod: `"OnRootMismatch"` (default) skips
+    /// the recursive ownership change of a volume whose root is already owned
+    /// by the fsGroup, `"Always"` runs it on every mount.
+    pub fs_group_change_policy: String,
     /// Keep the root filesystem writable (default `false`).
     pub writable_root: bool,
     /// Size limit of the `emptyDir` backing [`SANDBOX_HOME`] (default `1Gi`).
@@ -125,6 +129,7 @@ impl Default for SandboxSettings {
     fn default() -> Self {
         Self {
             run_as_user: SANDBOX_UID,
+            fs_group_change_policy: "OnRootMismatch".to_string(),
             writable_root: false,
             home_size_limit: "1Gi".to_string(),
             tmp_size_limit: "512Mi".to_string(),
@@ -840,6 +845,7 @@ pub fn build_pod_spec(config: &PodConfig<'_>) -> Result<Pod, AgentError> {
             "runAsUser": sandbox.run_as_user,
             "runAsGroup": sandbox.run_as_user,
             "fsGroup": sandbox.run_as_user,
+            "fsGroupChangePolicy": sandbox.fs_group_change_policy,
             "seccompProfile": { "type": "RuntimeDefault" }
         });
         let container_ctx = sandbox_container_security_context(sandbox);
@@ -1669,6 +1675,7 @@ mod tests {
         assert_eq!(pod_ctx["runAsUser"], SANDBOX_UID);
         assert_eq!(pod_ctx["runAsGroup"], SANDBOX_UID);
         assert_eq!(pod_ctx["fsGroup"], SANDBOX_UID);
+        assert_eq!(pod_ctx["fsGroupChangePolicy"], "OnRootMismatch");
         assert_eq!(pod_ctx["seccompProfile"]["type"], "RuntimeDefault");
 
         let ctx = &pod["spec"]["containers"][0]["securityContext"];
@@ -1688,6 +1695,19 @@ mod tests {
         let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
         assert_eq!(pod["spec"]["securityContext"]["runAsUser"], 4242);
         assert_eq!(pod["spec"]["securityContext"]["fsGroup"], 4242);
+    }
+
+    #[test]
+    fn build_pod_spec_sandbox_custom_fs_group_change_policy() {
+        let sandbox = SandboxSettings {
+            fs_group_change_policy: "Always".to_string(),
+            ..SandboxSettings::default()
+        };
+        let pod = pod_json(&hardened_config(sandboxed(&sandbox)));
+        assert_eq!(
+            pod["spec"]["securityContext"]["fsGroupChangePolicy"],
+            "Always"
+        );
     }
 
     #[test]

@@ -43,15 +43,13 @@ use axum::Extension;
 use axum::Router;
 use axum::middleware as axum_mw;
 use axum::routing::{delete, get, patch, post, put};
+use ironflow_store::MAX_API_BODY_BYTES;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::middleware::{WorkerToken, https_redirect, security_headers, worker_token_auth};
 use crate::rate_limit::{AccountLimit, RateLimitContext, TrustedProxies, per_minute, rate_limit};
 use crate::state::AppState;
-
-/// Maximum request body size: 2 MiB.
-const MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 
 /// Maximum artifact upload size: 128 MiB.
 ///
@@ -431,11 +429,12 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .nest("/api/v1/internal", internal_routes)
         .nest("/api/v1", api_v1)
         .with_state(state)
-        .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
+        .layer(RequestBodyLimitLayer::new(MAX_API_BODY_BYTES))
         .merge(artifact_upload_routes);
 
-    // Before the dashboard fallback: metrics are labelled by raw path, and
-    // every unknown URL falls through to the dashboard.
+    // Before the dashboard fallback: metrics are labelled by matched route,
+    // and every unknown URL falls through to the dashboard, which is not
+    // metered.
     #[cfg(feature = "prometheus")]
     {
         app = app.layer(axum_mw::from_fn(crate::middleware::request_metrics));

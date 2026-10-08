@@ -1,16 +1,23 @@
 //! HTTP-based [`RunStore`] that talks to the ironflow API internal routes.
 
+use std::error::Error as _;
 use std::future::Future;
 use std::pin::Pin;
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use reqwest::{Client, StatusCode};
-use serde_json::{Value, from_str, json};
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{Client, Error as HttpError, StatusCode};
+use serde::Serialize;
+use serde_json::{Value, from_str, json, to_vec};
+use tokio::time::sleep;
+use tracing::warn;
 use uuid::Uuid;
 
 use ironflow_engine::error::CONCURRENCY_CONFLICT_CODE;
+use ironflow_store::MAX_API_BODY_BYTES;
 use ironflow_store::api_key_store::ApiKeyStore;
 use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
 use ironflow_store::artifact_store::ArtifactStore;
@@ -49,12 +56,21 @@ struct ApiResponse<T> {
     data: T,
 }
 
+/// Delays between the attempts of an idempotent update: 1 s, 2 s, then 4 s,
+/// so a transient failure is tried four times in all.
+const RETRY_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+
 /// RunStore implementation that communicates with the API server via HTTP.
 #[derive(Debug, Clone)]
 pub struct ApiRunStore {
     client: Client,
     base_url: String,
     token: String,
+    retry_backoff: Vec<Duration>,
 }
 
 impl ApiRunStore {
@@ -69,20 +85,112 @@ impl ApiRunStore {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
+            retry_backoff: RETRY_BACKOFF.to_vec(),
         }
+    }
+
+    /// Replace the delays between retries, so tests do not wait seconds.
+    #[cfg(test)]
+    fn with_retry_backoff(mut self, retry_backoff: Vec<Duration>) -> Self {
+        self.retry_backoff = retry_backoff;
+        self
     }
 
     fn internal(&self, path: &str) -> String {
         format!("{}/api/v1/internal{}", self.base_url, path)
     }
 
-    fn err(e: reqwest::Error) -> StoreError {
-        StoreError::Database(format!("worker HTTP error: {e}"))
+    fn err(e: HttpError) -> StoreError {
+        StoreError::Database(format!("worker HTTP error: {}", error_chain(&e)))
     }
 
     fn status_err(body: &str) -> StoreError {
         StoreError::Database(format!("worker API error: {body}"))
     }
+
+    /// `PUT` an idempotent update to an internal route.
+    ///
+    /// The serialized body is checked against [`MAX_API_BODY_BYTES`] before
+    /// anything is sent: the API would refuse it, or the connection would be
+    /// cut mid-upload, and neither tells the size. A `413` is reported the
+    /// same way. A send failure (refused, cut or timed-out connection) or a
+    /// `5xx` is retried after each delay of `retry_backoff`; any other status
+    /// is returned at once.
+    async fn put_json<B: Serialize>(&self, path: &str, body: &B) -> Result<(), StoreError> {
+        let bytes = Bytes::from(to_vec(body).map_err(|e| {
+            StoreError::Database(format!("failed to serialize PUT {path} body: {e}"))
+        })?);
+        let len = bytes.len();
+        if len > MAX_API_BODY_BYTES {
+            return Err(StoreError::Database(format!(
+                "payload too large: PUT {path} is {len} bytes, API limit is {MAX_API_BODY_BYTES} bytes"
+            )));
+        }
+
+        let url = self.internal(path);
+        let mut delays = self.retry_backoff.iter();
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let sent = self
+                .client
+                .put(&url)
+                .bearer_auth(&self.token)
+                .header(CONTENT_TYPE, "application/json")
+                .body(bytes.clone())
+                .send()
+                .await;
+            let failure = match sent {
+                Ok(resp) if resp.status().is_success() => return Ok(()),
+                Ok(resp) if resp.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                    return Err(StoreError::Database(format!(
+                        "payload too large: API rejected PUT {path} of {len} bytes (HTTP 413)"
+                    )));
+                }
+                Ok(resp) if resp.status().is_server_error() => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    format!("HTTP {status}: {body}")
+                }
+                Ok(resp) => {
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(Self::status_err(&body));
+                }
+                Err(e) => error_chain(&e),
+            };
+            match delays.next() {
+                Some(delay) => {
+                    warn!(
+                        path,
+                        attempt,
+                        error = %failure,
+                        retry_in = ?delay,
+                        "worker API update failed, retrying"
+                    );
+                    sleep(*delay).await;
+                }
+                None => {
+                    return Err(StoreError::Database(format!(
+                        "worker HTTP error: PUT {path} failed after {attempt} attempts: {failure}"
+                    )));
+                }
+            }
+        }
+    }
+}
+
+/// Render an error with its whole `source()` chain: reqwest's own message is
+/// only "error sending request", the cause (connection refused, closed,
+/// timed out) sits underneath.
+fn error_chain(e: &HttpError) -> String {
+    let mut msg = e.to_string();
+    let mut source = e.source();
+    while let Some(cause) = source {
+        msg.push_str(": ");
+        msg.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    msg
 }
 
 impl RunStore for ApiRunStore {
@@ -168,40 +276,16 @@ impl RunStore for ApiRunStore {
 
     fn update_run_status(&self, id: Uuid, new_status: RunStatus) -> StoreFuture<'_, ()> {
         Box::pin(async move {
-            let resp = self
-                .client
-                .put(self.internal(&format!("/runs/{id}/status")))
-                .bearer_auth(&self.token)
-                .json(&serde_json::json!({ "status": new_status }))
-                .send()
-                .await
-                .map_err(Self::err)?;
-
-            if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(Self::status_err(&body));
-            }
-            Ok(())
+            self.put_json(
+                &format!("/runs/{id}/status"),
+                &json!({ "status": new_status }),
+            )
+            .await
         })
     }
 
     fn update_run(&self, id: Uuid, update: RunUpdate) -> StoreFuture<'_, ()> {
-        Box::pin(async move {
-            let resp = self
-                .client
-                .put(self.internal(&format!("/runs/{id}")))
-                .bearer_auth(&self.token)
-                .json(&update)
-                .send()
-                .await
-                .map_err(Self::err)?;
-
-            if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(Self::status_err(&body));
-            }
-            Ok(())
-        })
+        Box::pin(async move { self.put_json(&format!("/runs/{id}"), &update).await })
     }
 
     fn list_active_descendants(&self, run_id: Uuid) -> StoreFuture<'_, Vec<Run>> {
@@ -395,22 +479,7 @@ impl RunStore for ApiRunStore {
     }
 
     fn update_step(&self, id: Uuid, update: StepUpdate) -> StoreFuture<'_, ()> {
-        Box::pin(async move {
-            let resp = self
-                .client
-                .put(self.internal(&format!("/steps/{id}")))
-                .bearer_auth(&self.token)
-                .json(&update)
-                .send()
-                .await
-                .map_err(Self::err)?;
-
-            if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(Self::status_err(&body));
-            }
-            Ok(())
-        })
+        Box::pin(async move { self.put_json(&format!("/steps/{id}"), &update).await })
     }
 
     fn get_step(&self, _id: Uuid) -> StoreFuture<'_, Option<Step>> {
@@ -1261,9 +1330,12 @@ impl SignalStore for ApiRunStore {
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
+    use axum::Router;
+    use axum::routing::put;
     use axum::serve;
     use ironflow_api::routes::{RouterConfig, create_router};
     use ironflow_api::state::AppState;
@@ -1271,8 +1343,9 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::notify::Event;
-    use ironflow_store::entities::{PARENT_RUN_ID_LABEL, TriggerKind};
+    use ironflow_store::entities::{PARENT_RUN_ID_LABEL, StepStatus, TriggerKind};
     use ironflow_store::memory::InMemoryStore;
+    use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
     use tokio::spawn;
     use tokio::sync::broadcast;
@@ -1540,6 +1613,315 @@ mod tests {
         assert_eq!(
             capability_query(&caps),
             vec![("workflows", String::new()), ("tags", String::new())]
+        );
+    }
+
+    // -- update_step: size check, 413, retries --
+
+    const STEP_ROUTE: &str = "/api/v1/internal/steps/{id}";
+    const RUN_ROUTE: &str = "/api/v1/internal/runs/{id}";
+    const RUN_STATUS_ROUTE: &str = "/api/v1/internal/runs/{id}/status";
+
+    /// Delays short enough for the retry tests.
+    fn fast_backoff() -> Vec<Duration> {
+        vec![Duration::from_millis(5); 3]
+    }
+
+    /// Serve `PUT route`, answering `statuses` in order (the last one repeats).
+    /// Returns the base URL and the request counter.
+    async fn scripted_put_api(
+        route: &str,
+        statuses: Vec<StatusCode>,
+    ) -> (String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let statuses = Arc::new(statuses);
+        let app = Router::new().route(
+            route,
+            put(move || {
+                let counter = counter.clone();
+                let statuses = statuses.clone();
+                async move {
+                    let i = counter.fetch_add(1, Ordering::SeqCst);
+                    let status = statuses
+                        .get(i)
+                        .or_else(|| statuses.last())
+                        .copied()
+                        .unwrap();
+                    (status, r#"{"data":null}"#)
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        spawn(async move { serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), hits)
+    }
+
+    fn completed_step() -> StepUpdate {
+        StepUpdate {
+            status: Some(StepStatus::Completed),
+            output: Some(json!({ "logs": "ok" })),
+            ..StepUpdate::default()
+        }
+    }
+
+    fn database_error(result: Result<(), StoreError>) -> String {
+        match result {
+            Err(StoreError::Database(msg)) => msg,
+            other => panic!("expected a Database error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_step_with_oversized_output_fails_with_payload_too_large_before_sending() {
+        let (url, hits) = scripted_put_api(STEP_ROUTE, vec![StatusCode::OK]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+        let update = StepUpdate {
+            status: Some(StepStatus::Completed),
+            output: Some(json!({ "logs": "x".repeat(MAX_API_BODY_BYTES) })),
+            ..StepUpdate::default()
+        };
+
+        let msg = database_error(store.update_step(Uuid::now_v7(), update).await);
+
+        assert!(msg.contains("payload too large"), "got: {msg}");
+        assert!(
+            msg.contains(&format!("API limit is {MAX_API_BODY_BYTES} bytes")),
+            "got: {msg}"
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "nothing must be sent");
+    }
+
+    #[tokio::test]
+    async fn update_step_reports_http_413_as_payload_too_large_without_retry() {
+        let (url, hits) = scripted_put_api(STEP_ROUTE, vec![StatusCode::PAYLOAD_TOO_LARGE]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(store.update_step(Uuid::now_v7(), completed_step()).await);
+
+        assert!(msg.contains("payload too large"), "got: {msg}");
+        assert!(msg.contains("HTTP 413"), "got: {msg}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn update_step_retries_server_errors_until_success() {
+        let (url, hits) = scripted_put_api(
+            STEP_ROUTE,
+            vec![
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::BAD_GATEWAY,
+                StatusCode::OK,
+            ],
+        )
+        .await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        store
+            .update_step(Uuid::now_v7(), completed_step())
+            .await
+            .unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn update_step_gives_up_after_four_attempts_on_server_errors() {
+        let (url, hits) = scripted_put_api(STEP_ROUTE, vec![StatusCode::SERVICE_UNAVAILABLE]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(store.update_step(Uuid::now_v7(), completed_step()).await);
+
+        assert!(msg.contains("after 4 attempts"), "got: {msg}");
+        assert!(msg.contains("503"), "got: {msg}");
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn update_step_does_not_retry_client_errors() {
+        let (url, hits) =
+            scripted_put_api(STEP_ROUTE, vec![StatusCode::BAD_REQUEST, StatusCode::OK]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(store.update_step(Uuid::now_v7(), completed_step()).await);
+
+        assert!(msg.contains("worker API error"), "got: {msg}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn update_step_on_unreachable_server_reports_cause_and_attempts() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let store =
+            ApiRunStore::new(&format!("http://{addr}"), "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(store.update_step(Uuid::now_v7(), completed_step()).await);
+
+        assert!(msg.contains("after 4 attempts"), "got: {msg}");
+        // The cause under reqwest's "error sending request" is kept.
+        assert!(msg.contains("error sending request"), "got: {msg}");
+        assert!(msg.to_lowercase().contains("connect"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn update_step_retries_a_connection_closed_mid_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = accepted.clone();
+        spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 64];
+                let _ = socket.read(&mut buf).await;
+                drop(socket);
+            }
+        });
+        let store =
+            ApiRunStore::new(&format!("http://{addr}"), "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(store.update_step(Uuid::now_v7(), completed_step()).await);
+
+        assert!(msg.contains("after 4 attempts"), "got: {msg}");
+        assert!(msg.contains("error sending request"), "got: {msg}");
+        assert!(accepted.load(Ordering::SeqCst) >= 4);
+    }
+
+    // -- update_run / update_run_status: same retry policy --
+
+    fn completed_run() -> RunUpdate {
+        RunUpdate {
+            status: Some(RunStatus::Completed),
+            ..RunUpdate::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn update_run_retries_server_errors_until_success() {
+        let (url, hits) =
+            scripted_put_api(RUN_ROUTE, vec![StatusCode::BAD_GATEWAY, StatusCode::OK]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        store
+            .update_run(Uuid::now_v7(), completed_run())
+            .await
+            .unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn update_run_gives_up_after_four_attempts_on_server_errors() {
+        let (url, hits) = scripted_put_api(RUN_ROUTE, vec![StatusCode::BAD_GATEWAY]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(store.update_run(Uuid::now_v7(), completed_run()).await);
+
+        assert!(msg.contains("after 4 attempts"), "got: {msg}");
+        assert!(msg.contains("502"), "got: {msg}");
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn update_run_does_not_retry_client_errors() {
+        let (url, hits) =
+            scripted_put_api(RUN_ROUTE, vec![StatusCode::CONFLICT, StatusCode::OK]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(store.update_run(Uuid::now_v7(), completed_run()).await);
+
+        assert!(msg.contains("worker API error"), "got: {msg}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn update_run_with_oversized_error_fails_with_payload_too_large_before_sending() {
+        let (url, hits) = scripted_put_api(RUN_ROUTE, vec![StatusCode::OK]).await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+        let update = RunUpdate {
+            status: Some(RunStatus::Failed),
+            error: Some("x".repeat(MAX_API_BODY_BYTES)),
+            ..RunUpdate::default()
+        };
+
+        let msg = database_error(store.update_run(Uuid::now_v7(), update).await);
+
+        assert!(msg.contains("payload too large"), "got: {msg}");
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "nothing must be sent");
+    }
+
+    #[tokio::test]
+    async fn update_run_status_retries_server_errors_until_success() {
+        let (url, hits) = scripted_put_api(
+            RUN_STATUS_ROUTE,
+            vec![
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::OK,
+            ],
+        )
+        .await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        store
+            .update_run_status(Uuid::now_v7(), RunStatus::Running)
+            .await
+            .unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn update_run_status_does_not_retry_client_errors() {
+        let (url, hits) = scripted_put_api(
+            RUN_STATUS_ROUTE,
+            vec![StatusCode::BAD_REQUEST, StatusCode::OK],
+        )
+        .await;
+        let store = ApiRunStore::new(&url, "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(
+            store
+                .update_run_status(Uuid::now_v7(), RunStatus::Running)
+                .await,
+        );
+
+        assert!(msg.contains("worker API error"), "got: {msg}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn update_run_status_on_unreachable_server_reports_cause_and_attempts() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let store =
+            ApiRunStore::new(&format!("http://{addr}"), "token").with_retry_backoff(fast_backoff());
+
+        let msg = database_error(
+            store
+                .update_run_status(Uuid::now_v7(), RunStatus::Running)
+                .await,
+        );
+
+        assert!(msg.contains("after 4 attempts"), "got: {msg}");
+        assert!(msg.contains("error sending request"), "got: {msg}");
+    }
+
+    #[test]
+    fn retry_backoff_is_one_two_four_seconds() {
+        let store = ApiRunStore::new("http://localhost:3000", "token");
+        assert_eq!(
+            store.retry_backoff,
+            vec![
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4)
+            ]
         );
     }
 }

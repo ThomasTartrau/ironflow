@@ -79,6 +79,13 @@ chooses how. When every account is limited the run sleeps until the next
 reset, up to `WorkerBuilder::max_capacity_wait` (6 hours by default), and the
 step runs again when it wakes.
 
+A step or run update sent to the API is checked against `MAX_API_BODY_BYTES` (2 MiB,
+the API body limit) before it leaves the worker: an oversized output fails the
+run with a `payload too large` error naming the size and the limit, and an
+HTTP 413 from the API reports the same error. Network errors and 5xx
+responses are retried after 1s, 2s and 4s (4 attempts); other 4xx responses
+fail at once.
+
 ## Concurrency groups
 
 Worker `concurrency` caps one process. To cap the runs that share an external

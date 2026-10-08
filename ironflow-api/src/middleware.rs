@@ -49,19 +49,48 @@ pub async fn worker_token_auth(req: Request, next: Next) -> Response {
 #[derive(Clone)]
 pub struct WorkerToken(pub String);
 
+/// `path` label of a request that matched no route.
+///
+/// Labelling it with its raw URL would create one time series per URL, so
+/// every unmatched request shares this value.
+#[cfg(feature = "prometheus")]
+pub const UNMATCHED_PATH_LABEL: &str = "unmatched";
+
 /// Middleware that records API request metrics (counter + duration histogram).
 ///
 /// Emits `ironflow_api_requests_total` and `ironflow_api_request_duration_seconds`
-/// for every request. Only compiled when the `prometheus` feature is enabled.
+/// for every request. The `path` label is the matched route pattern (e.g.
+/// `/api/v1/internal/steps/{id}`), never the raw URL, so ids do not create a
+/// time series each; a request that matched no route is labelled
+/// [`UNMATCHED_PATH_LABEL`]. Only compiled when the `prometheus` feature is
+/// enabled.
+///
+/// # Examples
+///
+/// ```
+/// use axum::Router;
+/// use axum::middleware::from_fn;
+/// use axum::routing::get;
+/// use ironflow_api::middleware::request_metrics;
+///
+/// let app: Router = Router::new()
+///     .route("/runs/{id}", get(|| async { "ok" }))
+///     .layer(from_fn(request_metrics));
+/// ```
 #[cfg(feature = "prometheus")]
 pub async fn request_metrics(req: Request, next: Next) -> Response {
     use std::time::Instant;
 
+    use axum::extract::MatchedPath;
     use ironflow_core::metric_names::{API_REQUEST_DURATION_SECONDS, API_REQUESTS_TOTAL};
     use metrics::{counter, histogram};
 
     let method = req.method().to_string();
-    let path = req.uri().path().to_string();
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or(UNMATCHED_PATH_LABEL, MatchedPath::as_str)
+        .to_string();
     let start = Instant::now();
 
     let resp = next.run(req).await;
