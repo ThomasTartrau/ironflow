@@ -38,6 +38,8 @@ pub struct RunResponse {
     pub retry_count: u32,
     /// Maximum allowed retries.
     pub max_retries: u32,
+    /// Number of times the run was requeued after its worker lost its lease. Separate from `retry_count`: it does not consume `max_retries`.
+    pub lease_recoveries: u32,
     /// Aggregated cost in USD.
     #[cfg_attr(feature = "openapi", schema(value_type = f64))]
     pub cost_usd: Decimal,
@@ -114,6 +116,7 @@ impl From<Run> for RunResponse {
             error: run.error,
             retry_count: run.retry_count,
             max_retries: run.max_retries,
+            lease_recoveries: run.lease_recoveries,
             cost_usd: run.cost_usd,
             duration_ms: run.duration_ms,
             created_at: run.created_at,
@@ -275,4 +278,58 @@ pub(crate) fn parse_label_param(raw: &Option<String>) -> Option<HashMap<String, 
         }
         if map.is_empty() { None } else { Some(map) }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::models::NewRun;
+    use ironflow_store::store::RunStore;
+    use serde_json::{json, to_value};
+
+    use super::*;
+
+    async fn run_with_lease_recoveries(lease_recoveries: u32) -> Run {
+        let store = InMemoryStore::new();
+        let mut run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "deploy".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 1,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 0,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: Vec::new(),
+            })
+            .await
+            .expect("create run")
+            .into_run();
+        run.lease_recoveries = lease_recoveries;
+        run
+    }
+
+    #[tokio::test]
+    async fn run_response_exposes_the_lease_recoveries() {
+        let response = RunResponse::from(run_with_lease_recoveries(2).await);
+
+        assert_eq!(response.lease_recoveries, 2);
+        let value = to_value(&response).expect("serialize");
+        assert_eq!(value["lease_recoveries"], 2);
+    }
+
+    #[tokio::test]
+    async fn run_response_reports_zero_lease_recoveries_for_a_fresh_run() {
+        let response = RunResponse::from(run_with_lease_recoveries(0).await);
+
+        assert_eq!(response.lease_recoveries, 0);
+        let value = to_value(&response).expect("serialize");
+        assert_eq!(value["lease_recoveries"], 0);
+    }
 }

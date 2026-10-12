@@ -343,6 +343,10 @@ pub fn run_detail_table(detail: &RunDetailResponse) -> Table {
         Cell::new("Retries"),
         Cell::new(format!("{}/{}", run.retry_count, run.max_retries)),
     ]);
+    table.add_row(vec![
+        Cell::new("Lease recoveries"),
+        Cell::new(run.lease_recoveries.to_string()),
+    ]);
 
     if !run.concurrency_limits.is_empty() {
         table.add_row(vec![
@@ -1263,6 +1267,7 @@ mod tests {
             error: None,
             retry_count: 0,
             max_retries: 0,
+            lease_recoveries: 0,
             cost_usd: 0.0,
             duration_ms: 0,
             created_at: now,
@@ -1537,6 +1542,42 @@ mod tests {
         let output = run_detail_table(&detail).to_string();
         assert!(output.contains("Priority"), "row missing from:\n{output}");
         assert!(output.contains("64"), "priority missing from:\n{output}");
+    }
+
+    fn detail_with_lease_recoveries(lease_recoveries: i32) -> RunDetailResponse {
+        let mut run = run_fixture(CreatedBy {
+            kind: CreatedByKind::System,
+            id: None,
+            label: "api".to_string(),
+        });
+        run.lease_recoveries = lease_recoveries;
+        RunDetailResponse {
+            run,
+            steps: Vec::new(),
+            payload: Value::Object(Map::new()),
+            active_descendant_count: 0,
+            worker_routing: None,
+        }
+    }
+
+    #[test]
+    fn run_detail_table_shows_the_lease_recoveries() {
+        let output = run_detail_table(&detail_with_lease_recoveries(2)).to_string();
+        let row = output
+            .lines()
+            .find(|line| line.contains("Lease recoveries"))
+            .unwrap_or_else(|| panic!("row missing from:\n{output}"));
+        assert!(row.contains('2'), "value missing from row: {row}");
+    }
+
+    #[test]
+    fn run_detail_table_shows_zero_lease_recoveries() {
+        let output = run_detail_table(&detail_with_lease_recoveries(0)).to_string();
+        let row = output
+            .lines()
+            .find(|line| line.contains("Lease recoveries"))
+            .unwrap_or_else(|| panic!("row missing from:\n{output}"));
+        assert!(row.contains('0'), "value missing from row: {row}");
     }
 
     #[test]

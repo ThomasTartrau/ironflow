@@ -3510,6 +3510,11 @@ export interface components {
 				[key: string]: string;
 			};
 			/**
+			 * Format: int32
+			 * @description Number of times the run was requeued after its worker lost its lease. Separate from `retry_count`: it does not consume `max_retries`.
+			 */
+			lease_recoveries: number;
+			/**
 			 * Format: double
 			 * @description Cumulative cost cap for this run, in USD. `None` means no cap.
 			 */
