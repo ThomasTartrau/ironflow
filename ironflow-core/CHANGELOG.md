@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [4.14.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.13.1...ironflow-core-v4.14.0) - 2026-10-12
+
+### Added
+
+- #192 add Claude Haiku 5.5 model with long-prompt pricing tier
+
 ## [4.13.1](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-core-v4.13.0...ironflow-core-v4.13.1) - 2026-10-08
 
 ### Fixed
