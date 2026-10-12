@@ -282,61 +282,51 @@ pub(crate) fn parse_label_param(raw: &Option<String>) -> Option<HashMap<String, 
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
-    use ironflow_store::models::FsmState;
+    use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::models::NewRun;
+    use ironflow_store::store::Store;
     use serde_json::json;
 
     use super::*;
 
-    fn run_with_lease_recoveries(lease_recoveries: u32) -> Run {
-        let now = Utc::now();
-        Run {
-            id: Uuid::now_v7(),
-            workflow_name: "deploy".to_string(),
-            status: FsmState::new(RunStatus::Running, Uuid::now_v7()),
-            trigger: TriggerKind::Manual,
-            payload: json!({}),
-            error: None,
-            retry_count: 0,
-            max_retries: 1,
-            cost_usd: Decimal::ZERO,
-            duration_ms: 0,
-            created_at: now,
-            updated_at: now,
-            started_at: None,
-            completed_at: None,
-            handler_version: None,
-            labels: HashMap::new(),
-            scheduled_at: None,
-            created_by: None,
-            created_by_label: None,
-            idempotency_key: None,
-            concurrency_key: None,
-            priority: 0,
-            concurrency_limits: Vec::new(),
-            max_cost_usd: None,
-            worker_id: None,
-            lease_expires_at: None,
-            output: None,
-            lease_recoveries,
-            capacity_wait_kind: None,
-            resume_status: None,
-            worker_tags: Vec::new(),
-        }
+    async fn run_with_lease_recoveries(lease_recoveries: u32) -> Run {
+        let store = InMemoryStore::new();
+        let mut run = store
+            .create_run(NewRun {
+                created_by: None,
+                workflow_name: "deploy".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 1,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 0,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: Vec::new(),
+            })
+            .await
+            .expect("create run")
+            .into_run();
+        run.lease_recoveries = lease_recoveries;
+        run
     }
 
-    #[test]
-    fn run_response_exposes_the_lease_recoveries() {
-        let response = RunResponse::from(run_with_lease_recoveries(2));
+    #[tokio::test]
+    async fn run_response_exposes_the_lease_recoveries() {
+        let response = RunResponse::from(run_with_lease_recoveries(2).await);
 
         assert_eq!(response.lease_recoveries, 2);
         let value = serde_json::to_value(&response).expect("serialize");
         assert_eq!(value["lease_recoveries"], 2);
     }
 
-    #[test]
-    fn run_response_reports_zero_lease_recoveries_for_a_fresh_run() {
-        let response = RunResponse::from(run_with_lease_recoveries(0));
+    #[tokio::test]
+    async fn run_response_reports_zero_lease_recoveries_for_a_fresh_run() {
+        let response = RunResponse::from(run_with_lease_recoveries(0).await);
 
         assert_eq!(response.lease_recoveries, 0);
         let value = serde_json::to_value(&response).expect("serialize");
