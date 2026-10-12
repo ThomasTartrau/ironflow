@@ -284,8 +284,8 @@ pub(crate) fn parse_label_param(raw: &Option<String>) -> Option<HashMap<String, 
 mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::NewRun;
-    use ironflow_store::store::Store;
-    use serde_json::json;
+    use ironflow_store::store::RunStore;
+    use serde_json::{json, to_value};
 
     use super::*;
 
@@ -320,7 +320,7 @@ mod tests {
         let response = RunResponse::from(run_with_lease_recoveries(2).await);
 
         assert_eq!(response.lease_recoveries, 2);
-        let value = serde_json::to_value(&response).expect("serialize");
+        let value = to_value(&response).expect("serialize");
         assert_eq!(value["lease_recoveries"], 2);
     }
 
@@ -329,7 +329,7 @@ mod tests {
         let response = RunResponse::from(run_with_lease_recoveries(0).await);
 
         assert_eq!(response.lease_recoveries, 0);
-        let value = serde_json::to_value(&response).expect("serialize");
+        let value = to_value(&response).expect("serialize");
         assert_eq!(value["lease_recoveries"], 0);
     }
 }

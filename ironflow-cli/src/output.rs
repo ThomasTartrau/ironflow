@@ -1544,7 +1544,7 @@ mod tests {
         assert!(output.contains("64"), "priority missing from:\n{output}");
     }
 
-    fn detail_with_lease_recoveries(lease_recoveries: u32) -> RunDetailResponse {
+    fn detail_with_lease_recoveries(lease_recoveries: i32) -> RunDetailResponse {
         let mut run = run_fixture(CreatedBy {
             kind: CreatedByKind::System,
             id: None,
