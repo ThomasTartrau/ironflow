@@ -5,7 +5,8 @@
 //! model families. Cost is computed into a [`CostBreakdown`] with uncached
 //! prompt, cache read, cache write and completion components, rounded to 6
 //! decimal places. Per-model rates, including prompt-cache rates, are exposed
-//! through [`ModelPricing`].
+//! through [`ModelPricing`]. Models with a long-prompt tier expose it through
+//! [`PricingSource::long_prompt_pricing`] ([`LongPromptPricing`]).
 //!
 //! The [`spawn_log`] helper emits cost telemetry in a fire-and-forget task so
 //! tracking never blocks step execution.
@@ -66,6 +67,48 @@ pub trait PricingSource: Send + Sync {
         self.price_per_1m(model)
             .map(|(i, o)| ModelPricing::without_cache(i, o))
     }
+
+    /// Return the long-prompt tier of the given model, if it has one.
+    ///
+    /// Some models bill a whole call on a higher rate grid once the prompt
+    /// exceeds a token threshold. The default implementation returns `None`
+    /// (single price tier).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ironflow_core::pricing::{PricingSource, StaticPricing};
+    ///
+    /// let pricing = StaticPricing::new();
+    /// if let Some(lp) = pricing.long_prompt_pricing("claude-haiku-5-5") {
+    ///     println!("above {} tokens: ${}/Mtok", lp.threshold_tokens, lp.rates.input_per_1m);
+    /// }
+    /// ```
+    fn long_prompt_pricing(&self, _model: &str) -> Option<LongPromptPricing> {
+        None
+    }
+}
+
+/// Rates applied to a whole call when its prompt exceeds a token threshold.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::pricing::{LongPromptPricing, ModelPricing};
+///
+/// let lp = LongPromptPricing {
+///     threshold_tokens: 100_000,
+///     rates: ModelPricing::without_cache(0.5, 2.5),
+/// };
+/// assert_eq!(lp.threshold_tokens, 100_000);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LongPromptPricing {
+    /// The long-prompt rates apply when the prompt is strictly above this
+    /// number of tokens.
+    pub threshold_tokens: u64,
+    /// Rates applied to the whole call (output included) above the threshold.
+    pub rates: ModelPricing,
 }
 
 /// Per-million-token rates for a single model, in USD.
@@ -191,6 +234,11 @@ impl CostBreakdown {
     /// the model is unknown the fallback Sonnet price is used (cache rates
     /// equal to the input rate) and a warning is logged.
     ///
+    /// When [`PricingSource::long_prompt_pricing`] returns a tier for the model
+    /// and the prompt is strictly above its threshold, the whole call (output
+    /// included) is billed on the long-prompt rates. The prompt size counts
+    /// uncached input, cache read and cache write tokens.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -215,7 +263,7 @@ impl CostBreakdown {
         cache_write_tokens: u64,
         output_tokens: u64,
     ) -> Self {
-        let rates = source.model_pricing(model).unwrap_or_else(|| {
+        let mut rates = source.model_pricing(model).unwrap_or_else(|| {
             warn!(
                 model,
                 fallback_input = SONNET_FALLBACK.0,
@@ -224,6 +272,16 @@ impl CostBreakdown {
             );
             ModelPricing::without_cache(SONNET_FALLBACK.0, SONNET_FALLBACK.1)
         });
+
+        let prompt_total = input_tokens
+            .saturating_add(cache_read_tokens)
+            .saturating_add(cache_write_tokens);
+        if let Some(lp) = source
+            .long_prompt_pricing(model)
+            .filter(|lp| prompt_total > lp.threshold_tokens)
+        {
+            rates = lp.rates;
+        }
 
         let prompt_usd = round6(input_tokens as f64 / 1_000_000.0 * rates.input_per_1m);
         let cache_read_usd =
@@ -248,6 +306,10 @@ impl CostBreakdown {
 /// Resolution is by substring: the most specific (longest) matching entry
 /// wins. For example, `"claude-sonnet-4-6[1m]"` matches the `"claude-sonnet-4-6"`
 /// entry because the full model string contains that substring.
+///
+/// `claude-haiku-5-5` also has a long-prompt tier (see
+/// [`PricingSource::long_prompt_pricing`]): above 100K prompt tokens the whole
+/// call is billed at $0.50 input / $2.50 output per million tokens.
 ///
 /// # Examples
 ///
@@ -276,6 +338,7 @@ impl StaticPricing {
             ("claude-mythos-5-1", 10.0, 50.0),
             ("claude-opus-5-5", 4.0, 20.0),
             ("claude-sonnet-5-5", 2.0, 10.0),
+            ("claude-haiku-5-5", 0.10, 0.50),
             ("claude-opus-5", 5.0, 25.0),
             ("claude-sonnet-5", 2.0, 10.0),
             ("claude-opus-4-8", 5.0, 25.0),
@@ -347,6 +410,23 @@ fn cache_multipliers(key: &str) -> Option<(f64, f64)> {
     }
 }
 
+/// Long-prompt tier table: `(entry key, threshold tokens, input, output)` per
+/// million tokens.
+const LONG_PROMPT_ENTRIES: &[(&str, u64, f64, f64)] = &[("claude-haiku-5-5", 100_000, 0.50, 2.50)];
+
+/// Build the rates of a table entry, applying its cache multipliers.
+fn rates_for(key: &str, input: f64, output: f64) -> ModelPricing {
+    match cache_multipliers(key) {
+        Some((read_mult, write_mult)) => ModelPricing {
+            input_per_1m: input,
+            output_per_1m: output,
+            cache_read_per_1m: input * read_mult,
+            cache_write_per_1m: input * write_mult,
+        },
+        None => ModelPricing::without_cache(input, output),
+    }
+}
+
 impl StaticPricing {
     /// Find the most specific table entry matching `model`.
     fn find_entry(&self, model: &str) -> Option<&(&'static str, f64, f64)> {
@@ -361,14 +441,17 @@ impl PricingSource for StaticPricing {
 
     fn model_pricing(&self, model: &str) -> Option<ModelPricing> {
         let (key, input, output) = *self.find_entry(model)?;
-        Some(match cache_multipliers(key) {
-            Some((read_mult, write_mult)) => ModelPricing {
-                input_per_1m: input,
-                output_per_1m: output,
-                cache_read_per_1m: input * read_mult,
-                cache_write_per_1m: input * write_mult,
-            },
-            None => ModelPricing::without_cache(input, output),
+        Some(rates_for(key, input, output))
+    }
+
+    fn long_prompt_pricing(&self, model: &str) -> Option<LongPromptPricing> {
+        let (key, _, _) = *self.find_entry(model)?;
+        let (_, threshold_tokens, input, output) = *LONG_PROMPT_ENTRIES
+            .iter()
+            .find(|(entry_key, _, _, _)| *entry_key == key)?;
+        Some(LongPromptPricing {
+            threshold_tokens,
+            rates: rates_for(key, input, output),
         })
     }
 }
@@ -520,6 +603,7 @@ mod tests {
             "claude-mythos-5-1",
             "claude-opus-5-5",
             "claude-sonnet-5-5",
+            "claude-haiku-5-5",
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-opus-4-8",
@@ -697,6 +781,120 @@ mod tests {
         assert_eq!(p.cache_read_per_1m, 2.0);
         assert_eq!(p.cache_write_per_1m, 2.0);
         assert!(FlatPricing.model_pricing("other").is_none());
+    }
+
+    #[test]
+    fn haiku_5_5_has_current_pricing() {
+        let pricing = StaticPricing::new();
+        assert_eq!(pricing.price_per_1m("claude-haiku-5-5"), Some((0.10, 0.50)));
+        assert_eq!(
+            pricing.price_per_1m("claude-haiku-5-5[1m]"),
+            Some((0.10, 0.50))
+        );
+        let p = pricing.model_pricing("claude-haiku-5-5").unwrap();
+        assert_close(p.input_per_1m, 0.10);
+        assert_close(p.output_per_1m, 0.50);
+        assert_close(p.cache_read_per_1m, 0.01);
+        assert_close(p.cache_write_per_1m, 0.125);
+    }
+
+    #[test]
+    fn haiku_5_5_small_grid_up_to_100k() {
+        let pricing = StaticPricing::new();
+        let bd = CostBreakdown::compute_with_cache(
+            &pricing,
+            "claude-haiku-5-5",
+            50_000,
+            30_000,
+            20_000,
+            10_000,
+        );
+        assert_close(bd.prompt_usd, 0.005);
+        assert_close(bd.cache_read_usd, 0.0003);
+        assert_close(bd.cache_write_usd, 0.0025);
+        assert_close(bd.completion_usd, 0.005);
+    }
+
+    #[test]
+    fn haiku_5_5_large_grid_above_100k() {
+        let pricing = StaticPricing::new();
+        let bd = CostBreakdown::compute_with_cache(&pricing, "claude-haiku-5-5", 100_001, 0, 0, 0);
+        // 0.0500005 rounded to 6 decimals.
+        assert_close(bd.prompt_usd, 0.050001);
+
+        let bd = CostBreakdown::compute_with_cache(
+            &pricing,
+            "claude-haiku-5-5",
+            10_000,
+            90_000,
+            1,
+            1_000_000,
+        );
+        assert_close(bd.cache_read_usd, 0.0045);
+        assert_close(bd.completion_usd, 2.5);
+    }
+
+    #[test]
+    fn haiku_5_5_boundary_100_000_vs_100_001() {
+        let pricing = StaticPricing::new();
+        let small = CostBreakdown::compute_with_cache(
+            &pricing,
+            "claude-haiku-5-5",
+            100_000,
+            0,
+            0,
+            1_000_000,
+        );
+        assert_close(small.prompt_usd, 0.01);
+        assert_close(small.completion_usd, 0.5);
+
+        let large = CostBreakdown::compute_with_cache(
+            &pricing,
+            "claude-haiku-5-5",
+            100_001,
+            0,
+            0,
+            1_000_000,
+        );
+        assert_close(large.prompt_usd, 0.050001);
+        assert_close(large.completion_usd, 2.5);
+    }
+
+    #[test]
+    fn haiku_4_5_stays_one_and_five_dollars() {
+        let pricing = StaticPricing::new();
+        assert_eq!(pricing.price_per_1m("claude-haiku-4-5"), Some((1.0, 5.0)));
+        assert_eq!(pricing.price_per_1m("haiku"), Some((1.0, 5.0)));
+
+        let bd = CostBreakdown::compute(&pricing, "claude-haiku-4-5", 200_000, 0);
+        assert_close(bd.prompt_usd, 0.2);
+
+        let bd = CostBreakdown::compute(&pricing, "claude-sonnet-5-5", 200_000, 0);
+        assert_close(bd.prompt_usd, 0.4);
+    }
+
+    #[test]
+    fn haiku_5_5_no_longer_resolves_on_haiku_alias() {
+        let pricing = StaticPricing::new();
+        assert_ne!(pricing.price_per_1m("claude-haiku-5-5"), Some((1.0, 5.0)));
+    }
+
+    #[test]
+    fn static_pricing_long_prompt_only_for_haiku_5_5() {
+        let pricing = StaticPricing::new();
+        let lp = pricing.long_prompt_pricing("claude-haiku-5-5").unwrap();
+        assert_eq!(lp.threshold_tokens, 100_000);
+        assert_close(lp.rates.input_per_1m, 0.50);
+        assert_close(lp.rates.output_per_1m, 2.50);
+        assert_close(lp.rates.cache_read_per_1m, 0.05);
+        assert_close(lp.rates.cache_write_per_1m, 0.625);
+        assert!(
+            pricing
+                .long_prompt_pricing("claude-haiku-5-5[1m]")
+                .is_some()
+        );
+        assert!(pricing.long_prompt_pricing("claude-haiku-4-5").is_none());
+        assert!(pricing.long_prompt_pricing("unknown").is_none());
     }
 
     #[test]

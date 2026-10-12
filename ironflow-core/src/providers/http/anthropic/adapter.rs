@@ -36,6 +36,8 @@ impl AnthropicModel {
     pub const OPUS_4_7: &str = "claude-opus-4-7";
     /// Claude Sonnet 4.6 - best combination of speed and intelligence (1M context).
     pub const SONNET_4_6: &str = "claude-sonnet-4-6";
+    /// Claude Haiku 5.5 - fastest model of the range (1M context).
+    pub const HAIKU_5_5: &str = "claude-haiku-5-5";
     /// Claude Haiku 4.5 - fastest model with near-frontier intelligence (200k context).
     pub const HAIKU_4_5: &str = "claude-haiku-4-5-20251001";
     /// Claude Opus 4.6 - previous generation most capable (1M context).
@@ -529,6 +531,23 @@ mod tests {
     }
 
     #[test]
+    fn build_request_haiku_5_5_uses_tool_forcing() {
+        let a = adapter();
+        let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
+        let config = AgentConfig::new("Give x")
+            .model(AnthropicModel::HAIKU_5_5)
+            .output_schema_raw(schema)
+            .into();
+        let body = a.build_request(&config).expect("build_request failed");
+
+        assert_eq!(body["model"], "claude-haiku-5-5");
+        assert_eq!(body["tool_choice"]["type"], "tool");
+        assert_eq!(body["tool_choice"]["name"], "structured_output");
+        assert_eq!(body["tools"][0]["name"], "structured_output");
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
     fn parse_response_text() {
         let a = adapter();
         let body = json!({
@@ -732,6 +751,10 @@ mod tests {
         assert_eq!(a.resolve_model("sonnet"), AnthropicModel::SONNET_5);
         assert_eq!(a.resolve_model("opus"), AnthropicModel::OPUS_5);
         assert_eq!(a.resolve_model("haiku"), AnthropicModel::HAIKU_4_5);
+        assert_eq!(
+            a.resolve_model("claude-haiku-5-5"),
+            AnthropicModel::HAIKU_5_5
+        );
         assert_eq!(a.resolve_model("claude-opus-4-6"), "claude-opus-4-6");
         assert_eq!(a.resolve_model("claude-opus-4-8"), "claude-opus-4-8");
         assert_eq!(a.resolve_model("claude-opus-5"), "claude-opus-5");

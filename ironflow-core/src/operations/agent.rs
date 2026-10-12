@@ -137,6 +137,8 @@ impl Model {
     pub const OPUS_5_1M: &str = "claude-opus-5[1m]";
     /// Claude Sonnet 5.5 - next Sonnet, launching; use only when explicitly requested.
     pub const SONNET_55: &str = "claude-sonnet-5-5";
+    /// Claude Haiku 5.5 - fastest model of the range, 1M token context native, two price tiers (prompt up to / above 100K tokens).
+    pub const HAIKU_55: &str = "claude-haiku-5-5";
     /// Claude Sonnet 5 - previous Sonnet, still served, 1M token context native.
     pub const SONNET_5: &str = "claude-sonnet-5";
     /// Claude Sonnet 5 with 1M token context window explicit.
@@ -1105,6 +1107,7 @@ mod tests {
         assert_eq!(Model::MYTHOS_51, "claude-mythos-5-1");
         assert_eq!(Model::OPUS_55, "claude-opus-5-5");
         assert_eq!(Model::SONNET_55, "claude-sonnet-5-5");
+        assert_eq!(Model::HAIKU_55, "claude-haiku-5-5");
         assert_eq!(Model::OPUS_5, "claude-opus-5");
         assert_eq!(Model::OPUS_5_1M, "claude-opus-5[1m]");
         assert_eq!(Model::SONNET_5, "claude-sonnet-5");
