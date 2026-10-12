@@ -14,6 +14,7 @@ function filtersFixture(
 		has_steps: false,
 		label: [],
 		created_by: "",
+		concurrency_group: "",
 		...overrides,
 	};
 }
@@ -57,6 +58,16 @@ describe("toFilterParams", () => {
 			"019a3f2b-0000-7000-8000-000000000001",
 		);
 	});
+
+	it("maps the concurrency group filter", () => {
+		const params = toFilterParams(filtersFixture({ concurrency_group: "g" }));
+		expect(params.get("concurrency_group")).toBe("g");
+	});
+
+	it("sets no concurrency group param when it is empty", () => {
+		const params = toFilterParams(filtersFixture({ concurrency_group: "" }));
+		expect(params.has("concurrency_group")).toBe(false);
+	});
 });
 
 describe("countActiveFilters", () => {
@@ -68,7 +79,7 @@ describe("countActiveFilters", () => {
 		expect(countActiveFilters(filtersFixture({ has_steps: false }))).toBe(1);
 	});
 
-	it("counts every set filter, including the author", () => {
+	it("counts every set filter, including the author and the concurrency group", () => {
 		expect(
 			countActiveFilters({
 				workflow: "deploy",
@@ -76,7 +87,8 @@ describe("countActiveFilters", () => {
 				has_steps: true,
 				label: ["env:prod", "team:core"],
 				created_by: "019a3f2b-0000-7000-8000-000000000001",
+				concurrency_group: "repo:acme",
 			}),
-		).toBe(4);
+		).toBe(5);
 	});
 });

@@ -39,6 +39,7 @@ const filterParsers = {
 	has_steps: parseAsBoolean.withDefault(true),
 	label: parseAsArrayOf(parseAsString).withDefault([]),
 	created_by: parseAsString.withDefault(""),
+	concurrency_group: parseAsString.withDefault(""),
 };
 
 const loadFilters = createLoader(filterParsers);
@@ -72,6 +73,7 @@ export function Component() {
 		has_steps: parseAsBooleanClient.withDefault(true),
 		label: parseAsArrayOfClient(parseAsStringClient).withDefault([]),
 		created_by: parseAsStringClient.withDefault(""),
+		concurrency_group: parseAsStringClient.withDefault(""),
 	});
 
 	const [period, setPeriod] = useQueryState(
@@ -93,7 +95,7 @@ export function Component() {
 			description="Overview of your workflow executions."
 		>
 			<div className="space-y-6">
-				<RunFilters paginated={false} />
+				<RunFilters paginated={false} concurrencyGroupFilter />
 				<div className="space-y-6">
 					{activeCount > 0 && (
 						<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded px-3 py-1.5">

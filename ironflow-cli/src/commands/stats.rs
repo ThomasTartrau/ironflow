@@ -56,6 +56,9 @@ pub enum StatsCommands {
         /// Also matches runs triggered by one of that user's API keys.
         #[arg(long)]
         created_by: Option<Uuid>,
+        /// Filter by concurrency group: only runs that belong to this group.
+        #[arg(long)]
+        concurrency_group: Option<String>,
     },
 }
 
@@ -78,6 +81,7 @@ pub async fn execute(client: &IronflowClient, args: &StatsArgs, json_mode: bool)
             label,
             has_steps,
             created_by,
+            concurrency_group,
         }) => {
             let params = StatsHistoryParams {
                 workflow: workflow.as_deref(),
@@ -87,6 +91,7 @@ pub async fn execute(client: &IronflowClient, args: &StatsArgs, json_mode: bool)
                 label: label.as_deref(),
                 has_steps: *has_steps,
                 created_by: *created_by,
+                concurrency_group: concurrency_group.as_deref(),
             };
             let response = client.stats_history_with(&params).await?;
             output::print_output(json_mode, &response, || {

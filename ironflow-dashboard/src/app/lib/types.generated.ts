@@ -1191,7 +1191,8 @@ export interface paths {
 		 *
 		 *     Accepts `period` and `granularity`, plus the same filters as
 		 *     `GET /api/v1/stats` and `GET /api/v1/runs` (`workflow` as a
-		 *     case-insensitive substring, `status`, `has_steps`, `label`, `created_by`).
+		 *     case-insensitive substring, `status`, `has_steps`, `label`, `created_by`,
+		 *     `concurrency_group`).
 		 */
 		get: operations["get_stats_history"];
 		put?: never;
@@ -7731,6 +7732,8 @@ export interface operations {
 				 *     Also matches runs triggered by one of that user's API keys.
 				 */
 				created_by?: string | null;
+				/** @description Filter by concurrency group: only runs that belong to this group. */
+				concurrency_group?: string | null;
 			};
 			header?: never;
 			path?: never;

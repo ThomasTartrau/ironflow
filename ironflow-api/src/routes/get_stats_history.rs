@@ -24,7 +24,8 @@ use crate::state::AppState;
 ///
 /// Accepts `period` and `granularity`, plus the same filters as
 /// `GET /api/v1/stats` and `GET /api/v1/runs` (`workflow` as a
-/// case-insensitive substring, `status`, `has_steps`, `label`, `created_by`).
+/// case-insensitive substring, `status`, `has_steps`, `label`, `created_by`,
+/// `concurrency_group`).
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -56,6 +57,7 @@ pub async fn get_stats_history(
         has_steps: params.has_steps,
         labels: params.parse_labels(),
         created_by_user_id: params.created_by,
+        concurrency_group: params.concurrency_group,
         period,
         granularity,
     };
@@ -127,7 +129,8 @@ mod tests {
     use ironflow_engine::notify::Event;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
-        NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind, TriggerKind, step_trace_id,
+        ConcurrencyLimit, NewRun, NewStep, NewUser, RunActor, RunStatus, StepKind, TriggerKind,
+        step_trace_id,
     };
     use ironflow_store::store::RunStore;
     use ironflow_store::user_store::UserStore;
@@ -400,6 +403,42 @@ mod tests {
         let (status, json_val) = fetch(store, "/?period=24h").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(total(&json_val, "completed"), 2);
+    }
+
+    #[tokio::test]
+    async fn filters_by_concurrency_group() {
+        let store = Arc::new(InMemoryStore::new());
+        for group in ["g", "other"] {
+            let req = NewRun {
+                concurrency_limits: vec![ConcurrencyLimit::new(group, 2)],
+                ..new_run(HashMap::new(), None)
+            };
+            create_run_in_status(&store, req, RunStatus::Pending).await;
+        }
+        create_run_in_status(&store, new_run(HashMap::new(), None), RunStatus::Pending).await;
+
+        let (status, json_val) = fetch(store, "/?period=24h&concurrency_group=g").await;
+        assert_eq!(status, StatusCode::OK);
+
+        assert_eq!(total(&json_val, "pending"), 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_concurrency_group_returns_empty_grid() {
+        let store = Arc::new(InMemoryStore::new());
+        let req = NewRun {
+            concurrency_limits: vec![ConcurrencyLimit::new("g", 2)],
+            ..new_run(HashMap::new(), None)
+        };
+        create_run_in_status(&store, req, RunStatus::Pending).await;
+
+        let (status, json_val) = fetch(store, "/?period=24h&concurrency_group=missing").await;
+        assert_eq!(status, StatusCode::OK);
+
+        assert!(buckets(&json_val).len() >= 24);
+        for key in COUNTERS {
+            assert_eq!(total(&json_val, key), 0, "{key}");
+        }
     }
 
     #[tokio::test]

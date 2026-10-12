@@ -75,6 +75,8 @@ pub struct StatsHistoryQuery {
     ///
     /// Also matches runs triggered by one of that user's API keys.
     pub created_by: Option<Uuid>,
+    /// Filter by concurrency group: only runs that belong to this group.
+    pub concurrency_group: Option<String>,
 }
 
 impl StatsHistoryQuery {
@@ -93,6 +95,7 @@ impl StatsHistoryQuery {
     ///     has_steps: None,
     ///     label: Some("env:prod,team:core".to_string()),
     ///     created_by: None,
+    ///     concurrency_group: None,
     /// };
     /// let labels = query.parse_labels().unwrap_or_default();
     /// assert_eq!(labels.get("env").map(String::as_str), Some("prod"));

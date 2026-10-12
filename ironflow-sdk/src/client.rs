@@ -133,6 +133,9 @@ pub struct StatsHistoryParams<'a> {
     /// Also matches runs triggered by one of that user's API keys.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
+    /// Filter by concurrency group: only runs that belong to this group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrency_group: Option<&'a str>,
 }
 
 /// Filtering options for [`IronflowClient::get_run_logs`].

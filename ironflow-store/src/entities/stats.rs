@@ -290,6 +290,9 @@ pub struct StatsHistoryFilter {
     /// Filter by author. Matches runs created by this user directly, and runs
     /// created by one of this user's API keys.
     pub created_by_user_id: Option<Uuid>,
+    /// Filter by concurrency group: only runs that belong to this group.
+    /// `None` means all groups.
+    pub concurrency_group: Option<String>,
     /// How far back to query.
     pub period: HistoryPeriod,
     /// Size of each time bucket.
@@ -305,6 +308,7 @@ impl Default for StatsHistoryFilter {
             has_steps: None,
             labels: None,
             created_by_user_id: None,
+            concurrency_group: None,
             period,
             granularity: period.default_granularity(),
         }
@@ -339,7 +343,7 @@ impl StatsHistoryFilter {
             labels: self.labels.clone(),
             created_by_user_id: self.created_by_user_id,
             priority: None,
-            concurrency_group: None,
+            concurrency_group: self.concurrency_group.clone(),
             eligible_for: None,
         }
     }
@@ -615,6 +619,7 @@ mod tests {
         assert!(filter.has_steps.is_none());
         assert!(filter.labels.is_none());
         assert!(filter.created_by_user_id.is_none());
+        assert!(filter.concurrency_group.is_none());
     }
 
     #[test]
@@ -627,6 +632,7 @@ mod tests {
             has_steps: Some(true),
             labels: Some(labels.clone()),
             created_by_user_id: Some(user_id),
+            concurrency_group: Some("deploy-group".into()),
             period: HistoryPeriod::NinetyDays,
             granularity: HistoryGranularity::OneWeek,
         };
@@ -636,6 +642,10 @@ mod tests {
         assert_eq!(run_filter.has_steps, Some(true));
         assert_eq!(run_filter.labels, Some(labels));
         assert_eq!(run_filter.created_by_user_id, Some(user_id));
+        assert_eq!(
+            run_filter.concurrency_group.as_deref(),
+            Some("deploy-group")
+        );
         assert!(run_filter.created_after.is_none());
         assert!(run_filter.created_before.is_none());
     }
