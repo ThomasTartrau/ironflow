@@ -28,7 +28,7 @@ impl GetStatsTool {
 /// Get time-bucketed historical statistics for trend charts.
 #[mcp_tool(
     name = "get_stats_history",
-    description = "Get time-bucketed historical statistics: one bucket per step over the whole period (zero-filled, UTC, weeks start on Monday), with a run count for every status (completed, warning, failed, cancelled, pending, running, retrying, awaiting_approval, sleeping, paused), success rate, average and p95 duration, and cost. Supports period (24h/7d/30d/90d), granularity (1h/1d/1w), and the same filters as get_stats: workflow (substring), status, label (key:value pairs), has_steps, created_by (user ID)."
+    description = "Get time-bucketed historical statistics: one bucket per step over the whole period (zero-filled, UTC, weeks start on Monday), with a run count for every status (completed, warning, failed, cancelled, pending, running, retrying, awaiting_approval, sleeping, paused), success rate, average and p95 duration, and cost. Supports period (24h/7d/30d/90d), granularity (1h/1d/1w), and the same filters as get_stats: workflow (substring), status, label (key:value pairs), has_steps, created_by (user ID), concurrency_group."
 )]
 #[derive(Debug, serde::Deserialize, serde::Serialize, JsonSchema)]
 pub struct GetStatsHistoryTool {
@@ -53,6 +53,9 @@ pub struct GetStatsHistoryTool {
     /// Filter by author: the user ID that triggered the run.
     #[serde(default)]
     pub created_by: Option<String>,
+    /// Filter by concurrency group: only runs that belong to this group.
+    #[serde(default)]
+    pub concurrency_group: Option<String>,
 }
 
 impl GetStatsHistoryTool {
@@ -83,6 +86,9 @@ impl GetStatsHistoryTool {
         }
         if let Some(ref c) = self.created_by {
             params.push(("created_by", c.as_str()));
+        }
+        if let Some(ref g) = self.concurrency_group {
+            params.push(("concurrency_group", g.as_str()));
         }
 
         let history: Value = client

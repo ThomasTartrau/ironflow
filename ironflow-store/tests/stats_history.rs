@@ -416,3 +416,46 @@ async fn stats_history_workflow_filter_is_substring() {
 
     assert_eq!(sum(&buckets, |b| b.completed), 2);
 }
+
+#[tokio::test]
+async fn stats_history_filters_by_concurrency_group() {
+    let store = InMemoryStore::new();
+    let in_g = NewRun {
+        concurrency_limits: vec![ConcurrencyLimit::new("g", 1), ConcurrencyLimit::new("h", 3)],
+        ..new_run("deploy")
+    };
+    let in_other = NewRun {
+        concurrency_limits: vec![ConcurrencyLimit::new("other", 1)],
+        ..new_run("deploy")
+    };
+    create_run_in_status(&store, in_g, RunStatus::Pending).await;
+    create_run_in_status(&store, in_other, RunStatus::Pending).await;
+    create_run_in_status(&store, new_run("deploy"), RunStatus::Pending).await;
+
+    let filter = StatsHistoryFilter {
+        concurrency_group: Some("g".to_string()),
+        ..last_24h()
+    };
+    let buckets = store.get_stats_history(filter).await.unwrap();
+    assert_eq!(sum(&buckets, |b| b.pending), 1);
+
+    let unfiltered = store.get_stats_history(last_24h()).await.unwrap();
+    assert_eq!(sum(&unfiltered, |b| b.pending), 3);
+}
+
+#[tokio::test]
+async fn stats_history_unknown_concurrency_group_counts_nothing() {
+    let store = InMemoryStore::new();
+    let in_g = NewRun {
+        concurrency_limits: vec![ConcurrencyLimit::new("g", 1)],
+        ..new_run("deploy")
+    };
+    create_run_in_status(&store, in_g, RunStatus::Pending).await;
+
+    let filter = StatsHistoryFilter {
+        concurrency_group: Some("missing".to_string()),
+        ..last_24h()
+    };
+    let buckets = store.get_stats_history(filter).await.unwrap();
+    assert_eq!(sum(&buckets, |b| b.pending), 0);
+}

@@ -53,13 +53,12 @@ interface RunFiltersProps {
 	 */
 	paginated?: boolean;
 	/**
-	 * Whether to offer the concurrency group filter. The dashboard
-	 * trends (`/stats/history`) do not accept it, so the dashboard leaves it
-	 * out rather than show charts that ignore it.
+	 * Whether to offer the concurrency group filter. The runs list and the
+	 * dashboard (stats, trends and recent runs) accept it.
 	 */
 	concurrencyGroupFilter?: boolean;
 	/**
-	 * Whether to offer the priority filter. Like the concurrency group, the
+	 * Whether to offer the priority filter. Unlike the concurrency group, the
 	 * dashboard trends do not accept it.
 	 */
 	priorityFilter?: boolean;

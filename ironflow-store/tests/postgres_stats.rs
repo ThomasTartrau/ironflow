@@ -200,3 +200,54 @@ async fn get_stats_history_weekly_buckets_start_on_monday() {
     }
     assert_eq!(history_totals(&buckets), [1; 10]);
 }
+
+#[tokio::test]
+#[ignore]
+async fn get_stats_history_filters_by_concurrency_group_match_in_memory() {
+    let pg = get_store().await;
+    let memory = InMemoryStore::new();
+    let labels = isolation_labels(&Uuid::now_v7().to_string());
+    let group = format!("stats-parity:{}", Uuid::now_v7());
+    let other = format!("stats-parity-other:{}", Uuid::now_v7());
+
+    for store in [&pg as &dyn RunStore, &memory as &dyn RunStore] {
+        let in_group = NewRun {
+            concurrency_limits: vec![
+                ConcurrencyLimit::new(group.as_str(), 5),
+                ConcurrencyLimit::new(other.as_str(), 5),
+            ],
+            ..new_run(labels.clone())
+        };
+        let outside = NewRun {
+            concurrency_limits: vec![ConcurrencyLimit::new(other.as_str(), 5)],
+            ..new_run(labels.clone())
+        };
+        store.create_run(in_group).await.expect("create run");
+        store.create_run(outside).await.expect("create run");
+        store
+            .create_run(new_run(labels.clone()))
+            .await
+            .expect("create run");
+    }
+
+    let filter = StatsHistoryFilter {
+        labels: Some(labels),
+        concurrency_group: Some(group),
+        period: HistoryPeriod::TwentyFourHours,
+        granularity: HistoryGranularity::OneHour,
+        ..StatsHistoryFilter::default()
+    };
+    let pg_buckets = pg
+        .get_stats_history(filter.clone())
+        .await
+        .expect("pg history");
+    let memory_buckets = memory
+        .get_stats_history(filter)
+        .await
+        .expect("memory history");
+
+    let mut expected = [0u64; 10];
+    expected[0] = 1;
+    assert_eq!(history_totals(&pg_buckets), expected);
+    assert_eq!(history_totals(&pg_buckets), history_totals(&memory_buckets));
+}

@@ -407,7 +407,8 @@ mod tests {
                             "status": params.get("status").cloned(),
                             "label": params.get("label").cloned(),
                             "has_steps": params.get("has_steps").cloned(),
-                            "created_by": params.get("created_by").cloned()
+                            "created_by": params.get("created_by").cloned(),
+                            "concurrency_group": params.get("concurrency_group").cloned()
                         }
                     }))
                 }),
@@ -1479,6 +1480,7 @@ mod tests {
             label: None,
             has_steps: None,
             created_by: None,
+            concurrency_group: None,
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -1503,6 +1505,7 @@ mod tests {
             label: Some("env:prod".to_string()),
             has_steps: Some(true),
             created_by: Some("01936f5a-0000-7000-8000-000000000001".to_string()),
+            concurrency_group: Some("g".to_string()),
         };
 
         let result = tool.run(&client).await.unwrap();
@@ -1515,6 +1518,7 @@ mod tests {
             parsed["meta"]["created_by"],
             "01936f5a-0000-7000-8000-000000000001"
         );
+        assert_eq!(parsed["meta"]["concurrency_group"], "g");
     }
 
     // ---------------------------------------------------------------

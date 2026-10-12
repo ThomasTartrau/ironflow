@@ -5,6 +5,7 @@ export interface DashboardFilters {
 	has_steps: boolean;
 	label: string[];
 	created_by: string;
+	concurrency_group: string;
 }
 
 /**
@@ -20,6 +21,8 @@ export function toFilterParams(filters: DashboardFilters): URLSearchParams {
 	if (filters.has_steps) params.set("has_steps", "true");
 	if (filters.label.length > 0) params.set("label", filters.label.join(","));
 	if (filters.created_by) params.set("created_by", filters.created_by);
+	if (filters.concurrency_group)
+		params.set("concurrency_group", filters.concurrency_group);
 	return params;
 }
 
@@ -31,5 +34,6 @@ export function countActiveFilters(filters: DashboardFilters): number {
 		!filters.has_steps ? "has_steps" : "",
 		filters.label.length > 0 ? "label" : "",
 		filters.created_by,
+		filters.concurrency_group,
 	].filter(Boolean).length;
 }

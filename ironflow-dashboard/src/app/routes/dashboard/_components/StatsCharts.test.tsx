@@ -17,6 +17,7 @@ const filters: DashboardFilters = {
 	has_steps: true,
 	label: ["env:prod"],
 	created_by: AUTHOR_ID,
+	concurrency_group: "repo:acme",
 };
 
 let mockFetch: ReturnType<typeof vi.fn>;
@@ -86,6 +87,7 @@ describe("StatsCharts", () => {
 		expect(params.get("label")).toBe("env:prod");
 		expect(params.get("has_steps")).toBe("true");
 		expect(params.get("created_by")).toBe(AUTHOR_ID);
+		expect(params.get("concurrency_group")).toBe("repo:acme");
 		expect(opts.signal).toBeInstanceOf(AbortSignal);
 	});
 

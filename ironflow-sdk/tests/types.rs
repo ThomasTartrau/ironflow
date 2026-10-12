@@ -1,5 +1,6 @@
 //! Deserialization tests for progenitor-generated types against JSON fixtures.
 
+use ironflow_sdk::client::StatsHistoryParams;
 use ironflow_sdk::types::{
     CreateRunRequest, CreatedByKind, MeResponse, RunResponse, RunStatus, ScopeEntry,
     SecretResponse, StatsHistoryBucketResponse, StatsResponse, WorkflowSummary,
@@ -251,4 +252,20 @@ fn deserialize_run_status_enum() {
         let status: RunStatus = serde_json::from_str(json).unwrap();
         assert_eq!(status, expected);
     }
+}
+
+#[test]
+fn stats_history_params_serialize_concurrency_group() {
+    let params = StatsHistoryParams {
+        concurrency_group: Some("g"),
+        ..Default::default()
+    };
+    let value = serde_json::to_value(&params).unwrap();
+    assert_eq!(value["concurrency_group"], "g");
+}
+
+#[test]
+fn stats_history_params_omit_absent_concurrency_group() {
+    let value = serde_json::to_value(StatsHistoryParams::default()).unwrap();
+    assert!(value.get("concurrency_group").is_none());
 }
