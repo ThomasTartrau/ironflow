@@ -93,7 +93,7 @@ pub fn hash_config(config: &AgentConfig) -> String {
     // Only hashed when set, so existing fixtures keep their name.
     if let Some(effort) = config.effort {
         hasher.update(b"|ef:");
-        hasher.update(effort.as_str().as_bytes());
+        hasher.update(<&'static str>::from(effort).as_bytes());
     }
     let result = hasher.finalize();
     format!(

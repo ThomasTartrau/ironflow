@@ -26,13 +26,13 @@
 //! ```
 
 use std::any;
-use std::fmt;
 use std::sync::Arc;
 
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value, to_string};
+use strum::{Display, IntoStaticStr};
 use tokio::time;
 use tracing::{info, warn};
 
@@ -190,11 +190,14 @@ impl<'de> Deserialize<'de> for PermissionMode {
 /// ```
 /// use ironflow_core::prelude::*;
 ///
-/// assert_eq!(Effort::Xhigh.as_str(), "xhigh");
-/// assert_eq!(Effort::High.to_string(), "high");
+/// assert_eq!(Effort::Xhigh.to_string(), "xhigh");
+/// assert_eq!(<&'static str>::from(Effort::High), "high");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum Effort {
     /// Lowest effort: fastest and cheapest.
     Low,
@@ -206,34 +209,6 @@ pub enum Effort {
     Xhigh,
     /// Maximum effort.
     Max,
-}
-
-impl Effort {
-    /// Return the lowercase string passed to the CLI / API.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ironflow_core::prelude::*;
-    ///
-    /// assert_eq!(Effort::Low.as_str(), "low");
-    /// assert_eq!(Effort::Max.as_str(), "max");
-    /// ```
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Xhigh => "xhigh",
-            Self::Max => "max",
-        }
-    }
-}
-
-impl fmt::Display for Effort {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 /// Builder for a single agent invocation.
@@ -1659,7 +1634,7 @@ mod tests {
 
     #[test]
     fn effort_as_str_and_display() {
-        assert_eq!(Effort::Xhigh.as_str(), "xhigh");
+        assert_eq!(<&'static str>::from(Effort::Xhigh), "xhigh");
         assert_eq!(Effort::Medium.to_string(), "medium");
     }
 

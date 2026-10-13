@@ -163,7 +163,7 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
         }
 
         if let Some(effort) = config.effort {
-            output_config.insert("effort".to_string(), json!(effort.as_str()));
+            output_config.insert("effort".to_string(), json!(<&'static str>::from(effort)));
         }
 
         if !output_config.is_empty() {

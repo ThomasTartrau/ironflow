@@ -237,7 +237,7 @@ pub fn push_opt(args: &mut Vec<String>, flag: &str, value: &Option<impl ToString
 /// session state (a resumed session keeps its effort).
 fn push_effort(args: &mut Vec<String>, config: &AgentConfig) {
     if let Some(effort) = config.effort {
-        push_flag(args, "--effort", effort.as_str());
+        push_flag(args, "--effort", <&'static str>::from(effort));
     }
 }
 
