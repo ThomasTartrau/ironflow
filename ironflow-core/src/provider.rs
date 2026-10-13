@@ -2131,7 +2131,7 @@ mod tests {
         let config = AgentConfig::new("p").effort(Effort::High);
         assert_eq!(config.effort, Some(Effort::High));
         assert!(to_string(&config).unwrap().contains("\"effort\":\"high\""));
-        let config = config.allowed_tools(&["Read"]);
+        let config = config.allow_tool(Tool::Read);
         assert_eq!(config.effort, Some(Effort::High));
     }
 
