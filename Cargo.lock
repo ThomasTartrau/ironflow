@@ -3596,7 +3596,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-auth-proxy"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "axum",
  "ironflow-core",
@@ -3615,7 +3615,7 @@ dependencies = [
 
 [[package]]
 name = "ironflow-cli"
-version = "0.1.62"
+version = "0.1.63"
 dependencies = [
  "anyhow",
  "axum",
