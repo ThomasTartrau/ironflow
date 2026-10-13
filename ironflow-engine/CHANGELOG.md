@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.52.0](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.51.12...ironflow-engine-v2.52.0) - 2026-10-13
+
+### Added
+
+- #195 add effort setting on AgentConfig (--effort of the Claude CLI)
+
 ## [2.51.9](https://gitlab.com/ThomasTartrau/ironflow/compare/ironflow-engine-v2.51.8...ironflow-engine-v2.51.9) - 2026-10-08
 
 ### Fixed
