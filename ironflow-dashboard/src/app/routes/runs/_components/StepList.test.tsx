@@ -298,6 +298,27 @@ describe("AccountBadge", () => {
 		expect(screen.getByText("account 0192f0c1")).toBeInTheDocument();
 	});
 
+	it("keeps a 64-char account name in a truncate element", () => {
+		const name = "a".repeat(64);
+		render(
+			<AccountBadge
+				step={stepFixture({
+					account_id: ACCOUNT_ID,
+					account: {
+						id: ACCOUNT_ID,
+						name,
+						display_name: "Compte long",
+					},
+				})}
+			/>,
+		);
+
+		const label = screen.getByText(`account ${name}`);
+		expect(label).toBeInTheDocument();
+		expect(label.className).toContain("truncate");
+		expect(label.parentElement).toHaveClass("min-w-0");
+	});
+
 	it("renders nothing without an account id", () => {
 		const { container } = render(<AccountBadge step={stepFixture()} />);
 

@@ -121,11 +121,14 @@ export function AccountBadge({ step }: { step: StepResponse }) {
 			<Tooltip>
 				<TooltipTrigger
 					render={
-						<span className="shrink-0">
-							<Badge variant="outline" className="text-[10px] font-medium">
+						<Badge
+							variant="outline"
+							className="text-[10px] font-medium min-w-0 max-w-full shrink"
+						>
+							<span className="truncate">
 								{`account ${step.account?.name ?? step.account_id.slice(0, 8)}`}
-							</Badge>
-						</span>
+							</span>
+						</Badge>
 					}
 				/>
 				<TooltipContent side="bottom">
@@ -348,7 +351,7 @@ function NestedStep({ step }: { step: StepResponse }) {
 			<button
 				type="button"
 				onClick={() => setIsExpanded(!isExpanded)}
-				className={`flex items-center gap-2 text-sm w-full text-left hover:bg-muted/50 rounded-[var(--radius-sm)] p-1.5 -ml-1.5 transition-colors duration-700 cursor-pointer ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-[var(--status-running-bg)]" : ""}`}
+				className={`flex min-w-0 items-center gap-2 text-sm w-full text-left hover:bg-muted/50 rounded-[var(--radius-sm)] p-1.5 -ml-1.5 transition-colors duration-700 cursor-pointer ${highlight ? "bg-primary/10" : ""} ${isRunning ? "bg-[var(--status-running-bg)]" : ""}`}
 			>
 				{isExpanded ? (
 					<ChevronUp className="w-3 h-3 text-muted-foreground shrink-0" />
@@ -812,8 +815,8 @@ function StepRow({ step }: { step: StepResponse }) {
 						{step.kind}
 					</Badge>
 				</TableCell>
-				<TableCell>
-					<div className="flex items-center gap-2">
+				<TableCell className="overflow-hidden">
+					<div className="flex min-w-0 items-center gap-2">
 						<StatusBadge status={step.status} awaitingKind={step.kind} />
 						<ApprovalSla step={step} />
 						<ApprovalProgress step={step} />
