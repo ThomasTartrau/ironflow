@@ -1,6 +1,6 @@
 //! Anthropic Messages API adapter implementation.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::error::AgentError;
 use crate::operations::agent::Model;
@@ -135,17 +135,20 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
             body["stream"] = json!(true);
         }
 
+        let mut output_config = Map::new();
+
         if let Some(ref schema_str) = config.json_schema {
             let transformed = transform_schema(schema_str);
             let schema_value: Value = serde_json::from_str(&transformed).unwrap_or(json!({}));
 
             if requires_output_config_format(&model) {
-                body["output_config"] = json!({
-                    "format": {
+                output_config.insert(
+                    "format".to_string(),
+                    json!({
                         "type": "json_schema",
                         "schema": schema_value
-                    }
-                });
+                    }),
+                );
             } else {
                 body["tools"] = json!([{
                     "name": "structured_output",
@@ -157,6 +160,14 @@ impl HttpAgentAdapter for AnthropicApiAdapter {
                     "name": "structured_output"
                 });
             }
+        }
+
+        if let Some(effort) = config.effort {
+            output_config.insert("effort".to_string(), json!(effort.as_str()));
+        }
+
+        if !output_config.is_empty() {
+            body["output_config"] = Value::Object(output_config);
         }
 
         Ok(body)
@@ -455,6 +466,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::operations::agent::Effort;
 
     fn adapter() -> AnthropicApiAdapter {
         AnthropicApiAdapter::new("test-key".to_string())
@@ -528,6 +540,57 @@ mod tests {
         assert_eq!(body["output_config"]["format"]["type"], "json_schema");
         assert!(body.get("tools").is_none());
         assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn build_request_effort_sets_output_config_effort() {
+        let a = adapter();
+        let config = AgentConfig::new("Hi").effort(Effort::High);
+        let body = a.build_request(&config).expect("build_request failed");
+
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert!(body["output_config"].get("format").is_none());
+    }
+
+    #[test]
+    fn build_request_effort_merges_with_output_config_format() {
+        let a = adapter();
+        let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
+        let config = AgentConfig::new("Give x")
+            .model(AnthropicModel::SONNET_5_5)
+            .effort(Effort::Max)
+            .output_schema_raw(schema)
+            .into();
+        let body = a.build_request(&config).expect("build_request failed");
+
+        assert_eq!(body["output_config"]["effort"], "max");
+        assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+    }
+
+    #[test]
+    fn build_request_effort_with_tool_forcing_keeps_tools() {
+        let a = adapter();
+        let schema = r#"{"type":"object","properties":{"x":{"type":"integer"}}}"#;
+        let config = AgentConfig::new("Give x")
+            .model(AnthropicModel::HAIKU_5_5)
+            .effort(Effort::Low)
+            .output_schema_raw(schema)
+            .into();
+        let body = a.build_request(&config).expect("build_request failed");
+
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert!(body["output_config"].get("format").is_none());
+        assert_eq!(body["tool_choice"]["name"], "structured_output");
+    }
+
+    #[test]
+    fn build_request_without_effort_has_no_output_config() {
+        let a = adapter();
+        let body = a
+            .build_request(&AgentConfig::new("Hi"))
+            .expect("build_request failed");
+
+        assert!(body.get("output_config").is_none());
     }
 
     #[test]

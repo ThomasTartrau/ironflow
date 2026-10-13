@@ -233,6 +233,14 @@ pub fn push_opt(args: &mut Vec<String>, flag: &str, value: &Option<impl ToString
     }
 }
 
+/// Push `--effort <level>` when an effort is configured, whatever the
+/// session state (a resumed session keeps its effort).
+fn push_effort(args: &mut Vec<String>, config: &AgentConfig) {
+    if let Some(effort) = config.effort {
+        push_flag(args, "--effort", effort.as_str());
+    }
+}
+
 /// Push the session flags: `--resume <id>` when a session is resumed,
 /// otherwise `--session-id <id>` when the session id is fixed. Never both:
 /// the CLI refuses to create a session it is asked to resume.
@@ -318,6 +326,7 @@ pub fn build_args(config: &AgentConfig) -> Result<Vec<String>, AgentError> {
         &config.append_system_prompt,
     );
     push_flag(&mut args, "--model", &config.model);
+    push_effort(&mut args, config);
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
     }
@@ -421,6 +430,7 @@ pub fn build_command(config: &AgentConfig) -> Result<BuiltCommand, AgentError> {
         &config.append_system_prompt,
     );
     push_flag(&mut args, "--model", &config.model);
+    push_effort(&mut args, config);
     if !config.allowed_tools.is_empty() {
         push_flag(&mut args, "--allowedTools", &config.allowed_tools.join(","));
     }
@@ -1116,6 +1126,7 @@ pub fn handle_nonzero_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::operations::agent::Effort;
     use crate::provider::Tool;
     use serde_json::json;
 
@@ -1833,6 +1844,7 @@ mod tests {
             session_id: None,
             resume_prompt: None,
             resume_environment_id: None,
+            effort: None,
             verbose: false,
             pod_labels: std::collections::BTreeMap::new(),
             pod: PodSettings::default(),
@@ -2468,6 +2480,61 @@ mod tests {
         let built = build_command(&config).unwrap();
         assert_eq!(flag_value(&built.args, "--resume"), Some("sid-old"));
         assert!(!built.args.contains(&"--session-id".to_string()));
+    }
+
+    #[test]
+    fn build_args_effort_emits_effort_flag() {
+        let config = AgentConfig::new("hello").effort(Effort::High);
+        let args = build_args(&config).unwrap();
+        assert_eq!(flag_value(&args, "--effort"), Some("high"));
+    }
+
+    #[test]
+    fn build_args_without_effort_emits_no_effort_flag() {
+        let args = build_args(&AgentConfig::new("hello")).unwrap();
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn build_args_effort_kept_when_resuming() {
+        let config = AgentConfig::new("hello").effort(Effort::Low).resume("sid");
+        let args = build_args(&config).unwrap();
+        assert_eq!(flag_value(&args, "--resume"), Some("sid"));
+        assert_eq!(flag_value(&args, "--effort"), Some("low"));
+    }
+
+    #[test]
+    fn build_args_effort_levels_map_to_lowercase() {
+        for (effort, expected) in [
+            (Effort::Low, "low"),
+            (Effort::Medium, "medium"),
+            (Effort::High, "high"),
+            (Effort::Xhigh, "xhigh"),
+            (Effort::Max, "max"),
+        ] {
+            let args = build_args(&AgentConfig::new("hello").effort(effort)).unwrap();
+            assert_eq!(flag_value(&args, "--effort"), Some(expected));
+        }
+    }
+
+    #[test]
+    fn build_command_effort_emits_effort_flag() {
+        let config = AgentConfig::new("hello").effort(Effort::Xhigh);
+        let built = build_command(&config).unwrap();
+        assert_eq!(flag_value(&built.args, "--effort"), Some("xhigh"));
+    }
+
+    #[test]
+    fn build_command_without_effort_emits_no_effort_flag() {
+        let built = build_command(&AgentConfig::new("hello")).unwrap();
+        assert!(!built.args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn build_command_effort_kept_when_resuming() {
+        let config = AgentConfig::new("hello").effort(Effort::Max).resume("sid");
+        let built = build_command(&config).unwrap();
+        assert_eq!(flag_value(&built.args, "--effort"), Some("max"));
     }
 
     #[test]

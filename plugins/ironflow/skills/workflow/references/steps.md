@@ -198,6 +198,10 @@ async fn example(ctx: &mut WorkflowContext, diff: &str) -> Result<(), EngineErro
 A structured answer that does not match its type fails the step with
 `EngineError::Serialization`.
 
+`.effort(Effort::High)` sets the reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`).
+Claude CLI providers receive `--effort`, the Anthropic API provider `output_config.effort`;
+other HTTP providers ignore it, and without the call no flag is sent.
+
 On an HTTP provider (OpenAI, Anthropic API, ...), tools live on the worker, grouped in
 named profiles (see the setup skill, `references/options.md`). A step picks one with
 `.tool_profile(BUG)`, a `ToolProfile` constant shared with the worker, and sees only

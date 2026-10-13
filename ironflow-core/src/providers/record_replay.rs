@@ -90,6 +90,11 @@ pub fn hash_config(config: &AgentConfig) -> String {
         hasher.update(b"|rs:");
         hasher.update(session_id.as_bytes());
     }
+    // Only hashed when set, so existing fixtures keep their name.
+    if let Some(effort) = config.effort {
+        hasher.update(b"|ef:");
+        hasher.update(effort.as_str().as_bytes());
+    }
     let result = hasher.finalize();
     format!(
         "{:016x}",
@@ -231,7 +236,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::operations::agent::Model;
+    use crate::operations::agent::{Effort, Model};
     use crate::providers::claude::ClaudeCodeProvider;
 
     /// RAII guard that removes a temp directory on drop (even on panic).
@@ -302,6 +307,19 @@ mod tests {
         let hash1 = hash_config(&config);
         let hash2 = hash_config(&config);
         assert_eq!(hash1, hash2, "same config should produce same hash");
+    }
+
+    #[test]
+    fn test_hash_config_effort_affects_hash() {
+        let base = AgentConfig::new("What is Rust?");
+        let high = AgentConfig::new("What is Rust?").effort(Effort::High);
+        let low = AgentConfig::new("What is Rust?").effort(Effort::Low);
+        assert_ne!(hash_config(&base), hash_config(&high));
+        assert_ne!(hash_config(&high), hash_config(&low));
+        assert_eq!(
+            hash_config(&base),
+            hash_config(&AgentConfig::new("What is Rust?"))
+        );
     }
 
     #[test]

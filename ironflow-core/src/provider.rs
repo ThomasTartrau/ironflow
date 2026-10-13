@@ -30,7 +30,7 @@ use serde_json::Value;
 use crate::account::{AccountSession, RateLimitRecorder};
 use crate::auth_proxy::ProxiedSecret;
 use crate::error::AgentError;
-use crate::operations::agent::{Model, PermissionMode};
+use crate::operations::agent::{Effort, Model, PermissionMode};
 use crate::retry::RetryPolicy;
 use crate::trace_context::WorkflowTraceContext;
 
@@ -285,6 +285,14 @@ pub struct AgentConfig<Tools = NoTools, Schema = NoSchema> {
     #[serde(default)]
     pub permission_mode: PermissionMode,
 
+    /// Reasoning effort requested from the model.
+    ///
+    /// `None` emits no flag, so the model default applies. Honored by the
+    /// Claude providers only (`--effort` for the CLI, `output_config.effort`
+    /// for the Anthropic HTTP adapter); other HTTP adapters ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
+
     /// Optional JSON Schema string. When set, the provider should request
     /// structured (typed) output from the model.
     #[serde(alias = "output_schema")]
@@ -459,6 +467,7 @@ impl AgentConfig {
             strict_mcp_config: false,
             bare: false,
             permission_mode: PermissionMode::Default,
+            effort: None,
             json_schema: None,
 
             resume_session_id: None,
@@ -541,6 +550,23 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
     /// Set the permission mode.
     pub fn permission_mode(mut self, mode: PermissionMode) -> Self {
         self.permission_mode = mode;
+        self
+    }
+
+    /// Set the reasoning effort.
+    ///
+    /// Claude providers only; without this call no effort is requested.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_core::prelude::*;
+    ///
+    /// let config = AgentConfig::new("review the diff").effort(Effort::High);
+    /// assert_eq!(config.effort, Some(Effort::High));
+    /// ```
+    pub fn effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
         self
     }
 
@@ -1317,6 +1343,7 @@ impl<Tools, Schema> AgentConfig<Tools, Schema> {
             strict_mcp_config: self.strict_mcp_config,
             bare: self.bare,
             permission_mode: self.permission_mode,
+            effort: self.effort,
             json_schema: self.json_schema,
             resume_session_id: self.resume_session_id,
             session_id: self.session_id,
@@ -1953,6 +1980,7 @@ mod tests {
             session_id: None,
             resume_prompt: None,
             resume_environment_id: None,
+            effort: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
             pod: PodSettings::default(),
@@ -2012,6 +2040,7 @@ mod tests {
             session_id: None,
             resume_prompt: None,
             resume_environment_id: None,
+            effort: None,
             verbose: false,
             pod_labels: BTreeMap::new(),
             pod: PodSettings::default(),
@@ -2087,6 +2116,23 @@ mod tests {
         assert_eq!(back.input_tokens, Some(10));
         assert_eq!(back.cache_read_input_tokens, None);
         assert_eq!(back.cache_creation_input_tokens, None);
+    }
+
+    #[test]
+    fn agent_config_effort_defaults_to_none_and_is_omitted_from_json() {
+        let config = AgentConfig::new("p");
+        assert_eq!(config.effort, None);
+        let json = to_string(&config).unwrap();
+        assert!(!json.contains("effort"));
+    }
+
+    #[test]
+    fn agent_config_effort_builder_serializes_and_survives_change_state() {
+        let config = AgentConfig::new("p").effort(Effort::High);
+        assert_eq!(config.effort, Some(Effort::High));
+        assert!(to_string(&config).unwrap().contains("\"effort\":\"high\""));
+        let config = config.allowed_tools(&["Read"]);
+        assert_eq!(config.effort, Some(Effort::High));
     }
 
     #[test]

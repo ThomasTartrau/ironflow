@@ -76,6 +76,11 @@ let verdict = ctx
 To read the `environment_id` or `account_id` of a typed step as well, call
 `ctx.agent_with_meta(..)`: it returns an `AgentReply` with the typed `answer` next to them.
 
+`.effort(Effort::High)` sets the reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`).
+It is passed as `--effort` to the Claude CLI providers and as `output_config.effort` to the
+Anthropic API provider; other HTTP providers ignore it. Without it no flag is sent and the
+model default applies.
+
 Tools are an enum: `.allow_tool(Tool::Bash)`, `Tool::Custom("mcp__server__tool".into())`
 for anything else. Tools and structured output are mutually exclusive.
 

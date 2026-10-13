@@ -173,6 +173,7 @@ impl AgentProvider for ClaudeCodeProvider {
 
             debug!(
                 model = %config.model,
+                effort = ?config.effort,
                 has_system_prompt = config.system_prompt.is_some(),
                 has_json_schema = config.json_schema.is_some(),
                 has_tools = !config.allowed_tools.is_empty(),

@@ -160,6 +160,7 @@ impl DockerProvider {
         debug!(
             container = %self.container,
             model = %config.model,
+            effort = ?config.effort,
             working_dir = ?work_dir,
             "creating docker exec"
         );
