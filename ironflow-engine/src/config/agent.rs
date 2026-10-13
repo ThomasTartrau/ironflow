@@ -150,10 +150,24 @@ impl<T: DeserializeOwned> AgentStep for AgentConfig<NoTools, WithSchema<T>> {
 mod tests {
     use super::*;
     use crate::executor::StepArtifacts;
+    use ironflow_core::operations::agent::Effort;
     use rust_decimal::Decimal;
     use schemars::JsonSchema;
     use serde::Deserialize;
-    use serde_json::{Value, json};
+    use serde_json::{Value, from_value, json};
+
+    #[test]
+    fn step_config_effort_builder_keeps_value() {
+        let config = AgentStepConfig::new("x").effort(Effort::Low);
+        assert_eq!(config.effort, Some(Effort::Low));
+    }
+
+    #[test]
+    fn step_config_effort_deserializes_and_rejects_invalid() {
+        let config: AgentStepConfig = from_value(json!({"prompt": "x", "effort": "low"})).unwrap();
+        assert_eq!(config.effort, Some(Effort::Low));
+        assert!(from_value::<AgentStepConfig>(json!({"prompt": "x", "effort": "bogus"})).is_err());
+    }
 
     fn step_output(output: Value) -> StepOutput {
         StepOutput {

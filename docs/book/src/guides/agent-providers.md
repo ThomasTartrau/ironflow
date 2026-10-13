@@ -21,6 +21,13 @@ are behind a [feature flag](../reference/feature-flags.md).
 The SSH, Docker and Kubernetes providers run Claude Code somewhere else; they are described
 in [Transports](transports.md).
 
+## Reasoning effort
+
+`AgentConfig::effort(Effort::High)` (also available on `AgentStepConfig`) takes `low`,
+`medium`, `high`, `xhigh` or `max`. The Claude Code providers (local, SSH, Docker,
+Kubernetes) pass it as `--effort`, also when a session is resumed, and `AnthropicApiProvider`
+sends `output_config.effort`. The other HTTP providers ignore it. When unset, no flag is sent.
+
 ## HTTP providers
 
 HTTP providers are used exactly like the local one:

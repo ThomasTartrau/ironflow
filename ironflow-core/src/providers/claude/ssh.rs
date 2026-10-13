@@ -408,6 +408,7 @@ impl SshProvider {
             port = self.port,
             username = %self.username,
             model = %config.model,
+            effort = ?config.effort,
             "connecting via SSH"
         );
 

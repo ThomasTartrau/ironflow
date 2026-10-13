@@ -1870,6 +1870,7 @@ impl K8sEphemeralProvider {
             namespace = %self.namespace,
             image = %self.image,
             model = %config.model,
+            effort = ?config.effort,
             prompt_via_configmap = prompt_configmap_name.is_some(),
             "creating ephemeral K8s pod"
         );

@@ -508,6 +508,7 @@ impl AccountAwareProvider {
             account = %account.name,
             strategy = self.strategy.name(),
             model = %config.model,
+            effort = ?config.effort,
             "selected provider account"
         );
 

@@ -114,7 +114,7 @@ pub mod prelude {
         NoopSecretResolver, Operation, OperationContext, SecretResolver, SecretValue,
         TypedOperation,
     };
-    pub use crate::operations::agent::{Agent, AgentResult, Model, PermissionMode};
+    pub use crate::operations::agent::{Agent, AgentResult, Effort, Model, PermissionMode};
     pub use crate::operations::http::{Http, HttpOutput};
     pub use crate::operations::shell::{Shell, ShellOutput};
     pub use crate::parallel::{try_join_all, try_join_all_limited};

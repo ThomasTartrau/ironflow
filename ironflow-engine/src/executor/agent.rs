@@ -107,9 +107,14 @@ impl StepExecutor for AgentExecutor<'_> {
         let start = Instant::now();
 
         if let Some(ref sender) = self.log_sender {
+            let effort = self
+                .config
+                .effort
+                .map(|e| format!(", effort={e}"))
+                .unwrap_or_default();
             sender.emit(
                 LogStream::System,
-                &format!("agent step started (model={})", self.config.model),
+                &format!("agent step started (model={}{})", self.config.model, effort),
             );
         }
 
@@ -137,6 +142,7 @@ impl StepExecutor for AgentExecutor<'_> {
         info!(
             step_kind = "agent",
             model = %self.config.model,
+            effort = ?self.config.effort,
             cost_usd = %cost,
             input_tokens = ?input_tokens,
             cache_read_input_tokens = ?cache_read_tokens,

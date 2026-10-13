@@ -32,6 +32,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_value, to_string};
+use strum::{Display, IntoStaticStr};
 use tokio::time;
 use tracing::{info, warn};
 
@@ -177,6 +178,37 @@ impl<'de> Deserialize<'de> for PermissionMode {
             _ => Self::Default,
         })
     }
+}
+
+/// Reasoning effort requested from the model.
+///
+/// Maps to the `--effort` flag of the Claude CLI and to
+/// `output_config.effort` of the Anthropic HTTP API. Serialized in lowercase.
+///
+/// # Examples
+///
+/// ```
+/// use ironflow_core::prelude::*;
+///
+/// assert_eq!(Effort::Xhigh.to_string(), "xhigh");
+/// assert_eq!(<&'static str>::from(Effort::High), "high");
+/// ```
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum Effort {
+    /// Lowest effort: fastest and cheapest.
+    Low,
+    /// Balanced effort.
+    Medium,
+    /// High effort.
+    High,
+    /// Extra-high effort.
+    Xhigh,
+    /// Maximum effort.
+    Max,
 }
 
 /// Builder for a single agent invocation.
@@ -1576,6 +1608,34 @@ mod tests {
             let back: PermissionMode = serde_json::from_str(&json).unwrap();
             assert_eq!(format!("{:?}", mode), format!("{:?}", back));
         }
+    }
+
+    #[test]
+    fn effort_serde_roundtrip_is_lowercase() {
+        for (effort, expected) in [
+            (Effort::Low, "\"low\""),
+            (Effort::Medium, "\"medium\""),
+            (Effort::High, "\"high\""),
+            (Effort::Xhigh, "\"xhigh\""),
+            (Effort::Max, "\"max\""),
+        ] {
+            let json = to_string(&effort).unwrap();
+            assert_eq!(json, expected);
+            let back: Effort = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, effort);
+        }
+    }
+
+    #[test]
+    fn effort_rejects_unknown_and_uppercase() {
+        assert!(serde_json::from_str::<Effort>("\"ultra\"").is_err());
+        assert!(serde_json::from_str::<Effort>("\"High\"").is_err());
+    }
+
+    #[test]
+    fn effort_as_str_and_display() {
+        assert_eq!(<&'static str>::from(Effort::Xhigh), "xhigh");
+        assert_eq!(Effort::Medium.to_string(), "medium");
     }
 
     // --- Retry builder ---

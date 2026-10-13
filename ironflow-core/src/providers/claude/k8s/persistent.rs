@@ -447,6 +447,7 @@ impl K8sPersistentProvider {
             pod = %self.pod_name,
             namespace = %self.namespace,
             model = %config.model,
+            effort = ?config.effort,
             "executing in persistent K8s pod"
         );
 
