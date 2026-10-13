@@ -15,6 +15,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import {
 	type PrioritySort,
 	nextPrioritySort,
@@ -40,6 +41,13 @@ const PRIORITY_ARIA_SORT = {
 	desc: "descending",
 	asc: "ascending",
 } as const;
+
+// Keep in sync with the column width classes below. Tailwind needs full static
+// class strings, so never build these dynamically.
+// 58rem fixed columns (w-40+w-24+w-40+w-48+w-24+w-20+w-36) + 12rem Workflow floor.
+const TABLE_MIN_WIDTH = "min-w-[70rem]";
+// Same floor plus the 5rem Version column (w-20).
+const TABLE_MIN_WIDTH_WITH_VERSION = "min-w-[75rem]";
 
 const PRIORITY_SORT_ICON = {
 	desc: ArrowDown,
@@ -80,12 +88,19 @@ export function RunsTable({
 
 	return (
 		<div className="rounded-[var(--radius)] border overflow-hidden">
-			<Table className="table-fixed">
+			<Table
+				className={cn(
+					"table-fixed",
+					hasVersions ? TABLE_MIN_WIDTH_WITH_VERSION : TABLE_MIN_WIDTH,
+				)}
+			>
 				<TableHeader>
 					<TableRow>
-						<TableHead className="w-40">Status</TableHead>
+						<TableHead className="w-40 overflow-hidden text-ellipsis">
+							Status
+						</TableHead>
 						<TableHead
-							className="w-24"
+							className="w-24 overflow-hidden text-ellipsis"
 							aria-sort={
 								prioritySort ? PRIORITY_ARIA_SORT[prioritySort] : undefined
 							}
@@ -105,13 +120,29 @@ export function RunsTable({
 								"Priority"
 							)}
 						</TableHead>
-						<TableHead>Workflow</TableHead>
-						{hasVersions && <TableHead className="w-20">Version</TableHead>}
-						<TableHead className="w-40">Triggered by</TableHead>
-						<TableHead className="w-48">Labels</TableHead>
-						<TableHead className="w-24">Duration</TableHead>
-						<TableHead className="w-20">Cost</TableHead>
-						<TableHead className="w-36">Started</TableHead>
+						<TableHead className="overflow-hidden text-ellipsis">
+							Workflow
+						</TableHead>
+						{hasVersions && (
+							<TableHead className="w-20 overflow-hidden text-ellipsis">
+								Version
+							</TableHead>
+						)}
+						<TableHead className="w-40 overflow-hidden text-ellipsis">
+							Triggered by
+						</TableHead>
+						<TableHead className="w-48 overflow-hidden text-ellipsis">
+							Labels
+						</TableHead>
+						<TableHead className="w-24 overflow-hidden text-ellipsis">
+							Duration
+						</TableHead>
+						<TableHead className="w-20 overflow-hidden text-ellipsis">
+							Cost
+						</TableHead>
+						<TableHead className="w-36 overflow-hidden text-ellipsis">
+							Started
+						</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -136,7 +167,10 @@ export function RunsTable({
 							<TableCell className="font-mono tabular-nums">
 								{runPriority(run)}
 							</TableCell>
-							<TableCell className="font-mono font-medium truncate max-w-[220px]">
+							<TableCell
+								className="font-mono font-medium truncate"
+								title={run.workflow_name}
+							>
 								{run.workflow_name}
 							</TableCell>
 							{hasVersions && (
