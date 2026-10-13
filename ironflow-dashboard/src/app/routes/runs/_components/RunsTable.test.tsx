@@ -89,6 +89,47 @@ describe("RunsTable version column", () => {
 	});
 });
 
+describe("RunsTable layout", () => {
+	// jsdom does no layout, so these assert the classes that drive it.
+	const systemRun = () =>
+		runFixture({ kind: "system", id: null, label: "api" });
+	const versionedRun = () => ({ ...systemRun(), handler_version: "1.2.0" });
+
+	it("keeps a minimum width for the Workflow column without Version", () => {
+		const { container } = renderTable([systemRun()]);
+		const table = container.querySelector("table");
+		expect(table).not.toBeNull();
+		expect(table?.classList.contains("min-w-[70rem]")).toBe(true);
+		expect(table?.classList.contains("min-w-[75rem]")).toBe(false);
+	});
+
+	it("widens the minimum width when the Version column is shown", () => {
+		const { container } = renderTable([versionedRun()]);
+		const table = container.querySelector("table");
+		expect(table?.classList.contains("min-w-[75rem]")).toBe(true);
+		expect(screen.getByText("Version")).toBeInTheDocument();
+	});
+
+	it("truncates the workflow name and exposes it in a title", () => {
+		const run = systemRun();
+		renderTable([run]);
+		const cell = screen.getByTitle(run.workflow_name);
+		expect(cell.classList.contains("truncate")).toBe(true);
+		expect(cell.getAttribute("title")).toBe(run.workflow_name);
+		expect(cell.classList.contains("max-w-[220px]")).toBe(false);
+	});
+
+	it("headers never overflow onto their neighbour", () => {
+		const { container } = renderTable([versionedRun()]);
+		const headers = Array.from(container.querySelectorAll("th"));
+		expect(headers.length).toBeGreaterThan(0);
+		for (const th of headers) {
+			expect(th.classList.contains("overflow-hidden")).toBe(true);
+			expect(th.classList.contains("text-ellipsis")).toBe(true);
+		}
+	});
+});
+
 describe("RunsTable duration column", () => {
 	it("shows a dash for a pending run that never started", () => {
 		const run = {
