@@ -2,6 +2,8 @@
 
 use axum::Json;
 use axum::extract::Request;
+#[cfg(feature = "prometheus")]
+use axum::http::Method;
 use axum::http::header::{
     CONTENT_SECURITY_POLICY, HOST, LOCATION, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
     X_FRAME_OPTIONS, X_XSS_PROTECTION,
@@ -56,14 +58,40 @@ pub struct WorkerToken(pub String);
 #[cfg(feature = "prometheus")]
 pub const UNMATCHED_PATH_LABEL: &str = "unmatched";
 
+/// `method` label of a request whose HTTP method is not one of the seven
+/// standard methods the API serves.
+///
+/// Any token is a valid HTTP method, so labelling requests with the raw method
+/// would let a client create one time series per invented method.
+#[cfg(feature = "prometheus")]
+pub const OTHER_METHOD_LABEL: &str = "other";
+
+/// Bounded `method` label of a request: the standard method name, or
+/// [`OTHER_METHOD_LABEL`] for `TRACE`, `CONNECT` and any extension method.
+#[cfg(feature = "prometheus")]
+fn method_label(method: &Method) -> &'static str {
+    match *method {
+        Method::GET => "GET",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::PATCH => "PATCH",
+        Method::DELETE => "DELETE",
+        Method::HEAD => "HEAD",
+        Method::OPTIONS => "OPTIONS",
+        _ => OTHER_METHOD_LABEL,
+    }
+}
+
 /// Middleware that records API request metrics (counter + duration histogram).
 ///
 /// Emits `ironflow_api_requests_total` and `ironflow_api_request_duration_seconds`
 /// for every request. The `path` label is the matched route pattern (e.g.
 /// `/api/v1/internal/steps/{id}`), never the raw URL, so ids do not create a
 /// time series each; a request that matched no route is labelled
-/// [`UNMATCHED_PATH_LABEL`]. Only compiled when the `prometheus` feature is
-/// enabled.
+/// [`UNMATCHED_PATH_LABEL`]. The `method` label is limited to `GET`, `POST`,
+/// `PUT`, `PATCH`, `DELETE`, `HEAD` and `OPTIONS`; any other method is
+/// labelled [`OTHER_METHOD_LABEL`]. Only compiled when the `prometheus` feature
+/// is enabled.
 ///
 /// # Examples
 ///
@@ -85,7 +113,7 @@ pub async fn request_metrics(req: Request, next: Next) -> Response {
     use ironflow_core::metric_names::{API_REQUEST_DURATION_SECONDS, API_REQUESTS_TOTAL};
     use metrics::{counter, histogram};
 
-    let method = req.method().to_string();
+    let method = method_label(req.method());
     let path = req
         .extensions()
         .get::<MatchedPath>()
@@ -98,7 +126,8 @@ pub async fn request_metrics(req: Request, next: Next) -> Response {
     let status = resp.status().as_u16().to_string();
     let duration = start.elapsed().as_secs_f64();
 
-    counter!(API_REQUESTS_TOTAL, "method" => method.clone(), "path" => path.clone(), "status" => status).increment(1);
+    counter!(API_REQUESTS_TOTAL, "method" => method, "path" => path.clone(), "status" => status)
+        .increment(1);
     histogram!(API_REQUEST_DURATION_SECONDS, "method" => method, "path" => path).record(duration);
 
     resp
@@ -477,5 +506,25 @@ mod tests {
                 .unwrap()
                 .contains("default-src 'self'")
         );
+    }
+
+    #[cfg(feature = "prometheus")]
+    #[test]
+    fn method_label_bounds_methods() {
+        use axum::http::Method;
+
+        use super::{OTHER_METHOD_LABEL, method_label};
+
+        assert_eq!(method_label(&Method::GET), "GET");
+        assert_eq!(method_label(&Method::POST), "POST");
+        assert_eq!(method_label(&Method::PUT), "PUT");
+        assert_eq!(method_label(&Method::PATCH), "PATCH");
+        assert_eq!(method_label(&Method::DELETE), "DELETE");
+        assert_eq!(method_label(&Method::HEAD), "HEAD");
+        assert_eq!(method_label(&Method::OPTIONS), "OPTIONS");
+        assert_eq!(method_label(&Method::TRACE), OTHER_METHOD_LABEL);
+        assert_eq!(method_label(&Method::CONNECT), OTHER_METHOD_LABEL);
+        let custom = Method::from_bytes(b"FOOBAR").expect("valid method token");
+        assert_eq!(method_label(&custom), OTHER_METHOD_LABEL);
     }
 }

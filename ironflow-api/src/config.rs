@@ -16,8 +16,10 @@
 //! | `WEBHOOK_URL` | no | - | Outbound webhook URL for notifications |
 //! | `IRONFLOW_ENV` | no | unset (strict) | `production`, or `development` for explicit dev mode |
 //! | `IRONFLOW_INSECURE_COOKIES` | no | `false` | `1`/`true` drops the `Secure` flag from session cookies (local HTTP-only dev). Ignored in production |
-//! | `RATE_LIMIT_AUTH` | no | `10` | Auth rate limit (req/min/IP). `0` = disabled |
+//! | `RATE_LIMIT_AUTH` | no | `10` | Credential routes rate limit (sign-in, sign-up, password change), req/min per caller and per targeted email. `0` = disabled |
 //! | `RATE_LIMIT_GENERAL` | no | `60` | General rate limit (req/min/IP). `0` = disabled |
+//! | `SSE_MAX_CONNECTIONS_PER_PRINCIPAL` | no | `5` | Simultaneous SSE streams per user or API key owner. `0` = disabled |
+//! | `SSE_MAX_CONNECTIONS` | no | `1000` | Simultaneous SSE streams for the whole server. `0` = disabled |
 //! | `ARTIFACTS_DIR` | no | - | Filesystem root for artifact blobs. Unset disables artifacts |
 //! | `ARTIFACT_MAX_BYTES` | no | `104857600` | Maximum size of a single artifact |
 //! | `PURGE_MAX_AGE_DAYS` | no | `90` | Runs older than this are purged |
@@ -143,6 +145,12 @@ pub struct ServerConfig {
     /// Rate limit for general public API routes in requests per minute per IP.
     /// `None` disables rate limiting on these routes.
     pub rate_limit_general: Option<u32>,
+    /// Simultaneous SSE streams (`/events`, `/runs/{id}/events`) one user or
+    /// API key owner may hold. `None` disables the cap.
+    pub sse_max_connections_per_principal: Option<u32>,
+    /// Simultaneous SSE streams the whole server may hold. `None` disables
+    /// the cap.
+    pub sse_max_connections: Option<u32>,
     /// Reverse proxies whose forwarding header the rate limiters believe, from
     /// `TRUSTED_PROXIES` (comma-separated IPs or CIDR ranges), and that header
     /// from `TRUSTED_PROXY_HEADER` (`x-forwarded-for` by default, or
@@ -328,6 +336,9 @@ impl ServerConfig {
 
         let rate_limit_auth = parse_optional_u32("RATE_LIMIT_AUTH", 10, &mut errors);
         let rate_limit_general = parse_optional_u32("RATE_LIMIT_GENERAL", 60, &mut errors);
+        let sse_max_connections_per_principal =
+            parse_optional_u32("SSE_MAX_CONNECTIONS_PER_PRINCIPAL", 5, &mut errors);
+        let sse_max_connections = parse_optional_u32("SSE_MAX_CONNECTIONS", 1000, &mut errors);
         let trusted_proxies = parse_trusted_proxies(
             env::var("TRUSTED_PROXIES").ok().as_deref(),
             env::var("TRUSTED_PROXY_HEADER").ok().as_deref(),
@@ -473,6 +484,8 @@ impl ServerConfig {
             cookie_secure,
             rate_limit_auth,
             rate_limit_general,
+            sse_max_connections_per_principal,
+            sse_max_connections,
             trusted_proxies,
             artifacts_dir,
             artifact_max_bytes,
@@ -525,6 +538,8 @@ mod tests {
             env::remove_var("WEBHOOK_URL");
             env::remove_var("RATE_LIMIT_AUTH");
             env::remove_var("RATE_LIMIT_GENERAL");
+            env::remove_var("SSE_MAX_CONNECTIONS_PER_PRINCIPAL");
+            env::remove_var("SSE_MAX_CONNECTIONS");
             env::remove_var("TRUSTED_PROXIES");
             env::remove_var("TRUSTED_PROXY_HEADER");
             env::remove_var("PURGE_MAX_AGE_DAYS");
@@ -736,6 +751,65 @@ mod tests {
         assert!(err.errors.iter().any(|e| e.contains("RATE_LIMIT_AUTH")));
 
         unsafe { env::remove_var("RATE_LIMIT_AUTH") };
+    }
+
+    #[test]
+    fn default_sse_limits() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { setup_dev() };
+
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.sse_max_connections_per_principal, Some(5));
+        assert_eq!(config.sse_max_connections, Some(1000));
+    }
+
+    #[test]
+    fn custom_sse_limits() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            setup_dev();
+            env::set_var("SSE_MAX_CONNECTIONS_PER_PRINCIPAL", "12");
+            env::set_var("SSE_MAX_CONNECTIONS", "300");
+        }
+
+        let config = ServerConfig::from_env().unwrap();
+        assert_eq!(config.sse_max_connections_per_principal, Some(12));
+        assert_eq!(config.sse_max_connections, Some(300));
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn zero_sse_limit_disables() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            setup_dev();
+            env::set_var("SSE_MAX_CONNECTIONS_PER_PRINCIPAL", "0");
+            env::set_var("SSE_MAX_CONNECTIONS", "0");
+        }
+
+        let config = ServerConfig::from_env().unwrap();
+        assert!(config.sse_max_connections_per_principal.is_none());
+        assert!(config.sse_max_connections.is_none());
+
+        unsafe { clear_env() };
+    }
+
+    #[test]
+    fn invalid_sse_limit_returns_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            setup_dev();
+            env::set_var("SSE_MAX_CONNECTIONS_PER_PRINCIPAL", "-1");
+            env::set_var("SSE_MAX_CONNECTIONS", "lots");
+        }
+
+        let err = ServerConfig::from_env().unwrap_err();
+        let reports = |name: &str| err.errors.iter().any(|e| e.contains(name));
+        assert!(reports("SSE_MAX_CONNECTIONS_PER_PRINCIPAL"));
+        assert!(reports("SSE_MAX_CONNECTIONS must"));
+
+        unsafe { clear_env() };
     }
 
     #[test]

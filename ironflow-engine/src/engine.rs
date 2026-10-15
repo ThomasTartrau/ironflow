@@ -46,9 +46,9 @@ use crate::guard::{WorkflowGuardConfig, new_shared_guard_state};
 use crate::handler::{WorkflowHandler, WorkflowInfo, clamp_priority};
 use crate::log_sender::LogSender;
 use crate::notify::{
-    ApprovalRequestedEvent, Event, EventPublisher, EventSubscriber, RunBudgetExceededEvent,
-    RunFailedEvent, RunStatusChangedEvent, SignalAwaitedEvent, SignalReceivedEvent,
-    WorkflowEventBus,
+    ApprovalRequestedEvent, Event, EventBusReleaser, EventPublisher, EventSubscriber,
+    RunBudgetExceededEvent, RunFailedEvent, RunStatusChangedEvent, SignalAwaitedEvent,
+    SignalReceivedEvent, WorkflowEventBus,
 };
 use crate::plan::{
     ExecutionPlan, PlanOptions, PlanRecorder, SharedPlanRecorder, estimate_durations, lock_plan,
@@ -669,6 +669,10 @@ impl Engine {
     /// step-level events (`StepStarted`, `StepCompleted`, `StepFailed`)
     /// to the bus.
     ///
+    /// The bus channel of a run is released when the run reaches a terminal
+    /// status: subscribers drain the buffered events, then their receiver
+    /// closes. Call this once per engine; each call registers a releaser.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -680,7 +684,9 @@ impl Engine {
     /// # }
     /// ```
     pub fn set_event_bus(&mut self, bus: WorkflowEventBus) {
-        self.event_bus = Some(bus);
+        self.event_bus = Some(bus.clone());
+        self.event_publisher
+            .subscribe(EventBusReleaser::new(bus), &[Event::RUN_STATUS_CHANGED]);
     }
 
     /// The workflow event bus attached to this engine, if any.

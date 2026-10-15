@@ -230,3 +230,25 @@ Log lines and Provider Account events do not go through the engine publisher, so
 - engine.resume_workflow("deploy").await?;
 + engine.resume_workflow("deploy", None).await?;
 ```
+
+## sse-connection-limits
+- kind: behavior
+- since: ironflow-api after 2.52.3 (#201)
+
+The SSE routes (`GET /events`, `GET /runs/{id}/events`) cap simultaneous streams: 5 per
+user or API key owner and 1000 for the server by default. A stream past either cap is
+refused with `429 SSE_CONNECTION_LIMIT`. A server that does not call `with_sse_limits`
+keeps these defaults and ignores `SSE_MAX_CONNECTIONS_PER_PRINCIPAL` and
+`SSE_MAX_CONNECTIONS`. `GET /runs/{id}/events` now ends once the run reaches a terminal
+status, and ends at once for a run already terminal.
+
+```diff
++ use ironflow_api::sse_limiter::SseLimits;
+  let mut state = AppState::new(store, engine, jwt_config, token, event_sender)
+-     .with_event_bus(event_bus);
++     .with_event_bus(event_bus)
++     .with_sse_limits(SseLimits {
++         per_principal: config.sse_max_connections_per_principal.map(|n| n as usize),
++         global: config.sse_max_connections.map(|n| n as usize),
++     });
+```

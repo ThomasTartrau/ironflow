@@ -24,6 +24,7 @@ use ironflow_api::config::ServerConfig;
 use ironflow_api::reaper::Reaper;
 use ironflow_api::routes::{RouterConfig, create_router};
 use ironflow_api::sse::SseBroadcaster;
+use ironflow_api::sse_limiter::SseLimits;
 use ironflow_api::state::AppState;
 use ironflow_artifacts::blob_store::BlobStore;
 use ironflow_artifacts::local::LocalBlobStore;
@@ -152,7 +153,11 @@ async fn main() {
         config.worker_token.clone(),
         event_sender,
     )
-    .with_event_bus(event_bus);
+    .with_event_bus(event_bus)
+    .with_sse_limits(SseLimits {
+        per_principal: config.sse_max_connections_per_principal.map(|n| n as usize),
+        global: config.sse_max_connections.map(|n| n as usize),
+    });
     if let Some(blob) = blob_store {
         state = state.with_blob_store(blob);
     }

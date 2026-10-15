@@ -40,6 +40,8 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use super::{Event, EventSubscriber, SubscriberFuture};
+
 /// Default broadcast channel buffer size per run.
 const DEFAULT_BUFFER_SIZE: usize = 64;
 
@@ -449,7 +451,10 @@ impl WorkflowEventBus {
 
     /// Remove the channel for a workflow run.
     ///
-    /// Call this when a run completes or is cleaned up to free resources.
+    /// Called by the engine when a run reaches a terminal status, once the
+    /// bus is attached with [`Engine::set_event_bus`](crate::engine::Engine::set_event_bus).
+    /// Dropping the sender lets every receiver drain the events already
+    /// buffered, then get [`broadcast::error::RecvError::Closed`].
     /// If no channel exists for `run_id`, this is a no-op.
     ///
     /// # Examples
@@ -467,11 +472,69 @@ impl WorkflowEventBus {
         let mut channels = self.channels.write().expect("event bus lock poisoned");
         channels.remove(&run_id);
     }
+
+    /// Whether a channel is currently open for a workflow run.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the bus lock was poisoned by a panic in another thread.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ironflow_engine::notify::WorkflowEventBus;
+    /// use uuid::Uuid;
+    ///
+    /// let bus = WorkflowEventBus::new();
+    /// let run_id = Uuid::now_v7();
+    /// assert!(!bus.has_channel(run_id));
+    /// let _rx = bus.subscribe(run_id);
+    /// assert!(bus.has_channel(run_id));
+    /// bus.remove(run_id);
+    /// assert!(!bus.has_channel(run_id));
+    /// ```
+    pub fn has_channel(&self, run_id: Uuid) -> bool {
+        let channels = self.channels.read().expect("event bus lock poisoned");
+        channels.contains_key(&run_id)
+    }
 }
 
 impl Default for WorkflowEventBus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// [`EventSubscriber`] that releases the [`WorkflowEventBus`] channel of a run
+/// once the run reaches a terminal status.
+///
+/// Terminal statuses are published from several places (engine, cancel,
+/// reaper, worker status updates), all through
+/// [`Event::RunStatusChanged`], so one subscriber covers them all.
+pub(crate) struct EventBusReleaser {
+    bus: WorkflowEventBus,
+}
+
+impl EventBusReleaser {
+    /// Build a releaser for the given bus.
+    pub(crate) fn new(bus: WorkflowEventBus) -> Self {
+        Self { bus }
+    }
+}
+
+impl EventSubscriber for EventBusReleaser {
+    fn name(&self) -> &str {
+        "event-bus-releaser"
+    }
+
+    fn handle<'a>(&'a self, event: &'a Event) -> SubscriberFuture<'a> {
+        Box::pin(async move {
+            if let Event::RunStatusChanged(change) = event
+                && change.to.is_terminal()
+            {
+                self.bus.remove(change.run_id);
+            }
+        })
     }
 }
 
@@ -486,7 +549,11 @@ impl std::fmt::Debug for WorkflowEventBus {
 
 #[cfg(test)]
 mod tests {
+    use ironflow_store::models::RunStatus;
     use serde_json::json;
+    use tokio::sync::broadcast::error::RecvError;
+
+    use crate::notify::RunStatusChangedEvent;
 
     use super::*;
 
@@ -831,5 +898,92 @@ mod tests {
 
         // rx_b should have nothing -- try_recv returns Empty.
         assert!(rx_b.try_recv().is_err());
+    }
+
+    fn status_changed(run_id: Uuid, to: RunStatus) -> Event {
+        Event::RunStatusChanged(RunStatusChangedEvent {
+            run_id,
+            workflow_name: "wf".to_string(),
+            from: RunStatus::Running,
+            to,
+            error: None,
+            cost_usd: Decimal::ZERO,
+            duration_ms: 0,
+            labels: HashMap::new(),
+            at: Utc::now(),
+        })
+    }
+
+    #[test]
+    fn has_channel_tracks_subscribe_and_remove() {
+        let bus = WorkflowEventBus::new();
+        let run_id = Uuid::now_v7();
+
+        assert!(!bus.has_channel(run_id));
+        let _rx = bus.subscribe(run_id);
+        assert!(bus.has_channel(run_id));
+        bus.remove(run_id);
+        assert!(!bus.has_channel(run_id));
+    }
+
+    #[tokio::test]
+    async fn remove_lets_receivers_drain_then_close() {
+        let bus = WorkflowEventBus::new();
+        let run_id = Uuid::now_v7();
+        let mut rx = bus.subscribe(run_id);
+
+        bus.publish(run_id, step_started("build"));
+        bus.remove(run_id);
+
+        let received = rx.recv().await.expect("buffered event survives removal");
+        assert_eq!(received.event_type(), "step_started");
+        assert!(matches!(rx.recv().await, Err(RecvError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn releaser_removes_channel_on_terminal_status() {
+        for to in [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+        ] {
+            let bus = WorkflowEventBus::new();
+            let releaser = EventBusReleaser::new(bus.clone());
+            let run_id = Uuid::now_v7();
+            let _rx = bus.subscribe(run_id);
+
+            releaser.handle(&status_changed(run_id, to)).await;
+
+            assert!(!bus.has_channel(run_id), "{to} must release the channel");
+        }
+    }
+
+    #[tokio::test]
+    async fn releaser_keeps_channel_on_non_terminal_status() {
+        for to in [RunStatus::Running, RunStatus::Pending, RunStatus::Paused] {
+            let bus = WorkflowEventBus::new();
+            let releaser = EventBusReleaser::new(bus.clone());
+            let run_id = Uuid::now_v7();
+            let _rx = bus.subscribe(run_id);
+
+            releaser.handle(&status_changed(run_id, to)).await;
+
+            assert!(bus.has_channel(run_id), "{to} must keep the channel");
+        }
+    }
+
+    #[tokio::test]
+    async fn releaser_ignores_other_runs() {
+        let bus = WorkflowEventBus::new();
+        let releaser = EventBusReleaser::new(bus.clone());
+        let run_id = Uuid::now_v7();
+        let _rx = bus.subscribe(run_id);
+
+        releaser
+            .handle(&status_changed(Uuid::now_v7(), RunStatus::Completed))
+            .await;
+
+        assert!(bus.has_channel(run_id));
+        assert_eq!(releaser.name(), "event-bus-releaser");
     }
 }

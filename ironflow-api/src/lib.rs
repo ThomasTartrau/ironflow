@@ -89,6 +89,7 @@ pub(crate) mod schedule_clock;
 pub mod schedule_sync;
 pub mod schedule_ticker;
 pub mod sse;
+pub mod sse_limiter;
 pub mod state;
 pub mod waker;
 pub mod worker_registry;

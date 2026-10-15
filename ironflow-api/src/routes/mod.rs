@@ -87,8 +87,9 @@ pub struct RouterConfig {
     /// Filesystem path to dashboard assets. When set, serves the SPA
     /// from this directory instead of the embedded build.
     pub dashboard_dir: Option<PathBuf>,
-    /// Rate limit for auth credential routes (sign-in, sign-up) in
-    /// requests per minute, applied per client IP and per targeted email.
+    /// Rate limit for auth credential routes (sign-in, sign-up, password change)
+    /// in requests per minute, applied per caller (client IP, or user for an
+    /// authenticated password change) and per targeted email.
     /// `None` disables the limiter.
     pub rate_limit_auth: Option<u32>,
     /// Rate limit for general public API routes in requests per minute
@@ -222,7 +223,8 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         .layer(RequestBodyLimitLayer::new(MAX_ARTIFACT_BODY_SIZE))
         .with_state(state.clone());
 
-    // Auth credential routes (rate-limited when configured)
+    // Auth credential routes (rate-limited when configured). Password change
+    // sits here too: it checks the current password, so it is a guessing oracle.
     #[allow(unused_mut)]
     let mut auth_credential_routes = Router::new();
 
@@ -237,8 +239,9 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
         auth_credential_routes = auth_credential_routes.route("/sign-up", post(sign_up_disabled));
     }
 
-    let mut auth_credential_routes =
-        auth_credential_routes.route("/sign-in", post(auth::sign_in::sign_in));
+    let mut auth_credential_routes = auth_credential_routes
+        .route("/sign-in", post(auth::sign_in::sign_in))
+        .route("/password", patch(auth::change_password::change_password));
 
     if let Some(rpm) = config.rate_limit_auth {
         let ctx = RateLimitContext {
@@ -257,8 +260,7 @@ pub fn create_router(state: AppState, config: RouterConfig) -> Router {
     let auth_session_routes = Router::new()
         .route("/refresh", post(auth::refresh::refresh))
         .route("/sign-out", post(auth::sign_out::sign_out))
-        .route("/me", get(auth::me::me))
-        .route("/password", patch(auth::change_password::change_password));
+        .route("/me", get(auth::me::me));
 
     // Public + user-authenticated routes (rate-limited when configured)
     #[allow(unused_mut)]

@@ -6,9 +6,9 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::entities::{
-    ApiKey, ConcurrencyGroupBacklog, IDEMPOTENCY_WINDOW, LeaseRequest, LeaseUpdate, NewRun,
-    NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun, Run,
-    RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
+    ApiKey, Assignee, ConcurrencyGroupBacklog, IDEMPOTENCY_WINDOW, LeaseRequest, LeaseUpdate,
+    NewRun, NewStep, NewStepDependency, Page, PurgePolicy, PurgeReason, PurgeableRun, ReapedRun,
+    Run, RunActor, RunCreation, RunFilter, RunStats, RunStatus, RunUpdate, StatsHistoryBucket,
     StatsHistoryFilter, Step, StepApproval, StepDependency, StepStatus, StepUpdate, TriggerKind,
     User, WorkerCapabilities, WorkflowPause, normalize_worker_tags, validate_concurrency_limits,
     validate_priority, validate_worker_tags,
@@ -827,6 +827,7 @@ impl RunStore for InMemoryStore {
                 approval_deadline_at: None,
                 approval_stage: 0,
                 approval_assignee: None,
+                approval_assignee_user_id: None,
                 approval_requirement: None,
                 approvals: Vec::new(),
                 account_id: None,
@@ -842,6 +843,20 @@ impl RunStore for InMemoryStore {
     fn update_step(&self, id: Uuid, update: StepUpdate) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             let mut state = self.state.write().await;
+            // Resolved when the gate opens, like the PostgreSQL store: an account created
+            // later under the same username is never bound to it.
+            let assignee_user_id =
+                update
+                    .approval_assignee
+                    .as_ref()
+                    .map(|assignee| match assignee {
+                        Assignee::User(name) => state
+                            .users
+                            .values()
+                            .find(|u| u.username == *name)
+                            .map(|u| u.id),
+                        Assignee::Group(_) => None,
+                    });
             let step = state
                 .steps
                 .get_mut(&id)
@@ -923,6 +938,7 @@ impl RunStore for InMemoryStore {
             }
             if let Some(assignee) = update.approval_assignee {
                 step.approval_assignee = Some(assignee);
+                step.approval_assignee_user_id = assignee_user_id.flatten();
             }
             if let Some(requirement) = update.approval_requirement {
                 step.approval_requirement = Some(requirement);
@@ -4376,5 +4392,75 @@ mod tests {
 
         let woken = store.claim_due_sleeping_runs(1).await.unwrap();
         assert_eq!(woken[0].id, newer.id);
+    }
+
+    // ---- approval assignee binding ----
+
+    async fn open_gate(store: &InMemoryStore, assignee: Assignee) -> Uuid {
+        let run = store
+            .create_run(new_run_req("gated"))
+            .await
+            .unwrap()
+            .into_run();
+        let step = store
+            .create_step(new_step_req(run.id, "approve", 0))
+            .await
+            .unwrap();
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    approval_assignee: Some(assignee),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+        step.id
+    }
+
+    #[tokio::test]
+    async fn gate_assignee_is_bound_when_the_gate_opens() {
+        let store = InMemoryStore::new();
+        let alice = seed_user(&store, "alice").await;
+
+        let step_id = open_gate(&store, Assignee::user("alice")).await;
+
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.approval_assignee_user_id, Some(alice));
+    }
+
+    #[tokio::test]
+    async fn account_created_after_the_gate_opened_is_not_bound() {
+        let store = InMemoryStore::new();
+
+        let step_id = open_gate(&store, Assignee::user("alice")).await;
+        seed_user(&store, "alice").await;
+
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.approval_assignee, Some(Assignee::user("alice")));
+        assert!(step.approval_assignee_user_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn reassigning_to_a_group_clears_the_bound_user() {
+        let store = InMemoryStore::new();
+        seed_user(&store, "alice").await;
+        let step_id = open_gate(&store, Assignee::user("alice")).await;
+
+        store
+            .update_step(
+                step_id,
+                StepUpdate {
+                    approval_assignee: Some(Assignee::group("sre-oncall")),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let step = store.get_step(step_id).await.unwrap().unwrap();
+        assert_eq!(step.approval_assignee, Some(Assignee::group("sre-oncall")));
+        assert!(step.approval_assignee_user_id.is_none());
     }
 }

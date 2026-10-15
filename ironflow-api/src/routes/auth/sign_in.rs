@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use ironflow_auth::password;
+use tracing::warn;
 
 use crate::entities::SignInRequest;
 use crate::error::ApiError;
@@ -36,16 +37,21 @@ pub async fn sign_in(
     State(state): State<AppState>,
     Json(req): Json<SignInRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = state
-        .store
-        .find_user_by_email(&req.email)
-        .await?
-        .ok_or(ApiError::InvalidCredentials)?;
+    let Some(user) = state.store.find_user_by_email(&req.email).await? else {
+        // Same Argon2 cost as a wrong password, so the answer time does not tell
+        // whether the email has an account.
+        if let Err(err) = password::verify_dummy(&req.password) {
+            warn!(error = %err, "dummy password verification failed");
+        }
+        warn!("sign-in refused: unknown email");
+        return Err(ApiError::InvalidCredentials);
+    };
 
     let valid = password::verify(&req.password, &user.password_hash)
         .map_err(|_| ApiError::Internal("password verification failed".into()))?;
 
     if !valid {
+        warn!(user_id = %user.id, "sign-in refused: wrong password");
         return Err(ApiError::InvalidCredentials);
     }
 
@@ -72,6 +78,7 @@ mod tests {
     use ironflow_store::store::Store;
     use serde_json::{json, to_string};
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
     use tokio::sync::broadcast;
     use tower::ServiceExt;
 
@@ -294,5 +301,58 @@ mod tests {
         assert_eq!(cookie_values.len(), 2);
         assert!(cookie_values[0].is_ok());
         assert!(cookie_values[1].is_ok());
+    }
+
+    #[tokio::test]
+    async fn sign_in_with_unknown_email_takes_as_long_as_a_wrong_password() {
+        let state = test_state();
+        let hash = password::hash("password123").expect("failed to hash password");
+        state
+            .store
+            .create_user(NewUser {
+                email: "test@example.com".to_string(),
+                username: "testuser".to_string(),
+                password_hash: hash,
+                is_admin: None,
+            })
+            .await
+            .expect("failed to create user");
+
+        let app = Router::new().route("/", post(sign_in)).with_state(state);
+
+        async fn timed_sign_in(app: &Router, email: &str) -> Duration {
+            let req = Request::builder()
+                .uri("/")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    to_string(&json!({
+                        "email": email,
+                        "password": "wrongpassword"
+                    }))
+                    .expect("failed to serialize"),
+                ))
+                .expect("failed to build request");
+
+            let started = Instant::now();
+            let resp = app.clone().oneshot(req).await.expect("request failed");
+            let elapsed = started.elapsed();
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+            elapsed
+        }
+
+        let mut known_total = Duration::ZERO;
+        let mut unknown_total = Duration::ZERO;
+        for _ in 0..3 {
+            known_total += timed_sign_in(&app, "test@example.com").await;
+            unknown_total += timed_sign_in(&app, "unknown@example.com").await;
+        }
+
+        // Without the dummy verification the unknown email answers in
+        // microseconds, against milliseconds for an Argon2 verification.
+        assert!(
+            unknown_total * 2 >= known_total,
+            "unknown email took {unknown_total:?}, wrong password took {known_total:?}"
+        );
     }
 }

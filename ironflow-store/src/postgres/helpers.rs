@@ -243,6 +243,7 @@ pub(crate) fn row_to_step(row: &sqlx::postgres::PgRow) -> Result<Step, StoreErro
             .map(|s| s.parse::<Assignee>())
             .transpose()
             .map_err(|e| StoreError::Database(e.to_string()))?,
+        approval_assignee_user_id: row.try_get("approval_assignee_user_id").unwrap_or(None),
         approval_requirement: row
             .try_get::<Option<Value>, _>("approval_requirement")
             .unwrap_or(None)

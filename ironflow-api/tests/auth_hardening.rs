@@ -419,6 +419,76 @@ async fn change_password_accepts_a_strong_new_password() {
     .expect("test timed out");
 }
 
+/// A router whose credential limiter allows 3 requests per minute, far below
+/// the general limiter's 60: a 429 within a few requests comes from the former.
+fn tight_auth_limit() -> RouterConfig {
+    RouterConfig {
+        rate_limit_auth: Some(3),
+        ..RouterConfig::default()
+    }
+}
+
+/// Send `count` password changes with a wrong current password, and return
+/// the statuses in order.
+async fn guess_current_password(harness: &Harness, auth: &str, count: usize) -> Vec<StatusCode> {
+    let mut statuses = Vec::new();
+    for _ in 0..count {
+        let req = authed(
+            "PATCH",
+            "/api/v1/auth/password",
+            auth,
+            json!({"old_password": "wrong-guess", "new_password": OTHER_PASSWORD}),
+        );
+        let resp = harness.app.clone().oneshot(req).await.expect("response");
+        statuses.push(resp.status());
+    }
+    statuses
+}
+
+#[tokio::test]
+async fn auth_limiter_throttles_password_change_guesses() {
+    timeout(TEST_TIMEOUT, async {
+        let harness = Harness::new(tight_auth_limit());
+        let (user, auth) = harness.user("alice", PASSWORD, false).await;
+
+        let statuses = guess_current_password(&harness, &auth, 6).await;
+
+        assert_eq!(statuses[0], StatusCode::BAD_REQUEST, "{statuses:?}");
+        assert!(
+            statuses.contains(&StatusCode::TOO_MANY_REQUESTS),
+            "6 wrong current passwords were never rate limited: {statuses:?}"
+        );
+        assert_eq!(
+            harness.sign_in(&user.email, PASSWORD).await,
+            StatusCode::NO_CONTENT,
+            "the password must be unchanged"
+        );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn auth_limiter_does_not_share_the_password_bucket_between_users() {
+    timeout(TEST_TIMEOUT, async {
+        let harness = Harness::new(tight_auth_limit());
+        let (_alice, alice_auth) = harness.user("alice", PASSWORD, false).await;
+        let (_bob, bob_auth) = harness.user("bob", PASSWORD, false).await;
+
+        let alice = guess_current_password(&harness, &alice_auth, 6).await;
+        assert!(
+            alice.contains(&StatusCode::TOO_MANY_REQUESTS),
+            "alice was never rate limited: {alice:?}"
+        );
+
+        // Same peer address as alice: the bucket is the user, not the IP.
+        let bob = guess_current_password(&harness, &bob_auth, 1).await;
+        assert_eq!(bob, vec![StatusCode::BAD_REQUEST]);
+    })
+    .await
+    .expect("test timed out");
+}
+
 #[tokio::test]
 async fn admin_cannot_create_a_user_with_a_weak_password() {
     timeout(TEST_TIMEOUT, async {

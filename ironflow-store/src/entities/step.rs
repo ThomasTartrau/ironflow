@@ -131,6 +131,13 @@ pub struct Step {
     /// User or group the approval is currently assigned to, after reassignment.
     #[serde(default)]
     pub approval_assignee: Option<Assignee>,
+    /// User the assignee resolved to when the gate was opened or last reassigned.
+    ///
+    /// `None` when the gate is assigned to a group, to nobody, or to a username no
+    /// account held at that moment: such a gate is admin-only, and an account
+    /// created later under that username is never bound to it.
+    #[serde(default)]
+    pub approval_assignee_user_id: Option<Uuid>,
     /// Approvers the handler required when the gate opened. `None` for a gate
     /// opened without approvers: one approval resolves it.
     #[serde(default)]
@@ -323,6 +330,7 @@ mod tests {
             approval_deadline_at: Some(now),
             approval_stage: 2,
             approval_assignee: Some(Assignee::group("sre-oncall")),
+            approval_assignee_user_id: Some(Uuid::now_v7()),
             approval_requirement: Some(ApprovalRequirement {
                 reason: Some("amount > 10k".to_string()),
                 required_approvers: 2,
@@ -366,6 +374,10 @@ mod tests {
         assert_eq!(back.approval_deadline_at, step.approval_deadline_at);
         assert_eq!(back.approval_stage, step.approval_stage);
         assert_eq!(back.approval_assignee, step.approval_assignee);
+        assert_eq!(
+            back.approval_assignee_user_id,
+            step.approval_assignee_user_id
+        );
         assert_eq!(back.approval_requirement, step.approval_requirement);
         assert_eq!(back.approvals, step.approvals);
     }
@@ -404,6 +416,7 @@ mod tests {
         assert!(step.cache_creation_input_tokens.is_none());
         assert!(step.approval_deadline_at.is_none());
         assert!(step.approval_assignee.is_none());
+        assert!(step.approval_assignee_user_id.is_none());
         assert!(step.approval_requirement.is_none());
         assert!(step.approvals.is_empty());
         assert!(step.environment_id.is_none());

@@ -93,12 +93,16 @@ pub struct EventsQuery {
 ///
 /// - 401 if the request is not authenticated
 /// - 403 `INSUFFICIENT_SCOPE` if the API key lacks `runs_read`
+/// - 429 `SSE_CONNECTION_LIMIT` if the caller (user or API key owner) or the
+///   server already holds as many event streams as
+///   [`SseLimits`](crate::sse_limiter::SseLimits) allows
 pub async fn events(
     auth: Authenticated,
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
     auth.require(ApiKeyScope::RunsRead, false)?;
+    let connection = state.sse_limiter.try_acquire(auth.user_id)?;
     let receiver = state.event_sender.subscribe();
     // Provider Account events describe admin-only resources, which an API
     // key reaches only through the `admin` scope.
@@ -109,6 +113,11 @@ pub async fn events(
         query.types,
         sees_provider_account_events,
     );
+    // The stream owns the slot: axum drops it when the client disconnects.
+    let stream = stream.map(move |item| {
+        let _held = &connection;
+        item
+    });
 
     let sse = Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)));
     Ok(sse)
@@ -195,15 +204,15 @@ mod tests {
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::RunStatus;
     use rust_decimal::Decimal;
-    use tokio::io::AsyncBufReadExt;
-    use tokio::io::BufReader;
-    use tokio::net::TcpListener;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::broadcast;
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
     use super::{EventKind, event_stream, events};
     use crate::routes::test_helpers::create_user_auth_header;
+    use crate::sse_limiter::SseLimits;
     use crate::state::AppState;
 
     fn test_state() -> AppState {
@@ -314,8 +323,8 @@ mod tests {
     }
 
     /// Connect to the SSE endpoint with auth and return a line reader.
-    async fn connect_sse(addr: &str, query: &str, auth: &str) -> BufReader<tokio::net::TcpStream> {
-        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    async fn connect_sse(addr: &str, query: &str, auth: &str) -> BufReader<TcpStream> {
+        let stream = TcpStream::connect(addr).await.unwrap();
         let (reader, mut writer) = stream.into_split();
 
         use tokio::io::AsyncWriteExt;
@@ -335,7 +344,7 @@ mod tests {
     /// Read all available data from the SSE stream until `needle` is found
     /// in the accumulated text, or timeout.
     async fn read_until_contains(
-        reader: &mut BufReader<tokio::net::TcpStream>,
+        reader: &mut BufReader<TcpStream>,
         needle: &str,
         dur: Duration,
     ) -> String {
@@ -449,7 +458,7 @@ mod tests {
         let state = test_state();
         let (addr, _sender, _auth) = start_sse_server(state).await;
         // Connect without auth header
-        let stream = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let stream = TcpStream::connect(&addr).await.unwrap();
         let (reader, mut writer) = stream.into_split();
 
         use tokio::io::AsyncWriteExt;
@@ -593,5 +602,89 @@ mod tests {
         let text = read_body_until(&mut body, "\"missed\"").await;
         assert!(text.contains("lagged"), "got {text}");
         assert!(!text.contains("run_status_changed"), "got {text}");
+    }
+
+    /// Read the HTTP status line of a response.
+    async fn status_line(reader: &mut BufReader<TcpStream>) -> String {
+        read_until_contains(reader, "\r\n", Duration::from_secs(5)).await
+    }
+
+    /// Read the headers left after the status line, then the body they announce.
+    async fn read_body(reader: &mut BufReader<TcpStream>) -> String {
+        timeout(Duration::from_secs(5), async {
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                if line.is_empty() || line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).await.unwrap();
+            String::from_utf8(body).unwrap()
+        })
+        .await
+        .expect("timeout reading the response body")
+    }
+
+    fn limited_state(per_principal: usize) -> AppState {
+        test_state().with_sse_limits(SseLimits {
+            per_principal: Some(per_principal),
+            global: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn events_returns_429_past_the_per_principal_limit() {
+        let state = limited_state(2);
+        let other_auth = create_user_auth_header(&state, "otheruser", false).await;
+        let (addr, _sender, auth) = start_sse_server(state).await;
+
+        let mut first = connect_sse(&addr, "", &auth).await;
+        assert!(status_line(&mut first).await.starts_with("HTTP/1.1 200"));
+        let mut second = connect_sse(&addr, "", &auth).await;
+        assert!(status_line(&mut second).await.starts_with("HTTP/1.1 200"));
+
+        let mut third = connect_sse(&addr, "", &auth).await;
+        let status = status_line(&mut third).await;
+        assert!(status.starts_with("HTTP/1.1 429"), "status line: {status}");
+        let body = read_body(&mut third).await;
+        assert!(body.contains("SSE_CONNECTION_LIMIT"), "body: {body}");
+
+        let mut other = connect_sse(&addr, "", &other_auth).await;
+        let status = status_line(&mut other).await;
+        assert!(
+            status.starts_with("HTTP/1.1 200"),
+            "another user keeps its own quota: {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn events_frees_the_slot_when_the_client_disconnects() {
+        let state = limited_state(1);
+        let (addr, _sender, auth) = start_sse_server(state).await;
+
+        let mut first = connect_sse(&addr, "", &auth).await;
+        assert!(status_line(&mut first).await.starts_with("HTTP/1.1 200"));
+        let mut refused = connect_sse(&addr, "", &auth).await;
+        assert!(status_line(&mut refused).await.starts_with("HTTP/1.1 429"));
+
+        drop(first);
+
+        let reopened = timeout(Duration::from_secs(5), async {
+            loop {
+                let mut retry = connect_sse(&addr, "", &auth).await;
+                if status_line(&mut retry).await.starts_with("HTTP/1.1 200") {
+                    return retry;
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(reopened.is_ok(), "the slot was not freed after disconnect");
     }
 }
