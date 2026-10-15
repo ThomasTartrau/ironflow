@@ -309,6 +309,10 @@ a run created while the workflow is paused stays `Pending` and is started by
 `resume_workflow`. `GET /api/v1/workflows`
 and `GET /api/v1/workflows/{name}` report `paused_at` while the workflow is
 paused.
+Every pause publishes a `workflow_paused` event, and a resume of a paused workflow a
+`workflow_resumed` event, both carrying the `user_id` of the caller
+(`Engine::resume_workflow` takes it as its second argument, `None` outside a user
+context); the audit log records them.
 
 The CLI exposes the same actions as `ironflow-cli run pause|resume <id>` and
 `ironflow-cli workflow pause|resume <name>`, the MCP server as the `pause_run`,

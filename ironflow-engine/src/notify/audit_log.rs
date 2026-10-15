@@ -101,14 +101,15 @@ mod tests {
     use uuid::Uuid;
 
     use ironflow_store::audit_log_store::AuditLogStore;
-    use ironflow_store::entities::{AuditLogFilter, EventKind};
+    use ironflow_store::entities::{AuditLogEntry, AuditLogFilter, EventKind};
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{RunStatus, StepKind};
 
     use super::*;
     use crate::notify::{
-        EventPublisher, EventSubscriber, RunFailedEvent, RunStatusChangedEvent, StepFailedEvent,
-        UserSignedInEvent,
+        ApprovalGrantedEvent, ApprovalRejectedEvent, EventPublisher, EventSubscriber,
+        RunFailedEvent, RunStatusChangedEvent, StepFailedEvent, UserSignedInEvent,
+        WorkflowPausedEvent, WorkflowResumedEvent,
     };
 
     fn sample_run_status_changed() -> Event {
@@ -292,5 +293,110 @@ mod tests {
         assert_eq!(payload["type"], "run_failed");
         assert_eq!(payload["workflow_name"], "deploy");
         assert_eq!(payload["error"], "step crashed");
+    }
+
+    /// Persist `event` and return the single entry it produced.
+    async fn persist_one(event: &Event) -> AuditLogEntry {
+        let store = Arc::new(InMemoryStore::new());
+        let subscriber = AuditLogSubscriber::new(store.clone());
+        subscriber.handle(event).await;
+
+        let mut page = store
+            .list_audit_logs(AuditLogFilter::default(), 1, 20)
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        page.items.remove(0)
+    }
+
+    #[tokio::test]
+    async fn audit_persists_approval_granted_with_user_id() {
+        let user_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
+        let entry = persist_one(&Event::ApprovalGranted(ApprovalGrantedEvent {
+            run_id,
+            step_id: Some(Uuid::now_v7()),
+            approved_by: "ci-key".to_string(),
+            user_id: Some(user_id),
+            approvals_received: 1,
+            approvals_required: 1,
+            requirement: None,
+            at: Utc::now(),
+        }))
+        .await;
+
+        assert_eq!(entry.event_type, EventKind::ApprovalGranted);
+        assert_eq!(entry.user_id, Some(user_id));
+        assert_eq!(entry.run_id, Some(run_id));
+        assert_eq!(entry.payload["user_id"], user_id.to_string());
+        assert_eq!(entry.payload["approved_by"], "ci-key");
+    }
+
+    #[tokio::test]
+    async fn audit_persists_approval_rejected_with_user_id() {
+        let user_id = Uuid::now_v7();
+        let entry = persist_one(&Event::ApprovalRejected(ApprovalRejectedEvent {
+            run_id: Uuid::now_v7(),
+            step_id: Some(Uuid::now_v7()),
+            rejected_by: "bob".to_string(),
+            user_id: Some(user_id),
+            reason: Some("wrong environment".to_string()),
+            requirement: None,
+            at: Utc::now(),
+        }))
+        .await;
+
+        assert_eq!(entry.event_type, EventKind::ApprovalRejected);
+        assert_eq!(entry.user_id, Some(user_id));
+        assert_eq!(entry.payload["reason"], "wrong environment");
+    }
+
+    #[tokio::test]
+    async fn audit_persists_workflow_paused_with_user_id() {
+        let user_id = Uuid::now_v7();
+        let entry = persist_one(&Event::WorkflowPaused(WorkflowPausedEvent {
+            workflow_name: "deploy".to_string(),
+            user_id: Some(user_id),
+            at: Utc::now(),
+        }))
+        .await;
+
+        assert_eq!(entry.event_type, EventKind::WorkflowPaused);
+        assert_eq!(entry.user_id, Some(user_id));
+        assert!(entry.run_id.is_none());
+        assert_eq!(entry.payload["workflow_name"], "deploy");
+    }
+
+    #[tokio::test]
+    async fn audit_persists_workflow_resumed_with_user_id() {
+        let user_id = Uuid::now_v7();
+        let entry = persist_one(&Event::WorkflowResumed(WorkflowResumedEvent {
+            workflow_name: "deploy".to_string(),
+            user_id: Some(user_id),
+            at: Utc::now(),
+        }))
+        .await;
+
+        assert_eq!(entry.event_type, EventKind::WorkflowResumed);
+        assert_eq!(entry.user_id, Some(user_id));
+        assert_eq!(entry.payload["workflow_name"], "deploy");
+    }
+
+    #[tokio::test]
+    async fn audit_system_decision_has_no_user_id() {
+        let entry = persist_one(&Event::ApprovalRejected(ApprovalRejectedEvent {
+            run_id: Uuid::now_v7(),
+            step_id: Some(Uuid::now_v7()),
+            rejected_by: "system:timeout".to_string(),
+            user_id: None,
+            reason: None,
+            requirement: None,
+            at: Utc::now(),
+        }))
+        .await;
+
+        assert_eq!(entry.event_type, EventKind::ApprovalRejected);
+        assert!(entry.user_id.is_none());
+        assert_eq!(entry.payload["rejected_by"], "system:timeout");
     }
 }

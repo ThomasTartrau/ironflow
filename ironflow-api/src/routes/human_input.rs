@@ -9,6 +9,7 @@ use chrono::Utc;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::config::HUMAN_INPUT_SCHEMA_KEY;
 use ironflow_engine::engine::ExecutionMode;
+use ironflow_engine::notify::{ApprovalRejectedEvent, Event};
 use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::models::{
     Run, RunStatus, Step, StepApproval, StepKind, StepStatus, StepUpdate,
@@ -125,6 +126,9 @@ pub async fn submit_human_input(
 /// `HumanInputRejected` error and decides what happens next. The body is
 /// optional; without a reason, one naming the caller is recorded.
 ///
+/// The rejection is published as an `approval_rejected` audit event carrying
+/// the caller's label (`rejected_by`), user id and the reason.
+///
 /// # Errors
 ///
 /// - 400 if the step is not a human input or is not awaiting input
@@ -174,7 +178,7 @@ pub async fn reject_human_input(
             step.id,
             StepUpdate {
                 status: Some(StepStatus::Rejected),
-                error: Some(reason),
+                error: Some(reason.clone()),
                 completed_at: Some(Utc::now()),
                 clear_approval_deadline: true,
                 ..StepUpdate::default()
@@ -182,6 +186,19 @@ pub async fn reject_human_input(
         )
         .await?;
     release_run(&state, &run).await?;
+
+    state
+        .engine
+        .event_publisher()
+        .publish(Event::ApprovalRejected(ApprovalRejectedEvent {
+            run_id: id,
+            step_id: Some(step.id),
+            rejected_by: actor,
+            user_id: Some(auth.user_id),
+            reason: Some(reason),
+            requirement: step.approval_requirement.clone(),
+            at: Utc::now(),
+        }));
 
     Ok(ok(RunResponse::from(state.get_run_or_404(id).await?)))
 }
@@ -302,7 +319,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::engine::Engine;
     use ironflow_engine::handler::input_schema_for;
-    use ironflow_engine::notify::Event;
+    use ironflow_store::entities::EventKind;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
         Assignee, NewRun, NewStep, NewUser, TriggerKind, User, step_trace_id,
@@ -311,11 +328,15 @@ mod tests {
     use ironflow_store::user_store::UserStore;
     use schemars::JsonSchema;
     use serde_json::{from_slice, json};
+    use std::time::Duration;
     use tokio::sync::broadcast;
+    use tokio::time::sleep;
     use tower::ServiceExt;
 
     use super::*;
-    use crate::routes::test_helpers::create_user_auth_header;
+    use crate::routes::test_helpers::{
+        audit_entries, await_audit_entry, create_user_auth_header, test_state_with_audit_log,
+    };
 
     /// The answer type the test steps ask for.
     #[allow(dead_code)]
@@ -338,23 +359,8 @@ mod tests {
     }
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
-        let provider = Arc::new(ClaudeCodeProvider::new());
-        let engine = Arc::new(Engine::new(store.clone(), provider));
-        let jwt_config = Arc::new(JwtConfig {
-            secret: "test-secret".to_string(),
-            access_token_ttl_secs: 900,
-            refresh_token_ttl_secs: 604800,
-            cookie_domain: None,
-            cookie_secure: false,
-        });
-        let (event_sender, _) = broadcast::channel::<Event>(1);
-        AppState::new(
-            store,
-            engine,
-            jwt_config,
-            "test-worker-token".to_string(),
-            event_sender,
-        )
+        let engine = Engine::new(store.clone(), Arc::new(ClaudeCodeProvider::new()));
+        state_with_engine(store, engine, false)
     }
 
     async fn member(store: &Arc<InMemoryStore>, username: &str) -> User {
@@ -847,5 +853,74 @@ mod tests {
             ApiError::InvalidInput(errors) => assert_eq!(errors.len(), 1, "got {errors:?}"),
             other => panic!("expected InvalidInput, got {other:?}"),
         }
+    }
+
+    /// A run awaiting a human input step, with an engine writing the audit log.
+    async fn setup_with_audit_log() -> (Arc<InMemoryStore>, AppState, Uuid, Uuid) {
+        let store = Arc::new(InMemoryStore::new());
+        let run_id = awaiting_run(&store).await;
+        let step_id = awaiting_step(&store, run_id, StepKind::HumanInput, None).await;
+        let state = test_state_with_audit_log(store.clone());
+        (store, state, run_id, step_id)
+    }
+
+    #[tokio::test]
+    async fn human_input_reject_is_recorded_in_the_audit_log() {
+        let (store, state, run_id, step_id) = setup_with_audit_log().await;
+        let auth = create_user_auth_header(&state, "admin", true).await;
+        let admin = store
+            .find_user_by_username("admin")
+            .await
+            .unwrap()
+            .expect("admin");
+
+        let body = json!({"reason": "out of scope"});
+        let (status, _) = call(&state, &auth, run_id, step_id, "reject", Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let entry = await_audit_entry(&store, EventKind::ApprovalRejected, Some(run_id)).await;
+        assert_eq!(entry.user_id, Some(admin.id));
+        assert_eq!(entry.step_id, Some(step_id));
+        assert_eq!(entry.payload["rejected_by"], "admin");
+        assert_eq!(entry.payload["user_id"], admin.id.to_string());
+        assert_eq!(entry.payload["reason"], "out of scope");
+    }
+
+    #[tokio::test]
+    async fn human_input_reject_without_body_records_the_default_reason() {
+        let (store, state, run_id, step_id) = setup_with_audit_log().await;
+        let auth = create_user_auth_header(&state, "admin", true).await;
+
+        let (status, _) = call(&state, &auth, run_id, step_id, "reject", None).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let entry = await_audit_entry(&store, EventKind::ApprovalRejected, Some(run_id)).await;
+        assert_eq!(entry.payload["reason"], "input rejected by admin");
+    }
+
+    #[tokio::test]
+    async fn human_input_refused_reject_records_nothing() {
+        let store = Arc::new(InMemoryStore::new());
+        let alice = member(&store, "alice").await;
+        let bob = member(&store, "bob").await;
+        let run_id = awaiting_run(&store).await;
+        let assignee = Some(Assignee::user(&alice.username));
+        let step_id = awaiting_step(&store, run_id, StepKind::HumanInput, assignee).await;
+        let state = test_state_with_audit_log(store.clone());
+
+        let bob_auth = member_header(&bob, &state);
+        let (status, _) = call(&state, &bob_auth, run_id, step_id, "reject", None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let alice_auth = member_header(&alice, &state);
+        let answer = json!({"answers": ["yes"]});
+        let (status, _) = call(&state, &alice_auth, run_id, step_id, "input", Some(answer)).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = call(&state, &alice_auth, run_id, step_id, "reject", None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+
+        sleep(Duration::from_millis(50)).await;
+        let rejections = audit_entries(&store, EventKind::ApprovalRejected, Some(run_id)).await;
+        assert!(rejections.is_empty());
     }
 }

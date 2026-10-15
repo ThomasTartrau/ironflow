@@ -9,7 +9,10 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
+use serde_json::json;
+use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use uuid::Uuid;
 
 use crate::authorization::AuthorizeExt;
@@ -78,6 +81,11 @@ pub struct EventsQuery {
 ///
 /// A keep-alive comment is sent every 30 seconds.
 ///
+/// A client that reads slower than events are published loses the oldest
+/// ones. It then receives a `lagged` event, whatever its filters, with
+/// `data: {"missed": n}`: the number of events it missed. Its view is stale
+/// and it should reload its state.
+///
 /// Provider Account events reach an admin session, or an API key holding the
 /// `admin` scope whose owner is an admin.
 ///
@@ -95,13 +103,42 @@ pub async fn events(
     // Provider Account events describe admin-only resources, which an API
     // key reaches only through the `admin` scope.
     let sees_provider_account_events = auth.require(ApiKeyScope::Admin, true).is_ok();
-    let type_filter = query.types;
+    let stream = event_stream(
+        receiver,
+        query.run_id,
+        query.types,
+        sees_provider_account_events,
+    );
 
-    let stream = BroadcastStream::new(receiver).filter_map(move |result: Result<Event, _>| {
+    let sse = Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)));
+    Ok(sse)
+}
+
+/// SSE event name sent to a client that fell behind and missed events.
+const LAGGED_EVENT: &str = "lagged";
+
+/// Turn the broadcast `receiver` into the SSE stream a client asked for.
+///
+/// A receiver that falls behind the channel capacity loses the oldest
+/// events: the client gets a [`LAGGED_EVENT`] carrying how many it missed.
+/// That event bypasses the filters, since which events were lost is unknown.
+fn event_stream(
+    receiver: broadcast::Receiver<Event>,
+    run_id_filter: Option<Uuid>,
+    type_filter: Option<Vec<EventKind>>,
+    sees_provider_account_events: bool,
+) -> impl Stream<Item = Result<SseEvent, Infallible>> {
+    BroadcastStream::new(receiver).filter_map(move |result: Result<Event, _>| {
         let type_filter = type_filter.clone();
-        let run_id_filter = query.run_id;
         async move {
-            let event = result.ok()?;
+            let event = match result {
+                Ok(event) => event,
+                Err(BroadcastStreamRecvError::Lagged(missed)) => {
+                    let data = json!({ "missed": missed }).to_string();
+                    let sse_event = SseEvent::default().event(LAGGED_EVENT).data(data);
+                    return Some(Ok(sse_event));
+                }
+            };
 
             if !sees_provider_account_events
                 && matches!(
@@ -130,10 +167,7 @@ pub async fn events(
 
             Some(Ok::<_, Infallible>(sse_event))
         }
-    });
-
-    let sse = Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)));
-    Ok(sse)
+    })
 }
 
 #[cfg(test)]
@@ -143,8 +177,12 @@ mod tests {
     use std::time::Duration;
 
     use axum::Router;
+    use axum::body::Body;
+    use axum::response::IntoResponse;
+    use axum::response::sse::Sse;
     use axum::routing::get;
     use chrono::Utc;
+    use http_body_util::BodyExt;
     use ironflow_auth::extractor::{API_KEY_PREFIX, API_KEY_SUFFIX_LEN};
     use ironflow_auth::password;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
@@ -164,7 +202,7 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
-    use super::events;
+    use super::{EventKind, event_stream, events};
     use crate::routes::test_helpers::create_user_auth_header;
     use crate::state::AppState;
 
@@ -491,5 +529,69 @@ mod tests {
         let text = read_until_contains(&mut reader, "\r\n", Duration::from_secs(5)).await;
 
         assert!(text.starts_with("HTTP/1.1 403"), "status line: {text}");
+    }
+
+    /// A channel of capacity 2 whose receiver already missed 3 of the 5
+    /// events sent: the lag is deterministic, the stream is not polled yet.
+    fn lagging_receiver() -> (broadcast::Sender<Event>, broadcast::Receiver<Event>) {
+        let (sender, receiver) = broadcast::channel::<Event>(2);
+        for _ in 0..5 {
+            sender.send(sample_run_event(Uuid::now_v7())).unwrap();
+        }
+        (sender, receiver)
+    }
+
+    /// Read the SSE body until `needle` shows up, or time out.
+    async fn read_body_until(body: &mut Body, needle: &str) -> String {
+        let mut accumulated = String::new();
+        let result = timeout(Duration::from_secs(5), async {
+            while !accumulated.contains(needle) {
+                let Some(frame) = body.frame().await else {
+                    break;
+                };
+                if let Ok(data) = frame.unwrap().into_data() {
+                    accumulated.push_str(&String::from_utf8_lossy(&data));
+                }
+            }
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "timeout waiting for '{needle}'. Data so far:\n{accumulated}"
+        );
+        accumulated
+    }
+
+    #[tokio::test]
+    async fn lagged_event_is_sent_when_the_subscriber_falls_behind() {
+        let (sender, receiver) = lagging_receiver();
+        let response = Sse::new(event_stream(receiver, None, None, false)).into_response();
+        let mut body = response.into_body();
+
+        let text = read_body_until(&mut body, "\"missed\"").await;
+        assert!(text.contains("lagged"), "got {text}");
+        assert!(text.contains("\"missed\":3"), "got {text}");
+
+        // The stream goes on after the notice.
+        let run_id = Uuid::now_v7();
+        sender.send(sample_run_event(run_id)).unwrap();
+        let text = read_body_until(&mut body, &run_id.to_string()).await;
+        assert!(text.contains("run_status_changed"), "got {text}");
+    }
+
+    #[tokio::test]
+    async fn lagged_event_bypasses_the_run_and_type_filters() {
+        let (_sender, receiver) = lagging_receiver();
+        let stream = event_stream(
+            receiver,
+            Some(Uuid::now_v7()),
+            Some(vec![EventKind::UserSignedIn]),
+            false,
+        );
+        let mut body = Sse::new(stream).into_response().into_body();
+
+        let text = read_body_until(&mut body, "\"missed\"").await;
+        assert!(text.contains("lagged"), "got {text}");
+        assert!(!text.contains("run_status_changed"), "got {text}");
     }
 }

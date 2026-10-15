@@ -49,7 +49,7 @@ pub use event::{
     ProviderAccountUsageUpdatedEvent, RetryForcedEvent, RunBudgetExceededEvent, RunCreatedEvent,
     RunFailedEvent, RunStatusChangedEvent, ScheduleOccurrencesMissedEvent, SignalAwaitedEvent,
     SignalReceivedEvent, StepCompletedEvent, StepFailedEvent, UserSignedInEvent,
-    UserSignedOutEvent, UserSignedUpEvent,
+    UserSignedOutEvent, UserSignedUpEvent, WorkflowPausedEvent, WorkflowResumedEvent,
 };
 pub use event_bus::{
     WorkflowAgentStepResumedEvent, WorkflowAgentStepTokensUsedEvent, WorkflowApprovalRequiredEvent,

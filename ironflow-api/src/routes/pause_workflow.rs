@@ -18,7 +18,8 @@ use crate::state::AppState;
 /// Runs already executing are left alone (pause them one by one with
 /// `POST /api/v1/runs/{id}/pause`), and new runs are still created: they
 /// wait in the queue until the workflow is resumed. Pausing a workflow
-/// already paused succeeds and keeps its first `paused_at`.
+/// already paused succeeds and keeps its first `paused_at`. Every pause
+/// publishes a `workflow_paused` audit event carrying the caller's user id.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -53,7 +54,9 @@ pub async fn pause_workflow(
 
 /// Resume a paused workflow: workers pick its queued runs again.
 ///
-/// Resuming a workflow that is not paused succeeds and changes nothing.
+/// Resuming a workflow that is not paused succeeds and changes nothing. A
+/// resume of a paused workflow publishes a `workflow_resumed` audit event
+/// carrying the caller's user id.
 #[cfg_attr(
     feature = "openapi",
     utoipa::path(
@@ -79,7 +82,7 @@ pub async fn resume_workflow(
 
     state
         .engine
-        .resume_workflow(&name)
+        .resume_workflow(&name, Some(auth.user_id))
         .await
         .map_err(|err| map_engine_error(err, &name))?;
 
@@ -104,20 +107,21 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
     use http_body_util::BodyExt;
-    use ironflow_auth::jwt::JwtConfig;
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::WorkflowContext;
     use ironflow_engine::engine::{Engine, ExecutionMode};
     use ironflow_engine::handler::{HandlerFuture, WorkflowHandler};
-    use ironflow_engine::notify::Event;
+    use ironflow_store::entities::EventKind;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::store::RunStore;
+    use ironflow_store::user_store::UserStore;
     use serde_json::{Value as JsonValue, from_slice};
-    use tokio::sync::broadcast;
     use tower::ServiceExt;
 
     use super::*;
-    use crate::routes::test_helpers::create_user_auth_header;
+    use crate::routes::test_helpers::{
+        await_audit_entry, create_user_auth_header, state_with_engine,
+    };
 
     struct Deploy;
 
@@ -132,25 +136,17 @@ mod tests {
     }
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
+        state_with(store, false)
+    }
+
+    /// An `AppState` whose engine runs `deploy`, persisting every event to the
+    /// store's audit log when `audit_log` is set.
+    fn state_with(store: Arc<InMemoryStore>, audit_log: bool) -> AppState {
         let provider = Arc::new(ClaudeCodeProvider::new());
         let mut engine =
             Engine::new(store.clone(), provider).with_execution_mode(ExecutionMode::Workers);
         engine.register(Deploy).unwrap();
-        let jwt_config = Arc::new(JwtConfig {
-            secret: "test-secret".to_string(),
-            access_token_ttl_secs: 900,
-            refresh_token_ttl_secs: 604800,
-            cookie_domain: None,
-            cookie_secure: false,
-        });
-        let (event_sender, _) = broadcast::channel::<Event>(1);
-        AppState::new(
-            store,
-            Arc::new(engine),
-            jwt_config,
-            "test-worker-token".to_string(),
-            event_sender,
-        )
+        state_with_engine(store, engine, audit_log)
     }
 
     async fn send(
@@ -254,5 +250,28 @@ mod tests {
 
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(store.list_workflow_pauses().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_are_recorded_in_the_audit_log_with_the_admin() {
+        let store = Arc::new(InMemoryStore::new());
+        let state = state_with(store.clone(), true);
+
+        let (status, _) = send(state.clone(), "pause", "deploy", true).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = send(state, "resume", "deploy", true).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let admin = store
+            .find_user_by_username("testuser")
+            .await
+            .unwrap()
+            .expect("admin created by send");
+        let paused = await_audit_entry(&store, EventKind::WorkflowPaused, None).await;
+        assert_eq!(paused.user_id, Some(admin.id));
+        assert_eq!(paused.payload["workflow_name"], "deploy");
+        let resumed = await_audit_entry(&store, EventKind::WorkflowResumed, None).await;
+        assert_eq!(resumed.user_id, Some(admin.id));
+        assert_eq!(resumed.payload["user_id"], admin.id.to_string());
     }
 }

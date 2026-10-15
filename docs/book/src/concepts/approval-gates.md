@@ -194,12 +194,14 @@ A delegated decision names both people. The `approval_granted` (or
   "type": "approval_granted",
   "run_id": "01932f...",
   "approved_by": "bob (delegated from alice)",
+  "user_id": "01932e...",
   "at": "2026-09-22T10:15:00Z"
 }
 ```
 
 An admin, or the assignee resolving their own gate, is recorded under their own
-name alone.
+name alone. `user_id` is always the caller (bob here): the label names the delegation,
+the id names who clicked.
 
 ## Requiring several approvers
 
@@ -296,7 +298,15 @@ Group names are 1 to 64 characters from `[A-Za-z0-9_.-]`, at most 50 per user.
 - `approval_granted` is published for **every** vote, with the `step_id`,
   `approvals_received`, `approvals_required` and the `requirement`. The gate
   resolves when `approvals_received >= approvals_required`.
-- `approval_rejected` carries the `step_id` and the `requirement`.
+- `approval_rejected` carries the `step_id` and the `requirement`. Rejecting a
+  human input publishes it too, with the `reason` given (or `input rejected by
+  <caller>`); a gate rejection has no `reason`.
+- `approval_granted` and `approval_rejected` carry the `user_id` of the caller,
+  also stored as the audit entry's `user_id`: for an API key it is the key's
+  owner, while `approved_by` / `rejected_by` stay the display label (the key
+  name, or `bob (delegated from alice)`). A decision of the SLA timer
+  (`system:timeout`) has no `user_id`. Events recorded before this field
+  existed read back with `user_id: null`.
 
 ```json
 {
@@ -304,6 +314,7 @@ Group names are 1 to 64 characters from `[A-Za-z0-9_.-]`, at most 50 per user.
   "run_id": "01932f...",
   "step_id": "01932f...",
   "approved_by": "alice",
+  "user_id": "01932e...",
   "approvals_received": 1,
   "approvals_required": 2,
   "requirement": {

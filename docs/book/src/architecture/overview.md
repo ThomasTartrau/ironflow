@@ -53,7 +53,7 @@ API. See [Standalone Runtime](../guides/standalone-runtime.md).
 2. The API validates authentication, creates a Run in the Store, and returns it
 3. A Worker polls the API, acquires a lease on the Run, and executes the handler
 4. The handler calls steps (`ctx.shell()`, `ctx.agent()`, etc.), each persisted as they complete
-5. Events are published via SSE for real-time updates
+5. Events are published via SSE for real-time updates; a client that falls behind gets a `lagged` event (`{"missed": n}`) and reloads its state
 6. On completion or failure, the Worker reports the result back to the API
 
 ## Data flow

@@ -32,7 +32,7 @@ use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::artifact::DirectArtifactSink;
 use ironflow_engine::budget::BudgetConfig;
 use ironflow_engine::engine::Engine;
-use ironflow_engine::notify::{Event, WebhookSubscriber, WorkflowEventBus};
+use ironflow_engine::notify::{AuditLogSubscriber, Event, WebhookSubscriber, WorkflowEventBus};
 use ironflow_store::crypto::{KeyRing, SECRET_KEYS_ENV};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
@@ -122,6 +122,10 @@ async fn main() {
             &[Event::RUN_STATUS_CHANGED, Event::STEP_FAILED],
         );
     }
+    // Every engine event is persisted for `GET /api/v1/audit-logs`: who approved,
+    // rejected, paused or resumed what. Log lines and provider account events do
+    // not go through the engine publisher, so they are not duplicated here.
+    engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
     let sse_broadcaster = SseBroadcaster::new();
     let event_sender = sse_broadcaster.sender();
     engine.subscribe(sse_broadcaster, Event::ALL);

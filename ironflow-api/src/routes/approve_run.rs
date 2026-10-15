@@ -289,6 +289,7 @@ async fn resolve_approval(
             run_id: id,
             step_id: None,
             approved_by: actor.clone(),
+            user_id: Some(auth.user_id),
             approvals_received: 1,
             approvals_required: 1,
             requirement: None,
@@ -381,6 +382,8 @@ async fn resolve_approval(
             run_id: id,
             step_id: gate.map(|g| g.id),
             rejected_by: actor,
+            user_id: Some(auth.user_id),
+            reason: None,
             requirement: gate.and_then(|g| g.approval_requirement.clone()),
             at: Utc::now(),
         })),
@@ -426,27 +429,26 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_engine::context::PARENT_RUN_ID_LABEL;
     use ironflow_engine::engine::Engine;
-    use ironflow_engine::notify::{AuditLogSubscriber, Event};
+    use ironflow_engine::notify::Event;
     use ironflow_store::approval_delegation_store::ApprovalDelegationStore;
-    use ironflow_store::audit_log_store::AuditLogStore;
     use ironflow_store::entities::NewApiKey;
     use ironflow_store::memory::InMemoryStore;
     use ironflow_store::models::{
-        ApprovalRequirement, AuditLogFilter, EventKind, NewApprovalDelegation, NewRun, NewStep,
-        NewUser, RunStatus, StepKind, StepStatus, TriggerKind, User, step_trace_id,
+        ApprovalRequirement, EventKind, NewApprovalDelegation, NewRun, NewStep, NewUser, RunStatus,
+        StepKind, StepStatus, TriggerKind, User, step_trace_id,
     };
     use ironflow_store::store::RunStore;
     use ironflow_store::user_store::UserStore;
     use serde_json::{Value as JsonValue, json};
     use std::sync::Arc;
-    use std::time::Duration;
     use tokio::sync::broadcast;
-    use tokio::time::sleep;
     use tower::ServiceExt;
     use uuid::Uuid;
 
     use super::*;
-    use crate::routes::test_helpers::create_user_auth_header;
+    use crate::routes::test_helpers::{
+        await_audit_entry, create_user_auth_header, test_state_with_audit_log,
+    };
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
         let provider = Arc::new(ClaudeCodeProvider::new());
@@ -1167,29 +1169,6 @@ mod tests {
 
     // -- delegation --
 
-    /// An `AppState` whose engine persists every event to the store's audit
-    /// log, so a test can read back the recorded `approved_by`.
-    fn test_state_with_audit_log(store: Arc<InMemoryStore>) -> AppState {
-        let provider = Arc::new(ClaudeCodeProvider::new());
-        let mut engine = Engine::new(store.clone(), provider);
-        engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
-        let jwt_config = Arc::new(JwtConfig {
-            secret: "test-secret".to_string(),
-            access_token_ttl_secs: 900,
-            refresh_token_ttl_secs: 604800,
-            cookie_domain: None,
-            cookie_secure: false,
-        });
-        let (event_sender, _) = broadcast::channel::<Event>(1);
-        AppState::new(
-            store,
-            Arc::new(engine),
-            jwt_config,
-            "test-worker-token".to_string(),
-            event_sender,
-        )
-    }
-
     /// Create a non-admin user in the store.
     async fn member(store: &Arc<InMemoryStore>, username: &str) -> User {
         let password_hash = password::hash("password123").expect("hash");
@@ -1333,25 +1312,7 @@ mod tests {
         run_id: Uuid,
         kind: EventKind,
     ) -> JsonValue {
-        for _ in 0..100 {
-            let page = store
-                .list_audit_logs(
-                    AuditLogFilter {
-                        event_type: Some(kind),
-                        run_id: Some(run_id),
-                        ..AuditLogFilter::default()
-                    },
-                    1,
-                    10,
-                )
-                .await
-                .expect("list audit logs");
-            if let Some(entry) = page.items.first() {
-                return entry.payload.clone();
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-        panic!("no {kind} audit entry was recorded for run {run_id}");
+        await_audit_entry(store, kind, Some(run_id)).await.payload
     }
 
     #[tokio::test]
@@ -1394,6 +1355,8 @@ mod tests {
 
         let payload = await_audit_payload(&store, run_id, EventKind::ApprovalGranted).await;
         assert_eq!(payload["approved_by"], "bob (delegated from alice)");
+        // The label names the delegation, the user id is the caller's.
+        assert_eq!(payload["user_id"], bob.id.to_string());
     }
 
     #[tokio::test]
@@ -1418,6 +1381,8 @@ mod tests {
 
         let payload = await_audit_payload(&store, run_id, EventKind::ApprovalRejected).await;
         assert_eq!(payload["rejected_by"], "bob (delegated from alice)");
+        assert_eq!(payload["user_id"], bob.id.to_string());
+        assert!(payload["reason"].is_null());
     }
 
     #[tokio::test]
@@ -1956,6 +1921,12 @@ mod tests {
     /// A `Bearer` header for an API key holding `scopes`, owned by a fresh
     /// admin.
     async fn admin_key_header(state: &AppState, scopes: Vec<ApiKeyScope>) -> String {
+        admin_key_with_owner(state, scopes).await.0
+    }
+
+    /// A `Bearer` header for an API key holding `scopes`, and the id of the
+    /// fresh admin owning it.
+    async fn admin_key_with_owner(state: &AppState, scopes: Vec<ApiKeyScope>) -> (String, Uuid) {
         let suffix = Uuid::now_v7().simple().to_string();
         let owner = state
             .store
@@ -1981,7 +1952,7 @@ mod tests {
             })
             .await
             .unwrap();
-        format!("Bearer {raw_key}")
+        (format!("Bearer {raw_key}"), owner.id)
     }
 
     /// An `Authenticated` API key caller holding `scopes`, owned by an admin.
@@ -2051,5 +2022,40 @@ mod tests {
         let manager = admin_key_caller(vec![ApiKeyScope::RunsManage]);
         let actor = authorize_gate(&manager, &state, &run, &gate).await.unwrap();
         assert_eq!(actor, "ci");
+    }
+
+    #[tokio::test]
+    async fn api_key_approval_is_recorded_with_the_key_owner() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+        let state = test_state_with_audit_log(store.clone());
+        let (auth, owner_id) = admin_key_with_owner(&state, vec![ApiKeyScope::RunsManage]).await;
+
+        let status = resolve_as(state, &auth, run.id, "approve").await;
+        assert_eq!(status, HttpStatusCode::OK);
+
+        // The label is the key name; the user id is the key owner, so the
+        // decision is attributable to a person.
+        let entry = await_audit_entry(&store, EventKind::ApprovalGranted, Some(run.id)).await;
+        assert_eq!(entry.user_id, Some(owner_id));
+        assert_eq!(entry.payload["user_id"], owner_id.to_string());
+        let label = entry.payload["approved_by"].as_str().expect("label");
+        assert!(label.starts_with("key-"), "got {label}");
+    }
+
+    #[tokio::test]
+    async fn api_key_rejection_is_recorded_with_the_key_owner() {
+        let store = Arc::new(InMemoryStore::new());
+        let run = create_awaiting_approval_run(&store).await;
+        let state = test_state_with_audit_log(store.clone());
+        let (auth, owner_id) = admin_key_with_owner(&state, vec![ApiKeyScope::RunsManage]).await;
+
+        let status = resolve_as(state, &auth, run.id, "reject").await;
+        assert_eq!(status, HttpStatusCode::OK);
+
+        let entry = await_audit_entry(&store, EventKind::ApprovalRejected, Some(run.id)).await;
+        assert_eq!(entry.user_id, Some(owner_id));
+        assert_eq!(entry.payload["user_id"], owner_id.to_string());
+        assert!(entry.payload["reason"].is_null());
     }
 }
