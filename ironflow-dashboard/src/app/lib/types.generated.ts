@@ -829,6 +829,9 @@ export interface paths {
 		 *     `HumanInputRejected` error and decides what happens next. The body is
 		 *     optional; without a reason, one naming the caller is recorded.
 		 *
+		 *     The rejection is published as an `approval_rejected` audit event carrying
+		 *     the caller's label (`rejected_by`), user id and the reason.
+		 *
 		 *     # Errors
 		 *
 		 *     - 400 if the step is not a human input or is not awaiting input
@@ -1378,7 +1381,8 @@ export interface paths {
 		 * @description Runs already executing are left alone (pause them one by one with
 		 *     `POST /api/v1/runs/{id}/pause`), and new runs are still created: they
 		 *     wait in the queue until the workflow is resumed. Pausing a workflow
-		 *     already paused succeeds and keeps its first `paused_at`.
+		 *     already paused succeeds and keeps its first `paused_at`. Every pause
+		 *     publishes a `workflow_paused` audit event carrying the caller's user id.
 		 */
 		post: operations["pause_workflow"];
 		delete?: never;
@@ -1421,7 +1425,9 @@ export interface paths {
 		put?: never;
 		/**
 		 * Resume a paused workflow: workers pick its queued runs again.
-		 * @description Resuming a workflow that is not paused succeeds and changes nothing.
+		 * @description Resuming a workflow that is not paused succeeds and changes nothing. A
+		 *     resume of a paused workflow publishes a `workflow_resumed` audit event
+		 *     carrying the caller's user id.
 		 */
 		post: operations["resume_workflow"];
 		delete?: never;
@@ -1699,6 +1705,7 @@ export interface components {
 		 *         run_id: Uuid::now_v7(),
 		 *         step_id: Some(Uuid::now_v7()),
 		 *         approved_by: "alice".to_string(),
+		 *         user_id: Some(Uuid::now_v7()),
 		 *         approvals_received: 1,
 		 *         approvals_required: 2,
 		 *         requirement: None,
@@ -1736,6 +1743,13 @@ export interface components {
 			 * @description Approval step identifier. `None` in events recorded before it existed.
 			 */
 			step_id?: string | null;
+			/**
+			 * Format: uuid
+			 * @description ID of the user who approved. `None` for a system decision (timeout
+			 *     escalation) and in events recorded before it existed. `approved_by`
+			 *     stays the display label.
+			 */
+			user_id?: string | null;
 		};
 		/**
 		 * @description Payload of the `Event::ApprovalRejected` event.
@@ -1751,6 +1765,8 @@ export interface components {
 		 *         run_id: Uuid::now_v7(),
 		 *         step_id: Some(Uuid::now_v7()),
 		 *         rejected_by: "bob".to_string(),
+		 *         user_id: Some(Uuid::now_v7()),
+		 *         reason: None,
 		 *         requirement: None,
 		 *         at: Utc::now(),
 		 *     };
@@ -1763,6 +1779,11 @@ export interface components {
 			 * @description When the rejection occurred.
 			 */
 			at: string;
+			/**
+			 * @description Why the decision was refused, when the rejection carries one (human
+			 *     input rejection). `None` for a gate rejection.
+			 */
+			reason?: string | null;
 			/** @description User who rejected (ID or username). */
 			rejected_by: string;
 			requirement?: null | components["schemas"]["ApprovalRequirement"];
@@ -1776,6 +1797,13 @@ export interface components {
 			 * @description Approval step identifier. `None` in events recorded before it existed.
 			 */
 			step_id?: string | null;
+			/**
+			 * Format: uuid
+			 * @description ID of the user who rejected. `None` for a system decision (timeout
+			 *     escalation) and in events recorded before it existed. `rejected_by`
+			 *     stays the display label.
+			 */
+			user_id?: string | null;
 		};
 		/**
 		 * @description Payload of the `Event::ApprovalRequested` event.
@@ -2471,6 +2499,14 @@ export interface components {
 			| (components["schemas"]["ScheduleOccurrencesMissedEvent"] & {
 					/** @enum {string} */
 					type: "schedule_occurrences_missed";
+			  })
+			| (components["schemas"]["WorkflowPausedEvent"] & {
+					/** @enum {string} */
+					type: "workflow_paused";
+			  })
+			| (components["schemas"]["WorkflowResumedEvent"] & {
+					/** @enum {string} */
+					type: "workflow_resumed";
 			  });
 		/**
 		 * @description Strongly-typed event kind matching domain event variants.
@@ -2509,7 +2545,9 @@ export interface components {
 			| "provider_account.usage_updated"
 			| "signal_awaited"
 			| "signal_received"
-			| "schedule_occurrences_missed";
+			| "schedule_occurrences_missed"
+			| "workflow_paused"
+			| "workflow_resumed";
 		/** @description The execution plan of one workflow for one input payload. */
 		ExecutionPlanResponse: {
 			/**
@@ -5186,6 +5224,78 @@ export interface components {
 			 */
 			paused_by?: string | null;
 			/** @description Workflow name. */
+			workflow_name: string;
+		};
+		/**
+		 * @description Payload of the `Event::WorkflowPaused` event.
+		 *
+		 *     Emitted on every pause request, including the pause of a workflow that
+		 *     was already paused: the request is a decision of its actor.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::WorkflowPausedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = WorkflowPausedEvent {
+		 *         workflow_name: "deploy".to_string(),
+		 *         user_id: Some(Uuid::now_v7()),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.workflow_name, "deploy");
+		 *     ```
+		 */
+		WorkflowPausedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the workflow was paused.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description ID of the user who paused the workflow. `None` when no user is behind
+			 *     the call.
+			 */
+			user_id?: string | null;
+			/** @description Paused workflow. */
+			workflow_name: string;
+		};
+		/**
+		 * @description Payload of the `Event::WorkflowResumed` event.
+		 *
+		 *     Emitted only when the workflow was paused: resuming a workflow that is
+		 *     not paused changes nothing and emits nothing.
+		 *
+		 *     # Examples
+		 *
+		 *     ```
+		 *     use chrono::Utc;
+		 *     use ironflow_engine::notify::WorkflowResumedEvent;
+		 *     use uuid::Uuid;
+		 *
+		 *     let payload = WorkflowResumedEvent {
+		 *         workflow_name: "deploy".to_string(),
+		 *         user_id: Some(Uuid::now_v7()),
+		 *         at: Utc::now(),
+		 *     };
+		 *     assert_eq!(payload.workflow_name, "deploy");
+		 *     ```
+		 */
+		WorkflowResumedEvent: {
+			/**
+			 * Format: date-time
+			 * @description When the workflow was resumed.
+			 */
+			at: string;
+			/**
+			 * Format: uuid
+			 * @description ID of the user who resumed the workflow. `None` when no user is behind
+			 *     the call.
+			 */
+			user_id?: string | null;
+			/** @description Resumed workflow. */
 			workflow_name: string;
 		};
 		/**

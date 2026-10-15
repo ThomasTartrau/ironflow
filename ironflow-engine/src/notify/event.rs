@@ -344,6 +344,7 @@ pub struct ApprovalRequestedEvent {
 ///     run_id: Uuid::now_v7(),
 ///     step_id: Some(Uuid::now_v7()),
 ///     approved_by: "alice".to_string(),
+///     user_id: Some(Uuid::now_v7()),
 ///     approvals_received: 1,
 ///     approvals_required: 2,
 ///     requirement: None,
@@ -361,6 +362,11 @@ pub struct ApprovalGrantedEvent {
     pub step_id: Option<Uuid>,
     /// User who approved (ID or username).
     pub approved_by: String,
+    /// ID of the user who approved. `None` for a system decision (timeout
+    /// escalation) and in events recorded before it existed. `approved_by`
+    /// stays the display label.
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
     /// Distinct approvals recorded on the gate, this one included.
     #[serde(default = "default_approval_count")]
     pub approvals_received: u32,
@@ -387,6 +393,8 @@ pub struct ApprovalGrantedEvent {
 ///     run_id: Uuid::now_v7(),
 ///     step_id: Some(Uuid::now_v7()),
 ///     rejected_by: "bob".to_string(),
+///     user_id: Some(Uuid::now_v7()),
+///     reason: None,
 ///     requirement: None,
 ///     at: Utc::now(),
 /// };
@@ -402,6 +410,15 @@ pub struct ApprovalRejectedEvent {
     pub step_id: Option<Uuid>,
     /// User who rejected (ID or username).
     pub rejected_by: String,
+    /// ID of the user who rejected. `None` for a system decision (timeout
+    /// escalation) and in events recorded before it existed. `rejected_by`
+    /// stays the display label.
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
+    /// Why the decision was refused, when the rejection carries one (human
+    /// input rejection). `None` for a gate rejection.
+    #[serde(default)]
+    pub reason: Option<String>,
     /// Approvers the handler required, if any.
     #[serde(default)]
     pub requirement: Option<ApprovalRequirement>,
@@ -807,6 +824,70 @@ pub struct ScheduleOccurrencesMissedEvent {
     pub at: DateTime<Utc>,
 }
 
+/// Payload of the `Event::WorkflowPaused` event.
+///
+/// Emitted on every pause request, including the pause of a workflow that
+/// was already paused: the request is a decision of its actor.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::WorkflowPausedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = WorkflowPausedEvent {
+///     workflow_name: "deploy".to_string(),
+///     user_id: Some(Uuid::now_v7()),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.workflow_name, "deploy");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WorkflowPausedEvent {
+    /// Paused workflow.
+    pub workflow_name: String,
+    /// ID of the user who paused the workflow. `None` when no user is behind
+    /// the call.
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
+    /// When the workflow was paused.
+    pub at: DateTime<Utc>,
+}
+
+/// Payload of the `Event::WorkflowResumed` event.
+///
+/// Emitted only when the workflow was paused: resuming a workflow that is
+/// not paused changes nothing and emits nothing.
+///
+/// # Examples
+///
+/// ```
+/// use chrono::Utc;
+/// use ironflow_engine::notify::WorkflowResumedEvent;
+/// use uuid::Uuid;
+///
+/// let payload = WorkflowResumedEvent {
+///     workflow_name: "deploy".to_string(),
+///     user_id: Some(Uuid::now_v7()),
+///     at: Utc::now(),
+/// };
+/// assert_eq!(payload.workflow_name, "deploy");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WorkflowResumedEvent {
+    /// Resumed workflow.
+    pub workflow_name: String,
+    /// ID of the user who resumed the workflow. `None` when no user is behind
+    /// the call.
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
+    /// When the workflow was resumed.
+    pub at: DateTime<Utc>,
+}
+
 /// A domain event emitted by the ironflow system.
 ///
 /// Covers the full lifecycle: runs, steps, approvals, and authentication.
@@ -931,6 +1012,13 @@ pub enum Event {
     ///
     /// Emitted by the schedule ticker once per schedule, tick and reason.
     ScheduleOccurrencesMissed(ScheduleOccurrencesMissedEvent),
+
+    // -- Workflows --
+    /// A workflow was paused: its new runs are held until it is resumed.
+    WorkflowPaused(WorkflowPausedEvent),
+
+    /// A paused workflow was resumed.
+    WorkflowResumed(WorkflowResumedEvent),
 }
 
 impl Event {
@@ -976,6 +1064,10 @@ impl Event {
     /// Event type constant for
     /// [`ScheduleOccurrencesMissed`](Event::ScheduleOccurrencesMissed).
     pub const SCHEDULE_OCCURRENCES_MISSED: &'static str = "schedule_occurrences_missed";
+    /// Event type constant for [`WorkflowPaused`](Event::WorkflowPaused).
+    pub const WORKFLOW_PAUSED: &'static str = "workflow_paused";
+    /// Event type constant for [`WorkflowResumed`](Event::WorkflowResumed).
+    pub const WORKFLOW_RESUMED: &'static str = "workflow_resumed";
 
     /// All event types. Pass this to
     /// [`EventPublisher::subscribe`](super::EventPublisher::subscribe) to
@@ -1013,6 +1105,8 @@ impl Event {
         Self::SIGNAL_AWAITED,
         Self::SIGNAL_RECEIVED,
         Self::SCHEDULE_OCCURRENCES_MISSED,
+        Self::WORKFLOW_PAUSED,
+        Self::WORKFLOW_RESUMED,
     ];
 
     /// Returns the event type as a static string (e.g. `"run_status_changed"`).
@@ -1056,6 +1150,8 @@ impl Event {
             Event::SignalAwaited(_) => Self::SIGNAL_AWAITED,
             Event::SignalReceived(_) => Self::SIGNAL_RECEIVED,
             Event::ScheduleOccurrencesMissed(_) => Self::SCHEDULE_OCCURRENCES_MISSED,
+            Event::WorkflowPaused(_) => Self::WORKFLOW_PAUSED,
+            Event::WorkflowResumed(_) => Self::WORKFLOW_RESUMED,
         }
     }
 
@@ -1103,7 +1199,9 @@ impl Event {
             | Event::ProviderAccountUpdated(_)
             | Event::ProviderAccountUsageUpdated(_)
             | Event::SignalReceived(_)
-            | Event::ScheduleOccurrencesMissed(_) => None,
+            | Event::ScheduleOccurrencesMissed(_)
+            | Event::WorkflowPaused(_)
+            | Event::WorkflowResumed(_) => None,
         }
     }
 
@@ -1158,7 +1256,9 @@ impl Event {
             | Event::ProviderAccountUpdated(_)
             | Event::ProviderAccountUsageUpdated(_)
             | Event::SignalReceived(_)
-            | Event::ScheduleOccurrencesMissed(_) => None,
+            | Event::ScheduleOccurrencesMissed(_)
+            | Event::WorkflowPaused(_)
+            | Event::WorkflowResumed(_) => None,
         }
     }
 
@@ -1166,8 +1266,13 @@ impl Event {
     ///
     /// Only the auth events ([`UserSignedIn`](Event::UserSignedIn),
     /// [`UserSignedUp`](Event::UserSignedUp),
-    /// [`UserSignedOut`](Event::UserSignedOut)) carry a user identifier;
-    /// every other variant returns `None`.
+    /// [`UserSignedOut`](Event::UserSignedOut)) and the decisions and pauses
+    /// ([`ApprovalGranted`](Event::ApprovalGranted),
+    /// [`ApprovalRejected`](Event::ApprovalRejected),
+    /// [`WorkflowPaused`](Event::WorkflowPaused),
+    /// [`WorkflowResumed`](Event::WorkflowResumed)) carry a user identifier.
+    /// A decision without a human actor (timeout escalation) returns `None`,
+    /// like every other variant.
     ///
     /// # Examples
     ///
@@ -1190,6 +1295,10 @@ impl Event {
             Event::UserSignedIn(e) => Some(e.user_id),
             Event::UserSignedUp(e) => Some(e.user_id),
             Event::UserSignedOut(e) => Some(e.user_id),
+            Event::ApprovalGranted(e) => e.user_id,
+            Event::ApprovalRejected(e) => e.user_id,
+            Event::WorkflowPaused(e) => e.user_id,
+            Event::WorkflowResumed(e) => e.user_id,
             Event::RunCreated(_)
             | Event::RunStatusChanged(_)
             | Event::RunFailed(_)
@@ -1198,8 +1307,6 @@ impl Event {
             | Event::StepCompleted(_)
             | Event::StepFailed(_)
             | Event::ApprovalRequested(_)
-            | Event::ApprovalGranted(_)
-            | Event::ApprovalRejected(_)
             | Event::ApprovalEscalated(_)
             | Event::LogLine(_)
             | Event::ProviderAccountUpdated(_)
@@ -1356,6 +1463,7 @@ mod tests {
             run_id: Uuid::now_v7(),
             step_id: Some(Uuid::now_v7()),
             approved_by: "alice".to_string(),
+            user_id: None,
             approvals_received: 1,
             approvals_required: 2,
             requirement: Some(requirement.clone()),
@@ -1596,6 +1704,7 @@ mod tests {
                 run_id,
                 step_id: None,
                 approved_by: "alice".to_string(),
+                user_id: None,
                 approvals_received: 1,
                 approvals_required: 1,
                 requirement: None,
@@ -1605,6 +1714,8 @@ mod tests {
                 run_id,
                 step_id: None,
                 rejected_by: "bob".to_string(),
+                user_id: None,
+                reason: None,
                 requirement: None,
                 at: now,
             }),
@@ -1688,6 +1799,7 @@ mod tests {
                 run_id,
                 step_id: Some(step_id),
                 approved_by: "alice".to_string(),
+                user_id: None,
                 approvals_received: 1,
                 approvals_required: 2,
                 requirement: None,
@@ -1697,6 +1809,8 @@ mod tests {
                 run_id,
                 step_id: Some(step_id),
                 rejected_by: "bob".to_string(),
+                user_id: None,
+                reason: None,
                 requirement: None,
                 at: now,
             }),
@@ -1722,6 +1836,7 @@ mod tests {
                 run_id,
                 step_id: None,
                 approved_by: "alice".to_string(),
+                user_id: None,
                 approvals_received: 1,
                 approvals_required: 1,
                 requirement: None,
@@ -1755,7 +1870,7 @@ mod tests {
     }
 
     #[test]
-    fn user_id_returns_some_only_for_auth_events() {
+    fn user_id_returns_the_actor_of_auth_events_decisions_and_pauses() {
         let user_id = Uuid::now_v7();
         let run_id = Uuid::now_v7();
         let now = Utc::now();
@@ -1772,6 +1887,35 @@ mod tests {
                 at: now,
             }),
             Event::UserSignedOut(UserSignedOutEvent { user_id, at: now }),
+            Event::ApprovalGranted(ApprovalGrantedEvent {
+                run_id,
+                step_id: None,
+                approved_by: "alice".to_string(),
+                user_id: Some(user_id),
+                approvals_received: 1,
+                approvals_required: 1,
+                requirement: None,
+                at: now,
+            }),
+            Event::ApprovalRejected(ApprovalRejectedEvent {
+                run_id,
+                step_id: None,
+                rejected_by: "bob".to_string(),
+                user_id: Some(user_id),
+                reason: None,
+                requirement: None,
+                at: now,
+            }),
+            Event::WorkflowPaused(WorkflowPausedEvent {
+                workflow_name: "w".to_string(),
+                user_id: Some(user_id),
+                at: now,
+            }),
+            Event::WorkflowResumed(WorkflowResumedEvent {
+                workflow_name: "w".to_string(),
+                user_id: Some(user_id),
+                at: now,
+            }),
         ];
 
         for event in &auth {
@@ -1795,6 +1939,21 @@ mod tests {
                 step_name: "s".to_string(),
                 kind: StepKind::Shell,
                 error: "e".to_string(),
+                at: now,
+            }),
+            // A system decision (timeout escalation) has no human actor.
+            Event::ApprovalRejected(ApprovalRejectedEvent {
+                run_id,
+                step_id: None,
+                rejected_by: "system:timeout".to_string(),
+                user_id: None,
+                reason: None,
+                requirement: None,
+                at: now,
+            }),
+            Event::WorkflowPaused(WorkflowPausedEvent {
+                workflow_name: "w".to_string(),
+                user_id: None,
                 at: now,
             }),
         ];
@@ -1908,6 +2067,7 @@ mod tests {
                     run_id: id,
                     step_id: Some(id),
                     approved_by: "alice".to_string(),
+                    user_id: None,
                     approvals_received: 1,
                     approvals_required: 1,
                     requirement: None,
@@ -1920,6 +2080,8 @@ mod tests {
                     run_id: id,
                     step_id: Some(id),
                     rejected_by: "bob".to_string(),
+                    user_id: None,
+                    reason: None,
                     requirement: None,
                     at: now,
                 }),
@@ -2025,6 +2187,22 @@ mod tests {
                     at: now,
                 }),
                 "schedule_occurrences_missed",
+            ),
+            (
+                Event::WorkflowPaused(WorkflowPausedEvent {
+                    workflow_name: "w".to_string(),
+                    user_id: Some(id),
+                    at: now,
+                }),
+                "workflow_paused",
+            ),
+            (
+                Event::WorkflowResumed(WorkflowResumedEvent {
+                    workflow_name: "w".to_string(),
+                    user_id: Some(id),
+                    at: now,
+                }),
+                "workflow_resumed",
             ),
         ];
 
@@ -2169,5 +2347,84 @@ mod tests {
         assert_eq!(back.run_id(), None);
         assert_eq!(back.step_id(), None);
         assert_eq!(back.user_id(), None);
+    }
+
+    #[test]
+    fn legacy_approval_decisions_have_no_user_id_nor_reason() {
+        let raw = r#"{"type":"approval_granted","run_id":"01890000-0000-7000-8000-000000000000","approved_by":"alice","at":"2026-01-01T00:00:00Z"}"#;
+        let granted: Event = serde_json::from_str(raw).expect("deserialize");
+        assert_eq!(granted.user_id(), None);
+
+        let raw = r#"{"type":"approval_rejected","run_id":"01890000-0000-7000-8000-000000000000","rejected_by":"bob","at":"2026-01-01T00:00:00Z"}"#;
+        let rejected: Event = serde_json::from_str(raw).expect("deserialize");
+        let Event::ApprovalRejected(rejected) = rejected else {
+            panic!("expected approval_rejected");
+        };
+        assert_eq!(rejected.user_id, None);
+        assert_eq!(rejected.reason, None);
+    }
+
+    #[test]
+    fn approval_rejected_roundtrips_the_actor_and_reason() {
+        let user_id = Uuid::now_v7();
+        let event = Event::ApprovalRejected(ApprovalRejectedEvent {
+            run_id: Uuid::now_v7(),
+            step_id: Some(Uuid::now_v7()),
+            rejected_by: "bob".to_string(),
+            user_id: Some(user_id),
+            reason: Some("wrong environment".to_string()),
+            requirement: None,
+            at: Utc::now(),
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.user_id(), Some(user_id));
+        let Event::ApprovalRejected(back) = back else {
+            panic!("expected approval_rejected");
+        };
+        assert_eq!(back.reason.as_deref(), Some("wrong environment"));
+    }
+
+    #[test]
+    fn workflow_paused_and_resumed_serde_roundtrip() {
+        let user_id = Uuid::now_v7();
+        let now = Utc::now();
+        let events = vec![
+            Event::WorkflowPaused(WorkflowPausedEvent {
+                workflow_name: "deploy".to_string(),
+                user_id: Some(user_id),
+                at: now,
+            }),
+            Event::WorkflowResumed(WorkflowResumedEvent {
+                workflow_name: "deploy".to_string(),
+                user_id: Some(user_id),
+                at: now,
+            }),
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).expect("serialize");
+            assert!(
+                json.contains(&format!("\"type\":\"{}\"", event.event_type())),
+                "got {json}"
+            );
+            assert!(json.contains("\"workflow_name\":\"deploy\""), "got {json}");
+            let back: Event = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back.event_type(), event.event_type());
+            assert_eq!(back.user_id(), Some(user_id));
+            assert_eq!(back.run_id(), None);
+            assert_eq!(back.step_id(), None);
+            assert!(Event::ALL.contains(&back.event_type()));
+        }
+    }
+
+    #[test]
+    fn workflow_paused_without_user_id_deserializes() {
+        let raw =
+            r#"{"type":"workflow_paused","workflow_name":"deploy","at":"2026-01-01T00:00:00Z"}"#;
+        let event: Event = serde_json::from_str(raw).expect("deserialize");
+        assert_eq!(event.event_type(), Event::WORKFLOW_PAUSED);
+        assert_eq!(event.user_id(), None);
     }
 }

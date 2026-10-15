@@ -25,7 +25,7 @@ use ironflow_store::models::{Run, RunFilter, RunStatus, RunUpdate, WorkflowPause
 
 use crate::engine::{Engine, ExecutionMode, chain_root};
 use crate::error::EngineError;
-use crate::notify::{Event, RunStatusChangedEvent};
+use crate::notify::{Event, RunStatusChangedEvent, WorkflowPausedEvent, WorkflowResumedEvent};
 
 /// Page size used to list the runs held while a workflow is paused.
 const HELD_RUNS_PAGE_SIZE: u32 = 100;
@@ -334,6 +334,10 @@ impl Engine {
     /// are not affected: pause them with [`pause_run`](Self::pause_run).
     /// Pausing a paused workflow returns the pause already recorded.
     ///
+    /// Every call publishes [`Event::WorkflowPaused`] with `paused_by` as its
+    /// actor, a re-pause included: the request is a decision of its actor and
+    /// the store does not tell whether the pause is new.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] when no handler is registered
@@ -363,6 +367,12 @@ impl Engine {
             .pause_workflow(workflow_name, paused_by)
             .await?;
         info!(workflow = %workflow_name, "workflow paused");
+        self.event_publisher()
+            .publish(Event::WorkflowPaused(WorkflowPausedEvent {
+                workflow_name: workflow_name.to_string(),
+                user_id: paused_by,
+                at: Utc::now(),
+            }));
         Ok(pause)
     }
 
@@ -370,6 +380,10 @@ impl Engine {
     ///
     /// Returns `true` when the workflow was paused, `false` when it was not:
     /// resuming is idempotent and starts nothing in that case.
+    ///
+    /// A resume of a paused workflow publishes [`Event::WorkflowResumed`]
+    /// with `resumed_by` as its actor; a resume of a workflow that is not
+    /// paused publishes nothing.
     ///
     /// Under [`ExecutionMode::Local`] the runs held `Pending` while the
     /// workflow was paused are started in background tasks, except
@@ -392,7 +406,7 @@ impl Engine {
     /// use ironflow_engine::error::EngineError;
     ///
     /// # async fn example(engine: Arc<Engine>) -> Result<(), EngineError> {
-    /// if engine.resume_workflow("deploy").await? {
+    /// if engine.resume_workflow("deploy", None).await? {
     ///     println!("deploy resumed");
     /// }
     /// # Ok(())
@@ -401,11 +415,18 @@ impl Engine {
     pub async fn resume_workflow(
         self: &Arc<Self>,
         workflow_name: &str,
+        resumed_by: Option<Uuid>,
     ) -> Result<bool, EngineError> {
         self.require_handler(workflow_name)?;
         let was_paused = self.store().resume_workflow(workflow_name).await?;
         if was_paused {
             info!(workflow = %workflow_name, "workflow resumed");
+            self.event_publisher()
+                .publish(Event::WorkflowResumed(WorkflowResumedEvent {
+                    workflow_name: workflow_name.to_string(),
+                    user_id: resumed_by,
+                    at: Utc::now(),
+                }));
             if self.execution_mode() == ExecutionMode::Local {
                 self.start_held_runs(workflow_name).await?;
             }

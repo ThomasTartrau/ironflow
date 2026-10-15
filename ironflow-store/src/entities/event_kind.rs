@@ -79,6 +79,10 @@ pub enum EventKind {
     SignalReceived,
     /// Occurrences of a cron schedule created no run.
     ScheduleOccurrencesMissed,
+    /// A workflow was paused.
+    WorkflowPaused,
+    /// A paused workflow was resumed.
+    WorkflowResumed,
 }
 
 impl EventKind {
@@ -105,6 +109,8 @@ impl EventKind {
         Self::SignalAwaited,
         Self::SignalReceived,
         Self::ScheduleOccurrencesMissed,
+        Self::WorkflowPaused,
+        Self::WorkflowResumed,
     ];
 
     /// Returns the wire-format string for this kind.
@@ -137,7 +143,7 @@ mod tests {
 
     #[test]
     fn all_has_correct_count() {
-        assert_eq!(EventKind::ALL.len(), 21);
+        assert_eq!(EventKind::ALL.len(), 23);
     }
 
     #[test]
@@ -173,6 +179,20 @@ mod tests {
         assert_eq!(
             "run_budget_exceeded".parse::<EventKind>().unwrap(),
             EventKind::RunBudgetExceeded
+        );
+    }
+
+    #[test]
+    fn workflow_pause_events_use_snake_case_wire_format() {
+        assert_eq!(EventKind::WorkflowPaused.as_str(), "workflow_paused");
+        assert_eq!(EventKind::WorkflowResumed.as_str(), "workflow_resumed");
+        assert_eq!(
+            "workflow_paused".parse::<EventKind>().unwrap(),
+            EventKind::WorkflowPaused
+        );
+        assert_eq!(
+            serde_json::to_string(&EventKind::WorkflowResumed).unwrap(),
+            "\"workflow_resumed\""
         );
     }
 

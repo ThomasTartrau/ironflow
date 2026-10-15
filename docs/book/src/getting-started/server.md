@@ -199,8 +199,9 @@ of the scope.
 
 On `GET /events`, a member session, or a key without the `admin` scope or owned by a
 member, only receives run events (`run_*`, `step_*`, `approval_*`, `log_line`,
-`retry_forced`, `signal_*`). User sign-in, sign-up and sign-out, Provider Account and
-schedule events reach only an admin session or an `admin`-scope key owned by an admin.
+`retry_forced`, `signal_*`). User sign-in, sign-up and sign-out, Provider Account,
+schedule and workflow pause/resume events reach only an admin session or an `admin`-scope
+key owned by an admin.
 
 Signals and Provider Accounts have their own scopes (`signals_send`, `accounts_read`,
 `accounts_manage`). Dashboard sessions (JWT) are not scope-checked: only the account's
@@ -224,6 +225,28 @@ scrape_configs:
     static_configs:
       - targets: ["ironflow:3000"]
 ```
+
+### Audit log
+
+The example server records every engine event in the audit log read by
+`GET /audit-logs` (and the Audit page of the dashboard) through `AuditLogSubscriber`.
+A custom server must subscribe it itself, otherwise the audit log stays empty:
+
+```rust,ignore
+engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+```
+
+Log lines and Provider Account events do not go through the engine publisher, so they
+are neither recorded nor duplicated. Who acted is the entry's `user_id`, also present in
+the payload of `approval_granted`, `approval_rejected` (a gate decision or a human input
+rejection, with its `reason`), `workflow_paused` and `workflow_resumed`. For an API key it
+is the key's owner; the event keeps the key name as its label (`approved_by`,
+`rejected_by`). A decision taken by the SLA timer (`system:timeout`) has no `user_id`. A
+pause is recorded on every request, a resume only when the workflow was paused.
+
+`GET /events` sends a `lagged` event, whatever its filters, to a client that read slower
+than events were published: `data: {"missed": n}` counts the events it lost. Its view
+is stale; reload it.
 
 ### Retention
 

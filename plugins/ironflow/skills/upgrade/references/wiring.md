@@ -197,6 +197,40 @@ key gets `429` after 10 verifications a minute.
 + ironflow-cli api-key create --name ci --scope runs_read
 ```
 
+## audit-log-subscriber
+- kind: behavior
+- since: ironflow-engine after 2.52.1, ironflow-api after 2.52.3 (#202)
+
+The audit log (`GET /api/v1/audit-logs`, the Audit page of the dashboard) is only filled
+when the server subscribes `AuditLogSubscriber` to the engine; without it the list stays
+empty. Approval decisions now carry the caller's `user_id` (the key owner for an API key),
+and the pause and resume of a workflow and the rejection of a human input are recorded
+too. Subscribe it next to the SSE broadcaster:
+
+```diff
+- use ironflow_engine::notify::{Event, WebhookSubscriber, WorkflowEventBus};
++ use ironflow_engine::notify::{AuditLogSubscriber, Event, WebhookSubscriber, WorkflowEventBus};
++ engine.subscribe(AuditLogSubscriber::new(store.clone()), Event::ALL);
+  let sse_broadcaster = SseBroadcaster::new();
+```
+
+Log lines and Provider Account events do not go through the engine publisher, so
+`Event::ALL` neither floods the audit log nor duplicates them.
+
+## resume-workflow-actor
+- kind: breaking
+- since: ironflow-engine after 2.52.1 (#202)
+- detect: `engine\.resume_workflow\([^,)]*\)`
+- compiler: `this method takes 2 arguments but 1 argument was supplied`
+
+`Engine::resume_workflow` takes the user who resumes the workflow, recorded in the
+`workflow_resumed` audit event. Pass `None` outside a user context:
+
+```diff
+- engine.resume_workflow("deploy").await?;
++ engine.resume_workflow("deploy", None).await?;
+```
+
 ## sse-connection-limits
 - kind: behavior
 - since: ironflow-api after 2.52.3 (#201)
