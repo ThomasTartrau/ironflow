@@ -193,8 +193,8 @@ whose secret does not verify counts on the IP bucket, and a client guessing secr
 key gets `429` after 10 verifications a minute.
 
 ```diff
-- ironflow-cli api-key create --name ci --scope runs_read --rate-limit-override 0
-+ ironflow-cli api-key create --name ci --scope runs_read
+- ironflow-cli api-key create ci --scope runs_read --rate-limit-override 0
++ ironflow-cli api-key create ci --scope runs_read
 ```
 
 ## audit-log-subscriber
