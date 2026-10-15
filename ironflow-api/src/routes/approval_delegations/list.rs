@@ -4,8 +4,9 @@ use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::DelegationFilter;
+use ironflow_store::entities::{ApiKeyScope, DelegationFilter};
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::{ApprovalDelegationResponse, ListApprovalDelegationsQuery};
 use crate::error::ApiError;
 use crate::response::ok_paged;
@@ -43,6 +44,7 @@ pub async fn list_approval_delegations(
     State(state): State<AppState>,
     Query(query): Query<ListApprovalDelegationsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsManage, false)?;
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 

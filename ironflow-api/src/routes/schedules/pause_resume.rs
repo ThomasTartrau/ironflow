@@ -5,8 +5,9 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
-use ironflow_store::entities::ScheduleUpdate;
+use ironflow_store::entities::{ApiKeyScope, ScheduleUpdate};
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::ScheduleResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -35,10 +36,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn pause_schedule(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsWrite, false)?;
     let schedule = state
         .store
         .update_schedule(
@@ -79,10 +81,11 @@ pub async fn pause_schedule(
     )
 )]
 pub async fn resume_schedule(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::RunsWrite, false)?;
     let current = state
         .store
         .find_schedule_by_id(id)

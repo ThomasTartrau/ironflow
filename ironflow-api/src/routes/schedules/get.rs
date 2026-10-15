@@ -5,7 +5,9 @@ use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use ironflow_auth::extractor::Authenticated;
+use ironflow_store::entities::ApiKeyScope;
 
+use crate::authorization::AuthorizeExt;
 use crate::entities::ScheduleResponse;
 use crate::error::ApiError;
 use crate::response::ok;
@@ -33,10 +35,11 @@ use crate::state::AppState;
     )
 )]
 pub async fn get_schedule(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.require(ApiKeyScope::WorkflowsRead, false)?;
     let schedule = state
         .store
         .find_schedule_by_id(id)
