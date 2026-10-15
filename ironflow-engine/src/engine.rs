@@ -16,6 +16,7 @@ use rust_decimal::Decimal;
 use serde_json::{Value, to_value};
 use tokio::spawn;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::time::timeout;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -233,12 +234,14 @@ pub struct Engine {
     execution_mode: ExecutionMode,
     worker_tags: Option<Arc<Vec<String>>>,
     active_runs: ActiveRuns,
+    local_resumes: ActiveRuns,
 }
 
-/// Per-run lock of the executions running in this process.
+/// Per-run locks of this process, keyed by run id.
 type ActiveRuns = Arc<Mutex<HashMap<Uuid, Arc<AsyncMutex<()>>>>>;
 
-/// Marks a run as executing in this process until it is dropped.
+/// Marks a run as executing in this process, or as being resumed locally,
+/// until it is dropped.
 ///
 /// Holds the run's lock, so a resume of the same run waits for the execution
 /// to end ([`Engine::wait_until_idle`]) instead of replaying it in parallel.
@@ -253,6 +256,21 @@ impl Drop for ActiveRunGuard {
     fn drop(&mut self) {
         self.lock.take();
         prune_active_run(&self.runs, self.run_id, &self.entry);
+    }
+}
+
+/// Take the lock of `run_id` in `runs`, waiting for its current holder.
+async fn lock_run(runs: &ActiveRuns, run_id: Uuid) -> ActiveRunGuard {
+    let entry = {
+        let mut runs = runs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(runs.entry(run_id).or_default())
+    };
+    let lock = Arc::clone(&entry).lock_owned().await;
+    ActiveRunGuard {
+        runs: Arc::clone(runs),
+        run_id,
+        entry,
+        lock: Some(lock),
     }
 }
 
@@ -343,7 +361,7 @@ pub fn chain_root(run: &Run) -> Option<Uuid> {
 }
 
 /// The run whose `Workflow` step started this sub-workflow child run.
-fn chain_parent(run: &Run) -> Option<Uuid> {
+pub(crate) fn chain_parent(run: &Run) -> Option<Uuid> {
     chain_label(run, PARENT_RUN_ID_LABEL)
 }
 
@@ -379,26 +397,14 @@ impl Engine {
             execution_mode: ExecutionMode::default(),
             worker_tags: None,
             active_runs: Arc::new(Mutex::new(HashMap::new())),
+            local_resumes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Mark `run_id` as executing in this process, waiting for a previous
     /// execution of the same run to end first.
     async fn track_execution(&self, run_id: Uuid) -> ActiveRunGuard {
-        let entry = {
-            let mut runs = self
-                .active_runs
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            Arc::clone(runs.entry(run_id).or_default())
-        };
-        let lock = Arc::clone(&entry).lock_owned().await;
-        ActiveRunGuard {
-            runs: Arc::clone(&self.active_runs),
-            run_id,
-            entry,
-            lock: Some(lock),
-        }
+        lock_run(&self.active_runs, run_id).await
     }
 
     /// Wait until no execution of `run_id` is running in this process.
@@ -1084,6 +1090,13 @@ impl Engine {
     /// aborts the plan: the partial plan is returned with
     /// [`ExecutionPlan::incomplete_reason`] set.
     ///
+    /// The handler is bounded twice: by
+    /// [`MAX_PLANNED_STEPS`](crate::plan::MAX_PLANNED_STEPS) on every step
+    /// kind, and by [`PlanOptions::timeout`]. Either one
+    /// returns the partial plan, with [`ExecutionPlan::truncated`] and
+    /// [`ExecutionPlan::incomplete_reason`] set, not an error. `ctx.store()`
+    /// and `ctx.secrets()` return an error while planning.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::InvalidWorkflow`] when no handler is registered
@@ -1157,8 +1170,13 @@ impl Engine {
         );
         ctx.set_plan(shared.clone());
 
-        if let Err(err) = handler.execute(&mut ctx).await {
-            lock_plan(&shared).fail(err.to_string());
+        match timeout(options.timeout, handler.execute(&mut ctx)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => lock_plan(&shared).fail(err.to_string()),
+            Err(_) => lock_plan(&shared).fail(format!(
+                "plan timed out after {} s",
+                options.timeout.as_secs_f64()
+            )),
         }
         drop(ctx);
 
@@ -1879,17 +1897,31 @@ impl Engine {
     /// run up. The state change already happened, so a failed resume is
     /// logged, not rolled back.
     ///
-    /// The task first waits for the execution of the run still in flight in
-    /// this process, if any: a run paused then resumed while a step runs
-    /// would otherwise be replayed next to the execution that has not
-    /// noticed the pause yet. Once it is gone, the run is read again:
-    /// `Pending` is started, `Running` was left unfinished by the previous
-    /// execution and is resumed as is, any other status means the previous
-    /// execution finished the run or it was taken elsewhere, and nothing is
-    /// done.
+    /// The local resumes of a run are serialized: a task reads the run only
+    /// once the previous local resume of it has returned, so two tasks never
+    /// both act on the same read. The task then waits for the execution of
+    /// the run still in flight in this process, if any: a run paused then
+    /// resumed while a step runs would otherwise be replayed next to the
+    /// execution that has not noticed the pause yet. Once it is gone, the run
+    /// is read again:
+    ///
+    /// - `Pending` is claimed with the `Pending -> Running` transition, a
+    ///   compare-and-set in every store, the one a worker performs when it
+    ///   picks a run. Only a successful claim resumes it here: a run another
+    ///   executor claimed first is left to it.
+    /// - `Running` with a worker lease is owned by that worker and left alone.
+    /// - `Running` without a lease was left unfinished by the previous
+    ///   execution in this process and is resumed as is, unless an execution
+    ///   of it is still running here.
+    /// - any other status means the previous execution finished the run or it
+    ///   was taken elsewhere, and nothing is done.
     pub(crate) fn spawn_local_resume(self: &Arc<Self>, run_id: Uuid) {
         let engine = Arc::clone(self);
         spawn(async move {
+            // One local resume of a run at a time, held until its execution
+            // returns: a sibling task reads the run only once this one is done,
+            // so it never sees the claim of a resume that has not started yet.
+            let _resuming = lock_run(&engine.local_resumes, run_id).await;
             engine.wait_until_idle(run_id).await;
             let run = match engine.store.get_run(run_id).await {
                 Ok(Some(run)) => run,
@@ -1904,16 +1936,40 @@ impl Engine {
             };
             match run.status.state {
                 RunStatus::Pending => {
-                    if let Err(err) = engine
+                    match engine
                         .store
                         .update_run_status(run_id, RunStatus::Running)
                         .await
                     {
-                        error!(run_id = %run_id, error = %err, "failed to restart a woken run");
+                        Ok(()) => {}
+                        Err(StoreError::InvalidTransition { from, .. }) => {
+                            info!(
+                                run_id = %run_id,
+                                status = %from,
+                                "run claimed elsewhere, left to its worker"
+                            );
+                            return;
+                        }
+                        Err(err) => {
+                            error!(run_id = %run_id, error = %err, "failed to restart a woken run");
+                            return;
+                        }
+                    }
+                }
+                RunStatus::Running if run.worker_id.is_some() => {
+                    info!(
+                        run_id = %run_id,
+                        worker_id = ?run.worker_id,
+                        "run owned by a worker lease, local resume skipped"
+                    );
+                    return;
+                }
+                RunStatus::Running => {
+                    if engine.is_executing(run_id) {
+                        info!(run_id = %run_id, "run already executing in this process, resume skipped");
                         return;
                     }
                 }
-                RunStatus::Running => {}
                 status => {
                     info!(
                         run_id = %run_id,
@@ -2818,7 +2874,7 @@ mod tests {
     use ironflow_core::providers::claude::ClaudeCodeProvider;
     use ironflow_core::providers::record_replay::RecordReplayProvider;
     use ironflow_store::memory::InMemoryStore;
-    use ironflow_store::models::{MAX_PRIORITY, MIN_PRIORITY, StepStatus};
+    use ironflow_store::models::{MAX_PRIORITY, MIN_PRIORITY, StepApproval, StepStatus};
     use serde_json::json;
 
     // Test handler that echoes a message via shell
@@ -3870,6 +3926,33 @@ mod tests {
         assert_eq!(steps[1].status.state, StepStatus::AwaitingApproval);
     }
 
+    /// Record one vote on the open approval gate of `run_id`, then move the
+    /// run to `Running`, the way the approve route does.
+    async fn approve_open_gate(store: &Arc<dyn Store>, run_id: Uuid) {
+        let gate = store
+            .list_steps(run_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|step| step.status.state == StepStatus::AwaitingApproval)
+            .expect("an open approval gate");
+        store
+            .record_step_approval(
+                gate.id,
+                StepApproval {
+                    user_id: Uuid::now_v7(),
+                    approved_by: "tester".to_string(),
+                    at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .update_run_status(run_id, RunStatus::Running)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn approval_resume_completes_run() {
         let mut engine = create_test_engine();
@@ -3883,12 +3966,8 @@ mod tests {
             .run;
         assert_eq!(run.status.state, RunStatus::AwaitingApproval);
 
-        // Simulate approval: transition to Running
-        engine
-            .store()
-            .update_run_status(run.id, RunStatus::Running)
-            .await
-            .unwrap();
+        // Simulate approval: one vote, then transition to Running
+        approve_open_gate(engine.store(), run.id).await;
 
         // Resume: replays build, skips approval, executes deploy
         let resumed = engine.resume_run(run.id).await.unwrap().run;
@@ -3922,11 +4001,7 @@ mod tests {
         assert_eq!(steps.len(), 2); // build + staging-gate
 
         // First approval
-        engine
-            .store()
-            .update_run_status(run.id, RunStatus::Running)
-            .await
-            .unwrap();
+        approve_open_gate(engine.store(), run.id).await;
 
         let resumed = engine.resume_run(run.id).await.unwrap().run;
         assert_eq!(resumed.status.state, RunStatus::AwaitingApproval);
@@ -3935,11 +4010,7 @@ mod tests {
         assert_eq!(steps.len(), 4); // build + staging-gate + deploy-staging + prod-gate
 
         // Second approval
-        engine
-            .store()
-            .update_run_status(run.id, RunStatus::Running)
-            .await
-            .unwrap();
+        approve_open_gate(engine.store(), run.id).await;
 
         let final_run = engine.resume_run(run.id).await.unwrap().run;
         assert_eq!(final_run.status.state, RunStatus::Completed);
@@ -4406,5 +4477,104 @@ mod tests {
             .unwrap();
         assert_eq!(updated_without.status.state, StepStatus::Failed);
         assert_eq!(updated_without.error.as_deref(), Some("parent run failed"),);
+    }
+
+    // -----------------------------------------------------------------------
+    // spawn_local_resume tests
+    // -----------------------------------------------------------------------
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use ironflow_store::models::LeaseRequest;
+    use tokio::time::sleep;
+
+    /// Counts its executions, then completes.
+    struct CountingWorkflow {
+        executions: Arc<AtomicUsize>,
+    }
+
+    impl WorkflowHandler for CountingWorkflow {
+        fn name(&self) -> &str {
+            "local-resume-counter"
+        }
+
+        fn execute<'a>(&'a self, _ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+            Box::pin(async move {
+                self.executions.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+    }
+
+    /// An engine running [`CountingWorkflow`], with one `Pending` run of it.
+    async fn engine_with_pending_counter() -> (Arc<Engine>, Arc<AtomicUsize>, Uuid) {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let mut engine = create_test_engine();
+        engine
+            .register(CountingWorkflow {
+                executions: executions.clone(),
+            })
+            .unwrap();
+        let run = engine
+            .enqueue_handler("local-resume-counter", TriggerKind::Manual, json!({}), 0)
+            .await
+            .unwrap();
+        (Arc::new(engine), executions, run.id)
+    }
+
+    #[tokio::test]
+    async fn local_resume_leaves_a_run_claimed_by_a_worker_alone() {
+        let (engine, executions, run_id) = engine_with_pending_counter().await;
+        let lease = LeaseRequest {
+            worker_id: "worker-1".to_string(),
+            ttl: Duration::from_secs(30),
+        };
+        let picked = engine
+            .store()
+            .pick_next_pending_for(Some(lease), None)
+            .await
+            .unwrap()
+            .expect("the run is due");
+        assert_eq!(picked.id, run_id);
+
+        engine.spawn_local_resume(run_id);
+        sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let run = engine.store().get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Running);
+        assert_eq!(run.worker_id.as_deref(), Some("worker-1"));
+    }
+
+    #[tokio::test]
+    async fn local_resume_claims_a_pending_run_once() {
+        let (engine, executions, run_id) = engine_with_pending_counter().await;
+
+        engine.spawn_local_resume(run_id);
+        engine.spawn_local_resume(run_id);
+        sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        let run = engine.store().get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn local_resume_of_a_running_run_executes_it_once() {
+        let (engine, executions, run_id) = engine_with_pending_counter().await;
+        engine
+            .store()
+            .update_run_status(run_id, RunStatus::Running)
+            .await
+            .unwrap();
+
+        engine.spawn_local_resume(run_id);
+        engine.spawn_local_resume(run_id);
+        sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        let run = engine.store().get_run(run_id).await.unwrap().unwrap();
+        assert_eq!(run.status.state, RunStatus::Completed);
     }
 }

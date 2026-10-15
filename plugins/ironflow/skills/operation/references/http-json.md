@@ -94,7 +94,7 @@ impl Operation for JsonGet {
 
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     let bearer = ctx
-        .secrets()
+        .secrets()?
         .get("api_token")
         .await
         .map_err(EngineError::Store)?

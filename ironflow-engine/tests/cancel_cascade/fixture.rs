@@ -11,10 +11,10 @@ use tokio::spawn;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-use ironflow_core::provider::AgentProvider;
+use ironflow_core::provider::{AgentProvider, LABEL_ROOT_RUN_ID};
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::config::{HumanInputConfig, ShellConfig, WorkflowOptions};
-use ironflow_engine::context::WorkflowContext;
+use ironflow_engine::context::{PARENT_RUN_ID_LABEL, WorkflowContext};
 use ironflow_engine::engine::{Engine, ExecutionMode};
 use ironflow_engine::executor::SubWorkflowOutcome;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
@@ -22,7 +22,8 @@ use ironflow_engine::notify::{Event, EventSubscriber, SubscriberFuture};
 use ironflow_store::error::StoreError;
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::models::{
-    NewRun, Run, RunFilter, RunStatus, Step, StepKind, StepStatus, TriggerKind,
+    NewRun, NewStep, Run, RunFilter, RunStatus, Step, StepKind, StepStatus, StepUpdate,
+    TriggerKind, step_trace_id,
 };
 use ironflow_store::store::{RunStore, Store};
 
@@ -419,5 +420,103 @@ fn new_run(workflow: &str, max_retries: u32, concurrency_key: Option<&str>) -> N
         concurrency_limits: Vec::new(),
         max_cost_usd: None,
         worker_tags: Vec::new(),
+    }
+}
+
+impl Fixture {
+    /// A root run of `asking-host` suspended in `AwaitingApproval`, with no
+    /// step yet.
+    pub async fn suspended_root(&self) -> Run {
+        let root = self.picked_run("asking-host", 0).await;
+        self.store
+            .update_run_status(root.id, RunStatus::AwaitingApproval)
+            .await
+            .expect("suspend the root");
+        self.run(root.id).await
+    }
+
+    /// Open on `run_id` an approval gate waiting for a vote.
+    pub async fn open_gate(&self, run_id: Uuid) -> Step {
+        self.open_step(
+            run_id,
+            "gate",
+            StepKind::Approval,
+            StepStatus::AwaitingApproval,
+        )
+        .await
+    }
+
+    /// Open on `root_id` the `Workflow` step that started `child_id`, as a
+    /// root suspended with that child records it.
+    pub async fn open_child_step(&self, root_id: Uuid, child_id: Uuid) -> Step {
+        let step = self
+            .open_step(root_id, "asker", StepKind::Workflow, StepStatus::Running)
+            .await;
+        self.store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    output: Some(json!({"child_run_id": child_id.to_string()})),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("record the child run id");
+        step
+    }
+
+    /// A `Pending` run of `asker` started by `parent_id`, in the chain rooted
+    /// at `root_id`.
+    pub async fn child_run(&self, root_id: Uuid, parent_id: Uuid) -> Run {
+        let mut request = new_run("asker", 0, None);
+        request.labels = HashMap::from([
+            (LABEL_ROOT_RUN_ID.to_string(), root_id.to_string()),
+            (PARENT_RUN_ID_LABEL.to_string(), parent_id.to_string()),
+        ]);
+        self.store
+            .create_run(request)
+            .await
+            .expect("create child run")
+            .into_run()
+    }
+
+    /// Create a step of `run_id` and move it to `status` through `Running`.
+    async fn open_step(
+        &self,
+        run_id: Uuid,
+        name: &str,
+        kind: StepKind,
+        status: StepStatus,
+    ) -> Step {
+        let step = self
+            .store
+            .create_step(NewStep {
+                run_id,
+                trace_id: step_trace_id(run_id, name, 0),
+                name: name.to_string(),
+                kind,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("create step");
+        let mut path = vec![StepStatus::Running];
+        if status != StepStatus::Running {
+            path.push(status);
+        }
+        for next in path {
+            self.store
+                .update_step(
+                    step.id,
+                    StepUpdate {
+                        status: Some(next),
+                        ..StepUpdate::default()
+                    },
+                )
+                .await
+                .expect("move step");
+        }
+        step
     }
 }

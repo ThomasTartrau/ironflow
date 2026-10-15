@@ -75,7 +75,7 @@ Then run:
 |--------|--------------|
 | `run(payload)` | Runs the first registered handler. |
 | `run_workflow(name, payload)` | Runs a specific registered handler. |
-| `resume(run_id)` | Continues a run suspended on an approval gate. |
+| `resume(run_id)` | Continues a run suspended on an approval gate, recording the votes the gate requires like the approve route. For a gate inside a sub-workflow, pass the child run id. |
 
 ## Asserting on the result
 

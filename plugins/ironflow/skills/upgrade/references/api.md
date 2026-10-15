@@ -168,7 +168,7 @@ Section: Artifacts.
 - let res = ctx.workflow(&Collect, json!({"scope": "disk"})).await?;
 - let child = res.output.get("run_id").and_then(|v| v.as_str()).unwrap_or("unknown");
 + let child = ctx.workflow(&Collect, CollectInput { scope: "disk".into() }).await?;
-+ let steps = ctx.store().list_steps(child.run_id()).await?;
++ let steps = ctx.store()?.list_steps(child.run_id()).await?;
 - fn sub_workflows(&self) -> Vec<String> { vec!["collect".to_string()] }
 + fn sub_workflows(&self) -> Vec<String> { sub_workflow_names(&[&Collect]) }
 ```
@@ -374,4 +374,64 @@ that names only `schedule` no longer compiles.
 + if let TriggerKind::Cron { schedule, .. } = ctx.trigger().await? {
 - let trigger = TriggerKind::Cron { schedule: "0 9 * * *".into() };
 + let trigger = TriggerKind::Cron { schedule: "0 9 * * *".into(), schedule_id: None, scheduled_for: None };
+```
+
+## plan-mode-store-secrets
+- kind: breaking
+- since: ironflow-engine after 2.52.0 (#200)
+- detect: `ctx\.store\(\)\.`
+- compiler: `no method named .* found for enum .Result`
+
+`WorkflowContext::store()` and `WorkflowContext::secrets()` return a `Result`. In plan mode
+(`POST /api/v1/workflows/{name}/plan`, `Engine::plan_handler`) both return
+`EngineError::InvalidWorkflow`: planning has no side effect, so it never reaches the real
+store or a secret. A handler that calls them mid-plan gets a partial plan, `truncated`
+with the reason; check `ctx.is_planning()` first to plan past the call.
+`OperationContext::secrets()`, used inside `Operation::execute`, is unchanged.
+
+```diff
+- let steps = ctx.store().list_steps(child.run_id()).await?;
++ let steps = ctx.store()?.list_steps(child.run_id()).await?;
+- let token = ctx.secrets().get("gitlab_token").await.map_err(EngineError::Store)?;
++ let token = ctx.secrets()?.get("gitlab_token").await.map_err(EngineError::Store)?;
+```
+
+## plan-bounds
+- kind: breaking
+- since: ironflow-engine after 2.52.0 (#200)
+- compiler: `missing field timeout in initializer of PlanOptions`
+
+The step cap of an execution plan (`MAX_PLANNED_STEPS`, 1000) now stops the handler on
+every step kind: operation, parallel, sub-workflow, delay, signal, approval, decision,
+skip and human input return `EngineError::InvalidWorkflow` once it is reached, instead of
+letting a loop run on without recording. A plan is also bounded by `PlanOptions::timeout`
+(`DEFAULT_PLAN_TIMEOUT`, 10 s): a handler still running then yields the partial plan,
+`truncated`, with `plan timed out after ...` as its reason. A `PlanOptions` written as a
+struct literal needs the new field.
+
+```diff
+  let options = PlanOptions {
+      max_depth: 2,
+      estimate_durations: false,
+      sample_runs: 10,
++     timeout: DEFAULT_PLAN_TIMEOUT,
+  };
+```
+
+## approval-replay-requires-votes
+- kind: behavior
+- since: ironflow-engine after 2.52.0 (#200)
+
+A replayed approval gate is completed only when it carries its recorded votes: one, or the
+`required_approvers` of its requirement. A run moved back to `Running` without a vote is
+suspended again on the same gate (`AwaitingApproval`, deadline kept) instead of passing it.
+The approve route and `TestEngine::resume` record the votes; code that resumed a gate by
+moving the run to `Running` itself must record them with `record_step_approval` first.
+A gate opened in a sub-workflow is approved on the child run that owns it: approving one of
+its ancestors records no vote on that gate, which then stays open.
+
+```diff
++ store.record_step_approval(gate.id, StepApproval { user_id, approved_by, at: Utc::now() }).await?;
+  store.update_run_status(run_id, RunStatus::Running).await?;
+  engine.resume_run(run_id).await?;
 ```

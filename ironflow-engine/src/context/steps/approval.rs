@@ -2,9 +2,9 @@
 
 use chrono::{TimeDelta, Utc};
 use serde_json::{json, to_value};
-use tracing::info;
+use tracing::{info, warn};
 
-use ironflow_store::models::{NewStep, StepKind, StepStatus, StepUpdate, step_trace_id};
+use ironflow_store::models::{NewStep, Step, StepKind, StepStatus, StepUpdate, step_trace_id};
 
 use crate::config::{ApprovalConfig, Approvers};
 use crate::context::WorkflowContext;
@@ -21,10 +21,13 @@ impl WorkflowContext {
     /// [`EngineError::ApprovalRequired`] to suspend the run. The engine
     /// transitions the run to `AwaitingApproval`.
     ///
-    /// On resume (after a human approved via the API), the approval step
-    /// is replayed: it is marked as `Completed` and execution continues
-    /// past it. Multiple approval gates in the same handler work -- each
-    /// one pauses and resumes independently.
+    /// On resume, the approval step is replayed: it is marked `Completed`
+    /// only when it carries the votes it needs (one, or `required_approvers`
+    /// of its [`ApprovalRequirement`](crate::config::ApprovalRequirement)),
+    /// and execution continues past it. A gate replayed without them
+    /// suspends the run again with [`EngineError::ApprovalRequired`]. Multiple
+    /// approval gates in the same handler work -- each one pauses and resumes
+    /// independently.
     ///
     /// When the config carries an SLA
     /// ([`ApprovalConfig::with_deadline`](crate::config::ApprovalConfig::with_deadline),
@@ -50,7 +53,8 @@ impl WorkflowContext {
     /// # Errors
     ///
     /// Returns [`EngineError::ApprovalRequired`] to pause the run on
-    /// first execution. Returns [`EngineError::ApprovalRejected`] when an
+    /// first execution, and on a replay of a gate that does not carry the
+    /// votes it needs yet. Returns [`EngineError::ApprovalRejected`] when an
     /// interceptor refuses the gate. Returns [`EngineError::ReplayDivergence`]
     /// when the step recorded at this position has a different name or kind.
     /// Returns other [`EngineError`] variants on store failures.
@@ -90,21 +94,38 @@ impl WorkflowContext {
         if let Some(plan) = self.plan().cloned() {
             self.position += 1;
             let mut recorder = lock_plan(&plan);
-            if recorder.record(name, StepKind::Approval, &self.workflow_name, None) {
-                recorder.set_last(vec![name.to_string()]);
-            }
+            recorder.record_or_stop(name, StepKind::Approval, &self.workflow_name, None)?;
+            recorder.set_last(vec![name.to_string()]);
             return Ok(());
         }
 
         let position = self.position;
         self.position += 1;
 
-        // Replay: if this approval step exists from a prior execution,
-        // the run was approved -- mark it completed (if not already) and continue.
+        // Replay: if this approval step exists from a prior execution, it is
+        // completed only once it carries the votes it needs; a gate replayed
+        // without them (a run moved back to `Running` outside the approve
+        // route) suspends the run again instead of approving itself.
         if let Some(existing) = self.replay_steps.get(&position) {
             check_replay_identity(existing, position, name, &StepKind::Approval)?;
 
             if existing.status.state == StepStatus::AwaitingApproval {
+                if !gate_has_its_votes(existing) {
+                    self.last_step_ids = vec![existing.id];
+                    warn!(
+                        run_id = %self.run_id,
+                        step = %name,
+                        position,
+                        approvals = existing.approvals.len(),
+                        required = required_votes(existing),
+                        "approval gate replayed without its votes, run suspended again"
+                    );
+                    return Err(EngineError::ApprovalRequired {
+                        run_id: self.run_id,
+                        step_id: existing.id,
+                        message: config.message().to_string(),
+                    });
+                }
                 self.store
                     .update_step(
                         existing.id,
@@ -327,5 +348,120 @@ impl WorkflowContext {
             step_id: step.id,
             message: config.message().to_string(),
         })
+    }
+}
+
+/// Votes an approval gate needs: `required_approvers` of its requirement, or
+/// one for a gate opened without approvers.
+pub(crate) fn required_votes(step: &Step) -> u32 {
+    step.approval_requirement
+        .as_ref()
+        .map_or(1, |requirement| requirement.required_approvers)
+}
+
+/// Whether the votes recorded on an approval gate resolve it, counted like the
+/// approve route does.
+fn gate_has_its_votes(step: &Step) -> bool {
+    step.approvals.len() as u32 >= required_votes(step)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use chrono::Utc;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use ironflow_store::memory::InMemoryStore;
+    use ironflow_store::models::{
+        ApprovalRequirement, NewRun, NewStep, Step, StepApproval, StepKind, StepUpdate,
+        TriggerKind, step_trace_id,
+    };
+    use ironflow_store::store::RunStore;
+
+    use super::gate_has_its_votes;
+
+    async fn gate(requirement: Option<u32>, votes: usize) -> Step {
+        let store = InMemoryStore::new();
+        let run = store
+            .create_run(NewRun {
+                workflow_name: "gated".to_string(),
+                trigger: TriggerKind::Manual,
+                payload: json!({}),
+                max_retries: 0,
+                handler_version: None,
+                labels: HashMap::new(),
+                scheduled_at: None,
+                created_by: None,
+                idempotency_key: None,
+                concurrency_key: None,
+                priority: 0,
+                concurrency_limits: Vec::new(),
+                max_cost_usd: None,
+                worker_tags: Vec::new(),
+            })
+            .await
+            .expect("create run")
+            .into_run();
+        let step = store
+            .create_step(NewStep {
+                run_id: run.id,
+                trace_id: step_trace_id(run.id, "gate", 0),
+                name: "gate".to_string(),
+                kind: StepKind::Approval,
+                position: 0,
+                input: None,
+                is_error_handler: false,
+            })
+            .await
+            .expect("create step");
+        store
+            .update_step(
+                step.id,
+                StepUpdate {
+                    approval_requirement: requirement.map(|required_approvers| {
+                        ApprovalRequirement {
+                            required_approvers,
+                            ..ApprovalRequirement::default()
+                        }
+                    }),
+                    ..StepUpdate::default()
+                },
+            )
+            .await
+            .expect("record the requirement");
+        for i in 0..votes {
+            store
+                .record_step_approval(
+                    step.id,
+                    StepApproval {
+                        user_id: Uuid::now_v7(),
+                        approved_by: format!("approver-{i}"),
+                        at: Utc::now(),
+                    },
+                )
+                .await
+                .expect("record vote");
+        }
+        store
+            .get_step(step.id)
+            .await
+            .expect("get step")
+            .expect("step exists")
+    }
+
+    #[tokio::test]
+    async fn gate_without_requirement_needs_one_vote() {
+        assert!(!gate_has_its_votes(&gate(None, 0).await));
+        assert!(gate_has_its_votes(&gate(None, 1).await));
+    }
+
+    #[tokio::test]
+    async fn gate_with_requirement_needs_its_required_approvers() {
+        assert!(!gate_has_its_votes(&gate(Some(2), 0).await));
+        assert!(!gate_has_its_votes(&gate(Some(2), 1).await));
+        assert!(gate_has_its_votes(&gate(Some(2), 2).await));
+        assert!(gate_has_its_votes(&gate(Some(2), 3).await));
     }
 }

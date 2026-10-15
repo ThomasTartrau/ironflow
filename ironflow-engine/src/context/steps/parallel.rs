@@ -95,12 +95,16 @@ impl WorkflowContext {
             self.position += 1;
             let mut results = Vec::with_capacity(steps.len());
             let mut names = Vec::with_capacity(steps.len());
-            {
+            let capped = {
                 let mut recorder = lock_plan(&plan);
                 let group = recorder.next_group();
+                let mut capped = None;
                 for (name, config) in &steps {
                     let wave = Some(group.clone());
-                    if !recorder.record(name, config.kind(), &self.workflow_name, wave) {
+                    if let Err(err) =
+                        recorder.record_or_stop(name, config.kind(), &self.workflow_name, wave)
+                    {
+                        capped = Some(err);
                         break;
                     }
                     names.push((*name).to_string());
@@ -114,8 +118,13 @@ impl WorkflowContext {
                     });
                 }
                 recorder.set_last(names);
-            }
-            return Ok(results);
+                capped
+            };
+            // Over the cap the handler stops: a partial wave is never returned.
+            return match capped {
+                Some(err) => Err(err),
+                None => Ok(results),
+            };
         }
 
         // Guard timeout: checked before launching the wave.

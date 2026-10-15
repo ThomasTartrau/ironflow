@@ -29,7 +29,7 @@ struct Issue {
 
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     let token = ctx
-        .secrets()
+        .secrets()?
         .get("gitlab_token")
         .await
         .map_err(EngineError::Store)?
@@ -77,7 +77,7 @@ struct Issue {
 
 async fn example(ctx: &mut WorkflowContext, failing_step: &str) -> Result<(), EngineError> {
     let token = ctx
-        .secrets()
+        .secrets()?
         .get("gitlab_token")
         .await
         .map_err(EngineError::Store)?

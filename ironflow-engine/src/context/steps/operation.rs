@@ -72,9 +72,8 @@ impl WorkflowContext {
             self.position += 1;
             let mut recorder = lock_plan(&plan);
             let estimate = recorder.estimate_for(name);
-            if recorder.record(name, kind, &self.workflow_name, None) {
-                recorder.set_last(vec![name.to_string()]);
-            }
+            recorder.record_or_stop(name, kind, &self.workflow_name, None)?;
+            recorder.set_last(vec![name.to_string()]);
             let mut output = planned_custom_output(estimate);
             output.artifacts = StepArtifacts::new(name, None, &[]);
             return Ok(output);

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::task::yield_now;
@@ -26,7 +27,7 @@ use ironflow_engine::notify::{AuditLogSubscriber, Event};
 use ironflow_store::audit_log_store::AuditLogStore;
 use ironflow_store::entities::{ApprovalRequirement, AuditLogFilter, EventKind};
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{RunStatus, Step, StepKind, TriggerKind};
+use ironflow_store::models::{RunStatus, Step, StepApproval, StepKind, StepStatus, TriggerKind};
 use ironflow_store::store::{RunStore, Store};
 
 /// Test timeout for bodies that spawn processes.
@@ -101,6 +102,40 @@ impl WorkflowHandler for PaymentGate {
     }
 }
 
+/// Workflow name registered by [`GateThenShell`] with two required approvers.
+const TWO_APPROVERS: &str = "two-approver-gate";
+
+/// Workflow name registered by [`GateThenShell`] without approvers.
+const ANY_APPROVER: &str = "any-approver-gate";
+
+/// Name of the step [`GateThenShell`] runs past its gate.
+const AFTER_GATE: &str = "after-gate";
+
+/// An approval gate with an SLA deadline, then a shell step.
+struct GateThenShell {
+    name: &'static str,
+    required: Option<u32>,
+}
+
+impl WorkflowHandler for GateThenShell {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a mut WorkflowContext) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let mut config = ApprovalConfig::new("Ship it?").with_deadline_secs(3600);
+            if let Some(required) = self.required {
+                config = config.requiring(Approvers::at_least(required));
+            }
+            ctx.approval("gate", config).await?;
+            ctx.shell(AFTER_GATE, ShellConfig::new("echo shipped"))
+                .await?;
+            Ok(())
+        })
+    }
+}
+
 fn provider() -> Arc<dyn AgentProvider> {
     Arc::new(RecordReplayProvider::replay(
         ClaudeCodeProvider::new(),
@@ -114,6 +149,11 @@ fn engine_with(store: Arc<InMemoryStore>, policy: Policy) -> Engine {
     engine
         .register(PaymentGate { policy })
         .expect("register handler");
+    for (name, required) in [(TWO_APPROVERS, Some(2)), (ANY_APPROVER, None)] {
+        engine
+            .register(GateThenShell { name, required })
+            .expect("register gated handler");
+    }
     engine
 }
 
@@ -137,6 +177,32 @@ async fn gate_step(store: &InMemoryStore, run_id: Uuid) -> Step {
         .into_iter()
         .find(|s| s.kind == StepKind::Approval)
         .expect("approval step exists")
+}
+
+/// Record a vote of a new user on the gate `gate_id`.
+async fn vote(store: &InMemoryStore, gate_id: Uuid) {
+    store
+        .record_step_approval(
+            gate_id,
+            StepApproval {
+                user_id: Uuid::now_v7(),
+                approved_by: "tester".to_string(),
+                at: Utc::now(),
+            },
+        )
+        .await
+        .expect("record vote");
+}
+
+/// Move a suspended run back to `Running` and resume it, as an approval
+/// outside the API would.
+async fn resume(engine: &Engine, store: &InMemoryStore, run_id: Uuid) -> RunStatus {
+    store
+        .update_run_status(run_id, RunStatus::Running)
+        .await
+        .expect("to running");
+    let resumed = engine.resume_run(run_id).await.expect("resume");
+    resumed.run.status.state
 }
 
 async fn stored_requirement(store: &InMemoryStore, run_id: Uuid) -> ApprovalRequirement {
@@ -245,7 +311,11 @@ async fn a_resumed_run_keeps_the_requirement_stored_when_the_gate_opened() {
             2
         );
 
-        // The approval API moves the run back to Running before resuming.
+        // The approval API records the votes, then moves the run back to
+        // Running before resuming.
+        let gate = gate_step(&store, run_id).await;
+        vote(&store, gate.id).await;
+        vote(&store, gate.id).await;
         store
             .update_run_status(run_id, RunStatus::Running)
             .await
@@ -303,6 +373,74 @@ async fn approval_requested_audit_entry_carries_the_requirement() {
                 "approver_groups": ["finance"],
             })
         );
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn a_replay_with_missing_votes_does_not_auto_approve_the_gate() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let engine = engine_with(store.clone(), Policy::Unset);
+        let result = engine
+            .run_handler(TWO_APPROVERS, TriggerKind::Api, json!({}))
+            .await
+            .expect("handler suspends on the gate");
+        let run_id = result.run.id;
+        let gate = gate_step(&store, run_id).await;
+        let deadline = gate.approval_deadline_at.expect("the gate has a deadline");
+
+        vote(&store, gate.id).await;
+        let status = resume(&engine, &store, run_id).await;
+
+        assert_eq!(status, RunStatus::AwaitingApproval);
+        let steps = store.list_steps(run_id).await.expect("list steps");
+        let gates: Vec<&Step> = steps
+            .iter()
+            .filter(|s| s.kind == StepKind::Approval)
+            .collect();
+        assert_eq!(gates.len(), 1, "the replay records no second gate");
+        assert_eq!(gates[0].status.state, StepStatus::AwaitingApproval);
+        assert_eq!(gates[0].approval_deadline_at, Some(deadline));
+        assert_eq!(gates[0].approvals.len(), 1);
+        assert!(steps.iter().all(|s| s.name != AFTER_GATE));
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test]
+async fn a_replayed_gate_without_any_vote_is_not_auto_approved() {
+    timeout(TEST_TIMEOUT, async {
+        let store = Arc::new(InMemoryStore::new());
+        let engine = engine_with(store.clone(), Policy::Unset);
+        let result = engine
+            .run_handler(ANY_APPROVER, TriggerKind::Api, json!({}))
+            .await
+            .expect("handler suspends on the gate");
+        let run_id = result.run.id;
+
+        let status = resume(&engine, &store, run_id).await;
+
+        assert_eq!(status, RunStatus::AwaitingApproval);
+        let gate = gate_step(&store, run_id).await;
+        assert_eq!(gate.status.state, StepStatus::AwaitingApproval);
+        assert!(gate.approval_deadline_at.is_some());
+        let steps = store.list_steps(run_id).await.expect("list steps");
+        assert_eq!(steps.len(), 1);
+        assert!(steps.iter().all(|s| s.name != AFTER_GATE));
+
+        vote(&store, gate.id).await;
+        let status = resume(&engine, &store, run_id).await;
+
+        assert_eq!(status, RunStatus::Completed);
+        let steps = store.list_steps(run_id).await.expect("list steps");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].status.state, StepStatus::Completed);
+        assert!(steps[0].approval_deadline_at.is_none());
+        assert_eq!(steps[1].name, AFTER_GATE);
+        assert_eq!(steps[1].status.state, StepStatus::Completed);
     })
     .await
     .expect("test timed out");

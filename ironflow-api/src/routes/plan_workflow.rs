@@ -6,8 +6,8 @@ use axum::response::IntoResponse;
 use ironflow_auth::extractor::Authenticated;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::plan::{
-    ConditionResult, DEFAULT_ESTIMATE_SAMPLE_RUNS, DEFAULT_PLAN_MAX_DEPTH, ExecutionPlan,
-    PlanOptions, PlannedStep,
+    ConditionResult, DEFAULT_ESTIMATE_SAMPLE_RUNS, DEFAULT_PLAN_MAX_DEPTH, DEFAULT_PLAN_TIMEOUT,
+    ExecutionPlan, PlanOptions, PlannedStep,
 };
 use ironflow_store::entities::ApiKeyScope;
 use ironflow_store::entities::StepKind;
@@ -226,6 +226,7 @@ pub async fn plan_workflow(
         max_depth,
         estimate_durations: req.estimate_durations.unwrap_or(true),
         sample_runs: DEFAULT_ESTIMATE_SAMPLE_RUNS,
+        timeout: DEFAULT_PLAN_TIMEOUT,
     };
 
     let plan = state

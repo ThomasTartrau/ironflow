@@ -953,7 +953,7 @@ use ironflow_engine::error::EngineError;
 
 async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     let token = ctx
-        .secrets()
+        .secrets()?
         .get("gitlab_token")
         .await
         .map_err(EngineError::Store)?

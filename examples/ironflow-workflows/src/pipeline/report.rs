@@ -39,8 +39,13 @@ impl WorkflowHandler for Report {
         Box::pin(async move {
             let enrich = ctx.workflow(&Enrich, ()).await?;
 
-            // While planning no child run exists, so there is nothing to read.
-            let steps = ctx.store().list_steps(enrich.run_id()).await?;
+            // While planning no child run exists and the store is out of reach,
+            // so there is nothing to read.
+            let steps = if ctx.is_planning() {
+                Vec::new()
+            } else {
+                ctx.store()?.list_steps(enrich.run_id()).await?
+            };
             let summary = match steps.iter().find(|step| step.name == STRUCTURE_STEP) {
                 Some(step) => {
                     let metrics: SystemMetrics = StepOutput::from(step).json()?;

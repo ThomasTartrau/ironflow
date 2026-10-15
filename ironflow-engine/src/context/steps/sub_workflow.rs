@@ -47,7 +47,7 @@ const CHILD_RUN_ID_KEY: &str = "child_run_id";
 ///
 /// A missing or unparsable id means the parent stopped before the child run
 /// was recorded: a new child run is started.
-pub(in crate::context) fn recorded_child_run_id(step: &Step) -> Option<Uuid> {
+pub(crate) fn recorded_child_run_id(step: &Step) -> Option<Uuid> {
     let raw = step.output.as_ref()?.get(CHILD_RUN_ID_KEY)?.as_str()?;
     match Uuid::parse_str(raw) {
         Ok(id) => Some(id),
@@ -194,7 +194,7 @@ impl WorkflowContext {
     ///
     /// # async fn example(ctx: &mut WorkflowContext) -> Result<(), EngineError> {
     /// let child = ctx.workflow(&Collect, CollectInput { scope: "system".to_string() }).await?;
-    /// let steps = ctx.store().list_steps(child.run_id()).await?;
+    /// let steps = ctx.store()?.list_steps(child.run_id()).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -655,9 +655,7 @@ impl WorkflowContext {
 
         {
             let mut recorder = lock_plan(plan);
-            if !recorder.record(&sub_name, StepKind::Workflow, &self.workflow_name, None) {
-                return Ok(planned);
-            }
+            recorder.record_or_stop(&sub_name, StepKind::Workflow, &self.workflow_name, None)?;
             recorder.set_last(vec![sub_name.clone()]);
         }
 

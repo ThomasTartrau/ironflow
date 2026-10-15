@@ -29,7 +29,7 @@ use ironflow_engine::engine::Engine;
 use ironflow_engine::error::EngineError;
 use ironflow_engine::handler::{HandlerFuture, TypedWorkflow, WorkflowHandler};
 use ironflow_store::memory::InMemoryStore;
-use ironflow_store::models::{NewRun, RunStatus, RunUpdate, TriggerKind};
+use ironflow_store::models::{NewRun, RunStatus, RunUpdate, StepApproval, StepStatus, TriggerKind};
 use ironflow_store::store::RunStore;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -152,6 +152,24 @@ async fn approved_gated_run(engine: &Engine, store: &InMemoryStore) -> Uuid {
     let run_id = enqueue(store, "gated", 0).await;
     let suspended = engine.execute_run(run_id).await.expect("reaches the gate");
     assert_eq!(suspended.run.status.state, RunStatus::AwaitingApproval);
+    let gate = store
+        .list_steps(run_id)
+        .await
+        .expect("list steps")
+        .into_iter()
+        .find(|s| s.status.state == StepStatus::AwaitingApproval)
+        .expect("the gate is open");
+    store
+        .record_step_approval(
+            gate.id,
+            StepApproval {
+                user_id: Uuid::now_v7(),
+                approved_by: "tester".to_string(),
+                at: Utc::now(),
+            },
+        )
+        .await
+        .expect("vote");
     store
         .update_run_status(run_id, RunStatus::Running)
         .await

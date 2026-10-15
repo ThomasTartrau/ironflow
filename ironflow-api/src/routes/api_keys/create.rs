@@ -193,7 +193,7 @@ mod tests {
     use ironflow_store::store::Store;
     use tokio::sync::broadcast;
 
-    async fn test_state() -> (AppState, AuthenticatedUser) {
+    async fn admin_state() -> (AppState, AuthenticatedUser) {
         let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
         let provider = Arc::new(ClaudeCodeProvider::new());
         let engine = Arc::new(Engine::new(store.clone(), provider));
@@ -280,7 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_api_key_name_longer_than_255_returns_400() {
-        let (state, auth) = test_state().await;
+        let (state, auth) = admin_state().await;
         let user_id = auth.user_id;
         let store = state.store.clone();
 
@@ -296,7 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_api_key_name_of_255_chars_returns_201() {
-        let (state, auth) = test_state().await;
+        let (state, auth) = admin_state().await;
 
         let response = create_api_key(auth, State(state), Json(request("a".repeat(255))))
             .await
@@ -307,7 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_api_key_stores_trimmed_name() {
-        let (state, auth) = test_state().await;
+        let (state, auth) = admin_state().await;
         let user_id = auth.user_id;
         let store = state.store.clone();
 

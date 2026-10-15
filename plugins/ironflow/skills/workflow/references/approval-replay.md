@@ -4,6 +4,9 @@ When `ctx.approval()` is reached the run stops with status `AwaitingApproval` an
 handler future is dropped. On approval the engine **runs `execute()` again from the first
 line**. Every step already completed returns its cached output without executing; the
 approval step is skipped; execution continues with the first step that has no cache entry.
+The gate is skipped only when its votes are recorded (one, or the `required_approvers` of
+its requirement): a run moved back to `Running` without them, outside the approve route or
+`TestEngine::resume`, suspends again on the same gate.
 
 Consequence: any code that is not a `ctx.*` step runs twice.
 

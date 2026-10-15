@@ -318,3 +318,5 @@ Group names are 1 to 64 characters from `[A-Za-z0-9_.-]`, at most 50 per user.
 ## Step replay
 
 After an approval, the engine re-executes the handler from the beginning: in the API process under `ExecutionMode::Local`, on the worker that picks up the requeued run under `ExecutionMode::Workers` (see [execution mode](engine-worker.md#execution-mode)). Completed steps return their cached output immediately -- they do not re-run. The approved gate is skipped, and execution resumes with the next step.
+
+The gate is skipped only when its votes are recorded: one, or the `required_approvers` of its requirement. The approve route records them before it resumes the run, and so does `TestEngine::resume` in tests. A run moved back to `Running` without them (a direct store update, a sub-workflow cancelled under a root that waits on its own gate) is suspended again on the same gate: it stays `AwaitingApproval` and keeps its deadline. For a gate inside a sub-workflow, the vote is cast on the child run that owns the gate.
