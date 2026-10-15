@@ -24,7 +24,9 @@ use ironflow_auth::password;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_engine::engine::Engine;
 use ironflow_engine::notify::Event;
-use ironflow_store::entities::{ApiKeyScope, NewApiKey, NewUser, User};
+use ironflow_store::entities::{
+    ApiKeyScope, NewApiKey, NewSchedule, NewUser, RunFilter, SchedulePolicy, ScheduleSource, User,
+};
 use ironflow_store::memory::InMemoryStore;
 use ironflow_store::store::Store;
 
@@ -185,6 +187,16 @@ fn create_run_body() -> Value {
     json!({"workflow": "test-workflow", "payload": {"env": "prod"}})
 }
 
+/// A valid `POST /schedules` body, for a workflow that is not registered.
+fn create_schedule_body() -> Value {
+    json!({"workflow_name": "test-workflow", "cron_expression": "0 0 * * * *"})
+}
+
+/// A valid `POST /approval-delegations` body delegating to `to_user_id`.
+fn create_delegation_body(to_user_id: Uuid) -> Value {
+    json!({"to_user_id": to_user_id, "valid_until": "2099-01-01T00:00:00Z"})
+}
+
 /// A valid `POST /users` body.
 fn create_user_body() -> Value {
     json!({
@@ -195,12 +207,15 @@ fn create_user_body() -> Value {
     })
 }
 
-/// Every user-facing route the issue lists, with a valid body where the route
-/// has a JSON extractor, so the request always reaches the handler.
-fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid) -> Vec<Row> {
+/// Every user-facing scoped route except `GET /templates/registry`, with a
+/// valid body where the route has a JSON extractor, so the request always
+/// reaches the handler. The registry route clones a git repository on success,
+/// so a dedicated deny test covers it instead.
+fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid, schedule_id: Uuid) -> Vec<Row> {
     let run = format!("/api/v1/runs/{run_id}");
     let step = format!("{run}/steps/{step_id}");
     let user = format!("/api/v1/users/{user_id}");
+    let schedule = format!("/api/v1/schedules/{schedule_id}");
     vec![
         // runs_read
         row("GET", "/api/v1/runs", ApiKeyScope::RunsRead),
@@ -214,6 +229,20 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid) -> Vec<Row> {
             "POST",
             "/api/v1/runs",
             create_run_body(),
+            ApiKeyScope::RunsWrite,
+        ),
+        row_with_body(
+            "POST",
+            "/api/v1/schedules",
+            create_schedule_body(),
+            ApiKeyScope::RunsWrite,
+        ),
+        row("DELETE", schedule.clone(), ApiKeyScope::RunsWrite),
+        row("POST", format!("{schedule}/pause"), ApiKeyScope::RunsWrite),
+        row("POST", format!("{schedule}/resume"), ApiKeyScope::RunsWrite),
+        row(
+            "POST",
+            format!("{schedule}/trigger"),
             ApiKeyScope::RunsWrite,
         ),
         // runs_manage
@@ -231,8 +260,26 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid) -> Vec<Row> {
         row("POST", format!("{run}/replay"), ApiKeyScope::RunsManage),
         row("POST", format!("{run}/pause"), ApiKeyScope::RunsManage),
         row("POST", format!("{run}/resume"), ApiKeyScope::RunsManage),
+        row(
+            "GET",
+            "/api/v1/approval-delegations",
+            ApiKeyScope::RunsManage,
+        ),
+        row_with_body(
+            "POST",
+            "/api/v1/approval-delegations",
+            create_delegation_body(user_id),
+            ApiKeyScope::RunsManage,
+        ),
+        row(
+            "DELETE",
+            format!("/api/v1/approval-delegations/{}", Uuid::now_v7()),
+            ApiKeyScope::RunsManage,
+        ),
         // workflows_read
         row("GET", "/api/v1/workflows", ApiKeyScope::WorkflowsRead),
+        row("GET", "/api/v1/schedules", ApiKeyScope::WorkflowsRead),
+        row("GET", schedule.clone(), ApiKeyScope::WorkflowsRead),
         row("GET", "/api/v1/workflows/x", ApiKeyScope::WorkflowsRead),
         row_with_body(
             "POST",
@@ -294,7 +341,7 @@ fn rows(run_id: Uuid, step_id: Uuid, user_id: Uuid) -> Vec<Row> {
 
 /// The rows of [`rows`] for a fixture, with a fresh run and step id.
 fn fixture_rows(fx: &Fixture) -> Vec<Row> {
-    rows(Uuid::now_v7(), Uuid::now_v7(), fx.target.id)
+    rows(Uuid::now_v7(), Uuid::now_v7(), fx.target.id, Uuid::now_v7())
 }
 
 /// Send `method` on `uri` with `auth`, and `body` as JSON when set.
@@ -482,10 +529,20 @@ async fn jwt_sessions_keep_their_scope_free_behaviour() {
         );
     }
 
-    for uri in ["/api/v1/runs", "/api/v1/workflows", "/api/v1/stats"] {
+    for uri in [
+        "/api/v1/runs",
+        "/api/v1/workflows",
+        "/api/v1/stats",
+        "/api/v1/schedules",
+        "/api/v1/approval-delegations",
+    ] {
         let resp = send(&fx.router, "GET", uri, &member, None).await;
         assert_eq!(resp.status(), StatusCode::OK, "GET {uri}");
     }
+
+    let pause = format!("/api/v1/schedules/{}/pause", Uuid::now_v7());
+    let resp = send(&fx.router, "POST", &pause, &member, None).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "POST {pause}");
 
     for (method, uri) in [
         ("GET", "/api/v1/users"),
@@ -494,5 +551,75 @@ async fn jwt_sessions_keep_their_scope_free_behaviour() {
     ] {
         let resp = send(&fx.router, method, uri, &member, None).await;
         assert_forbidden_with(resp, "FORBIDDEN", method, uri).await;
+    }
+}
+
+#[tokio::test]
+async fn stats_read_key_cannot_delete_pause_or_trigger_a_schedule_nor_list_templates() {
+    let fx = fixture().await;
+    let schedule = fx
+        .state
+        .store
+        .create_schedule(NewSchedule {
+            workflow_name: "deploy".to_string(),
+            cron_expression: "0 0 * * * *".to_string(),
+            inputs: json!({}),
+            source: ScheduleSource::Api,
+            priority: 0,
+            created_by_user_id: Some(fx.admin.id),
+            next_trigger_at: None,
+            policy: SchedulePolicy::default(),
+        })
+        .await
+        .expect("create schedule");
+    let auth = api_key_header(&fx.admin, vec![ApiKeyScope::StatsRead], &fx.state).await;
+    let base = format!("/api/v1/schedules/{}", schedule.id);
+
+    for (method, uri) in [
+        ("DELETE", base.clone()),
+        ("POST", format!("{base}/pause")),
+        ("POST", format!("{base}/resume")),
+        ("POST", format!("{base}/trigger")),
+        ("GET", "/api/v1/templates/registry".to_string()),
+    ] {
+        let resp = send(&fx.router, method, &uri, &auth, None).await;
+        assert_forbidden_with(resp, "INSUFFICIENT_SCOPE", method, &uri).await;
+    }
+
+    let found = fx
+        .state
+        .store
+        .find_schedule_by_id(schedule.id)
+        .await
+        .expect("find")
+        .expect("schedule still exists");
+    assert!(found.disabled_at.is_none());
+    let runs = fx
+        .state
+        .store
+        .list_runs(RunFilter::default(), 1, 10)
+        .await
+        .expect("runs");
+    assert_eq!(runs.total, 0);
+}
+
+#[tokio::test]
+async fn member_key_with_the_scope_reaches_schedule_and_delegation_routes() {
+    let fx = fixture().await;
+    let keys = keys_per_scope(&fx.member, &fx.state).await;
+
+    for r in fixture_rows(&fx)
+        .into_iter()
+        .filter(|r| r.uri.contains("/schedules") || r.uri.contains("/approval-delegations"))
+    {
+        let auth = &keys[&r.scope];
+        let resp = send(&fx.router, r.method, &r.uri, auth, r.body).await;
+        assert_ne!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{} {}",
+            r.method,
+            r.uri
+        );
     }
 }
