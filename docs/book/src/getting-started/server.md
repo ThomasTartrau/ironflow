@@ -25,7 +25,7 @@ The repository includes a complete example server:
 | `RATE_LIMIT_GENERAL` | `60` | Other API requests per minute, per caller (`0` disables) |
 | `SSE_MAX_CONNECTIONS_PER_PRINCIPAL` | `5` | Simultaneous SSE streams (`/events`, `/runs/{id}/events`) per user or API key owner; beyond it the answer is `429` (`0` disables). A dashboard tab holds up to two |
 | `SSE_MAX_CONNECTIONS` | `1000` | Same cap for the whole server (`0` disables) |
-| `TRUSTED_PROXIES` | -- | Comma-separated IPs or CIDR ranges of the reverse proxies whose forwarding header is believed |
+| `TRUSTED_PROXIES` | -- | Comma-separated IPs or CIDR ranges of the reverse proxies whose forwarding header is believed, by the rate limiters and the HTTPS redirect |
 | `TRUSTED_PROXY_HEADER` | `x-forwarded-for` | Header a trusted proxy reports the client IP in: `x-forwarded-for`, or `x-real-ip` to read only that header. There is no fallback between the two |
 | `ARTIFACTS_DIR` | -- | Filesystem root for step [artifacts](../concepts/artifacts.md); unset disables them |
 | `ARTIFACT_MAX_BYTES` | `104857600` | Maximum size of one artifact (100 MiB) |
@@ -114,8 +114,13 @@ with a `308 Permanent Redirect` to `https://<host><path>` (the host comes from
 `X-Forwarded-Proto`, such as in-cluster health probes and worker traffic, are not
 redirected. Every response carries `Strict-Transport-Security`.
 
-The reverse proxy must therefore set `X-Forwarded-Proto` (and `X-Forwarded-Host` if it
-rewrites `Host`), and must overwrite any value sent by the client.
+The redirect reads `X-Forwarded-Proto` and `X-Forwarded-Host` only when the TCP peer is
+listed in `TRUSTED_PROXIES`. From any other peer these headers are client input: they are
+ignored and the request is served as is. Set `TRUSTED_PROXIES` in production, or nothing is
+redirected (the server logs a warning at startup).
+
+The reverse proxy must therefore be listed in `TRUSTED_PROXIES`, set `X-Forwarded-Proto`
+(and `X-Forwarded-Host` if it rewrites `Host`), and overwrite any value sent by the client.
 
 ### Rate limiting and client IP
 
@@ -183,15 +188,20 @@ implies every other scope. Paths below are relative to `/api/v1`.
 | `runs_write` | `POST /runs`, `POST /schedules`, `DELETE /schedules/{id}`, `POST /schedules/{id}/pause`, `/resume`, `/trigger` |
 | `runs_manage` | `POST /runs/{id}/approve`, `/reject`, `/cancel`, `/retry`, `/replay`, `/pause`, `/resume`, `POST /runs/{id}/steps/{step_id}/input`, `/reject`, `GET /approval-delegations`, `POST /approval-delegations`, `DELETE /approval-delegations/{id}` |
 | `workflows_read` | `GET /workflows`, `GET /workflows/{name}`, `POST /workflows/{name}/plan`, `GET /schedules`, `GET /schedules/{id}`, `GET /templates/registry` |
-| `stats_read` | `GET /stats`, `GET /stats/history` |
+| `stats_read` | `GET /stats`, `GET /stats/history`, `GET /metrics` |
 | `admin` | `/secrets/*`, `/users/*`, `GET /audit-logs`, `POST /workflows/{name}/pause`, `POST /workflows/{name}/resume` |
 
 Routes that were admin-only stay so: `POST /runs`, cancel, retry, replay, pause and resume
-of a run, and every `admin` route also need the key's owner to be an admin, checked at
-request time, so demoting the owner takes effect at once (`403 FORBIDDEN`). Approving,
-rejecting and answering a gate keep their assignee and delegation rules on top of the
-scope. On `GET /events`, Provider Account events reach a key only when it holds the
-`admin` scope and its owner is an admin.
+of a run, `GET /metrics`, and every `admin` route also need the key's owner to be an admin,
+checked at request time, so demoting the owner takes effect at once (`403 FORBIDDEN`).
+Approving, rejecting and answering a gate keep their assignee and delegation rules on top
+of the scope.
+
+On `GET /events`, a member session, or a key without the `admin` scope or owned by a
+member, only receives run events (`run_*`, `step_*`, `approval_*`, `log_line`,
+`retry_forced`, `signal_*`). User sign-in, sign-up and sign-out, Provider Account,
+schedule and workflow pause/resume events reach only an admin session or an `admin`-scope
+key owned by an admin.
 
 Schedule, template and delegation routes are not admin-only: a key owned by a member reaches
 them exactly as that member's dashboard session does. Revoking a delegation still needs to
@@ -201,6 +211,25 @@ are part of.
 Signals and Provider Accounts have their own scopes (`signals_send`, `accounts_read`,
 `accounts_manage`). Dashboard sessions (JWT) are not scope-checked: only the account's
 admin flag applies to them.
+
+### Metrics
+
+Built with the `prometheus` feature, the server exposes `GET /api/v1/metrics`. It needs an
+admin session, or an API key with the `stats_read` (or `admin`) scope owned by an admin;
+an unauthenticated request gets `401`. Create a key for the scraper
+(`ironflow-cli api-key create prometheus --scope stats_read`) and hand it to
+Prometheus as a bearer token:
+
+```yaml
+scrape_configs:
+  - job_name: ironflow
+    metrics_path: /api/v1/metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ironflow-api-key
+    static_configs:
+      - targets: ["ironflow:3000"]
+```
 
 ### Audit log
 
